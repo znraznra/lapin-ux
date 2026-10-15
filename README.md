@@ -125,11 +125,14 @@ From a terminal inside any Wayland session (COSMIC, GNOME, KDE, sway…) with
 
 ```sh
 cargo build
-PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTOP=LapinUX:COSMIC target/debug/lapin-ux-session
+XDG_CONFIG_HOME="$(mktemp -d)" PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTOP=LapinUX:COSMIC \
+  dbus-run-session -- target/debug/lapin-ux-session
 ```
 
 cosmic-comp detects the parent session and opens as a window containing a
 full Lapin UX desktop. Close the window (or `pkill lapin-ux-session`) to stop.
+
+See [TESTING.md](TESTING.md) for a step-by-step test checklist.
 
 ## Develop
 

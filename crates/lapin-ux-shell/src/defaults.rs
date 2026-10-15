@@ -34,17 +34,19 @@ fn radii() -> CornerRadii {
     }
 }
 
-fn apply_theme_variant(dark: bool) -> Result<(), cosmic_config::Error> {
+fn apply_theme_variant(dark: bool) -> Result<bool, cosmic_config::Error> {
     let (builder_cfg, theme_cfg) = if dark {
         (ThemeBuilder::dark_config()?, Theme::dark_config()?)
     } else {
         (ThemeBuilder::light_config()?, Theme::light_config()?)
     };
-    let mut b = ThemeBuilder::get_entry(&builder_cfg)
-        .unwrap_or_else(|(_, b)| b);
-    if b == ThemeBuilder::default() || b == (if dark { ThemeBuilder::dark() } else { ThemeBuilder::light() }) {
-        b = if dark { ThemeBuilder::dark() } else { ThemeBuilder::light() };
+    // Someone who already styled COSMIC (accent or roundness) keeps their look.
+    let id = if dark { "com.system76.CosmicTheme.Dark.Builder" } else { "com.system76.CosmicTheme.Light.Builder" };
+    if ["accent", "corner_radii"].iter().any(|k| cfg_path(id).join(k).exists()) {
+        tracing::info!("existing {} theme customisation found; leaving it", if dark { "dark" } else { "light" });
+        return Ok(false);
     }
+    let mut b = ThemeBuilder::get_entry(&builder_cfg).unwrap_or_else(|(_, b)| b);
     b.accent = Some(if dark { srgb(0x4ca0e8) } else { srgb(0x1a6fc4) });
     b.corner_radii = radii();
     // Floating windows sit edge to edge; tiles get a small gap.
@@ -56,7 +58,7 @@ fn apply_theme_variant(dark: bool) -> Result<(), cosmic_config::Error> {
     b.frosted_applets = true;
     b.write_entry(&builder_cfg)?;
     b.build().write_entry(&theme_cfg)?;
-    Ok(())
+    Ok(true)
 }
 
 /// Mirrors cosmic-bg's `Entry` so it serialises identically.
@@ -87,11 +89,15 @@ enum BgSampling {
     Alphanumeric,
 }
 
-fn apply_wallpaper(dark: bool) -> Result<(), cosmic_config::Error> {
+fn apply_wallpaper(dark: bool) -> Result<bool, cosmic_config::Error> {
     let file = Path::new(WALLPAPER_DIR).join(if dark { "lapin-ux-dark.jpg" } else { "lapin-ux-light.jpg" });
     if !file.exists() {
         tracing::info!(path = %file.display(), "default wallpaper not installed; leaving wallpaper unchanged");
-        return Ok(());
+        return Ok(false);
+    }
+    if cfg_path("com.system76.CosmicBackground").join("all").exists() {
+        tracing::info!("a wallpaper is already configured; leaving it");
+        return Ok(false);
     }
     let cfg = cosmic_config::Config::new("com.system76.CosmicBackground", 1)?;
     cfg.set("same-on-all", true)?;
@@ -106,13 +112,14 @@ fn apply_wallpaper(dark: bool) -> Result<(), cosmic_config::Error> {
             scaling_mode: BgScaling::Zoom,
             sampling_method: BgSampling::Alphanumeric,
         },
-    )
+    )?;
+    Ok(true)
 }
 
 /// Point the Super key (and Super+A) at our Start menu. `lapin-ux-shell start`
 /// falls back to cosmic-launcher outside an Lapin UX session, so this is safe
 /// for people who also log into COSMIC.
-fn apply_shortcuts() -> Result<(), cosmic_config::Error> {
+fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
     #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
     enum System {
         AppLibrary,
@@ -124,12 +131,13 @@ fn apply_shortcuts() -> Result<(), cosmic_config::Error> {
     let user_file = cfg_path("com.system76.CosmicSettings.Shortcuts").join("system_actions");
     if std::fs::read_to_string(&user_file).is_ok_and(|s| !s.trim().is_empty()) {
         tracing::info!("user has custom system actions; not changing the Super key binding");
-        return Ok(());
+        return Ok(false);
     }
     let mut map = BTreeMap::new();
     map.insert(System::Launcher, "lapin-ux-shell start".to_string());
     map.insert(System::AppLibrary, "lapin-ux-shell start".to_string());
-    cfg.set("system_actions", map)
+    cfg.set("system_actions", map)?;
+    Ok(true)
 }
 
 /// Familiar keyboard shortcuts, layered over the compositor defaults.
@@ -144,15 +152,16 @@ const WINDOWS_STYLE_SHORTCUTS: &str = r#"{
     (modifiers: [Ctrl, Alt], key: "Delete"): System(LogOut),
 }"#;
 
-fn apply_keybindings() -> Result<(), cosmic_config::Error> {
+fn apply_keybindings() -> Result<bool, cosmic_config::Error> {
     let dir = cfg_path("com.system76.CosmicSettings.Shortcuts");
     let file = dir.join("custom");
     if std::fs::read_to_string(&file).is_ok_and(|s| !s.trim().is_empty()) {
         tracing::info!("user has custom shortcuts; not adding the familiar set");
-        return Ok(());
+        return Ok(false);
     }
     std::fs::create_dir_all(&dir).map_err(cosmic_config::Error::Io)?;
-    std::fs::write(&file, WINDOWS_STYLE_SHORTCUTS).map_err(cosmic_config::Error::Io)
+    std::fs::write(&file, WINDOWS_STYLE_SHORTCUTS).map_err(cosmic_config::Error::Io)?;
+    Ok(true)
 }
 
 /// Interface font for every libcosmic app (shell, settings, files…).
@@ -168,20 +177,21 @@ fn font_installed(family: &str) -> bool {
 
 /// Switch the interface font to Inter, unless it isn't installed or the
 /// user already picked a font of their own.
-fn apply_font() -> Result<(), cosmic_config::Error> {
+fn apply_font() -> Result<bool, cosmic_config::Error> {
     use cosmic::config::CosmicTk;
     if !font_installed(UI_FONT) {
         tracing::info!("{UI_FONT} is not installed; keeping the default interface font");
-        return Ok(());
+        return Ok(false);
     }
     let cfg = CosmicTk::config()?;
     let mut tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
     if tk.interface_font.family != CosmicTk::default().interface_font.family {
         tracing::info!(family = %tk.interface_font.family, "user chose an interface font; leaving it");
-        return Ok(());
+        return Ok(false);
     }
     tk.interface_font.family = UI_FONT.to_string();
-    cfg.set("interface_font", tk.interface_font)
+    cfg.set("interface_font", tk.interface_font)?;
+    Ok(true)
 }
 
 fn cfg_path(id: &str) -> PathBuf {
@@ -218,7 +228,8 @@ pub fn apply_first_run() {
         ("keyboard shortcuts", apply_keybindings()),
     ] {
         match res {
-            Ok(()) => tracing::info!("applied default {what}"),
+            Ok(true) => tracing::info!("applied default {what}"),
+            Ok(false) => tracing::info!("kept existing {what}"),
             Err(e) => tracing::warn!("could not apply default {what}: {e}"),
         }
     }

@@ -60,6 +60,15 @@ if command -v systemctl >/dev/null; then
     systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
 fi
 
+# Keep a log of this session (and the previous one) for bug reports:
+#   ~/.local/state/lapin-ux/session.log
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
+if mkdir -p "$LOG_DIR" 2>/dev/null; then
+    [ -f "$LOG_DIR/session.log" ] && mv -f "$LOG_DIR/session.log" "$LOG_DIR/session.previous.log"
+    exec >>"$LOG_DIR/session.log" 2>&1
+fi
+echo "=== Lapin UX session start $(date -Iseconds) ==="
+
 if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
     exec dbus-run-session -- lapin-ux-session
 else

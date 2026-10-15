@@ -64,6 +64,12 @@ async fn main() -> Result<()> {
         .init();
 
     let compositor = std::env::args().nth(1).unwrap_or_else(|| "cosmic-comp".into());
+    // Started from inside another desktop (testing in a window): leave that
+    // desktop's systemd/D-Bus environment and session target alone.
+    let nested = std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    if nested {
+        info!("running nested inside another session; not touching its environment");
+    }
     info!(%compositor, "starting Lapin UX session");
 
     let (mut comp, env) = handshake::start_compositor(&compositor).await?;
@@ -73,8 +79,10 @@ async fn main() -> Result<()> {
         // nothing else reads the environment concurrently.
         unsafe { std::env::set_var(k, v) };
     }
-    export_environment(&env).await;
-    systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
+    if !nested {
+        export_environment(&env).await;
+        systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
+    }
 
     let (stop_tx, stop_rx) = watch::channel(false);
     let mut supervisors = Vec::new();
@@ -113,7 +121,9 @@ async fn main() -> Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(3), s).await;
     }
     terminate(&mut comp).await;
-    systemctl(&["stop", "--no-block", "lapin-ux-session.target"]).await;
+    if !nested {
+        systemctl(&["stop", "--no-block", "lapin-ux-session.target"]).await;
+    }
     std::process::exit(code);
 }
 
