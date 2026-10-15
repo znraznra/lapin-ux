@@ -26,6 +26,8 @@ depends=(
     'cosmic-screenshot'        # Super+Shift+S
     'cosmic-icon-theme'
     'xdg-desktop-portal-cosmic'
+    'inter-font'               # interface font
+    'fontconfig'
     # Runtime libraries
     'libxkbcommon'
     'wayland'

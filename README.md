@@ -57,6 +57,7 @@ COSMIC compositor. Arch Linux first.
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
+- Font: Inter for the whole interface (if you haven't already picked a font).
 - Wallpaper: original light/dark artwork.
 - Keyboard: Super opens Start, plus
 
@@ -106,7 +107,7 @@ All settings use cosmic-config and apply live:
 ```sh
 sudo pacman -S --needed base-devel rust python-numpy python-pillow \
     cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-    cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic
+    cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font
 cd packaging/arch
 makepkg -si
 ```

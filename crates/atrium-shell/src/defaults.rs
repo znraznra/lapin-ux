@@ -155,6 +155,35 @@ fn apply_keybindings() -> Result<(), cosmic_config::Error> {
     std::fs::write(&file, WINDOWS_STYLE_SHORTCUTS).map_err(cosmic_config::Error::Io)
 }
 
+/// Interface font for every libcosmic app (shell, settings, files…).
+pub const UI_FONT: &str = "Inter";
+
+fn font_installed(family: &str) -> bool {
+    std::process::Command::new("fc-list")
+        .arg(format!(":family={family}"))
+        .arg("family")
+        .output()
+        .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+}
+
+/// Switch the interface font to Inter, unless it isn't installed or the
+/// user already picked a font of their own.
+fn apply_font() -> Result<(), cosmic_config::Error> {
+    use cosmic::config::CosmicTk;
+    if !font_installed(UI_FONT) {
+        tracing::info!("{UI_FONT} is not installed; keeping the default interface font");
+        return Ok(());
+    }
+    let cfg = CosmicTk::config()?;
+    let mut tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
+    if tk.interface_font.family != CosmicTk::default().interface_font.family {
+        tracing::info!(family = %tk.interface_font.family, "user chose an interface font; leaving it");
+        return Ok(());
+    }
+    tk.interface_font.family = UI_FONT.to_string();
+    cfg.set("interface_font", tk.interface_font)
+}
+
 fn cfg_path(id: &str) -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -184,6 +213,7 @@ pub fn apply_first_run() {
         ("dark theme", apply_theme_variant(true)),
         ("light theme", apply_theme_variant(false)),
         ("wallpaper", apply_wallpaper(dark)),
+        ("interface font", apply_font()),
         ("Super key", apply_shortcuts()),
         ("keyboard shortcuts", apply_keybindings()),
     ] {
