@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Lapin notification daemon: owns `org.freedesktop.Notifications` and
+//! Lapin UX notification daemon: owns `org.freedesktop.Notifications` and
 //! shows toasts stacked in the bottom-right corner above the taskbar.
 
 mod dbus;
@@ -7,7 +7,7 @@ mod dbus;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use lapin_core::notify::{CloseReason, Queue, Toast, Urgency};
+use lapin_ux_core::notify::{CloseReason, Queue, Toast, Urgency};
 use cosmic::app::{Core, Settings, Task};
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
@@ -19,7 +19,7 @@ use cosmic::{Application, Element, theme};
 
 const WIDTH: u32 = 364;
 
-static AUTOSIZE: LazyLock<cosmic::widget::Id> = LazyLock::new(|| cosmic::widget::Id::new("lapin-toasts"));
+static AUTOSIZE: LazyLock<cosmic::widget::Id> = LazyLock::new(|| cosmic::widget::Id::new("lapin-ux-toasts"));
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -52,7 +52,7 @@ impl App {
                     keyboard_interactivity: KeyboardInteractivity::None,
                     anchor: Anchor::BOTTOM | Anchor::RIGHT,
                     output: IcedOutput::Active,
-                    namespace: "lapin-notifications".into(),
+                    namespace: "lapin-ux-notifications".into(),
                     margin: IcedMargin { top: 0, right: 12, bottom: 12, left: 0 },
                     size: Some((Some(WIDTH), Some(1))),
                     exclusive_zone: 0,
@@ -88,7 +88,7 @@ impl Application for App {
     type Executor = cosmic::executor::Default;
     type Flags = ();
     type Message = Message;
-    const APP_ID: &'static str = lapin_core::ids::NOTIFYD_APP_ID;
+    const APP_ID: &'static str = lapin_ux_core::ids::NOTIFYD_APP_ID;
 
     fn core(&self) -> &Core {
         &self.core
@@ -202,7 +202,7 @@ impl Application for App {
     }
 }
 
-fn icon_for(n: &lapin_core::notify::Notification) -> icon::Handle {
+fn icon_for(n: &lapin_ux_core::notify::Notification) -> icon::Handle {
     let name = if !n.app_icon.is_empty() {
         n.app_icon.as_str()
     } else {
@@ -288,7 +288,7 @@ fn toast(t: &Toast) -> Element<'_, Message> {
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,lapin_notifyd=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,lapin_ux_notifyd=info".into()),
         )
         .init();
     cosmic::app::run::<App>(

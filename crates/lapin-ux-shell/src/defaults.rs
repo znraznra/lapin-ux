@@ -16,7 +16,7 @@ use cosmic::cosmic_theme::{CornerRadii, Theme, ThemeBuilder, ThemeMode};
 use serde::Serialize;
 
 /// Where packages install the default wallpapers.
-pub const WALLPAPER_DIR: &str = "/usr/share/backgrounds/lapin";
+pub const WALLPAPER_DIR: &str = "/usr/share/backgrounds/lapin-ux";
 
 fn srgb(hex: u32) -> Srgb {
     Srgb::new(((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0)
@@ -88,7 +88,7 @@ enum BgSampling {
 }
 
 fn apply_wallpaper(dark: bool) -> Result<(), cosmic_config::Error> {
-    let file = Path::new(WALLPAPER_DIR).join(if dark { "lapin-dark.jpg" } else { "lapin-light.jpg" });
+    let file = Path::new(WALLPAPER_DIR).join(if dark { "lapin-ux-dark.jpg" } else { "lapin-ux-light.jpg" });
     if !file.exists() {
         tracing::info!(path = %file.display(), "default wallpaper not installed; leaving wallpaper unchanged");
         return Ok(());
@@ -109,8 +109,8 @@ fn apply_wallpaper(dark: bool) -> Result<(), cosmic_config::Error> {
     )
 }
 
-/// Point the Super key (and Super+A) at our Start menu. `lapin-shell start`
-/// falls back to cosmic-launcher outside an Lapin session, so this is safe
+/// Point the Super key (and Super+A) at our Start menu. `lapin-ux-shell start`
+/// falls back to cosmic-launcher outside an Lapin UX session, so this is safe
 /// for people who also log into COSMIC.
 fn apply_shortcuts() -> Result<(), cosmic_config::Error> {
     #[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,8 +127,8 @@ fn apply_shortcuts() -> Result<(), cosmic_config::Error> {
         return Ok(());
     }
     let mut map = BTreeMap::new();
-    map.insert(System::Launcher, "lapin-shell start".to_string());
-    map.insert(System::AppLibrary, "lapin-shell start".to_string());
+    map.insert(System::Launcher, "lapin-ux-shell start".to_string());
+    map.insert(System::AppLibrary, "lapin-ux-shell start".to_string());
     cfg.set("system_actions", map)
 }
 
@@ -137,7 +137,7 @@ fn apply_shortcuts() -> Result<(), cosmic_config::Error> {
 const WINDOWS_STYLE_SHORTCUTS: &str = r#"{
     (modifiers: [Super], key: "l"): System(LockScreen),
     (modifiers: [Super], key: "e"): System(HomeFolder),
-    (modifiers: [Super], key: "d"): Spawn("lapin-shell desktop"),
+    (modifiers: [Super], key: "d"): Spawn("lapin-ux-shell desktop"),
     (modifiers: [Super], key: "Up"): Maximize,
     (modifiers: [Super], key: "Down"): Minimize,
     (modifiers: [Super, Shift], key: "s"): System(Screenshot),

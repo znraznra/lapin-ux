@@ -1,12 +1,12 @@
 [package]
-name = "lapin-notifyd"
-description = "Lapin notification server (org.freedesktop.Notifications) with toast popups"
+name = "lapin-ux-notifyd"
+description = "Lapin UX notification server (org.freedesktop.Notifications) with toast popups"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-lapin-core.workspace = true
+lapin-ux-core.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 libcosmic.workspace = true

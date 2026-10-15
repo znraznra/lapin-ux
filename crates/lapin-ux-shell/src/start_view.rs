@@ -205,7 +205,7 @@ fn home<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
                     icon::from_name(icon_name).size(28).into(),
                     column::with_children(vec![
                         text::body(f.name.clone()).into(),
-                        text::caption(lapin_core::recent::relative(&f.modified, now)).class(style::dim_text()).into(),
+                        text::caption(lapin_ux_core::recent::relative(&f.modified, now)).class(style::dim_text()).into(),
                     ])
                     .into(),
                 ])
@@ -265,7 +265,7 @@ fn all_apps<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> 
     let names: Vec<&str> = apps.iter().map(|a| a.data.name.as_str()).collect();
     let mut list = column::with_capacity(apps.len() + 30).spacing(2);
     let mut index = 0usize;
-    for section in lapin_core::apps::alphabet_sections(&names) {
+    for section in lapin_ux_core::apps::alphabet_sections(&names) {
         list = list.push(container(text::heading(section.header)).padding([10, 12, 4, 12]));
         for i in section.items {
             let id = apps[i].data.id.as_str();

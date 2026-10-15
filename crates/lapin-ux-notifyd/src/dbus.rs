@@ -3,12 +3,12 @@
 //!
 //! Spec: https://specifications.freedesktop.org/notification-spec/latest/
 //! The D-Bus side only parses and forwards; all timing and display
-//! decisions happen in the UI thread with `lapin_core::notify::Queue`.
+//! decisions happen in the UI thread with `lapin_ux_core::notify::Queue`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lapin_core::notify::{CloseReason, Notification, Urgency, strip_markup};
+use lapin_ux_core::notify::{CloseReason, Notification, Urgency, strip_markup};
 use cosmic::iced::{Subscription, stream};
 use futures::SinkExt;
 use tokio::sync::mpsc;
@@ -90,7 +90,7 @@ impl Server {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("Lapin Notifications", "Lapin", env!("CARGO_PKG_VERSION"), "1.2")
+        ("Lapin UX Notifications", "Lapin UX", env!("CARGO_PKG_VERSION"), "1.2")
     }
 
     #[zbus(signal)]
@@ -104,7 +104,7 @@ impl Server {
 }
 
 pub fn subscription() -> Subscription<Event> {
-    Subscription::run_with("lapin-notifications-dbus", |_| {
+    Subscription::run_with("lapin-ux-notifications-dbus", |_| {
         stream::channel(64, |mut output: futures::channel::mpsc::Sender<Event>| async move {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let server = Server { tx, next_id: AtomicU32::new(1) };

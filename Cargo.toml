@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/lapin-core",
-    "crates/lapin-shell",
-    "crates/lapin-notifyd",
-    "crates/lapin-session",
+    "crates/lapin-ux-core",
+    "crates/lapin-ux-shell",
+    "crates/lapin-ux-notifyd",
+    "crates/lapin-ux-session",
 ]
 
 [workspace.package]
@@ -12,10 +12,10 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 rust-version = "1.93"
-repository = "https://github.com/CHANGE-ME/lapin"
+repository = "https://github.com/CHANGE-ME/lapin-ux"
 
 [workspace.dependencies]
-lapin-core = { path = "crates/lapin-core" }
+lapin-ux-core = { path = "crates/lapin-ux-core" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

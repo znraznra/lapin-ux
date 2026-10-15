@@ -1,4 +1,4 @@
-# Lapin
+# Lapin UX
 
 A Linux desktop that feels familiar to anyone coming from Windows 11: a
 centered taskbar, a Start menu with search, pinned apps and recent files,
@@ -6,7 +6,7 @@ toasts in the bottom-right corner, a system tray, and the keyboard shortcuts
 people already know. Written in Rust with [libcosmic]/iced, running on the
 COSMIC compositor. Arch Linux first.
 
-> Lapin matches *behaviour, layout and feel*. It contains no Microsoft
+> Lapin UX matches *behaviour, layout and feel*. It contains no Microsoft
 > artwork, fonts, names or logos; the Start mark, wallpapers and icons in
 > `data/` are original.
 
@@ -20,7 +20,7 @@ COSMIC compositor. Arch Linux first.
 
 ## What's in the box (phase 1)
 
-**Taskbar** (`lapin-shell`), one per monitor
+**Taskbar** (`lapin-ux-shell`), one per monitor
 - Centered (or left-aligned) Start button, Search box, pinned and running apps.
 - All windows of an app share a button. Click: open / focus / minimize;
   several windows: a window picker. Middle-click: new instance.
@@ -42,18 +42,18 @@ COSMIC compositor. Arch Linux first.
 - Right-click any app: pin/unpin to Start or taskbar.
 - Account name/avatar, and a power menu: Lock, Sign out, Sleep, Restart, Shut down.
 
-**Notifications** (`lapin-notifyd`)
+**Notifications** (`lapin-ux-notifyd`)
 - Full `org.freedesktop.Notifications` server: actions, urgency, replace-id,
   transient, image-path, markup stripped to plain text.
 - Up to 3 toasts stacked above the taskbar, 5 s default, critical ones stay,
   hover pauses the timer, Do-not-disturb ready in the queue logic.
 
-**Session** (`lapin-session`, `start-lapin`)
+**Session** (`lapin-ux-session`, `start-lapin-ux`)
 - Starts cosmic-comp in normal (not kiosk) mode using the same handshake as
   cosmic-session, exports the display to systemd/D-Bus, then starts and
   supervises every component with exponential back-off restarts.
-- `dev.lapin.Session.Exit` on the session bus for Sign out.
-- XDG autostart ("startup apps") through `lapin-session.target`.
+- `dev.lapinux.Session.Exit` on the session bus for Sign out.
+- XDG autostart ("startup apps") through `lapin-ux-session.target`.
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
@@ -75,10 +75,10 @@ COSMIC compositor. Arch Linux first.
 ## Architecture
 
 ```
-display manager ──> start-lapin ──> lapin-session
+display manager ──> start-lapin-ux ──> lapin-ux-session
                                       ├─ cosmic-comp            compositor (reused, unmodified)
-                                      ├─ lapin-shell           taskbar ×N, Start menu, tray   ← ours
-                                      ├─ lapin-notifyd         notification toasts            ← ours
+                                      ├─ lapin-ux-shell           taskbar ×N, Start menu, tray   ← ours
+                                      ├─ lapin-ux-notifyd         notification toasts            ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
                                       ├─ cosmic-bg              wallpaper                      (reused)
                                       ├─ cosmic-osd             volume OSD, polkit dialogs     (reused)
@@ -88,17 +88,17 @@ display manager ──> start-lapin ──> lapin-session
 
 | Crate | What it is | Depends on libcosmic |
 |---|---|---|
-| `lapin-core` | Search ranking, taskbar model, toast queue, clock formats, recent files. 36 unit tests. | no |
-| `lapin-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
-| `lapin-notifyd` | Notification server and toasts | yes |
-| `lapin-session` | Compositor handshake and process supervisor. 2 tests. | no |
+| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files. 36 unit tests. | no |
+| `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
+| `lapin-ux-notifyd` | Notification server and toasts | yes |
+| `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
 
 Window tracking supports two backends: cosmic-comp's protocols (full
 control) and `wlr-foreign-toplevel-management` (sway, Hyprland, labwc,
 niri…), so the shell also runs on wlroots compositors.
 
 All settings use cosmic-config and apply live:
-`~/.config/cosmic/dev.lapin.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
+`~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
 `alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
 `show_desktop_corner`).
 
@@ -112,8 +112,8 @@ cd packaging/arch
 makepkg -si
 ```
 
-Log out, pick **Lapin** in your display manager's session list, log in.
-Uninstall with `sudo pacman -R lapin-desktop-git`.
+Log out, pick **Lapin UX** in your display manager's session list, log in.
+Uninstall with `sudo pacman -R lapin-ux-desktop-git`.
 
 ## Try it without installing
 
@@ -122,28 +122,28 @@ From a terminal inside any Wayland session (COSMIC, GNOME, KDE, sway…) with
 
 ```sh
 cargo build
-PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTOP=Lapin:COSMIC target/debug/lapin-session
+PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTOP=LapinUX:COSMIC target/debug/lapin-ux-session
 ```
 
 cosmic-comp detects the parent session and opens as a window containing a
-full Lapin desktop. Close the window (or `pkill lapin-session`) to stop.
+full Lapin UX desktop. Close the window (or `pkill lapin-ux-session`) to stop.
 
 ## Develop
 
 ```sh
 cargo test --workspace     # unit tests (core logic, session handshake)
 cargo clippy --workspace   # clean at the time of writing
-RUST_LOG=lapin_shell=debug target/debug/lapin-shell   # run the shell alone in a session
-target/debug/lapin-shell start                          # toggle Start in the running shell
+RUST_LOG=lapin_ux_shell=debug target/debug/lapin-ux-shell   # run the shell alone in a session
+target/debug/lapin-ux-shell start                          # toggle Start in the running shell
 python3 tools/make-wallpaper.py                          # re-render wallpapers
 ```
 
-`lapin-core` holds anything that can be tested without a display; put new
+`lapin-ux-core` holds anything that can be tested without a display; put new
 logic there first.
 
 ## Renaming
 
-The working name is easy to change: `crates/lapin-core/src/lib.rs` (`ids`),
+The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 `data/session/*`, `data/systemd/*`, `packaging/arch/PKGBUILD`.
 
 ## Not done yet (next phases)

@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Lapin
+Name=Lapin UX
 Comment=A familiar desktop: taskbar, Start menu and notifications
-Exec=/usr/bin/start-lapin
+Exec=/usr/bin/start-lapin-ux
 Type=Application
-DesktopNames=Lapin;COSMIC
+DesktopNames=LapinUX;COSMIC

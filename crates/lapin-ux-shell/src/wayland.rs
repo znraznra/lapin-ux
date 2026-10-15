@@ -88,7 +88,7 @@ pub fn subscription() -> Subscription<WaylandUpdate> {
                 let (calloop_tx, calloop_rx) = calloop::channel::channel();
                 let (tx, rx) = unbounded();
                 std::thread::Builder::new()
-                    .name("lapin-toplevels".into())
+                    .name("lapin-ux-toplevels".into())
                     .spawn(move || run(tx, calloop_rx))
                     .expect("spawning toplevel thread");
                 *guard = Some(rx);

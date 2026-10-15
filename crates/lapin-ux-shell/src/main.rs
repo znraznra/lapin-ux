@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Lapin shell: the taskbar (one per monitor) and the Start menu.
+//! Lapin UX shell: the taskbar (one per monitor) and the Start menu.
 //!
 //! Usage:
-//!   lapin-shell          run the shell (only one instance runs)
-//!   lapin-shell start    toggle the Start menu in the running instance
+//!   lapin-ux-shell          run the shell (only one instance runs)
+//!   lapin-ux-shell start    toggle the Start menu in the running instance
 //!                         (bound to the Super key by the session)
-//!   lapin-shell desktop  show the desktop / restore windows (Super+D)
+//!   lapin-ux-shell desktop  show the desktop / restore windows (Super+D)
 
 mod app;
 mod catalog;
@@ -33,31 +33,31 @@ impl CosmicFlags for Args {
     }
 }
 
-fn in_lapin_session() -> bool {
+fn in_lapin_ux_session() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP")
-        .is_ok_and(|d| d.split(':').any(|n| n == lapin_core::ids::DESKTOP_NAME))
+        .is_ok_and(|d| d.split(':').any(|n| n == lapin_ux_core::ids::DESKTOP_NAME))
 }
 
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,lapin_shell=info".into()),
+                .unwrap_or_else(|_| "warn,lapin_ux_shell=info".into()),
         )
         .init();
 
     let action = std::env::args().nth(1);
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-shell [start|desktop]");
+        println!("usage: lapin-ux-shell [start|desktop]");
         return Ok(());
     }
 
     // The Super-key binding is shared with COSMIC's config. Outside an
-    // Lapin session, hand the key to COSMIC's own launcher.
-    if action.as_deref() == Some("start") && !in_lapin_session() {
+    // Lapin UX session, hand the key to COSMIC's own launcher.
+    if action.as_deref() == Some("start") && !in_lapin_ux_session() {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new("cosmic-launcher").exec();
-        eprintln!("lapin-shell: not in an Lapin session and cosmic-launcher failed: {err}");
+        eprintln!("lapin-ux-shell: not in an Lapin UX session and cosmic-launcher failed: {err}");
         return Ok(());
     }
 

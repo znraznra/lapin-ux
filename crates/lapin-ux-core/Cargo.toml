@@ -1,6 +1,6 @@
 [package]
-name = "lapin-core"
-description = "UI-free logic shared by Lapin components (search, taskbar model, notifications queue, clock)"
+name = "lapin-ux-core"
+description = "UI-free logic shared by Lapin UX components (search, taskbar model, notifications queue, clock)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

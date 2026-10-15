@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Persistent shell settings, stored with cosmic-config under
-//! `~/.config/cosmic/dev.lapin.Shell/v1/` (one small file per key) and
+//! `~/.config/cosmic/dev.lapinux.Shell/v1/` (one small file per key) and
 //! watched live, so a future Settings app can change them on the fly.
 
 use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry};
@@ -93,13 +93,13 @@ impl ShellConfig {
 }
 
 pub fn shell_config() -> Option<cosmic_config::Config> {
-    cosmic_config::Config::new(lapin_core::ids::SHELL_APP_ID, VERSION)
+    cosmic_config::Config::new(lapin_ux_core::ids::SHELL_APP_ID, VERSION)
         .inspect_err(|e| tracing::error!("config unavailable: {e}"))
         .ok()
 }
 
 pub fn shell_state() -> Option<cosmic_config::Config> {
-    cosmic_config::Config::new_state(lapin_core::ids::SHELL_APP_ID, VERSION)
+    cosmic_config::Config::new_state(lapin_ux_core::ids::SHELL_APP_ID, VERSION)
         .inspect_err(|e| tracing::error!("state unavailable: {e}"))
         .ok()
 }

@@ -179,7 +179,7 @@ pub fn subscription() -> Subscription<Event> {
         Running(EventStream),
         Done,
     }
-    Subscription::run_with("lapin-tray", |_| {
+    Subscription::run_with("lapin-ux-tray", |_| {
         futures::stream::unfold(State::Start, |state| async move {
             match state {
                 State::Start => match connect().await {

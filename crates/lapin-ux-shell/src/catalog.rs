@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use lapin_core::search::{self, Searchable};
+use lapin_ux_core::search::{self, Searchable};
 use cosmic::desktop::{
     self, DesktopEntryCache, DesktopEntryData, DesktopLookupContext, DesktopResolveOptions, fde,
 };
@@ -104,7 +104,7 @@ impl Catalog {
     }
 }
 
-/// `XDG_CURRENT_DESKTOP` is a colon-separated list, e.g. `Lapin:COSMIC`.
+/// `XDG_CURRENT_DESKTOP` is a colon-separated list, e.g. `LapinUX:COSMIC`.
 pub fn current_desktops() -> Vec<String> {
     std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()

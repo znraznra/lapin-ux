@@ -1,22 +1,15 @@
 [package]
-name = "lapin-shell"
-description = "Lapin taskbar and Start menu"
+name = "lapin-ux-session"
+description = "Starts the compositor and the Lapin UX shell components, restarts them if they crash"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "lapin-shell"
-path = "src/main.rs"
-
 [dependencies]
-lapin-core.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
-futures.workspace = true
-jiff = "0.2"
+rustix = { version = "1", features = ["fs", "process"] }
 serde.workspace = true
-libcosmic.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

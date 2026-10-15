@@ -2927,7 +2927,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapin-core"
+name = "lapin-ux-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -2935,12 +2935,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapin-notifyd"
+name = "lapin-ux-notifyd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
- "lapin-core",
+ "lapin-ux-core",
  "libcosmic",
  "serde",
  "tokio",
@@ -2950,7 +2950,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapin-session"
+name = "lapin-ux-session"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2964,14 +2964,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapin-shell"
+name = "lapin-ux-shell"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "futures",
  "jiff",
- "lapin-core",
+ "lapin-ux-core",
  "libcosmic",
  "serde",
  "tokio",
