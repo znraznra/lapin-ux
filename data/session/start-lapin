@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
 # Adapted from cosmic-session's start-cosmic (GPL-3.0-only).
-# Started by the display manager for the "Atrium" session.
+# Started by the display manager for the "Lapin" session.
 set -e
 
 if command -v systemctl >/dev/null; then
@@ -9,7 +9,7 @@ if command -v systemctl >/dev/null; then
     # they do not block this one.
     for unit in $(systemctl --user --no-legend --state=failed --plain list-units | cut -f1 -d' '); do
         partof="$(systemctl --user show -p PartOf --value "$unit")"
-        for target in atrium-session.target graphical-session.target; do
+        for target in lapin-session.target graphical-session.target; do
             if [ "$partof" = "$target" ]; then
                 systemctl --user reset-failed "$unit"
                 break
@@ -23,8 +23,8 @@ if [ -n "${SHELL}" ] && [ "${1}" != "--in-login-shell" ]; then
     exec "${SHELL}" -l -c "${0} --in-login-shell"
 fi
 
-export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:=Atrium:COSMIC}"
-export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:=Atrium}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:=Lapin:COSMIC}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:=Lapin}"
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:=wayland}"
 export _JAVA_AWT_WM_NONREPARENTING=1
 export GDK_BACKEND=wayland,x11
@@ -61,7 +61,7 @@ if command -v systemctl >/dev/null; then
 fi
 
 if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
-    exec dbus-run-session -- atrium-session
+    exec dbus-run-session -- lapin-session
 else
-    exec atrium-session
+    exec lapin-session
 fi

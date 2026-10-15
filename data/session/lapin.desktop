@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Atrium
+Name=Lapin
 Comment=A familiar desktop: taskbar, Start menu and notifications
-Exec=/usr/bin/start-atrium
+Exec=/usr/bin/start-lapin
 Type=Application
-DesktopNames=Atrium;COSMIC
+DesktopNames=Lapin;COSMIC

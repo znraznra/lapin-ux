@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Taskbar and its popups (window picker, right-click menu, calendar).
 
-use atrium_core::taskbar::Button;
+use lapin_core::taskbar::Button;
 use cosmic::desktop::IconSourceExt;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, button, column, container, icon, mouse_area, row, text};
@@ -12,7 +12,7 @@ use crate::config::TaskbarAlignment;
 use crate::style;
 use crate::wayland::WindowId as Handle;
 
-pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/atrium-start.svg");
+pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/lapin-start.svg");
 
 fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     match &shell.tracker {
@@ -402,7 +402,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
                 Message::CalendarSelect,
                 || Message::CalendarPrev,
                 || Message::CalendarNext,
-                if atrium_core::clock::week_starts_sunday_env() {
+                if lapin_core::clock::week_starts_sunday_env() {
                     jiff::civil::Weekday::Sunday
                 } else {
                     jiff::civil::Weekday::Monday

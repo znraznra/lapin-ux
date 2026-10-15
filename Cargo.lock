@@ -424,60 +424,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atrium-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
-]
-
-[[package]]
-name = "atrium-notifyd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "atrium-core",
- "futures",
- "libcosmic",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus",
-]
-
-[[package]]
-name = "atrium-session"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rustix 1.1.5",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus",
-]
-
-[[package]]
-name = "atrium-shell"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "atrium-core",
- "chrono",
- "futures",
- "jiff",
- "libcosmic",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus",
-]
-
-[[package]]
 name = "atspi"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2978,6 +2924,60 @@ dependencies = [
  "arrayvec",
  "euclid",
  "smallvec",
+]
+
+[[package]]
+name = "lapin-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "lapin-notifyd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "lapin-core",
+ "libcosmic",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
+name = "lapin-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
+name = "lapin-shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "jiff",
+ "lapin-core",
+ "libcosmic",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]

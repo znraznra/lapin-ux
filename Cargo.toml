@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/atrium-core",
-    "crates/atrium-shell",
-    "crates/atrium-notifyd",
-    "crates/atrium-session",
+    "crates/lapin-core",
+    "crates/lapin-shell",
+    "crates/lapin-notifyd",
+    "crates/lapin-session",
 ]
 
 [workspace.package]
@@ -12,10 +12,10 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 rust-version = "1.93"
-repository = "https://github.com/CHANGE-ME/atrium"
+repository = "https://github.com/CHANGE-ME/lapin"
 
 [workspace.dependencies]
-atrium-core = { path = "crates/atrium-core" }
+lapin-core = { path = "crates/lapin-core" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

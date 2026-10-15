@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Atrium shell: the taskbar (one per monitor) and the Start menu.
+//! Lapin shell: the taskbar (one per monitor) and the Start menu.
 //!
 //! Usage:
-//!   atrium-shell          run the shell (only one instance runs)
-//!   atrium-shell start    toggle the Start menu in the running instance
+//!   lapin-shell          run the shell (only one instance runs)
+//!   lapin-shell start    toggle the Start menu in the running instance
 //!                         (bound to the Super key by the session)
-//!   atrium-shell desktop  show the desktop / restore windows (Super+D)
+//!   lapin-shell desktop  show the desktop / restore windows (Super+D)
 
 mod app;
 mod catalog;
@@ -33,31 +33,31 @@ impl CosmicFlags for Args {
     }
 }
 
-fn in_atrium_session() -> bool {
+fn in_lapin_session() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP")
-        .is_ok_and(|d| d.split(':').any(|n| n == atrium_core::ids::DESKTOP_NAME))
+        .is_ok_and(|d| d.split(':').any(|n| n == lapin_core::ids::DESKTOP_NAME))
 }
 
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,atrium_shell=info".into()),
+                .unwrap_or_else(|_| "warn,lapin_shell=info".into()),
         )
         .init();
 
     let action = std::env::args().nth(1);
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: atrium-shell [start|desktop]");
+        println!("usage: lapin-shell [start|desktop]");
         return Ok(());
     }
 
     // The Super-key binding is shared with COSMIC's config. Outside an
-    // Atrium session, hand the key to COSMIC's own launcher.
-    if action.as_deref() == Some("start") && !in_atrium_session() {
+    // Lapin session, hand the key to COSMIC's own launcher.
+    if action.as_deref() == Some("start") && !in_lapin_session() {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new("cosmic-launcher").exec();
-        eprintln!("atrium-shell: not in an Atrium session and cosmic-launcher failed: {err}");
+        eprintln!("lapin-shell: not in an Lapin session and cosmic-launcher failed: {err}");
         return Ok(());
     }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Render Atrium's default wallpapers (original artwork).
+"""Render Lapin's default wallpapers (original artwork).
 
 Soft, layered translucent arches over a deep blue-to-teal field: calm,
 light-catching, and recognisably "ours". Run from the repository root:
@@ -92,7 +92,7 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "data/wallpapers"
     os.makedirs(out, exist_ok=True)
     for dark in (True, False):
-        name = "atrium-dark.jpg" if dark else "atrium-light.jpg"
+        name = "lapin-dark.jpg" if dark else "lapin-light.jpg"
         render(dark).save(os.path.join(out, name), quality=88, optimize=True, progressive=True)
         print("wrote", os.path.join(out, name))
 

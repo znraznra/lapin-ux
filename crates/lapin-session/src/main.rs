@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Atrium session manager.
+//! Lapin session manager.
 //!
 //! 1. Starts the compositor (cosmic-comp) with a socket it uses to tell us
 //!    which `WAYLAND_DISPLAY` / `DISPLAY` it created. This is the same
@@ -9,7 +9,7 @@
 //!    D-Bus-activated apps can reach the display.
 //! 3. Starts every component in `components()` and restarts any that crash,
 //!    backing off if one keeps failing.
-//! 4. Exposes `dev.atrium.Session.Exit()` on the session bus; the Start
+//! 4. Exposes `dev.lapin.Session.Exit()` on the session bus; the Start
 //!    menu's "Sign out" calls it.
 
 mod handshake;
@@ -38,12 +38,12 @@ const fn c(exec: &'static str, required: bool) -> Component {
 fn components() -> Vec<Component> {
     vec![
         // Ours
-        c("atrium-shell", true),
-        c("atrium-notifyd", true),
+        c("lapin-shell", true),
+        c("lapin-notifyd", true),
         // Reused, unmodified COSMIC services (no visible branding):
         // applies theme/fonts, media keys, night light
         c("cosmic-settings-daemon", false),
-        // wallpaper renderer; Atrium writes its config
+        // wallpaper renderer; Lapin writes its config
         c("cosmic-bg", false),
         // volume/brightness OSD and the polkit password dialog
         c("cosmic-osd", false),
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         .init();
 
     let compositor = std::env::args().nth(1).unwrap_or_else(|| "cosmic-comp".into());
-    info!(%compositor, "starting Atrium session");
+    info!(%compositor, "starting Lapin session");
 
     let (mut comp, env) = handshake::start_compositor(&compositor).await?;
     info!(?env, "compositor is ready");
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         unsafe { std::env::set_var(k, v) };
     }
     export_environment(&env).await;
-    systemctl(&["start", "--no-block", "atrium-session.target"]).await;
+    systemctl(&["start", "--no-block", "lapin-session.target"]).await;
 
     let (stop_tx, stop_rx) = watch::channel(false);
     let mut supervisors = Vec::new();
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(3), s).await;
     }
     terminate(&mut comp).await;
-    systemctl(&["stop", "--no-block", "atrium-session.target"]).await;
+    systemctl(&["stop", "--no-block", "lapin-session.target"]).await;
     std::process::exit(code);
 }
 
@@ -228,7 +228,7 @@ struct SessionIface {
     stop: watch::Sender<bool>,
 }
 
-#[zbus::interface(name = "dev.atrium.Session")]
+#[zbus::interface(name = "dev.lapin.Session")]
 impl SessionIface {
     /// End the session (sign out).
     fn exit(&self) {
@@ -238,8 +238,8 @@ impl SessionIface {
 
 async fn serve_dbus(stop: watch::Sender<bool>) -> Result<zbus::Connection> {
     zbus::connection::Builder::session()?
-        .name("dev.atrium.Session")?
-        .serve_at("/dev/atrium/Session", SessionIface { stop })?
+        .name("dev.lapin.Session")?
+        .serve_at("/dev/lapin/Session", SessionIface { stop })?
         .build()
         .await
         .context("connecting to the session bus")

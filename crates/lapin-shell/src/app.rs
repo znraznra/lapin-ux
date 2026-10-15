@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use atrium_core::clock::ClockStyle;
-use atrium_core::recent::RecentFile;
-use atrium_core::taskbar::{ClickAction, Taskbar, Window};
+use lapin_core::clock::ClockStyle;
+use lapin_core::recent::RecentFile;
+use lapin_core::taskbar::{ClickAction, Taskbar, Window};
 use cosmic::app::{Core, Task};
 use cosmic::cctk::sctk::reexports::calloop;
 use cosmic::cctk::sctk::reexports::protocols::xdg::shell::client::xdg_positioner::{Anchor as PAnchor, Gravity};
@@ -35,10 +35,10 @@ use crate::style;
 use crate::wayland::{self as wl, WaylandRequest, WaylandUpdate, WindowId as Handle, WindowInfo};
 
 pub static SEARCH_ID: std::sync::LazyLock<cosmic::widget::Id> =
-    std::sync::LazyLock::new(|| cosmic::widget::Id::new("atrium-start-search"));
+    std::sync::LazyLock::new(|| cosmic::widget::Id::new("lapin-start-search"));
 
 static POPUP_AUTOSIZE: std::sync::LazyLock<cosmic::widget::Id> =
-    std::sync::LazyLock::new(|| cosmic::widget::Id::new("atrium-popup-autosize"));
+    std::sync::LazyLock::new(|| cosmic::widget::Id::new("lapin-popup-autosize"));
 
 pub struct Bar {
     pub id: window::Id,
@@ -232,7 +232,7 @@ impl Shell {
                 keyboard_interactivity: KeyboardInteractivity::None,
                 anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
                 output: IcedOutput::Output(output.clone()),
-                namespace: "atrium-taskbar".into(),
+                namespace: "lapin-taskbar".into(),
                 size: Some((None, Some(style::TASKBAR_HEIGHT))),
                 exclusive_zone: style::TASKBAR_HEIGHT as i32,
                 size_limits: Limits::NONE.min_height(style::TASKBAR_HEIGHT as f32).max_height(style::TASKBAR_HEIGHT as f32),
@@ -261,7 +261,7 @@ impl Shell {
             query: String::new(),
             page: StartPage::Home,
             selected: None,
-            recent_files: atrium_core::recent::load(6),
+            recent_files: lapin_core::recent::load(6),
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let r = style::PANEL_RADIUS as u32;
@@ -278,7 +278,7 @@ impl Shell {
                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
-                    namespace: "atrium-start".into(),
+                    namespace: "lapin-start".into(),
                     margin: IcedMargin { top: 0, right: 0, bottom: 12, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
@@ -410,7 +410,7 @@ impl Shell {
             StartPage::Home => self.config.pinned_start.iter().filter(|id| self.catalog.get(id).is_some()).cloned().collect(),
             StartPage::AllApps => {
                 let names: Vec<&str> = self.catalog.apps().iter().map(|a| a.data.name.as_str()).collect();
-                atrium_core::apps::alphabet_sections(&names)
+                lapin_core::apps::alphabet_sections(&names)
                     .into_iter()
                     .flat_map(|sec| sec.items)
                     .map(|i| self.catalog.apps()[i].data.id.clone())
@@ -445,7 +445,7 @@ async fn power_action(action: PowerAction) -> anyhow::Result<()> {
     }
     if action == PowerAction::SignOut {
         let conn = zbus::Connection::session().await?;
-        conn.call_method(Some("dev.atrium.Session"), "/dev/atrium/Session", Some("dev.atrium.Session"), "Exit", &())
+        conn.call_method(Some("dev.lapin.Session"), "/dev/lapin/Session", Some("dev.lapin.Session"), "Exit", &())
             .await?;
         return Ok(());
     }
@@ -470,7 +470,7 @@ impl Application for Shell {
     type Executor = cosmic::executor::Default;
     type Flags = crate::Args;
     type Message = Message;
-    const APP_ID: &'static str = atrium_core::ids::SHELL_APP_ID;
+    const APP_ID: &'static str = lapin_core::ids::SHELL_APP_ID;
 
     fn core(&self) -> &Core {
         &self.core
@@ -571,7 +571,7 @@ impl Application for Shell {
         Subscription::batch(tray_subs.chain([
             crate::tray::subscription().map(Message::Tray),
             wl::subscription().map(Message::Wayland),
-            self.core.watch_config::<ShellConfig>(atrium_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
+            self.core.watch_config::<ShellConfig>(lapin_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
             cosmic::iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick),
             listen_raw(|event, _status, window| match event {

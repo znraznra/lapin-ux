@@ -1,15 +1,22 @@
 [package]
-name = "atrium-session"
-description = "Starts the compositor and the Atrium shell components, restarts them if they crash"
+name = "lapin-shell"
+description = "Lapin taskbar and Start menu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "lapin-shell"
+path = "src/main.rs"
+
 [dependencies]
+lapin-core.workspace = true
 anyhow.workspace = true
-rustix = { version = "1", features = ["fs", "process"] }
+chrono.workspace = true
+futures.workspace = true
+jiff = "0.2"
 serde.workspace = true
-serde_json.workspace = true
+libcosmic.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
