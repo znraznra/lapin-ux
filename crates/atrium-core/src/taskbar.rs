@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Taskbar button model.
+//!
+//! Pinned apps keep their slots whether or not they are running. Running apps
+//! that are not pinned appear after the pinned ones, in the order they were
+//! first opened. All windows of one app share a button (the default
+//! "always combine" behaviour of the benchmark).
+//!
+//! `W` is the window handle type (a Wayland toplevel handle in the shell,
+//! a plain integer in tests).
+
+/// One window known to the taskbar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Window<W> {
+    pub handle: W,
+    /// The desktop-entry id the window was matched to (or its raw app_id).
+    pub app: String,
+    pub title: String,
+    pub active: bool,
+    pub minimized: bool,
+    pub urgent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Button<W> {
+    pub app: String,
+    pub pinned: bool,
+    pub windows: Vec<Window<W>>,
+}
+
+impl<W> Button<W> {
+    pub fn running(&self) -> bool {
+        !self.windows.is_empty()
+    }
+    pub fn active(&self) -> bool {
+        self.windows.iter().any(|w| w.active)
+    }
+    pub fn urgent(&self) -> bool {
+        self.windows.iter().any(|w| w.urgent)
+    }
+}
+
+/// What a left click on a button should do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClickAction<W> {
+    Launch(String),
+    Activate(W),
+    Minimize(W),
+    /// Several windows: show the window picker above the button.
+    ShowPicker,
+}
+
+#[derive(Debug, Clone)]
+pub struct Taskbar<W> {
+    pinned: Vec<String>,
+    /// Running windows in the order they appeared.
+    windows: Vec<Window<W>>,
+}
+
+impl<W> Default for Taskbar<W> {
+    fn default() -> Self {
+        Self { pinned: Vec::new(), windows: Vec::new() }
+    }
+}
+
+impl<W: Clone + PartialEq> Taskbar<W> {
+    pub fn new(pinned: Vec<String>) -> Self {
+        Self { pinned, windows: Vec::new() }
+    }
+
+    pub fn pinned(&self) -> &[String] {
+        &self.pinned
+    }
+
+    pub fn set_pinned(&mut self, pinned: Vec<String>) {
+        self.pinned = pinned;
+    }
+
+    pub fn is_pinned(&self, app: &str) -> bool {
+        self.pinned.iter().any(|p| p == app)
+    }
+
+    /// Pin at the end (like "Pin to taskbar"). Returns true if it changed.
+    pub fn pin(&mut self, app: &str) -> bool {
+        if self.is_pinned(app) {
+            return false;
+        }
+        self.pinned.push(app.to_string());
+        true
+    }
+
+    pub fn unpin(&mut self, app: &str) -> bool {
+        let before = self.pinned.len();
+        self.pinned.retain(|p| p != app);
+        before != self.pinned.len()
+    }
+
+    /// Move a pinned app to `to` (drag-reorder). Out-of-range is clamped.
+    pub fn move_pinned(&mut self, app: &str, to: usize) {
+        if let Some(from) = self.pinned.iter().position(|p| p == app) {
+            let item = self.pinned.remove(from);
+            let to = to.min(self.pinned.len());
+            self.pinned.insert(to, item);
+        }
+    }
+
+    /// Insert or update a window. Activating one window deactivates the rest.
+    pub fn upsert(&mut self, win: Window<W>) {
+        if win.active {
+            for w in &mut self.windows {
+                w.active = false;
+            }
+        }
+        match self.windows.iter_mut().find(|w| w.handle == win.handle) {
+            Some(existing) => *existing = win,
+            None => self.windows.push(win),
+        }
+    }
+
+    pub fn remove(&mut self, handle: &W) {
+        self.windows.retain(|w| &w.handle != handle);
+    }
+
+    pub fn windows(&self) -> &[Window<W>] {
+        &self.windows
+    }
+
+    pub fn buttons(&self) -> Vec<Button<W>> {
+        let mut out: Vec<Button<W>> = self
+            .pinned
+            .iter()
+            .map(|app| Button { app: app.clone(), pinned: true, windows: Vec::new() })
+            .collect();
+        for w in &self.windows {
+            match out.iter_mut().find(|b| b.app == w.app) {
+                Some(b) => b.windows.push(w.clone()),
+                None => out.push(Button { app: w.app.clone(), pinned: false, windows: vec![w.clone()] }),
+            }
+        }
+        out
+    }
+
+    /// Left-click behaviour for the button of `app`.
+    pub fn click(&self, app: &str) -> ClickAction<W> {
+        let wins: Vec<&Window<W>> = self.windows.iter().filter(|w| w.app == app).collect();
+        match wins.as_slice() {
+            [] => ClickAction::Launch(app.to_string()),
+            [only] if only.active && !only.minimized => ClickAction::Minimize(only.handle.clone()),
+            [only] => ClickAction::Activate(only.handle.clone()),
+            _ => ClickAction::ShowPicker,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn w(handle: u32, app: &str, active: bool) -> Window<u32> {
+        Window { handle, app: app.into(), title: format!("{app} {handle}"), active, minimized: false, urgent: false }
+    }
+
+    #[test]
+    fn pinned_first_then_running_in_open_order() {
+        let mut t = Taskbar::new(vec!["files".into(), "browser".into()]);
+        t.upsert(w(1, "editor", false));
+        t.upsert(w(2, "browser", false));
+        t.upsert(w(3, "music", false));
+        t.upsert(w(4, "editor", true));
+        let b = t.buttons();
+        let apps: Vec<_> = b.iter().map(|b| b.app.as_str()).collect();
+        assert_eq!(apps, ["files", "browser", "editor", "music"]);
+        assert!(!b[0].running());
+        assert!(b[1].running() && b[1].pinned);
+        assert_eq!(b[2].windows.len(), 2);
+        assert!(b[2].active());
+    }
+
+    #[test]
+    fn single_active_window() {
+        let mut t = Taskbar::new(vec![]);
+        t.upsert(w(1, "a", true));
+        t.upsert(w(2, "b", false));
+        assert!(!t.windows()[0].active || !t.windows()[1].active);
+        assert_eq!(t.click("a"), ClickAction::Minimize(1));
+        assert_eq!(t.click("b"), ClickAction::Activate(2));
+        t.upsert(w(2, "b", true));
+        assert!(!t.windows()[0].active);
+        assert_eq!(t.click("a"), ClickAction::Activate(1));
+    }
+
+    #[test]
+    fn click_rules() {
+        let mut t = Taskbar::new(vec!["a".into()]);
+        assert_eq!(t.click("a"), ClickAction::Launch("a".into()));
+        t.upsert(w(1, "a", false));
+        t.upsert(w(2, "a", false));
+        assert_eq!(t.click("a"), ClickAction::ShowPicker);
+        let mut min = w(3, "c", true);
+        min.minimized = true;
+        t.upsert(min);
+        assert_eq!(t.click("c"), ClickAction::Activate(3));
+    }
+
+    #[test]
+    fn close_window_keeps_pinned_slot() {
+        let mut t = Taskbar::new(vec!["a".into()]);
+        t.upsert(w(1, "a", true));
+        t.upsert(w(2, "b", false));
+        t.remove(&1);
+        t.remove(&2);
+        let b = t.buttons();
+        assert_eq!(b.len(), 1);
+        assert!(!b[0].running());
+    }
+
+    #[test]
+    fn pin_unpin_move() {
+        let mut t: Taskbar<u32> = Taskbar::new(vec!["a".into(), "b".into(), "c".into()]);
+        assert!(!t.pin("a"));
+        assert!(t.pin("d"));
+        t.move_pinned("d", 0);
+        assert_eq!(t.pinned(), ["d", "a", "b", "c"]);
+        t.move_pinned("d", 99);
+        assert_eq!(t.pinned(), ["a", "b", "c", "d"]);
+        assert!(t.unpin("b"));
+        assert!(!t.unpin("zzz"));
+        assert_eq!(t.pinned(), ["a", "c", "d"]);
+    }
+
+    #[test]
+    fn unpinning_running_app_moves_it_after_pinned() {
+        let mut t = Taskbar::new(vec!["a".into(), "b".into()]);
+        t.upsert(w(1, "a", false));
+        t.unpin("a");
+        let apps: Vec<_> = t.buttons().into_iter().map(|b| b.app).collect();
+        assert_eq!(apps, ["b", "a"]);
+    }
+}

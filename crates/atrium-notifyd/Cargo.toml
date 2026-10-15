@@ -1,0 +1,17 @@
+[package]
+name = "atrium-notifyd"
+description = "Atrium notification server (org.freedesktop.Notifications) with toast popups"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+atrium-core.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+libcosmic.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true

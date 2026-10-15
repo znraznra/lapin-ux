@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/atrium-core",
+    "crates/atrium-shell",
+    "crates/atrium-notifyd",
+    "crates/atrium-session",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.93"
+repository = "https://github.com/CHANGE-ME/atrium"
+
+[workspace.dependencies]
+atrium-core = { path = "crates/atrium-core" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.47", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process", "signal", "net", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter"] }
+zbus = { version = "5.13", default-features = false, features = ["tokio"] }
+futures = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "6"
+
+# Pinned to a known commit so builds are reproducible. Bump deliberately.
+libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "e1f2cd2e52226aa50d59bb2cd6d43ffe290106ed", default-features = false, features = [
+    "autosize",
+    "dbus-config",
+    "desktop",
+    "desktop-systemd-scope",
+    "multi-window",
+    "single-instance",
+    "tokio",
+    "wayland",
+    "wgpu",
+    "winit",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Fast enough to iterate on, small enough to fit this machine.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2

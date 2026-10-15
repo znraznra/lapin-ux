@@ -1,0 +1,13 @@
+[Unit]
+Description=Atrium Session Target
+Documentation=man:systemd.special(7)
+
+BindsTo=graphical-session.target
+Before=graphical-session.target
+
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+
+# Runs the user's "startup apps" (XDG autostart entries).
+Wants=xdg-desktop-autostart.target
+Before=xdg-desktop-autostart.target

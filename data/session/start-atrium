@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# Adapted from cosmic-session's start-cosmic (GPL-3.0-only).
+# Started by the display manager for the "Atrium" session.
+set -e
+
+if command -v systemctl >/dev/null; then
+    # A previous session may have left failed units behind; reset them so
+    # they do not block this one.
+    for unit in $(systemctl --user --no-legend --state=failed --plain list-units | cut -f1 -d' '); do
+        partof="$(systemctl --user show -p PartOf --value "$unit")"
+        for target in atrium-session.target graphical-session.target; do
+            if [ "$partof" = "$target" ]; then
+                systemctl --user reset-failed "$unit"
+                break
+            fi
+        done
+    done
+fi
+
+# Pick up the user's environment from their login shell (PATH, etc.).
+if [ -n "${SHELL}" ] && [ "${1}" != "--in-login-shell" ]; then
+    exec "${SHELL}" -l -c "${0} --in-login-shell"
+fi
+
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:=Atrium:COSMIC}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:=Atrium}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:=wayland}"
+export _JAVA_AWT_WM_NONREPARENTING=1
+export GDK_BACKEND=wayland,x11
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+export QT_ENABLE_HIGHDPI_SCALING=1
+export ELECTRON_OZONE_PLATFORM_HINT=auto
+
+# Qt apps follow the desktop theme if a bridge is installed.
+if [ -z "$QT_QPA_PLATFORMTHEME" ]; then
+    for dir in /usr/lib/qt6/plugins /usr/lib/*/qt6/plugins; do
+        if [ -f "$dir/platformthemes/libcutecosmictheme.so" ]; then
+            export QT_QPA_PLATFORMTHEME=cosmic
+            break
+        elif [ -f "$dir/platformthemes/libqt6ct.so" ]; then
+            export QT_QPA_PLATFORMTHEME=qt6ct
+        fi
+    done
+fi
+
+# Passwords and SSH keys (if gnome-keyring is installed and enabled by PAM).
+if [ -d "$XDG_RUNTIME_DIR/keyring" ] && command -v gnome-keyring-daemon >/dev/null 2>&1; then
+    eval "$(gnome-keyring-daemon --start --components=pkcs11,secrets,ssh 2>/dev/null)"
+    if [ -z "$SSH_AUTH_SOCK" ]; then
+        for sock in "$XDG_RUNTIME_DIR/gcr/ssh" "$XDG_RUNTIME_DIR/keyring/ssh"; do
+            [ -S "$sock" ] && export SSH_AUTH_SOCK="$sock" && break
+        done
+    fi
+fi
+
+if command -v systemctl >/dev/null; then
+    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
+fi
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
+    exec dbus-run-session -- atrium-session
+else
+    exec atrium-session
+fi

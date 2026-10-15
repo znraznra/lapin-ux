@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Logic shared by the Atrium shell components that does not need a GUI.
+//!
+//! Everything here is plain Rust so it can be unit-tested without a Wayland
+//! session: app search ranking, the "All apps" alphabet grouping, the taskbar
+//! button model (pinned + running windows), the notification toast queue and
+//! clock formatting.
+
+pub mod apps;
+pub mod clock;
+pub mod notify;
+pub mod recent;
+pub mod search;
+pub mod taskbar;
+
+/// Reverse-DNS identifiers. Change these in one place when the project gets
+/// its final name / domain.
+pub mod ids {
+    pub const SHELL_APP_ID: &str = "dev.atrium.Shell";
+    pub const NOTIFYD_APP_ID: &str = "dev.atrium.Notifications";
+    pub const DESKTOP_NAME: &str = "Atrium";
+}

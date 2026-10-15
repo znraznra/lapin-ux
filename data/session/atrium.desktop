@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Atrium
+Comment=A familiar desktop: taskbar, Start menu and notifications
+Exec=/usr/bin/start-atrium
+Type=Application
+DesktopNames=Atrium;COSMIC

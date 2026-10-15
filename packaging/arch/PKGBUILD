@@ -1,0 +1,83 @@
+# Maintainer: CHANGE ME <you@example.com>
+#
+# Builds Atrium from this source tree:
+#
+#   cd packaging/arch && makepkg -si
+#
+# To build from a published repository instead, replace the `source`
+# array with: source=("atrium::git+https://github.com/CHANGE-ME/atrium.git")
+# and point `_src` at "$srcdir/atrium".
+
+pkgname=atrium-desktop-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Atrium: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
+arch=('x86_64' 'aarch64')
+license=('GPL-3.0-only')
+depends=(
+    # Compositor and reused, unbranded COSMIC services
+    'cosmic-comp'
+    'cosmic-settings-daemon'
+    'cosmic-bg'
+    'cosmic-osd'
+    'cosmic-idle'
+    'cosmic-greeter'           # lock screen
+    'cosmic-launcher'          # Alt+Tab window switcher (until Atrium has its own)
+    'cosmic-screenshot'        # Super+Shift+S
+    'cosmic-icon-theme'
+    'xdg-desktop-portal-cosmic'
+    # Runtime libraries
+    'libxkbcommon'
+    'wayland'
+    'dbus'
+    'systemd-libs'
+    'xdg-utils'
+)
+optdepends=(
+    'gnome-keyring: saved passwords and SSH keys'
+    'papirus-icon-theme: broader app icon coverage'
+    'xdg-desktop-portal-gtk: file pickers for GTK apps'
+)
+makedepends=('cargo' 'git' 'python' 'python-numpy' 'python-pillow')
+provides=('atrium-desktop')
+conflicts=('atrium-desktop')
+options=('!lto')
+
+_src="$startdir/../.."
+
+prepare() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo build --frozen --release --workspace
+    [ -f data/wallpapers/atrium-dark.jpg ] || python tools/make-wallpaper.py data/wallpapers
+}
+
+check() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo test --frozen --release -p atrium-core -p atrium-session
+}
+
+package() {
+    cd "$_src"
+    local bin
+    for bin in atrium-session atrium-shell atrium-notifyd; do
+        install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
+    done
+    install -Dm755 data/session/start-atrium        "$pkgdir/usr/bin/start-atrium"
+    install -Dm644 data/session/atrium.desktop      "$pkgdir/usr/share/wayland-sessions/atrium.desktop"
+    install -Dm644 data/systemd/atrium-session.target "$pkgdir/usr/lib/systemd/user/atrium-session.target"
+    install -Dm644 data/portals/atrium-portals.conf "$pkgdir/usr/share/xdg-desktop-portal/atrium-portals.conf"
+    install -Dm644 data/wallpapers/atrium-dark.jpg  "$pkgdir/usr/share/backgrounds/atrium/atrium-dark.jpg"
+    install -Dm644 data/wallpapers/atrium-light.jpg "$pkgdir/usr/share/backgrounds/atrium/atrium-light.jpg"
+    install -Dm644 data/icons/atrium-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.atrium.Shell.svg"
+    install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

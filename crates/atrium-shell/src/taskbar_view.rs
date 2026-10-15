@@ -1,0 +1,417 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Taskbar and its popups (window picker, right-click menu, calendar).
+
+use atrium_core::taskbar::Button;
+use cosmic::desktop::IconSourceExt;
+use cosmic::iced::{Alignment, Length};
+use cosmic::widget::{self, button, column, container, icon, mouse_area, row, text};
+use cosmic::Element;
+
+use crate::app::{Bar, Message, Popup, PopupKind, PowerAction, Shell, rect_key};
+use crate::config::TaskbarAlignment;
+use crate::style;
+use crate::wayland::WindowId as Handle;
+
+pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/atrium-start.svg");
+
+fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    match &shell.tracker {
+        Some(t) => t.container(key, content).into(),
+        None => content.into(),
+    }
+}
+
+pub fn app_icon(shell: &Shell, app: &str) -> icon::Handle {
+    match shell.catalog.data_for(app) {
+        Some(d) => d.icon.as_cosmic_icon(),
+        None => icon::from_name(app.to_string())
+            .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])))
+            .handle(),
+    }
+}
+
+pub fn app_name(shell: &Shell, app: &str) -> String {
+    shell.catalog.data_for(app).map(|d| d.name.clone()).unwrap_or_else(|| app.to_string())
+}
+
+pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
+    let start_open = shell.start.is_some();
+    let start_btn = button::custom(
+        container(icon(icon::from_svg_bytes(START_ICON)).size(style::TASK_ICON))
+            .center(Length::Fill),
+    )
+    .width(style::TASK_BUTTON)
+    .height(style::TASK_BUTTON)
+    .padding(0)
+    .class(style::flat_button(start_open))
+    .on_press(Message::ToggleStart);
+
+    let mut center = row::with_capacity(16).spacing(4).align_y(Alignment::Center).push(start_btn);
+
+    if shell.config.show_search {
+        let pill = container(
+            row::with_children(vec![
+                icon::from_name("system-search-symbolic").size(16).into(),
+                text::body("Search").into(),
+            ])
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([0, 14])
+        .height(32)
+        .width(180)
+        .align_y(Alignment::Center)
+        .class(style::search_pill());
+        center = center.push(
+            button::custom(pill)
+                .padding([0, 4])
+                .class(style::flat_button(false))
+                .on_press(Message::ToggleStart),
+        );
+    }
+
+    // Task buttons get their own row so the widget tree keeps a stable
+    // shape when the search box is toggled or buttons come and go.
+    let tasks: Vec<Element<'_, Message>> = shell.taskbar.buttons().into_iter().map(|b| task_button(shell, bar, b)).collect();
+    center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
+
+    let clock_style = shell.clock_style();
+    let clock = button::custom(
+        column::with_children(vec![
+            text::caption(clock_style.time(&shell.now)).into(),
+            text::caption(clock_style.date(&shell.now)).into(),
+        ])
+        .align_x(Alignment::End),
+    )
+    .padding([4, 10])
+    .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
+    .on_press(Message::ClockClick(bar.id));
+
+    let tray: Vec<Element<'_, Message>> = shell.tray.iter().map(|t| tray_button(shell, bar, t)).collect();
+    let mut right = row::with_capacity(3).spacing(2).align_y(Alignment::Center);
+    right = right.push(row::with_children(tray).spacing(0).align_y(Alignment::Center));
+    right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
+    if shell.config.show_desktop_corner {
+        right = right.push(
+            button::custom(widget::Space::new().width(6).height(Length::Fill))
+                .padding(0)
+                .height(Length::Fill)
+                .class(style::flat_button(false))
+                .on_press(Message::ShowDesktop),
+        );
+    }
+
+    let content: Element<'_, Message> = match shell.config.alignment {
+        TaskbarAlignment::Center => row::with_children(vec![
+            widget::Space::new().width(Length::Fill).into(),
+            center.into(),
+            container(right).width(Length::Fill).align_x(Alignment::End).into(),
+        ])
+        .align_y(Alignment::Center)
+        .into(),
+        TaskbarAlignment::Left => row::with_children(vec![
+            container(center).width(Length::Fill).into(),
+            right.into(),
+        ])
+        .align_y(Alignment::Center)
+        .into(),
+    };
+
+    container(content)
+        .padding([4, 4, 4, 12])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(Alignment::Center)
+        .class(style::taskbar_bg())
+        .into()
+}
+
+fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element<'a, Message> {
+    let active = b.active();
+    let indicator: Element<'_, Message> = if b.urgent() {
+        container(widget::Space::new().width(16).height(3)).class(style::urgent_indicator()).into()
+    } else if b.running() {
+        container(widget::Space::new().width(if active { 16 } else { 6 }).height(3))
+            .class(style::indicator(active))
+            .into()
+    } else {
+        widget::Space::new().width(6).height(3).into()
+    };
+
+    let content = column::with_children(vec![
+        widget::Space::new().height(4).into(),
+        icon(app_icon(shell, &b.app)).size(style::TASK_ICON).into(),
+        widget::Space::new().height(Length::Fill).into(),
+        indicator,
+        widget::Space::new().height(1).into(),
+    ])
+    .align_x(Alignment::Center)
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    let btn = button::custom(content)
+        .width(style::TASK_BUTTON)
+        .height(style::TASK_BUTTON)
+        .padding(0)
+        .class(style::flat_button(active))
+        .on_press(Message::TaskClick(bar.id, b.app.clone()));
+
+    let area = mouse_area(btn)
+        .on_right_press(Message::TaskContext(bar.id, b.app.clone()))
+        .on_middle_press(Message::Launch(b.app.clone()));
+
+    track(shell, rect_key(bar.id, &b.app), area)
+}
+
+fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry) -> Element<'a, Message> {
+    let name = t.item.name().to_string();
+    let content: Element<'_, Message> = match &t.icon {
+        Some(h) => icon(h.clone()).size(16).into(),
+        None => icon::from_name("image-missing-symbolic").size(16).into(),
+    };
+    let open = matches!(&shell.popup, Some(Popup { kind: PopupKind::TrayMenu(n), .. }) if *n == name);
+    let btn = button::custom(container(content).center(Length::Fill))
+        .width(32)
+        .height(style::TASK_BUTTON)
+        .padding(0)
+        .class(style::flat_button(open))
+        .on_press(Message::TrayClick(bar.id, name.clone()));
+    let area = mouse_area(btn).on_right_press(Message::TrayContext(bar.id, name.clone()));
+    track(shell, rect_key(bar.id, &format!("tray:{name}")), area)
+}
+
+/// Turn a tray icon update into a drawable icon: a themed name when the app
+/// gives one, otherwise the largest ARGB pixmap converted to RGBA.
+pub fn tray_icon(update: crate::tray::IconUpdate) -> icon::Handle {
+    if let Some(name) = update.name.as_deref() {
+        let path = std::path::Path::new(name);
+        if path.is_absolute() && path.exists() {
+            return icon::from_path(path.to_path_buf());
+        }
+        let mut b = icon::from_name(name.to_string())
+            .prefer_svg(true)
+            .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])));
+        if let Some(p) = update.theme_path {
+            b = b.with_extra_paths(vec![p]);
+        }
+        return b.handle();
+    }
+    let best = update
+        .pixmap
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.width > 0 && p.height > 0 && p.bytes.len() == (p.width * p.height * 4) as usize)
+        // Prefer 32 px-ish (crisp at 16 px on HiDPI), else the largest.
+        .min_by_key(|p| ((p.width - 32).abs(), -(p.width)));
+    match best {
+        Some(mut p) => {
+            for px in p.bytes.chunks_exact_mut(4) {
+                px.rotate_left(1); // ARGB (network order) -> RGBA
+            }
+            icon::from_raster_pixels(p.width as u32, p.height as u32, p.bytes)
+        }
+        None => icon::from_name("image-missing-symbolic").handle(),
+    }
+}
+
+fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
+    let Some(entry) = shell.tray.iter().find(|t| t.item.name() == name) else {
+        return panel(text::body("Not available"), 200.0);
+    };
+    let Some(root) = entry.menu.as_ref() else {
+        return panel(container(text::body("Loading…").class(style::dim_text())).padding(8), 200.0);
+    };
+    let Some(node) = root.find(&shell.tray_menu_path) else {
+        return panel(text::body("Menu changed"), 200.0);
+    };
+    let mut items: Vec<Element<'_, Message>> = Vec::new();
+    if !shell.tray_menu_path.is_empty() {
+        items.push(menu_item("go-previous-symbolic", node.label(), Message::TrayMenuBack));
+        items.push(menu_divider());
+    }
+    for child in node.children().iter().filter(|c| c.visible()) {
+        if child.is_separator() {
+            items.push(menu_divider());
+            continue;
+        }
+        let lead: Element<'_, Message> = match (child.toggled(), child.icon_name()) {
+            (Some(true), _) => icon::from_name("object-select-symbolic").size(16).into(),
+            (Some(false), _) => widget::Space::new().width(16).height(16).into(),
+            (None, Some(n)) => icon::from_name(n.to_string()).size(16).into(),
+            (None, None) => widget::Space::new().width(16).height(16).into(),
+        };
+        let mut r = row::with_capacity(3).spacing(12).align_y(Alignment::Center).push(lead);
+        let label = text::body(child.label()).width(Length::Fill);
+        r = r.push(if child.enabled() { label } else { label.class(style::dim_text()) });
+        if child.is_submenu() {
+            r = r.push(icon::from_name("go-next-symbolic").size(12));
+        }
+        let mut b = button::custom(r).width(Length::Fill).padding([7, 12]).class(style::flat_button(false));
+        if child.enabled() {
+            b = b.on_press(Message::TrayMenuItem(name.to_string(), child.id(), child.is_submenu()));
+        }
+        items.push(b.into());
+    }
+    if items.is_empty() {
+        items.push(container(text::body("No actions").class(style::dim_text())).padding(8).into());
+    }
+    panel(column::with_children(items).spacing(2), 260.0)
+}
+
+/// One row in a popup menu.
+pub fn menu_item<'a>(icon_name: &'a str, label: impl Into<String>, msg: Message) -> Element<'a, Message> {
+    button::custom(
+        row::with_children(vec![
+            icon::from_name(icon_name.to_string()).size(16).into(),
+            text::body(label.into()).into(),
+        ])
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([7, 12])
+    .class(style::flat_button(false))
+    .on_press(msg)
+    .into()
+}
+
+fn menu_divider<'a>() -> Element<'a, Message> {
+    container(widget::divider::horizontal::light()).padding([4, 8]).into()
+}
+
+fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
+    container(content).padding(4).width(width).class(style::panel_bg()).into()
+}
+
+pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
+    match &popup.kind {
+        PopupKind::Windows(app) => {
+            let items: Vec<Element<'_, Message>> = shell
+                .taskbar
+                .windows()
+                .iter()
+                .filter(|w| &w.app == app)
+                .map(|w| {
+                    let title = if w.title.is_empty() { app_name(shell, app) } else { w.title.clone() };
+                    row::with_children(vec![
+                        button::custom(
+                            row::with_children(vec![
+                                icon(app_icon(shell, app)).size(16).into(),
+                                text::body(title).width(Length::Fill).into(),
+                            ])
+                            .spacing(10)
+                            .align_y(Alignment::Center),
+                        )
+                        .width(Length::Fill)
+                        .padding([8, 10])
+                        .class(style::flat_button(w.active))
+                        .on_press(Message::ActivateWindow(w.handle))
+                        .into(),
+                        button::custom(icon::from_name("window-close-symbolic").size(16))
+                            .padding(8)
+                            .class(style::flat_button(false))
+                            .on_press(Message::CloseWindow(w.handle))
+                            .into(),
+                    ])
+                    .align_y(Alignment::Center)
+                    .into()
+                })
+                .collect();
+            panel(column::with_children(items).spacing(2), 320.0)
+        }
+        PopupKind::TaskContext(app) => {
+            let mut items: Vec<Element<'_, Message>> = Vec::new();
+            if let Some(data) = shell.catalog.data_for(app) {
+                for action in &data.desktop_actions {
+                    items.push(menu_item(
+                        "go-next-symbolic",
+                        action.name.clone(),
+                        Message::LaunchAction(app.clone(), action.exec.clone()),
+                    ));
+                }
+                if !data.desktop_actions.is_empty() {
+                    items.push(menu_divider());
+                }
+            }
+            items.push(
+                button::custom(
+                    row::with_children(vec![
+                        icon(app_icon(shell, app)).size(16).into(),
+                        text::body(app_name(shell, app)).into(),
+                    ])
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding([7, 12])
+                .class(style::flat_button(false))
+                .on_press(Message::Launch(app.clone()))
+                .into(),
+            );
+            if shell.taskbar.is_pinned(app) {
+                items.push(menu_item("view-pin-symbolic", "Unpin from taskbar", Message::Unpin(app.clone())));
+            } else if shell.catalog.get(app).is_some() {
+                items.push(menu_item("view-pin-symbolic", "Pin to taskbar", Message::Pin(app.clone())));
+            }
+            let n = shell.taskbar.windows().iter().filter(|w| &w.app == app).count();
+            if n > 0 {
+                let label = if n == 1 { "Close window" } else { "Close all windows" };
+                items.push(menu_item("window-close-symbolic", label, Message::CloseApp(app.clone())));
+            }
+            panel(column::with_children(items).spacing(2), 280.0)
+        }
+        PopupKind::StartContext(app) => {
+            let mut items: Vec<Element<'_, Message>> = Vec::new();
+            if shell.config.pinned_start.contains(app) {
+                items.push(menu_item("view-pin-symbolic", "Unpin from Start", Message::UnpinStart(app.clone())));
+            } else {
+                items.push(menu_item("view-pin-symbolic", "Pin to Start", Message::PinStart(app.clone())));
+            }
+            if shell.taskbar.is_pinned(app) {
+                items.push(menu_item("view-pin-symbolic", "Unpin from taskbar", Message::Unpin(app.clone())));
+            } else {
+                items.push(menu_item("view-pin-symbolic", "Pin to taskbar", Message::Pin(app.clone())));
+            }
+            panel(column::with_children(items).spacing(2), 240.0)
+        }
+        PopupKind::TrayMenu(name) => tray_menu(shell, name),
+        PopupKind::Power => panel(
+            column::with_children(vec![
+                menu_item("system-lock-screen-symbolic", "Lock", Message::Power(PowerAction::Lock)),
+                menu_item("system-log-out-symbolic", "Sign out", Message::Power(PowerAction::SignOut)),
+                menu_divider(),
+                menu_item("weather-clear-night-symbolic", "Sleep", Message::Power(PowerAction::Sleep)),
+                menu_item("system-reboot-symbolic", "Restart", Message::Power(PowerAction::Restart)),
+                menu_item("system-shutdown-symbolic", "Shut down", Message::Power(PowerAction::ShutDown)),
+            ])
+            .spacing(2),
+            200.0,
+        ),
+        PopupKind::Calendar => {
+            let clock = shell.clock_style();
+            let mut long = clock;
+            long.seconds = true;
+            let header = column::with_children(vec![
+                text::title3(long.time(&shell.now)).into(),
+                text::body(clock.long_date(&shell.now)).class(style::dim_text()).into(),
+            ])
+            .spacing(2)
+            .padding([8, 12]);
+            let cal = widget::calendar(
+                &shell.calendar,
+                Message::CalendarSelect,
+                || Message::CalendarPrev,
+                || Message::CalendarNext,
+                if atrium_core::clock::week_starts_sunday_env() {
+                    jiff::civil::Weekday::Sunday
+                } else {
+                    jiff::civil::Weekday::Monday
+                },
+            );
+            panel(
+                column::with_children(vec![header.into(), menu_divider(), container(cal).padding(8).into()]),
+                400.0,
+            )
+        }
+    }
+}
