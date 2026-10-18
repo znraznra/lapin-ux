@@ -14,8 +14,8 @@ use std::time::Duration;
 use cosmic::iced::{Subscription, stream};
 use futures::{SinkExt, StreamExt};
 use lapin_ux_core::quick::{
-    Battery, Bluetooth, BtDevice, Charge, Link, Network, Power, Sink, Volume, WifiNetwork, merge_networks,
-    parse_pactl_mute, parse_pactl_sinks, parse_pactl_volume, parse_wpctl_volume,
+    AppStream, HOTSPOT_ID, Vpn, Battery, Bluetooth, BtDevice, Charge, Link, Network, Power, Sink, Volume, WifiNetwork, merge_networks,
+    parse_pactl_mute, parse_pactl_sink_inputs, parse_pactl_sinks, parse_pactl_volume, parse_wpctl_volume,
 };
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, MessageStream, Proxy};
@@ -36,6 +36,8 @@ pub enum Event {
     Power(Power),
     Volume(Volume),
     Sinks(Vec<Sink>),
+    /// Apps playing sound (volume mixer).
+    Streams(Vec<AppStream>),
 }
 
 async fn proxy<'a>(conn: &Connection, dest: &'a str, path: &'a str, iface: &'a str) -> zbus::Result<Proxy<'a>> {
@@ -193,6 +195,9 @@ pub async fn network(conn: &Connection) -> zbus::Result<Network> {
         });
     }
     n.networks = merge_networks(list);
+    let (vpns, hotspot) = vpns_and_hotspot(conn, &nm).await;
+    n.vpns = vpns;
+    n.hotspot = hotspot;
 
     let primary: OwnedObjectPath = nm.get_property("PrimaryConnection").await?;
     if primary.as_str() != "/" {
@@ -210,6 +215,103 @@ pub async fn network(conn: &Connection) -> zbus::Result<Network> {
         };
     }
     Ok(n)
+}
+
+/// Saved VPNs (with their active connection, if up) and whether our
+/// hotspot is running.
+async fn vpns_and_hotspot(conn: &Connection, nm: &Proxy<'_>) -> (Vec<Vpn>, bool) {
+    // Saved connection path → active connection path.
+    let mut active: HashMap<String, String> = HashMap::new();
+    let mut hotspot = false;
+    for a in nm.get_property::<Vec<OwnedObjectPath>>("ActiveConnections").await.unwrap_or_default() {
+        let Ok(ac) = proxy(conn, NM, a.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await else { continue };
+        if ac.get_property::<String>("Id").await.is_ok_and(|id| id == HOTSPOT_ID) {
+            hotspot = true;
+        }
+        if let Ok(c) = ac.get_property::<OwnedObjectPath>("Connection").await {
+            active.insert(c.to_string(), a.to_string());
+        }
+    }
+    let mut vpns = Vec::new();
+    let Ok(settings) = proxy(conn, NM, "/org/freedesktop/NetworkManager/Settings", "org.freedesktop.NetworkManager.Settings").await else {
+        return (vpns, hotspot);
+    };
+    for p in settings.call::<_, _, Vec<OwnedObjectPath>>("ListConnections", &()).await.unwrap_or_default() {
+        let Ok(c) = proxy(conn, NM, p.as_str(), "org.freedesktop.NetworkManager.Settings.Connection").await else { continue };
+        let Ok(s) = c.call::<_, _, Settings>("GetSettings", &()).await else { continue };
+        let Some(base) = s.get("connection") else { continue };
+        let kind: String = prop(base, "type").unwrap_or_default();
+        if kind == "vpn" || kind == "wireguard" {
+            vpns.push(Vpn { name: prop(base, "id").unwrap_or_default(), settings: p.to_string(), active: active.get(p.as_str()).cloned() });
+        }
+    }
+    vpns.sort_by(|a, b| a.name.cmp(&b.name));
+    (vpns, hotspot)
+}
+
+/// Connect or disconnect a VPN.
+pub async fn vpn(settings: String, active: Option<String>) -> zbus::Result<()> {
+    let conn = Connection::system().await?;
+    let nm = proxy(&conn, NM, NM_PATH, NM).await?;
+    match active {
+        Some(a) => nm.call::<_, _, ()>("DeactivateConnection", &(OwnedObjectPath::try_from(a.as_str())?,)).await,
+        None => {
+            let root = OwnedObjectPath::try_from("/")?;
+            nm.call::<_, _, OwnedObjectPath>("ActivateConnection", &(OwnedObjectPath::try_from(settings.as_str())?, root.clone(), root))
+                .await
+                .map(|_| ())
+        }
+    }
+}
+
+/// Start or stop the mobile hotspot (Wi-Fi access point sharing this
+/// computer's connection), creating its connection the first time.
+pub async fn hotspot(device: String, on: bool, name: String, password: String) -> zbus::Result<()> {
+    let conn = Connection::system().await?;
+    let nm = proxy(&conn, NM, NM_PATH, NM).await?;
+    for a in nm.get_property::<Vec<OwnedObjectPath>>("ActiveConnections").await.unwrap_or_default() {
+        let ac = proxy(&conn, NM, a.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await?;
+        if ac.get_property::<String>("Id").await.is_ok_and(|id| id == HOTSPOT_ID) {
+            if !on {
+                return nm.call::<_, _, ()>("DeactivateConnection", &(a,)).await;
+            }
+            return Ok(());
+        }
+    }
+    if !on {
+        return Ok(());
+    }
+    let dev = OwnedObjectPath::try_from(device.as_str())?;
+    let root = OwnedObjectPath::try_from("/")?;
+    // Reuse the saved hotspot connection if there is one.
+    let settings = proxy(&conn, NM, "/org/freedesktop/NetworkManager/Settings", "org.freedesktop.NetworkManager.Settings").await?;
+    for p in settings.call::<_, _, Vec<OwnedObjectPath>>("ListConnections", &()).await.unwrap_or_default() {
+        let c = proxy(&conn, NM, p.as_str(), "org.freedesktop.NetworkManager.Settings.Connection").await?;
+        if let Ok(s) = c.call::<_, _, Settings>("GetSettings", &()).await
+            && s.get("connection").and_then(|b| prop::<String>(b, "id")).as_deref() == Some(HOTSPOT_ID)
+        {
+            nm.call::<_, _, OwnedObjectPath>("ActivateConnection", &(p, dev, root)).await?;
+            return Ok(());
+        }
+    }
+    let mut s: HashMap<&str, HashMap<&str, Value>> = HashMap::new();
+    s.insert(
+        "connection",
+        HashMap::from([
+            ("id", Value::from(HOTSPOT_ID)),
+            ("type", Value::from("802-11-wireless")),
+            ("autoconnect", Value::from(false)),
+        ]),
+    );
+    s.insert("802-11-wireless", HashMap::from([("ssid", Value::from(name.into_bytes())), ("mode", Value::from("ap"))]));
+    s.insert(
+        "802-11-wireless-security",
+        HashMap::from([("key-mgmt", Value::from("wpa-psk")), ("psk", Value::from(password))]),
+    );
+    s.insert("ipv4", HashMap::from([("method", Value::from("shared"))]));
+    s.insert("ipv6", HashMap::from([("method", Value::from("ignore"))]));
+    nm.call::<_, _, (OwnedObjectPath, OwnedObjectPath)>("AddAndActivateConnection", &(s, dev, root)).await?;
+    Ok(())
 }
 
 pub async fn set_wifi(enabled: bool) -> zbus::Result<()> {
@@ -419,6 +521,19 @@ pub async fn set_mute(muted: bool) {
     }
 }
 
+pub async fn streams() -> Vec<AppStream> {
+    output("pactl", &["list", "sink-inputs"]).await.as_deref().map(parse_pactl_sink_inputs).unwrap_or_default()
+}
+
+pub async fn set_stream_volume(index: u32, level: f32) {
+    let pct = format!("{}%", (level.clamp(0.0, 1.0) * 100.0).round());
+    run("pactl", &["set-sink-input-volume", &index.to_string(), &pct]).await;
+}
+
+pub async fn set_stream_mute(index: u32, muted: bool) {
+    run("pactl", &["set-sink-input-mute", &index.to_string(), if muted { "1" } else { "0" }]).await;
+}
+
 pub async fn set_default_sink(name: String) {
     run("pactl", &["set-default-sink", &name]).await;
 }
@@ -432,6 +547,7 @@ fn audio_subscription() -> Subscription<Event> {
             loop {
                 let _ = out.send(Event::Volume(volume().await)).await;
                 let _ = out.send(Event::Sinks(sinks().await)).await;
+                let _ = out.send(Event::Streams(streams().await)).await;
                 let child = tokio::process::Command::new("pactl")
                     .arg("subscribe")
                     .stdout(std::process::Stdio::piped())
@@ -444,6 +560,11 @@ fn audio_subscription() -> Subscription<Event> {
                 let Some(stdout) = child.stdout.take() else { continue };
                 let mut lines = tokio::io::BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    if line.contains("sink-input") {
+                        tokio::time::sleep(Duration::from_millis(60)).await;
+                        let _ = out.send(Event::Streams(streams().await)).await;
+                        continue;
+                    }
                     if !(line.contains("sink") || line.contains("server")) {
                         continue;
                     }

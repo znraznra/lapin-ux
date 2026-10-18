@@ -47,6 +47,8 @@ pub struct ShellConfig {
     pub desktop_auto_arrange: bool,
     /// Automatically hide the taskbar.
     pub auto_hide: bool,
+    /// Mobile hotspot password (made up the first time it's used).
+    pub hotspot_password: String,
     /// With several monitors: which taskbars show which windows.
     pub multi_display: lapin_ux_core::taskbar::MultiDisplay,
 }

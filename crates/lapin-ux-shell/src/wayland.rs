@@ -18,6 +18,11 @@ use cosmic::cctk::{
     self,
     cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::{self, ZcosmicToplevelHandleV1},
     cosmic_protocols::toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
+    cosmic_protocols::a11y::v1::client::cosmic_a11y_manager_v1::{self, CosmicA11yManagerV1},
+    cosmic_protocols::keyboard_layout::v1::client::{
+        zcosmic_keyboard_layout_manager_v1::ZcosmicKeyboardLayoutManagerV1,
+        zcosmic_keyboard_layout_v1::{self, ZcosmicKeyboardLayoutV1},
+    },
     sctk::{
         self,
         activation::{ActivationHandler, ActivationState, RequestData, RequestDataExt},
@@ -41,7 +46,7 @@ use cosmic::cctk::{
         Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
         backend::ObjectId,
         globals::{GlobalList, registry_queue_init},
-        protocol::{wl_output, wl_seat::WlSeat, wl_shm, wl_surface::WlSurface},
+        protocol::{wl_keyboard, wl_output, wl_seat::WlSeat, wl_shm, wl_surface::WlSurface},
     },
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
 };
@@ -76,6 +81,22 @@ pub enum WaylandUpdate {
     ActivationToken { token: Option<String>, app_id: String, exec: String, terminal: bool },
     /// A preview picture of a window (RGBA).
     Thumbnail { id: WindowId, width: u32, height: u32, rgba: std::sync::Arc<Vec<u8>> },
+    /// Accessibility state from the compositor (cosmic-comp only).
+    A11y(A11yState),
+    /// The active keyboard layout (index into the configured list).
+    KeyboardGroup(u32),
+}
+
+/// What the compositor reports about its accessibility features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct A11yState {
+    /// The compositor supports the accessibility protocol.
+    pub available: bool,
+    pub magnifier: bool,
+    pub inverted: bool,
+    /// Colour filter in use (greyscale, colour-blindness corrections…).
+    pub filter: u32,
+    pub filter_on: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +108,10 @@ pub enum WaylandRequest {
     TokenRequest { app_id: String, exec: String, terminal: bool },
     /// Capture one frame of a window for a thumbnail.
     Capture(WindowId),
+    SetMagnifier(bool),
+    SetColorFilter(bool),
+    /// Switch to keyboard layout `n` of the configured list.
+    SetKeyboardGroup(u32),
 }
 
 /// Thumbnails are captured at most this size.
@@ -185,6 +210,10 @@ struct AppData {
     screencopy: Option<ScreencopyState>,
     shm: Option<Shm>,
     captures: HashMap<WindowId, Capture>,
+    a11y: Option<CosmicA11yManagerV1>,
+    a11y_state: A11yState,
+    layout_manager: Option<ZcosmicKeyboardLayoutManagerV1>,
+    keyboard_layout: Option<ZcosmicKeyboardLayoutV1>,
 }
 
 impl AppData {
@@ -214,8 +243,20 @@ impl AppData {
     }
 
     fn handle(&mut self, req: WaylandRequest) {
+        match req {
+            WaylandRequest::SetMagnifier(on) => return self.set_a11y(Some(on), None),
+            WaylandRequest::SetColorFilter(on) => return self.set_a11y(None, Some(on)),
+            WaylandRequest::SetKeyboardGroup(g) => {
+                if let Some(k) = &self.keyboard_layout {
+                    k.set_group(g);
+                }
+                return;
+            }
+            _ => {}
+        }
         let target = |id: &WindowId| self.objects.get(id).cloned();
         match req {
+            WaylandRequest::SetMagnifier(_) | WaylandRequest::SetColorFilter(_) | WaylandRequest::SetKeyboardGroup(_) => {}
             WaylandRequest::Activate(id) => match target(&id) {
                 Some(Toplevel::Cosmic(ext)) => {
                     if let (Some(Backend::Cosmic { manager: Some(m), .. }), Some(t), Some(seat)) =
@@ -368,7 +409,15 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         screencopy: Some(ScreencopyState::new(&globals, &qh)),
         shm: Shm::bind(&globals, &qh).ok(),
         captures: HashMap::new(),
+        a11y: globals.bind::<CosmicA11yManagerV1, _, _>(&qh, 1..=3, ()).ok(),
+        a11y_state: A11yState::default(),
+        layout_manager: globals.bind::<ZcosmicKeyboardLayoutManagerV1, _, _>(&qh, 1..=1, ()).ok(),
+        keyboard_layout: None,
     };
+    if data.a11y.is_some() {
+        data.a11y_state.available = true;
+        let _ = data.tx.unbounded_send(WaylandUpdate::A11y(data.a11y_state));
+    }
 
     while !data.exit {
         if let Err(e) = event_loop.dispatch(None, &mut data) {
@@ -508,7 +557,16 @@ impl SeatHandler for AppData {
         &mut self.seat_state
     }
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
-    fn new_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat, _: sctk::seat::Capability) {}
+    fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: WlSeat, cap: sctk::seat::Capability) {
+        // The keyboard-layout protocol hangs off a keyboard.
+        if cap == sctk::seat::Capability::Keyboard
+            && self.keyboard_layout.is_none()
+            && let Some(m) = &self.layout_manager
+        {
+            let kb = seat.get_keyboard(qh, ());
+            self.keyboard_layout = Some(m.get_keyboard_layout(&kb, qh, ()));
+        }
+    }
     fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat, _: sctk::seat::Capability) {}
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
 }
@@ -605,6 +663,70 @@ impl ScreencopyHandler for AppData {
         if let Some(d) = frame.data::<FrameData>() {
             tracing::debug!(?reason, "capture failed");
             self.captures.remove(&d.window);
+        }
+    }
+}
+
+// ---- accessibility and keyboard layout (cosmic-comp) ----------------------------
+
+impl Dispatch<CosmicA11yManagerV1, ()> for AppData {
+    fn event(state: &mut Self, _: &CosmicA11yManagerV1, event: cosmic_a11y_manager_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        let on = |v: WEnum<cosmic_a11y_manager_v1::ActiveState>| matches!(v, WEnum::Value(cosmic_a11y_manager_v1::ActiveState::Enabled));
+        let filter = |v: WEnum<cosmic_a11y_manager_v1::Filter>| match v {
+            WEnum::Value(f) => f as u32,
+            WEnum::Unknown(n) => n,
+        };
+        match event {
+            cosmic_a11y_manager_v1::Event::Magnifier { active } => state.a11y_state.magnifier = on(active),
+            cosmic_a11y_manager_v1::Event::ScreenFilter { inverted, filter: f } => {
+                state.a11y_state.inverted = on(inverted);
+                state.a11y_state.filter = filter(f);
+                state.a11y_state.filter_on = state.a11y_state.filter > 1;
+            }
+            cosmic_a11y_manager_v1::Event::ScreenFilter2 { inverted, filter: f, filter_state } => {
+                state.a11y_state.inverted = on(inverted);
+                state.a11y_state.filter = filter(f);
+                state.a11y_state.filter_on = on(filter_state);
+            }
+            _ => return,
+        }
+        let _ = state.tx.unbounded_send(WaylandUpdate::A11y(state.a11y_state));
+    }
+}
+
+impl Dispatch<ZcosmicKeyboardLayoutManagerV1, ()> for AppData {
+    fn event(_: &mut Self, _: &ZcosmicKeyboardLayoutManagerV1, _: <ZcosmicKeyboardLayoutManagerV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<ZcosmicKeyboardLayoutV1, ()> for AppData {
+    fn event(state: &mut Self, _: &ZcosmicKeyboardLayoutV1, event: zcosmic_keyboard_layout_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let zcosmic_keyboard_layout_v1::Event::Group { group } = event {
+            let _ = state.tx.unbounded_send(WaylandUpdate::KeyboardGroup(group));
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for AppData {
+    fn event(_: &mut Self, _: &wl_keyboard::WlKeyboard, _: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl AppData {
+    fn set_a11y(&mut self, magnifier: Option<bool>, filter_on: Option<bool>) {
+        use cosmic_a11y_manager_v1::{ActiveState, Filter};
+        let Some(m) = &self.a11y else { return };
+        let st = |b: bool| if b { ActiveState::Enabled } else { ActiveState::Disabled };
+        if let Some(on) = magnifier {
+            m.set_magnifier(st(on));
+        }
+        if let Some(on) = filter_on {
+            let s = self.a11y_state;
+            if m.version() >= 3 {
+                // Keep the chosen filter; greyscale if none was ever picked.
+                let f = if s.filter > 1 { Filter::try_from(s.filter).unwrap_or(Filter::Greyscale) } else { Filter::Greyscale };
+                m.set_screen_filter2(st(s.inverted), f, st(on));
+            } else if m.version() >= 2 {
+                m.set_screen_filter(st(s.inverted), if on { Filter::Greyscale } else { Filter::Disabled });
+            }
         }
     }
 }

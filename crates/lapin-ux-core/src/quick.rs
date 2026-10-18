@@ -37,7 +37,23 @@ pub struct Network {
     /// Wi-Fi device object path (for connect/scan).
     pub wifi_device: String,
     pub networks: Vec<WifiNetwork>,
+    /// Saved VPN / WireGuard connections.
+    pub vpns: Vec<Vpn>,
+    /// Our mobile hotspot connection is up.
+    pub hotspot: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vpn {
+    pub name: String,
+    /// Saved connection object path.
+    pub settings: String,
+    /// Active connection object path while connected.
+    pub active: Option<String>,
+}
+
+/// NetworkManager connection id of the mobile hotspot.
+pub const HOTSPOT_ID: &str = "Mobile hotspot";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BtDevice {
@@ -169,6 +185,109 @@ pub fn parse_pactl_sinks(out: &str, default: &str) -> Vec<Sink> {
     sinks
 }
 
+/// One app playing sound (a PulseAudio/PipeWire sink input).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AppStream {
+    pub index: u32,
+    pub name: String,
+    pub icon: String,
+    /// Executable name, to find a better icon from installed apps.
+    pub binary: String,
+    pub level: f32,
+    pub muted: bool,
+}
+
+/// Parse `pactl list sink-inputs`; streams of the same app are merged
+/// (first one's index is used for its slider) and system sounds skipped.
+pub fn parse_pactl_sink_inputs(out: &str) -> Vec<AppStream> {
+    let mut list: Vec<AppStream> = Vec::new();
+    let mut cur: Option<AppStream> = None;
+    let mut role = String::new();
+    let flush = |cur: &mut Option<AppStream>, role: &mut String, list: &mut Vec<AppStream>| {
+        if let Some(s) = cur.take()
+            && role != "event"
+            && !s.name.is_empty()
+            && !list.iter().any(|o| o.name == s.name)
+        {
+            list.push(s);
+        }
+        role.clear();
+    };
+    for line in out.lines() {
+        let l = line.trim();
+        if let Some(idx) = l.strip_prefix("Sink Input #") {
+            flush(&mut cur, &mut role, &mut list);
+            cur = idx.trim().parse().ok().map(|index| AppStream { index, ..Default::default() });
+            continue;
+        }
+        let Some(s) = cur.as_mut() else { continue };
+        if let Some(m) = l.strip_prefix("Mute:") {
+            s.muted = m.trim() == "yes";
+        } else if l.starts_with("Volume:") {
+            if let Some(v) = parse_pactl_volume(l) {
+                s.level = v;
+            }
+        } else if let Some((k, v)) = l.split_once(" = ") {
+            let v = v.trim().trim_matches('"').to_string();
+            match k.trim() {
+                "application.name" => s.name = v,
+                "application.icon_name" => s.icon = v,
+                "application.process.binary" => s.binary = v,
+                "media.role" => role = v,
+                _ => {}
+            }
+        }
+    }
+    flush(&mut cur, &mut role, &mut list);
+    list
+}
+
+/// Keyboard layouts configured for cosmic-comp, from its `xkb_config` RON
+/// file: `layout: "us,de"`, `variant: ",nodeadkeys"` → [("us",""), ("de","nodeadkeys")].
+pub fn xkb_layouts(ron: &str) -> Vec<(String, String)> {
+    let field = |name: &str| -> String {
+        let Some(i) = ron.find(&format!("{name}:")) else { return String::new() };
+        let rest = &ron[i + name.len() + 1..];
+        let Some(a) = rest.find('"') else { return String::new() };
+        let rest = &rest[a + 1..];
+        rest[..rest.find('"').unwrap_or(rest.len())].to_string()
+    };
+    let layouts = field("layout");
+    let variants = field("variant");
+    let variants: Vec<&str> = variants.split(',').collect();
+    layouts
+        .split(',')
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .enumerate()
+        .map(|(i, l)| (l.to_string(), variants.get(i).map_or("", |v| v.trim()).to_string()))
+        .collect()
+}
+
+/// Human name of a layout from xkb's `evdev.lst` ("us" → "English (US)").
+pub fn xkb_description(lst: &str, layout: &str, variant: &str) -> Option<String> {
+    let mut section = "";
+    for line in lst.lines() {
+        if let Some(s) = line.strip_prefix("! ") {
+            section = s.trim();
+            continue;
+        }
+        let l = line.trim();
+        let Some((code, desc)) = l.split_once(char::is_whitespace) else { continue };
+        let desc = desc.trim();
+        if variant.is_empty() && section == "layout" && code == layout {
+            return Some(desc.to_string());
+        }
+        // Variants read "nodeadkeys      de: German (no dead keys)".
+        if !variant.is_empty() && section == "variant" && code == variant {
+            if let Some(d) = desc.strip_prefix(&format!("{layout}: ")) {
+                return Some(d.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Merge access points into one entry per SSID (strongest wins), hide
 /// hidden networks, and sort: connected first, then known, then by strength.
 pub fn merge_networks(mut aps: Vec<WifiNetwork>) -> Vec<WifiNetwork> {
@@ -260,6 +379,26 @@ pub fn network_label(n: &Network) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_layouts() {
+        let ron = "(\n    rules: \"\",\n    model: \"pc104\",\n    layout: \"us,de\",\n    variant: \",nodeadkeys\",\n    options: None,\n)";
+        assert_eq!(xkb_layouts(ron), vec![("us".into(), "".into()), ("de".into(), "nodeadkeys".into())]);
+        let lst = "! model\n  pc104  Generic 104\n\n! layout\n  us              English (US)\n  de              German\n\n! variant\n  nodeadkeys      de: German (no dead keys)\n";
+        assert_eq!(xkb_description(lst, "us", "").as_deref(), Some("English (US)"));
+        assert_eq!(xkb_description(lst, "de", "nodeadkeys").as_deref(), Some("German (no dead keys)"));
+        assert_eq!(xkb_description(lst, "fr", ""), None);
+    }
+
+    #[test]
+    fn sink_inputs() {
+        let out = "Sink Input #42\n\tMute: no\n\tVolume: front-left: 42598 /  65% / -11.23 dB,   front-right: 42598 /  65% / -11.23 dB\n\tProperties:\n\t\tapplication.name = \"Firefox\"\n\t\tapplication.process.binary = \"firefox\"\n\t\tapplication.icon_name = \"firefox\"\nSink Input #43\n\tMute: yes\n\tVolume: mono: 65536 / 100% / 0.00 dB\n\tProperties:\n\t\tapplication.name = \"Firefox\"\nSink Input #44\n\tMute: no\n\tVolume: mono: 65536 / 100%\n\tProperties:\n\t\tapplication.name = \"Spotify\"\nSink Input #45\n\tProperties:\n\t\tapplication.name = \"bell\"\n\t\tmedia.role = \"event\"\n";
+        let s = parse_pactl_sink_inputs(out);
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].index, s[0].name.as_str(), s[0].binary.as_str(), s[0].muted), (42, "Firefox", "firefox", false));
+        assert!((s[0].level - 0.65).abs() < 0.01);
+        assert_eq!((s[1].name.as_str(), s[1].level), ("Spotify", 1.0));
+    }
 
     #[test]
     fn wpctl() {

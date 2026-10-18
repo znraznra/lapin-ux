@@ -842,6 +842,7 @@ impl Application for Shell {
             crate::launcher_entry::subscription().map(Message::Badge),
             crate::clipboard::subscription().map(Message::Clip),
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
+            crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             wl::subscription().map(Message::Wayland),
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
@@ -900,6 +901,8 @@ impl Shell {
                 WaylandUpdate::ActivationToken { token, app_id, exec, terminal } => {
                     return spawn(exec, app_id, terminal, token);
                 }
+                WaylandUpdate::A11y(a) => self.quick.a11y = a,
+                WaylandUpdate::KeyboardGroup(g) => self.quick.kb_group = g,
                 WaylandUpdate::Thumbnail { id, width, height, rgba } => {
                     return self.update_preview(crate::previews::PreviewMsg::Thumbnail(id, width, height, rgba));
                 }

@@ -88,7 +88,7 @@ async fn switch_user_available() -> bool {
     dbus.name_has_owner(name).await.unwrap_or(false)
 }
 
-fn which(bin: &str) -> bool {
+pub(crate) fn which(bin: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
 }
 
