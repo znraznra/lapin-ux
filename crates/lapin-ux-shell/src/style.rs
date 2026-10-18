@@ -113,6 +113,24 @@ pub fn indicator(active: bool) -> theme::Container<'static> {
     })
 }
 
+/// A folder of apps in Start's pinned grid.
+pub fn folder_tile() -> theme::Container<'static> {
+    theme::Container::custom(|t| container::Style {
+        background: Some(Background::Color(with_alpha(t.cosmic().on_bg_color(), 0.08))),
+        border: Border { radius: 6.0.into(), ..Default::default() },
+        ..Default::default()
+    })
+}
+
+/// An open folder in Start.
+pub fn folder_card() -> theme::Container<'static> {
+    theme::Container::custom(|t| container::Style {
+        background: Some(Background::Color(with_alpha(t.cosmic().on_bg_color(), 0.05))),
+        border: Border { radius: 8.0.into(), width: 1.0, color: with_alpha(t.cosmic().on_bg_color(), 0.1) },
+        ..Default::default()
+    })
+}
+
 /// The small count bubble on a taskbar button.
 pub fn badge() -> theme::Container<'static> {
     theme::Container::custom(|t| {

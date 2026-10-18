@@ -5,7 +5,7 @@
 use std::sync::LazyLock;
 
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{self, button, column, container, grid, icon, mouse_area, row, scrollable, text, text_input};
+use cosmic::widget::{self, button, column, container, icon, mouse_area, row, scrollable, text, text_input};
 use cosmic::Element;
 
 use crate::start_search::StartItem;
@@ -14,7 +14,6 @@ use crate::style;
 use crate::taskbar_view::{app_icon, app_name};
 
 pub const PINNED_COLUMNS: usize = 6;
-const PINNED_ROWS: usize = 3;
 
 struct Account {
     name: String,
@@ -69,27 +68,6 @@ fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Mes
         Some(t) => t.container(key, content).into(),
         None => content.into(),
     }
-}
-
-/// Large grid tile: icon over a two-line label.
-fn tile<'a>(shell: &'a Shell, start: &'a StartMenu, app: &'a str, selected: bool) -> Element<'a, Message> {
-    let b = button::custom(
-        column::with_children(vec![
-            icon(app_icon(shell, app)).size(32).into(),
-            text::caption(app_name(shell, app))
-                .align_x(Alignment::Center)
-                .width(Length::Fill)
-                .height(32)
-                .into(),
-        ])
-        .spacing(6)
-        .align_x(Alignment::Center),
-    )
-    .width(Length::Fixed(88.0))
-    .padding([12, 4, 4, 4])
-    .class(style::flat_button(selected))
-    .on_press(Message::Launch(app.to_string()));
-    tracked(shell, rect_key(start.id, app), mouse_area(b).on_right_press(Message::StartContext(app.to_string())))
 }
 
 /// Compact list row: icon and name, optional secondary line.
@@ -180,19 +158,7 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
 }
 
 fn home<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
-    let pinned: Vec<&String> = shell.config.pinned_start.iter().filter(|id| shell.catalog.get(id).is_some()).collect();
-    let mut g = grid().column_spacing(4).row_spacing(8);
-    for (i, app) in pinned.iter().take(PINNED_COLUMNS * PINNED_ROWS).enumerate() {
-        if i > 0 && i % PINNED_COLUMNS == 0 {
-            g = g.insert_row();
-        }
-        g = g.push(tile(shell, start, app, start.selected == Some(i)));
-    }
-    let pinned_block: Element<'_, Message> = if pinned.is_empty() {
-        text::body("Right-click an app in All apps to pin it here.").class(style::dim_text()).into()
-    } else {
-        container(g).center_x(Length::Fill).into()
-    };
+    let pinned_block = crate::start_pins::pinned_block(shell, start);
 
     // Recommended: recent documents, or recently opened apps if there are none.
     let now = chrono::Utc::now();
@@ -349,6 +315,7 @@ fn item_row<'a>(shell: &'a Shell, start: &'a StartMenu, item: &StartItem, select
         },
         StartItem::Setting(p) => result_row(named(p.icon), p.title.to_string(), "System settings".into(), selected, item.clone()),
         StartItem::File { path, is_dir } => result_row(file_icon(path, *is_dir), file_name(path), location(path), selected, item.clone()),
+        StartItem::Pin(_) => widget::Space::new().into(),
         StartItem::Web(q) => result_row(
             named("system-search-symbolic"),
             format!("{q} \u{2014} See web results"),
@@ -399,7 +366,9 @@ fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
             head(file_icon(path, *is_dir), file_name(path), format!("{kind} \u{00B7} {}", location(path)))
                 .push(button::suggested("Open").on_press(Message::StartActivate(item.clone())))
                 .push(action("Open file location".into(), Message::ShowInFolder(path.clone())))
+                .push(action("Pin to Start".into(), Message::Pins(crate::start_pins::PinMsg::PinPath(path.clone()))))
         }
+        StartItem::Pin(_) => return widget::Space::new().into(),
         StartItem::Web(q) => head(named("system-search-symbolic"), q.clone(), "Search the web".into())
             .push(button::suggested("Open results in browser").on_press(Message::StartActivate(item.clone()))),
     };

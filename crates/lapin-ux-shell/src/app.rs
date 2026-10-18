@@ -69,6 +69,9 @@ pub struct StartMenu {
     /// starts using the arrow keys; search results highlight the best match.
     pub selected: Option<usize>,
     pub recent_files: Vec<RecentFile>,
+    /// A folder of pinned apps is open (its stored pin index).
+    pub folder: Option<usize>,
+    pub pin_drag: Option<crate::start_pins::PinDrag>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +88,8 @@ pub enum PopupKind {
     TrayMenu(String),
     /// Hidden tray icons behind the ^ button.
     TrayOverflow,
+    /// Right-click on a pinned file, site or folder in Start.
+    PinContext(usize),
     /// Right-click on empty taskbar space.
     TaskbarMenu,
     /// Its "Show taskbar apps on" submenu (several monitors).
@@ -184,6 +189,7 @@ pub enum Message {
     Pin(String),
     Unpin(String),
     PinStart(String),
+    Pins(crate::start_pins::PinMsg),
     UnpinStart(String),
     ShowDesktop,
     ClockClick(window::Id),
@@ -370,6 +376,8 @@ impl Shell {
             page: StartPage::Home,
             selected: None,
             recent_files: lapin_ux_core::recent::load(6),
+            folder: None,
+            pin_drag: None,
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
@@ -540,7 +548,19 @@ impl Shell {
             return self.search(&s.query).flat();
         }
         let ids: Vec<String> = match s.page {
-            StartPage::Home => self.config.pinned_start.iter().filter(|id| self.catalog.get(id).is_some()).cloned().collect(),
+            StartPage::Home => {
+                if let Some((_, _, apps)) = self.open_folder() {
+                    return apps.into_iter().map(StartItem::App).collect();
+                }
+                return self
+                    .visible_pins()
+                    .into_iter()
+                    .map(|(i, p)| match p {
+                        lapin_ux_core::pins::Pin::App(a) => StartItem::App(a),
+                        _ => StartItem::Pin(i),
+                    })
+                    .collect();
+            }
             StartPage::AllApps => {
                 let names: Vec<&str> = self.catalog.apps().iter().map(|a| a.data.name.as_str()).collect();
                 lapin_ux_core::apps::alphabet_sections(&names)
@@ -977,6 +997,9 @@ impl Shell {
             Message::KeyNamed(id, named) => {
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
                     let msg = match named {
+                        Named::Escape if self.start.as_ref().is_some_and(|s| s.folder.is_some()) => {
+                            Message::Pins(crate::start_pins::PinMsg::CloseFolder)
+                        }
                         Named::Escape => Message::CloseStart,
                         Named::ArrowDown => Message::StartNav(Nav::Down),
                         Named::ArrowUp => Message::StartNav(Nav::Up),
@@ -1007,7 +1030,12 @@ impl Shell {
             Message::TaskbarItem(n) => return self.taskbar_item(n),
             Message::TaskbarContext(bar) => return self.taskbar_context(bar),
             Message::TaskbarOption(o) => return self.taskbar_option(o),
-            Message::BarPointer(id, ev) => return self.bar_pointer(id, ev),
+            Message::BarPointer(id, ev) => {
+                if self.start.as_ref().is_some_and(|s| s.id == id) {
+                    return self.start_pointer(ev);
+                }
+                return self.bar_pointer(id, ev);
+            }
             Message::TrayOverflow(bar) => return self.tray_overflow(bar),
             Message::TrayPin(id, inline) => return self.tray_pin(id, inline),
             Message::CloseStart => {
@@ -1194,17 +1222,14 @@ impl Shell {
                 return self.close_popup();
             }
             Message::PinStart(app) => {
-                if !self.config.pinned_start.contains(&app) {
-                    self.config.pinned_start.push(app);
-                    self.persist_config();
-                }
+                self.pin_app(app);
                 return self.close_popup();
             }
             Message::UnpinStart(app) => {
-                self.config.pinned_start.retain(|a| a != &app);
-                self.persist_config();
+                self.unpin_app(&app);
                 return self.close_popup();
             }
+            Message::Pins(m) => return self.update_pins(m),
             Message::ShowDesktop => {
                 if self.desktop_shown.is_empty() {
                     // Remember visible windows, focused one last, so restoring

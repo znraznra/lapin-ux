@@ -20,6 +20,8 @@ pub enum StartItem {
     Setting(&'static SettingsPage),
     File { path: PathBuf, is_dir: bool },
     Web(String),
+    /// A pinned tile (stored index) that isn't a plain app.
+    Pin(usize),
 }
 
 /// Search results grouped like the benchmark: best match, apps, settings,
@@ -90,6 +92,7 @@ impl Shell {
                 Task::batch([close, self.open_settings(p.page)])
             }
             StartItem::File { path, .. } => self.update(Message::OpenFile(path)),
+            StartItem::Pin(i) => self.update_pins(crate::start_pins::PinMsg::Open(i)),
             StartItem::Web(q) => {
                 let template = if self.config.web_search.trim().is_empty() {
                     files::DEFAULT_WEB_SEARCH.to_string()
@@ -213,7 +216,7 @@ pub async fn notify(summary: &str, body: &str) {
         .await;
 }
 
-fn open_with_default(target: std::ffi::OsString) -> Task<Message> {
+pub(crate) fn open_with_default(target: std::ffi::OsString) -> Task<Message> {
     Task::future(async move {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(target);

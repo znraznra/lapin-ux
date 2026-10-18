@@ -530,7 +530,12 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         }
         PopupKind::StartContext(app) => {
             let mut items: Vec<Element<'_, Message>> = Vec::new();
-            if shell.config.pinned_start.contains(app) {
+            if let Some((_, _, apps)) = shell.open_folder()
+                && apps.contains(app)
+            {
+                items.push(menu_item("folder-symbolic", "Move out of folder", Message::Pins(crate::start_pins::PinMsg::TakeOut(app.clone()))));
+            }
+            if lapin_ux_core::pins::has_app(&lapin_ux_core::pins::decode_all(&shell.config.pinned_start), app) {
                 items.push(menu_item("view-pin-symbolic", "Unpin from Start", Message::UnpinStart(app.clone())));
             } else {
                 items.push(menu_item("view-pin-symbolic", "Pin to Start", Message::PinStart(app.clone())));
@@ -564,6 +569,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
+        PopupKind::PinContext(i) => crate::start_pins::context(shell, *i),
         PopupKind::TaskbarDisplays => taskbar_displays(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),
         PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),

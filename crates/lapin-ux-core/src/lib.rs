@@ -13,6 +13,7 @@ pub mod clock;
 pub mod desktop;
 pub mod files;
 pub mod notify;
+pub mod pins;
 pub mod procs;
 pub mod quick;
 pub mod recent;
