@@ -22,6 +22,14 @@ pub struct Catalog {
     cache: DesktopEntryCache,
     /// app_id reported by a window -> resolved entry, so lookup runs once per app.
     resolved: HashMap<String, DesktopEntryData>,
+    /// Newest modification time of the application folders when loaded.
+    stamp: Option<std::time::SystemTime>,
+}
+
+/// Newest mtime of the application folders: changes when an app is
+/// installed or removed (a .desktop file is added to or deleted from them).
+fn apps_stamp() -> Option<std::time::SystemTime> {
+    fde::default_paths().filter_map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()).max()
 }
 
 impl Catalog {
@@ -56,7 +64,12 @@ impl Catalog {
         let by_id = apps.iter().enumerate().map(|(i, a)| (a.data.id.clone(), i)).collect();
         let cache = DesktopEntryCache::new(locales.clone());
         tracing::info!(count = apps.len(), "loaded applications");
-        Self { locales, apps, by_id, cache, resolved: HashMap::new() }
+        Self { locales, apps, by_id, cache, resolved: HashMap::new(), stamp: apps_stamp() }
+    }
+
+    /// Apps were installed or removed since loading.
+    pub fn changed_on_disk(&self) -> bool {
+        apps_stamp() != self.stamp
     }
 
     pub fn apps(&self) -> &[App] {

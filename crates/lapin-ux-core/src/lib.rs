@@ -8,10 +8,12 @@
 
 pub mod apps;
 pub mod clock;
+pub mod files;
 pub mod notify;
 pub mod quick;
 pub mod recent;
 pub mod search;
+pub mod system;
 pub mod taskbar;
 
 /// Reverse-DNS identifiers. Change these in one place when the project gets

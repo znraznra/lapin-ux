@@ -35,6 +35,10 @@ pub struct ShellConfig {
     pub tray_inline: Vec<String>,
     /// Bumped when new defaults (e.g. shortcuts) ship, so upgrades get them.
     pub defaults_version: u32,
+    /// Web search URL for Start, `{}` = the query. Empty = DuckDuckGo.
+    pub web_search: String,
+    /// Don't offer "Search the web" in Start.
+    pub hide_web_search: bool,
 }
 
 /// Small runtime state (not settings): recently launched apps.

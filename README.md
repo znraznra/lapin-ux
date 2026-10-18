@@ -42,7 +42,17 @@ COSMIC compositor. Arch Linux first.
   and executables (`nautilus` → Files). Arrow keys + Enter work; Esc steps back.
 - Pinned grid (6 × 3), *All apps* with A–Z sections, *Recommended* from recently
   opened files (`recently-used.xbel`) or recently launched apps.
-- Right-click any app: pin/unpin to Start or taskbar.
+- Search also finds **Settings pages** (Wi-Fi, Display, Dark mode…),
+  **files and folders** in your Desktop, Documents, Downloads, Music, Pictures
+  and Videos (own background index, hidden folders skipped), and offers
+  **Search the web** (DuckDuckGo by default; `web_search` setting, `{}` = query,
+  `hide_web_search` to turn it off). Results are grouped Best match / Apps /
+  Settings / Folders / Documents / Web with a details card; files have
+  *Open file location*.
+- Right-click any app: pin/unpin to Start or taskbar, **Uninstall** (asks
+  first; pacman packages through an admin prompt, Flatpaks directly; core
+  desktop packages are refused). Newly installed or removed apps appear the
+  next time Start opens.
 - Account name/avatar, and a power menu: Lock, Sign out, Sleep, Restart, Shut down.
 
 **Notifications** (`lapin-ux-notifyd`)
@@ -128,7 +138,7 @@ niri…), so the shell also runs on wlroots compositors.
 All settings use cosmic-config and apply live:
 `~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
 `alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
-`show_desktop_corner`).
+`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`).
 
 ## Install on Arch
 

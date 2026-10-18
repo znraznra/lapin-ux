@@ -8,6 +8,7 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, button, column, container, grid, icon, mouse_area, row, scrollable, text, text_input};
 use cosmic::Element;
 
+use crate::start_search::StartItem;
 use crate::app::{Message, SEARCH_ID, Shell, StartMenu, StartPage, rect_key};
 use crate::style;
 use crate::taskbar_view::{app_icon, app_name};
@@ -297,55 +298,146 @@ fn all_apps<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> 
     .into()
 }
 
+fn result_row<'a>(icon_handle: icon::Handle, title: String, sub: String, selected: bool, item: StartItem) -> Element<'a, Message> {
+    button::custom(
+        row::with_children(vec![
+            icon(icon_handle).size(24).into(),
+            column::with_children(vec![text::body(title).into(), text::caption(sub).class(style::dim_text()).into()]).into(),
+        ])
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([6, 12])
+    .class(style::flat_button(selected))
+    .on_press(Message::StartActivate(item))
+    .into()
+}
+
+fn named(name: &str) -> icon::Handle {
+    icon::from_name(name.to_string())
+        .fallback(Some(icon::IconFallback::Names(vec!["text-x-generic".into(), "application-x-executable".into()])))
+        .handle()
+}
+
+fn file_icon(path: &std::path::Path, is_dir: bool) -> icon::Handle {
+    if is_dir {
+        return named("folder");
+    }
+    named(mime_icon(&file_name(path)))
+}
+
+/// Folder shown under a file name, with home abbreviated to ~.
+fn location(path: &std::path::Path) -> String {
+    let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+    match std::env::var("HOME") {
+        Ok(home) if parent.starts_with(&home) => format!("~{}", &parent[home.len()..]),
+        _ => parent,
+    }
+}
+
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+fn item_row<'a>(shell: &'a Shell, start: &'a StartMenu, item: &StartItem, selected: bool) -> Element<'a, Message> {
+    match item {
+        StartItem::App(id) => match shell.catalog.get(id) {
+            // Borrow the id from the catalog so the row can outlive `item`.
+            Some(app) => list_row(shell, start, &app.data.id, app.generic_name.clone().or_else(|| Some("App".into())), selected),
+            None => widget::Space::new().into(),
+        },
+        StartItem::Setting(p) => result_row(named(p.icon), p.title.to_string(), "System settings".into(), selected, item.clone()),
+        StartItem::File { path, is_dir } => result_row(file_icon(path, *is_dir), file_name(path), location(path), selected, item.clone()),
+        StartItem::Web(q) => result_row(
+            named("system-search-symbolic"),
+            format!("{q} \u{2014} See web results"),
+            "Search the web".into(),
+            selected,
+            item.clone(),
+        ),
+    }
+}
+
+fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
+    let head = |handle: icon::Handle, title: String, sub: String| {
+        column::with_capacity(8)
+            .spacing(8)
+            .align_x(Alignment::Center)
+            .push(widget::Space::new().height(16))
+            .push(icon(handle).size(64))
+            .push(text::title4(title).align_x(Alignment::Center))
+            .push(text::caption(sub).class(style::dim_text()).align_x(Alignment::Center))
+            .push(widget::Space::new().height(8))
+    };
+    let action = |label: String, msg: Message| {
+        button::custom(text::body(label).width(Length::Fill))
+            .width(Length::Fill)
+            .padding([6, 12])
+            .class(style::flat_button(false))
+            .on_press(msg)
+    };
+    let card = match item {
+        StartItem::App(id) => {
+            let Some(app) = shell.catalog.get(id) else { return widget::Space::new().into() };
+            let mut card = head(app_icon(shell, id), app.data.name.clone(), app.generic_name.clone().unwrap_or_else(|| "App".into()))
+                .push(button::suggested("Open").on_press(Message::Launch(id.clone())));
+            for a in app.data.desktop_actions.iter().take(5) {
+                card = card.push(action(a.name.clone(), Message::LaunchAction(id.clone(), a.exec.clone())));
+            }
+            if crate::start_search::can_uninstall(shell, id) {
+                card = card.push(action("Uninstall".into(), Message::UninstallAsk(id.clone())));
+            }
+            card
+        }
+        StartItem::Setting(p) => head(named(p.icon), p.title.to_string(), "System settings".into())
+            .push(button::suggested("Open").on_press(Message::StartActivate(item.clone()))),
+        StartItem::File { path, is_dir } => {
+            let kind = if *is_dir { "Folder" } else { "File" };
+            head(file_icon(path, *is_dir), file_name(path), format!("{kind} \u{00B7} {}", location(path)))
+                .push(button::suggested("Open").on_press(Message::StartActivate(item.clone())))
+                .push(action("Open file location".into(), Message::ShowInFolder(path.clone())))
+        }
+        StartItem::Web(q) => head(named("system-search-symbolic"), q.clone(), "Search the web".into())
+            .push(button::suggested("Open results in browser").on_press(Message::StartActivate(item.clone()))),
+    };
+    card.into()
+}
+
 fn search_results<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
-    let results = shell.catalog.search(&start.query);
-    if results.is_empty() {
+    let results = shell.search(&start.query);
+    let flat = results.flat();
+    if flat.is_empty() {
         return container(text::body(format!("No results for \u{201C}{}\u{201D}", start.query.trim())).class(style::dim_text()))
             .padding([24, 0])
             .into();
     }
-    let selected = start.selected.unwrap_or(0).min(results.len() - 1);
-    let best = results[selected];
-    let best_id = best.data.id.as_str();
+    let selected = start.selected.unwrap_or(0).min(flat.len() - 1);
 
-    let mut list = column::with_capacity(12).spacing(2);
-    for (i, app) in results.iter().take(12).enumerate() {
-        let sub = app.generic_name.clone().or_else(|| Some("App".into()));
-        list = list.push(list_row(shell, start, &app.data.id, sub, i == selected));
-    }
-
-    // Detail card for the highlighted result, with its desktop actions.
-    let mut card = column::with_capacity(8)
-        .spacing(8)
-        .align_x(Alignment::Center)
-        .push(widget::Space::new().height(16))
-        .push(icon(app_icon(shell, best_id)).size(64))
-        .push(text::title4(best.data.name.clone()))
-        .push(text::caption(best.generic_name.clone().unwrap_or_else(|| "App".into())).class(style::dim_text()))
-        .push(widget::Space::new().height(8))
-        .push(
-            button::suggested("Open")
-                .on_press(Message::Launch(best_id.to_string())),
-        );
-    for action in best.data.desktop_actions.iter().take(5) {
-        card = card.push(
-            button::custom(text::body(action.name.clone()).width(Length::Fill))
-                .width(Length::Fill)
-                .padding([6, 12])
-                .class(style::flat_button(false))
-                .on_press(Message::LaunchAction(best_id.to_string(), action.exec.clone())),
-        );
+    let sections: [(&str, Vec<StartItem>); 6] = [
+        ("Best match", results.best.clone().into_iter().collect()),
+        ("Apps", results.apps.clone()),
+        ("Settings", results.settings.clone()),
+        ("Folders", results.folders.clone()),
+        ("Documents", results.documents.clone()),
+        ("Search the web", results.web.clone().into_iter().collect()),
+    ];
+    let mut list = column::with_capacity(flat.len() + 6).spacing(2);
+    let mut i = 0usize;
+    for (title, items) in sections {
+        if items.is_empty() {
+            continue;
+        }
+        list = list.push(container(text::heading(title)).padding([8, 0, 4, 0]));
+        for it in &items {
+            list = list.push(item_row(shell, start, it, i == selected));
+            i += 1;
+        }
     }
 
     row::with_children(vec![
-        column::with_children(vec![
-            text::heading("Best matches").into(),
-            widget::Space::new().height(8).into(),
-            scrollable(list).height(Length::Fill).into(),
-        ])
-        .width(Length::FillPortion(3))
-        .into(),
-        container(card).padding(12).width(Length::FillPortion(2)).class(style::card()).into(),
+        scrollable(list).height(Length::Fill).width(Length::FillPortion(3)).into(),
+        container(detail_card(shell, &flat[selected])).padding(12).width(Length::FillPortion(2)).class(style::card()).into(),
     ])
     .spacing(16)
     .height(Length::Fill)

@@ -483,7 +483,27 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             } else {
                 items.push(menu_item("view-pin-symbolic", "Pin to taskbar", Message::Pin(app.clone())));
             }
+            if crate::start_search::can_uninstall(shell, app) {
+                items.push(menu_divider());
+                items.push(menu_item("user-trash-symbolic", "Uninstall", Message::UninstallAsk(app.clone())));
+            }
             panel(column::with_children(items).spacing(2), 240.0)
+        }
+        PopupKind::ConfirmUninstall(app) => {
+            let name = shell.catalog.get(app).map_or(app.clone(), |a| a.data.name.clone());
+            panel(
+                column::with_children(vec![
+                    text::body(format!("{name} and its related info will be uninstalled.")).into(),
+                    row::with_children(vec![
+                        widget::Space::new().width(Length::Fill).into(),
+                        button::destructive("Uninstall").on_press(Message::Uninstall(app.clone())).into(),
+                    ])
+                    .into(),
+                ])
+                .spacing(16)
+                .padding(16),
+                300.0,
+            )
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell),

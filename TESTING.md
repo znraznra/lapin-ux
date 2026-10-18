@@ -104,6 +104,12 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] "All" shows every app A–Z; Back returns
 - [ ] Recommended shows recently opened files (open a document in an app first)
 - [ ] Right-click an app: Pin/Unpin to Start, Pin/Unpin to taskbar
+- [ ] Type part of a file or folder name from Documents/Downloads/Pictures: it shows under Documents/Folders; Open and "Open file location" work
+- [ ] Type `wifi`, `display`, `dark mode`: the matching Settings page is offered and opens
+- [ ] Any search ends with "Search the web", which opens your browser
+- [ ] Esc clears the search and you can type a new one straight away
+- [ ] Right-click an app you installed (pacman or Flatpak) → Uninstall → confirm: an admin prompt appears for pacman apps; a notification says it was uninstalled; it disappears from Start
+- [ ] Install an app (e.g. `flatpak install` or from the store), open Start: it's listed
 - [ ] Your name (and photo, if set) appear at the bottom
 - [ ] Power menu: Lock, Sign out, Sleep, Restart, Shut down each do what they say
 

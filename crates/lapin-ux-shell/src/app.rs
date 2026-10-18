@@ -81,6 +81,8 @@ pub enum PopupKind {
     TrayOverflow,
     /// Right-click on empty taskbar space.
     TaskbarMenu,
+    /// "This app and its related info will be uninstalled."
+    ConfirmUninstall(String),
 }
 
 /// One icon in the notification area.
@@ -165,6 +167,13 @@ pub enum Message {
     ClockClick(window::Id),
     /// Click outside an open Start menu or panel.
     CatcherClick,
+    FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
+    /// Installed apps changed (e.g. after uninstalling): reload .desktop files.
+    ReloadApps,
+    UninstallAsk(String),
+    Uninstall(String),
+    StartActivate(crate::start_search::StartItem),
+    ShowInFolder(std::path::PathBuf),
     Quick(crate::quick::QuickMsg),
     /// Super+N: close our panels, then toggle the notification centre.
     ToggleNotifications,
@@ -207,6 +216,9 @@ pub struct Shell {
     pub calendar: cosmic::widget::calendar::CalendarModel,
     pub notify: crate::notify_client::State,
     pub quick: crate::quick::QuickState,
+    /// Start search over the user's folders.
+    pub files: std::sync::Arc<lapin_ux_core::files::FileIndex>,
+    pub indexing: bool,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -296,6 +308,10 @@ impl Shell {
             .map(|h| h.saturating_sub(style::TASKBAR_HEIGHT + 24).min(style::START_HEIGHT))
             .unwrap_or(style::START_HEIGHT)
             .max(360);
+        if self.catalog.changed_on_disk() {
+            self.catalog = Catalog::load();
+        }
+        let index = self.refresh_file_index();
         self.start = Some(StartMenu {
             id,
             query: String::new(),
@@ -332,6 +348,7 @@ impl Shell {
                 None,
             )),
             text_input::focus(SEARCH_ID.clone()),
+            index,
         ])
     }
 
@@ -453,12 +470,13 @@ impl Shell {
     }
 
     /// Ordered list of what the Start menu currently shows, for keyboard nav.
-    pub fn start_items(&self) -> Vec<String> {
+    pub fn start_items(&self) -> Vec<crate::start_search::StartItem> {
+        use crate::start_search::StartItem;
         let Some(s) = &self.start else { return Vec::new() };
         if !s.query.trim().is_empty() {
-            return self.catalog.search(&s.query).into_iter().take(12).map(|a| a.data.id.clone()).collect();
+            return self.search(&s.query).flat();
         }
-        match s.page {
+        let ids: Vec<String> = match s.page {
             StartPage::Home => self.config.pinned_start.iter().filter(|id| self.catalog.get(id).is_some()).cloned().collect(),
             StartPage::AllApps => {
                 let names: Vec<&str> = self.catalog.apps().iter().map(|a| a.data.name.as_str()).collect();
@@ -468,7 +486,8 @@ impl Shell {
                     .map(|i| self.catalog.apps()[i].data.id.clone())
                     .collect()
             }
-        }
+        };
+        ids.into_iter().map(StartItem::App).collect()
     }
 
     fn power(&mut self, action: PowerAction) -> Task<Message> {
@@ -573,6 +592,8 @@ impl Application for Shell {
             calendar: cosmic::widget::calendar::CalendarModel::now(),
             notify: Default::default(),
             quick: Default::default(),
+            files: Default::default(),
+            indexing: false,
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -810,10 +831,11 @@ impl Shell {
                     && (!s.query.is_empty() || s.page != StartPage::Home)
                 {
                     // Esc steps back: clear search / leave All apps first.
+                    // (The text box drops focus on Esc; take it back so typing works.)
                     s.query.clear();
                     s.page = StartPage::Home;
                     s.selected = None;
-                    return Task::none();
+                    return text_input::focus(SEARCH_ID.clone());
                 }
                 return self.close_start();
             }
@@ -826,8 +848,8 @@ impl Shell {
             Message::StartSubmit => {
                 let items = self.start_items();
                 let selected = self.start.as_ref().and_then(|s| s.selected).unwrap_or(0);
-                if let Some(id) = items.get(selected).or(items.first()).cloned() {
-                    return self.launch(&id);
+                if let Some(item) = items.get(selected).or(items.first()).cloned() {
+                    return self.activate(item);
                 }
             }
             Message::StartNav(nav) => {
@@ -971,6 +993,18 @@ impl Shell {
             }
             Message::NotifyState(s) => self.notify = s,
             Message::CatcherClick => return self.catcher_click(),
+            Message::FilesIndexed(idx) => {
+                self.files = idx;
+                self.indexing = false;
+            }
+            Message::ReloadApps => self.catalog = Catalog::load(),
+            Message::UninstallAsk(app) => return self.uninstall_ask(app),
+            Message::Uninstall(app) => return self.uninstall(app),
+            Message::StartActivate(item) => return self.activate(item),
+            Message::ShowInFolder(path) => {
+                let close = self.close_start();
+                return Task::batch([close, crate::start_search::show_in_folder(path)]);
+            }
             Message::Quick(m) => return self.update_quick(m),
             Message::ToggleNotifications => {
                 let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);

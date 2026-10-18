@@ -20,6 +20,7 @@ mod defaults;
 mod notify_client;
 mod panels;
 mod quick;
+mod start_search;
 mod style;
 mod start_view;
 mod taskbar_extras;
