@@ -16,6 +16,8 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::event::wayland::{self, LayerEvent, OutputEvent, PopupEvent};
 use cosmic::iced::event::{PlatformSpecific, listen_raw};
 use cosmic::iced::keyboard::{self, Key, key::Named};
+use cosmic::iced::mouse;
+use crate::taskbar_extras::Pointer;
 use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::runtime::wayland::popup::{SctkPopupSettings, SctkPositioner};
@@ -75,11 +77,17 @@ pub enum PopupKind {
     Power,
     /// A tray icon's menu (by item name).
     TrayMenu(String),
+    /// Hidden tray icons behind the ^ button.
+    TrayOverflow,
+    /// Right-click on empty taskbar space.
+    TaskbarMenu,
 }
 
 /// One icon in the notification area.
 pub struct TrayEntry {
     pub item: crate::tray::TrayItem,
+    /// Stable tray id reported by the app (used to remember placement).
+    pub id: Option<String>,
     pub icon: Option<cosmic::widget::icon::Handle>,
     pub title: Option<String>,
     pub menu: Option<crate::tray::Layout>,
@@ -119,8 +127,19 @@ pub enum Message {
     Rect(RectangleUpdate<String>),
     ToggleStart,
     CloseStart,
-    /// A navigation key pressed in some surface; only acted on for Start.
-    StartKey(window::Id, Box<Message>),
+    /// A named key pressed in one of our surfaces.
+    KeyNamed(window::Id, Named),
+    /// Open Start on a given page (Win+X "Installed apps", "Search").
+    OpenStartAt(StartPage),
+    Panel(crate::panels::PanelMsg),
+    /// Super+1…9.
+    TaskbarItem(usize),
+    TaskbarContext(window::Id),
+    TaskbarOption(crate::taskbar_extras::TaskbarOption),
+    BarPointer(window::Id, crate::taskbar_extras::Pointer),
+    TrayOverflow(window::Id),
+    /// Stable tray id, show inline on the taskbar.
+    TrayPin(String, bool),
     StartQuery(String),
     StartSubmit,
     StartNav(Nav),
@@ -158,17 +177,17 @@ pub enum Message {
 }
 
 pub struct Shell {
-    core: Core,
+    pub(crate) core: Core,
     pub config: ShellConfig,
-    config_handle: Option<cosmic_config::Config>,
+    pub(crate) config_handle: Option<cosmic_config::Config>,
     pub state: ShellState,
-    state_handle: Option<cosmic_config::Config>,
+    pub(crate) state_handle: Option<cosmic_config::Config>,
     pub catalog: Catalog,
     pub taskbar: Taskbar<Handle>,
-    wayland_tx: Option<calloop::channel::Sender<WaylandRequest>>,
+    pub(crate) wayland_tx: Option<calloop::channel::Sender<WaylandRequest>>,
     pub bars: Vec<Bar>,
     pub start: Option<StartMenu>,
-    start_closed_at: Instant,
+    pub(crate) start_closed_at: Instant,
     pub popup: Option<Popup>,
     pub rects: HashMap<String, Rectangle>,
     pub tracker: Option<RectangleTracker<String>>,
@@ -176,12 +195,20 @@ pub struct Shell {
     pub now: chrono::NaiveDateTime,
     pub calendar: cosmic::widget::calendar::CalendarModel,
     /// Windows minimized by "Show desktop", restored by a second click.
-    desktop_shown: Vec<Handle>,
+    pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
-    start_pending: bool,
+    pub(crate) start_pending: bool,
     pub tray: Vec<TrayEntry>,
     /// Submenu path inside the open tray menu.
     pub tray_menu_path: Vec<i32>,
+    /// Win+X menu / Run dialog.
+    pub panel: Option<crate::panels::Panel>,
+    pub(crate) panel_closed_at: Instant,
+    /// Last pointer position over a taskbar.
+    pub(crate) pointer: Option<(window::Id, cosmic::iced::Point)>,
+    pub drag: Option<crate::taskbar_extras::Drag>,
+    pub(crate) suppress_click_until: Instant,
+    pub(crate) item_context_at: Instant,
 }
 
 /// Key used for rectangle tracking of a taskbar item on a given bar.
@@ -190,7 +217,7 @@ pub fn rect_key(bar: window::Id, item: &str) -> String {
 }
 
 impl Shell {
-    fn persist_config(&self) {
+    pub(crate) fn persist_config(&self) {
         if let Some(h) = &self.config_handle
             && let Err(e) = self.config.write_entry(h)
         {
@@ -198,7 +225,7 @@ impl Shell {
         }
     }
 
-    fn persist_state(&self) {
+    pub(crate) fn persist_state(&self) {
         if let Some(h) = &self.state_handle
             && let Err(e) = self.state.write_entry(h)
         {
@@ -206,7 +233,7 @@ impl Shell {
         }
     }
 
-    fn request(&self, req: WaylandRequest) {
+    pub(crate) fn request(&self, req: WaylandRequest) {
         if let Some(tx) = &self.wayland_tx {
             let _ = tx.send(req);
         }
@@ -246,7 +273,7 @@ impl Shell {
         task
     }
 
-    fn open_start(&mut self) -> Task<Message> {
+    pub(crate) fn open_start(&mut self) -> Task<Message> {
         let id = window::Id::unique();
         let height = self
             .bars
@@ -295,7 +322,7 @@ impl Shell {
         ])
     }
 
-    fn close_start(&mut self) -> Task<Message> {
+    pub(crate) fn close_start(&mut self) -> Task<Message> {
         let mut tasks = vec![self.close_popup()];
         if let Some(s) = self.start.take() {
             self.start_closed_at = Instant::now();
@@ -304,7 +331,7 @@ impl Shell {
         Task::batch(tasks)
     }
 
-    fn close_popup(&mut self) -> Task<Message> {
+    pub(crate) fn close_popup(&mut self) -> Task<Message> {
         match self.popup.take() {
             Some(p) => destroy_popup(p.id),
             None => Task::none(),
@@ -312,7 +339,7 @@ impl Shell {
     }
 
     /// Open a popup anchored above the tracked rectangle `key` on surface `parent`.
-    fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
+    pub(crate) fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
         let same = self.popup.as_ref().is_some_and(|p| p.kind == kind);
         let close = self.close_popup();
         if same {
@@ -321,6 +348,7 @@ impl Shell {
         let id = window::Id::unique();
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         let above = self.bars.iter().any(|b| b.id == parent);
+        let at_pointer = matches!(kind, PopupKind::TaskbarMenu);
         let settings = SctkPopupSettings {
             parent,
             id,
@@ -333,8 +361,19 @@ impl Shell {
                     width: (r.width as i32).max(1),
                     height: (r.height as i32).max(1),
                 },
-                anchor: if above { PAnchor::Top } else { PAnchor::Bottom },
-                gravity: if above { Gravity::Top } else { Gravity::Bottom },
+                // Menus opened at the pointer grow up and to the right of
+                // it; the rest are centred over the button they belong to.
+                anchor: match (at_pointer, above) {
+                    (true, _) => PAnchor::TopLeft,
+                    (false, true) => PAnchor::Top,
+                    (false, false) => PAnchor::Bottom,
+                },
+                gravity: match (at_pointer, above) {
+                    (true, true) => Gravity::TopRight,
+                    (true, false) => Gravity::BottomRight,
+                    (false, true) => Gravity::Top,
+                    (false, false) => Gravity::Bottom,
+                },
                 // slide_x | flip_y | resize_x | resize_y
                 constraint_adjustment: 1 | 8 | 16 | 32,
                 offset: (0, if above { -8 } else { 4 }),
@@ -358,7 +397,7 @@ impl Shell {
         Task::batch([close, create])
     }
 
-    fn launch(&mut self, app_id: &str) -> Task<Message> {
+    pub(crate) fn launch(&mut self, app_id: &str) -> Task<Message> {
         let Some(data) = self.catalog.data_for(app_id).cloned() else {
             tracing::warn!(app_id, "no desktop entry to launch");
             return Task::none();
@@ -487,8 +526,15 @@ impl Application for Shell {
         if !cfg.initialized {
             crate::defaults::apply_first_run();
             cfg = cfg.with_defaults(&catalog);
+            cfg.defaults_version = crate::defaults::DEFAULTS_VERSION;
             if let Some(h) = &config_handle {
                 let _ = cfg.write_entry(h);
+            }
+        } else if cfg.defaults_version < crate::defaults::DEFAULTS_VERSION {
+            crate::defaults::apply_upgrade(cfg.defaults_version);
+            cfg.defaults_version = crate::defaults::DEFAULTS_VERSION;
+            if let Some(h) = &config_handle {
+                let _ = cfg.set_defaults_version(h, cfg.defaults_version);
             }
         }
         let state_handle = config::shell_state();
@@ -515,6 +561,12 @@ impl Application for Shell {
             start_pending: false,
             tray: Vec::new(),
             tray_menu_path: Vec::new(),
+            panel: None,
+            panel_closed_at: Instant::now() - Duration::from_secs(10),
+            pointer: None,
+            drag: None,
+            suppress_click_until: Instant::now(),
+            item_context_at: Instant::now() - Duration::from_secs(10),
         };
         (shell, Task::none())
     }
@@ -529,6 +581,9 @@ impl Application for Shell {
         }
         if let Some(start) = self.start.as_ref().filter(|s| s.id == id) {
             return crate::start_view::start_menu(self, start);
+        }
+        if let Some(panel) = self.panel.as_ref().filter(|p| p.id == id) {
+            return crate::panels::view(self, panel);
         }
         if let Some(popup) = self.popup.as_ref().filter(|p| p.id == id) {
             // Popups size themselves to their content.
@@ -548,9 +603,15 @@ impl Application for Shell {
 
     fn dbus_activation(&mut self, msg: cosmic::dbus_activation::Message) -> Task<Message> {
         match msg.msg {
-            cosmic::dbus_activation::Details::ActivateAction { action, .. } => match action.as_str() {
+            cosmic::dbus_activation::Details::ActivateAction { action, args } => match action.as_str() {
                 "start" => self.update(Message::ToggleStart),
                 "desktop" => self.update(Message::ShowDesktop),
+                "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
+                "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
+                "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
+                    Some(n) => self.update(Message::TaskbarItem(n)),
+                    None => Task::none(),
+                },
                 other => {
                     tracing::warn!(action = other, "unknown action");
                     Task::none()
@@ -582,15 +643,16 @@ impl Application for Shell {
                     _ => None,
                 },
                 cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), .. }) => {
-                    let msg = match named {
-                        Named::Escape => Message::CloseStart,
-                        Named::ArrowDown => Message::StartNav(Nav::Down),
-                        Named::ArrowUp => Message::StartNav(Nav::Up),
-                        Named::ArrowLeft => Message::StartNav(Nav::Left),
-                        Named::ArrowRight => Message::StartNav(Nav::Right),
-                        _ => return None,
-                    };
-                    Some(Message::StartKey(window, Box::new(msg)))
+                    Some(Message::KeyNamed(window, named))
+                }
+                cosmic::iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                    Some(Message::BarPointer(window, Pointer::Move(position)))
+                }
+                cosmic::iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                    Some(Message::BarPointer(window, Pointer::Down))
+                }
+                cosmic::iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                    Some(Message::BarPointer(window, Pointer::Up))
                 }
                 _ => None,
             }),
@@ -598,7 +660,7 @@ impl Application for Shell {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        if !matches!(message, Message::Tick | Message::Rect(_) | Message::Wayland(_)) {
+        if !matches!(message, Message::Tick | Message::Rect(_) | Message::Wayland(_) | Message::BarPointer(..)) {
             tracing::trace!(?message);
         }
         match message {
@@ -638,6 +700,9 @@ impl Application for Shell {
                 }
                 return self.close_start();
             }
+            Message::Layer(LayerEvent::Unfocused, id) if self.panel.as_ref().is_some_and(|p| p.id == id) => {
+                return self.close_panel();
+            }
             Message::Layer(..) => {}
             Message::PopupClosed(id) => {
                 if self.popup.as_ref().is_some_and(|p| p.id == id) {
@@ -671,14 +736,42 @@ impl Application for Shell {
                     self.start_pending = true;
                     return Task::none();
                 }
-                let close = self.close_popup();
+                let close = Task::batch([self.close_popup(), self.close_panel()]);
                 return Task::batch([close, self.open_start()]);
             }
-            Message::StartKey(id, msg) => {
+            Message::KeyNamed(id, named) => {
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
-                    return self.update(*msg);
+                    let msg = match named {
+                        Named::Escape => Message::CloseStart,
+                        Named::ArrowDown => Message::StartNav(Nav::Down),
+                        Named::ArrowUp => Message::StartNav(Nav::Up),
+                        Named::ArrowLeft => Message::StartNav(Nav::Left),
+                        Named::ArrowRight => Message::StartNav(Nav::Right),
+                        _ => return Task::none(),
+                    };
+                    return self.update(msg);
+                }
+                if self.panel.as_ref().is_some_and(|p| p.id == id) {
+                    return self.panel_key(named);
                 }
             }
+            Message::OpenStartAt(page) => {
+                let close = self.close_panel();
+                let open = if self.start.is_none() { self.open_start() } else { Task::none() };
+                if let Some(s) = &mut self.start {
+                    s.page = page;
+                    s.selected = None;
+                    s.query.clear();
+                }
+                return Task::batch([close, open]);
+            }
+            Message::Panel(m) => return self.update_panel(m),
+            Message::TaskbarItem(n) => return self.taskbar_item(n),
+            Message::TaskbarContext(bar) => return self.taskbar_context(bar),
+            Message::TaskbarOption(o) => return self.taskbar_option(o),
+            Message::BarPointer(id, ev) => return self.bar_pointer(id, ev),
+            Message::TrayOverflow(bar) => return self.tray_overflow(bar),
+            Message::TrayPin(id, inline) => return self.tray_pin(id, inline),
             Message::CloseStart => {
                 if self.popup.is_some() {
                     return self.close_popup();
@@ -757,6 +850,9 @@ impl Application for Shell {
                 return Task::batch([close, open]);
             }
             Message::TaskClick(bar, app) => {
+                if self.click_suppressed() {
+                    return Task::none();
+                }
                 let close = self.close_popup();
                 let action = self.taskbar.click(&app);
                 let next = match action {
@@ -777,6 +873,7 @@ impl Application for Shell {
                 return Task::batch([close, next]);
             }
             Message::TaskContext(bar, app) => {
+                self.note_item_context();
                 let key = rect_key(bar, &app);
                 return self.open_popup(bar, &key, PopupKind::TaskContext(app));
             }
@@ -859,7 +956,7 @@ impl Application for Shell {
                 crate::tray::Event::Connected => tracing::info!("tray host ready"),
                 crate::tray::Event::Registered(item) => {
                     self.tray.retain(|t| t.item.name() != item.name());
-                    self.tray.push(TrayEntry { item, icon: None, title: None, menu: None });
+                    self.tray.push(TrayEntry { item, id: None, icon: None, title: None, menu: None });
                 }
                 crate::tray::Event::Unregistered(name) => {
                     self.tray.retain(|t| t.item.name() != name);
@@ -872,6 +969,9 @@ impl Application for Shell {
             Message::TrayIcon(name, update) => {
                 if let Some(t) = self.tray.iter_mut().find(|t| t.item.name() == name) {
                     t.title = update.title.clone();
+                    if update.id.is_some() {
+                        t.id = update.id.clone();
+                    }
                     t.icon = Some(crate::taskbar_view::tray_icon(update));
                 }
             }
@@ -898,12 +998,18 @@ impl Application for Shell {
                 ]);
             }
             Message::TrayContext(bar, name) => {
+                self.note_item_context();
                 let Some(t) = self.tray.iter().find(|t| t.item.name() == name) else { return Task::none() };
+                // Icons in the overflow menu anchor their menu to the ^ button.
+                let anchor_key = if self.tray_inline(t) {
+                    rect_key(bar, &format!("tray:{name}"))
+                } else {
+                    rect_key(bar, "tray-overflow")
+                };
                 match t.item.menu_proxy().cloned() {
                     Some(menu) => {
                         self.tray_menu_path.clear();
-                        let key = rect_key(bar, &format!("tray:{name}"));
-                        let open = self.open_popup(bar, &key, PopupKind::TrayMenu(name));
+                        let open = self.open_popup(bar, &anchor_key, PopupKind::TrayMenu(name));
                         let prepare = Task::future(async move {
                             let _ = menu.about_to_show(0).await;
                             cosmic::Action::App(Message::Noop)

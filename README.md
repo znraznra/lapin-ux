@@ -69,6 +69,9 @@ COSMIC compositor. Arch Linux first.
 | Super | Start menu |
 | Super + E | File manager |
 | Super + D | Show desktop / restore |
+| Super + X | Power-user menu |
+| Super + R | Run dialog |
+| Super + 1…9 | Open / switch to the n-th taskbar app |
 | Super + L | Lock |
 | Super + ↑ / ↓ | Maximize / minimize |
 | Super + Shift + S | Screenshot |

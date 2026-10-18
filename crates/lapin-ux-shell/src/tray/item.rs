@@ -33,6 +33,8 @@ pub struct IconUpdate {
     pub pixmap: Option<Vec<Pixmap>>,
     pub theme_path: Option<PathBuf>,
     pub title: Option<String>,
+    /// The app's stable tray id (e.g. "discord"); bus names change every run.
+    pub id: Option<String>,
 }
 
 impl TrayItem {
@@ -84,6 +86,7 @@ impl TrayItem {
                 pixmap: p.icon_pixmap().await.ok(),
                 theme_path: p.icon_theme_path().await.ok().filter(|s| !s.is_empty()).map(PathBuf::from),
                 title: p.title().await.ok().filter(|t| !t.is_empty()),
+                id: p.id().await.ok().filter(|t| !t.is_empty()),
             }
         }
         struct Key(StatusNotifierItemProxy<'static>, String);
@@ -142,6 +145,8 @@ pub trait StatusNotifierItem {
     fn icon_pixmap(&self) -> zbus::Result<Vec<Pixmap>>;
     #[zbus(property)]
     fn title(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn id(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn menu(&self) -> zbus::Result<zvariant::OwnedObjectPath>;
     #[zbus(property)]

@@ -46,7 +46,10 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     .class(style::flat_button(start_open))
     .on_press(Message::ToggleStart);
 
-    let mut center = row::with_capacity(16).spacing(4).align_y(Alignment::Center).push(start_btn);
+    let mut center = row::with_capacity(16)
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .push(track(shell, rect_key(bar.id, "start"), start_btn));
 
     if shell.config.show_search {
         let pill = container(
@@ -87,7 +90,19 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
     .on_press(Message::ClockClick(bar.id));
 
-    let tray: Vec<Element<'_, Message>> = shell.tray.iter().map(|t| tray_button(shell, bar, t)).collect();
+    // Tray: hidden icons behind ^, chosen ones inline.
+    let mut tray: Vec<Element<'_, Message>> = Vec::new();
+    if shell.tray.iter().any(|t| !shell.tray_inline(t)) {
+        let open = matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::TrayOverflow));
+        let btn = button::custom(container(icon::from_name("pan-up-symbolic").size(16)).center(Length::Fill))
+            .width(28)
+            .height(style::TASK_BUTTON)
+            .padding(0)
+            .class(style::flat_button(open))
+            .on_press(Message::TrayOverflow(bar.id));
+        tray.push(track(shell, rect_key(bar.id, "tray-overflow"), btn));
+    }
+    tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
     let mut right = row::with_capacity(3).spacing(2).align_y(Alignment::Center);
     right = right.push(row::with_children(tray).spacing(0).align_y(Alignment::Center));
     right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
@@ -117,13 +132,13 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         .into(),
     };
 
-    container(content)
+    let bar_body = container(content)
         .padding([4, 4, 4, 12])
         .width(Length::Fill)
         .height(Length::Fill)
         .align_y(Alignment::Center)
-        .class(style::taskbar_bg())
-        .into()
+        .class(style::taskbar_bg());
+    mouse_area(bar_body).on_right_press(Message::TaskbarContext(bar.id)).into()
 }
 
 fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element<'a, Message> {
@@ -149,11 +164,12 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
     .width(Length::Fill)
     .height(Length::Fill);
 
+    let dragging = shell.drag.as_ref().is_some_and(|d| d.active && d.app == b.app);
     let btn = button::custom(content)
         .width(style::TASK_BUTTON)
         .height(style::TASK_BUTTON)
         .padding(0)
-        .class(style::flat_button(active))
+        .class(style::flat_button(active || dragging))
         .on_press(Message::TaskClick(bar.id, b.app.clone()));
 
     let area = mouse_area(btn)
@@ -255,7 +271,77 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
     if items.is_empty() {
         items.push(container(text::body("No actions").class(style::dim_text())).padding(8).into());
     }
+    if shell.tray_menu_path.is_empty()
+        && let Some(id) = entry.id.clone()
+    {
+        items.push(menu_divider());
+        if shell.tray_inline(entry) {
+            items.push(menu_item("go-down-symbolic", "Hide in overflow menu", Message::TrayPin(id, false)));
+        } else {
+            items.push(menu_item("view-pin-symbolic", "Show on taskbar", Message::TrayPin(id, true)));
+        }
+    }
     panel(column::with_children(items).spacing(2), 260.0)
+}
+
+/// A menu row with a check mark when `on`.
+pub fn menu_check<'a>(label: &'a str, on: bool, msg: Message) -> Element<'a, Message> {
+    let mark: Element<'_, Message> = if on {
+        icon::from_name("object-select-symbolic").size(16).into()
+    } else {
+        widget::Space::new().width(16).height(16).into()
+    };
+    button::custom(row::with_children(vec![mark, text::body(label).into()]).spacing(12).align_y(Alignment::Center))
+        .width(Length::Fill)
+        .padding([7, 12])
+        .class(style::flat_button(false))
+        .on_press(msg)
+        .into()
+}
+
+fn taskbar_menu(shell: &Shell) -> Element<'_, Message> {
+    use crate::config::{Role, find_app};
+    use crate::taskbar_extras::TaskbarOption as O;
+    let mut items: Vec<Element<'_, Message>> = Vec::new();
+    if let Some(id) = find_app(&shell.catalog, Role::TaskManager) {
+        items.push(menu_item("utilities-system-monitor-symbolic", "Task Manager", Message::Launch(id)));
+        items.push(menu_divider());
+    }
+    let center = shell.config.alignment == TaskbarAlignment::Center;
+    items.push(menu_check("Center taskbar icons", center, Message::TaskbarOption(O::Align(TaskbarAlignment::Center))));
+    items.push(menu_check("Left-align taskbar icons", !center, Message::TaskbarOption(O::Align(TaskbarAlignment::Left))));
+    items.push(menu_divider());
+    items.push(menu_check("Show Search box", shell.config.show_search, Message::TaskbarOption(O::ToggleSearch)));
+    items.push(menu_check(
+        "Show desktop button",
+        shell.config.show_desktop_corner,
+        Message::TaskbarOption(O::ToggleDesktopButton),
+    ));
+    panel(column::with_children(items).spacing(2), 260.0)
+}
+
+fn tray_overflow(shell: &Shell, bar: cosmic::iced::window::Id) -> Element<'_, Message> {
+    let hidden: Vec<&crate::app::TrayEntry> = shell.tray.iter().filter(|t| !shell.tray_inline(t)).collect();
+    let mut grid = column::with_capacity(4).spacing(2);
+    for chunk in hidden.chunks(4) {
+        let mut r = row::with_capacity(4).spacing(2);
+        for t in chunk {
+            let name = t.item.name().to_string();
+            let content: Element<'_, Message> = match &t.icon {
+                Some(h) => icon(h.clone()).size(16).into(),
+                None => icon::from_name("image-missing-symbolic").size(16).into(),
+            };
+            let btn = button::custom(container(content).center(Length::Fill))
+                .width(40)
+                .height(40)
+                .padding(0)
+                .class(style::flat_button(false))
+                .on_press(Message::TrayClick(bar, name.clone()));
+            r = r.push(mouse_area(btn).on_right_press(Message::TrayContext(bar, name.clone())));
+        }
+        grid = grid.push(r);
+    }
+    panel(grid, 0.0)
 }
 
 /// One row in a popup menu.
@@ -279,8 +365,10 @@ fn menu_divider<'a>() -> Element<'a, Message> {
     container(widget::divider::horizontal::light()).padding([4, 8]).into()
 }
 
+/// `width` 0 means "fit the content".
 fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
-    container(content).padding(4).width(width).class(style::panel_bg()).into()
+    let c = container(content).padding(4).class(style::panel_bg());
+    if width > 0.0 { c.width(width).into() } else { c.into() }
 }
 
 pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
@@ -375,6 +463,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             panel(column::with_children(items).spacing(2), 240.0)
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
+        PopupKind::TaskbarMenu => taskbar_menu(shell),
+        PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),
         PopupKind::Power => panel(
             column::with_children(vec![
                 menu_item("system-lock-screen-symbolic", "Lock", Message::Power(PowerAction::Lock)),

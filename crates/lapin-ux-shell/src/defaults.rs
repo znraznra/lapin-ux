@@ -140,9 +140,13 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
     Ok(true)
 }
 
-/// Familiar keyboard shortcuts, layered over the compositor defaults.
-/// Written only if the user has no custom shortcuts yet.
-const WINDOWS_STYLE_SHORTCUTS: &str = r#"{
+/// Bump when the generated shortcuts (or other upgradeable defaults) change.
+pub const DEFAULTS_VERSION: u32 = 2;
+
+const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
+
+/// What the first release wrote, recognised so it can be upgraded in place.
+const LEGACY_V1_SHORTCUTS: &str = r#"{
     (modifiers: [Super], key: "l"): System(LockScreen),
     (modifiers: [Super], key: "e"): System(HomeFolder),
     (modifiers: [Super], key: "d"): Spawn("lapin-ux-shell desktop"),
@@ -152,16 +156,55 @@ const WINDOWS_STYLE_SHORTCUTS: &str = r#"{
     (modifiers: [Ctrl, Alt], key: "Delete"): System(LogOut),
 }"#;
 
+/// Familiar keyboard shortcuts, layered over the compositor defaults.
+pub fn windows_style_shortcuts() -> String {
+    let mut lines = vec![
+        r#"(modifiers: [Super], key: "l"): System(LockScreen),"#.to_string(),
+        r#"(modifiers: [Super], key: "e"): System(HomeFolder),"#.to_string(),
+        r#"(modifiers: [Super], key: "d"): Spawn("lapin-ux-shell desktop"),"#.to_string(),
+        r#"(modifiers: [Super], key: "x"): Spawn("lapin-ux-shell winx"),"#.to_string(),
+        r#"(modifiers: [Super], key: "r"): Spawn("lapin-ux-shell run"),"#.to_string(),
+        r#"(modifiers: [Super], key: "Up"): Maximize,"#.to_string(),
+        r#"(modifiers: [Super], key: "Down"): Minimize,"#.to_string(),
+        r#"(modifiers: [Super, Shift], key: "s"): System(Screenshot),"#.to_string(),
+        r#"(modifiers: [Ctrl, Alt], key: "Delete"): System(LogOut),"#.to_string(),
+    ];
+    // Super+1…9 open the n-th taskbar app (these keys switch workspaces in COSMIC).
+    for n in 1..=9 {
+        lines.push(format!(r#"(modifiers: [Super], key: "{n}"): Spawn("lapin-ux-shell taskbar-item {n}"),"#));
+    }
+    let body: Vec<String> = lines.into_iter().map(|l| format!("    {l}")).collect();
+    format!("{MARKER}\n{{\n{}\n}}\n", body.join("\n"))
+}
+
 fn apply_keybindings() -> Result<bool, cosmic_config::Error> {
     let dir = cfg_path("com.system76.CosmicSettings.Shortcuts");
     let file = dir.join("custom");
-    if std::fs::read_to_string(&file).is_ok_and(|s| !s.trim().is_empty()) {
-        tracing::info!("user has custom shortcuts; not adding the familiar set");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let ours = existing.trim().is_empty()
+        || existing.lines().next().is_some_and(|l| l.trim() == MARKER)
+        || existing.trim() == LEGACY_V1_SHORTCUTS.trim();
+    if !ours {
+        tracing::info!("user has their own custom shortcuts; not changing them");
+        return Ok(false);
+    }
+    let new = windows_style_shortcuts();
+    if existing == new {
         return Ok(false);
     }
     std::fs::create_dir_all(&dir).map_err(cosmic_config::Error::Io)?;
-    std::fs::write(&file, WINDOWS_STYLE_SHORTCUTS).map_err(cosmic_config::Error::Io)?;
+    std::fs::write(&file, new).map_err(cosmic_config::Error::Io)?;
     Ok(true)
+}
+
+/// Defaults that newer releases add for people who already ran an older one.
+pub fn apply_upgrade(from: u32) {
+    tracing::info!(from, to = DEFAULTS_VERSION, "upgrading defaults");
+    match apply_keybindings() {
+        Ok(true) => tracing::info!("updated keyboard shortcuts"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("could not update keyboard shortcuts: {e}"),
+    }
 }
 
 /// Interface font for every libcosmic app (shell, settings, files…).

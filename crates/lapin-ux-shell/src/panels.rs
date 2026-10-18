@@ -1,0 +1,356 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Keyboard-invoked panels: the Win+X power-user menu and the Run dialog.
+//!
+//! These open from a shortcut, where no click gives us an input serial for
+//! a popup grab, so they are layer surfaces with exclusive keyboard focus
+//! (like the Start menu) and close when they lose focus.
+
+use std::sync::LazyLock;
+
+use cosmic::app::Task;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    Anchor, KeyboardInteractivity, Layer, destroy_layer_surface,
+};
+use cosmic::iced::{Alignment, Length, Limits, window};
+use cosmic::surface::action::{LiveSettings, app_layer_shell};
+use cosmic::widget::{self, button, column, container, icon, row, text, text_input};
+use cosmic::{Application, Element};
+
+use crate::app::{Message, PowerAction, Shell, StartPage, rect_key};
+use crate::config::{Role, find_app};
+use crate::style;
+
+static AUTOSIZE: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-panel-autosize"));
+static RUN_INPUT: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-run-input"));
+
+const WINX_WIDTH: u32 = 280;
+const RUN_WIDTH: u32 = 420;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelKind {
+    /// Power-user menu. `power` shows the shut down / sign out list.
+    WinX { power: bool, selected: usize },
+    Run { input: String },
+}
+
+pub struct Panel {
+    pub id: window::Id,
+    pub kind: PanelKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum PanelMsg {
+    OpenWinX,
+    OpenRun,
+    Close,
+    /// Close the panel, then perform the message.
+    Do(Box<Message>),
+    WinXPower(bool),
+    RunInput(String),
+    RunSubmit,
+}
+
+/// One menu row: icon, label, action.
+pub struct Item {
+    pub icon: &'static str,
+    pub label: &'static str,
+    pub msg: Message,
+}
+
+fn item(icon: &'static str, label: &'static str, msg: Message) -> Item {
+    Item { icon, label, msg }
+}
+
+/// The Win+X entries that make sense on this system (apps that aren't
+/// installed are left out). `None` marks a divider.
+pub fn winx_items(shell: &Shell, power: bool) -> Vec<Option<Item>> {
+    if power {
+        return vec![
+            Some(item("go-previous-symbolic", "Back", Message::Panel(PanelMsg::WinXPower(false)))),
+            None,
+            Some(item("system-log-out-symbolic", "Sign out", Message::Power(PowerAction::SignOut))),
+            Some(item("system-lock-screen-symbolic", "Lock", Message::Power(PowerAction::Lock))),
+            Some(item("weather-clear-night-symbolic", "Sleep", Message::Power(PowerAction::Sleep))),
+            Some(item("system-shutdown-symbolic", "Shut down", Message::Power(PowerAction::ShutDown))),
+            Some(item("system-reboot-symbolic", "Restart", Message::Power(PowerAction::Restart))),
+        ];
+    }
+    let app = |role| find_app(&shell.catalog, role);
+    let mut v = vec![Some(item("view-app-grid-symbolic", "Installed apps", Message::OpenStartAt(StartPage::AllApps)))];
+    if let Some(id) = app(Role::Settings) {
+        v.push(Some(item("preferences-system-symbolic", "System", Message::Launch(id))));
+    }
+    if let Some(id) = app(Role::Disks) {
+        v.push(Some(item("drive-harddisk-symbolic", "Disk Management", Message::Launch(id))));
+    }
+    if let Some(id) = app(Role::Terminal) {
+        v.push(Some(item("utilities-terminal-symbolic", "Terminal", Message::Launch(id))));
+    }
+    v.push(None);
+    if let Some(id) = app(Role::TaskManager) {
+        v.push(Some(item("utilities-system-monitor-symbolic", "Task Manager", Message::Launch(id))));
+    }
+    if let Some(id) = app(Role::Settings) {
+        v.push(Some(item("emblem-system-symbolic", "Settings", Message::Launch(id))));
+    }
+    if let Some(id) = app(Role::Files) {
+        v.push(Some(item("system-file-manager-symbolic", "File Explorer", Message::Launch(id))));
+    }
+    v.push(Some(item("system-search-symbolic", "Search", Message::OpenStartAt(StartPage::Home))));
+    v.push(Some(item("system-run-symbolic", "Run", Message::Panel(PanelMsg::OpenRun))));
+    v.push(None);
+    v.push(Some(item("system-shutdown-symbolic", "Shut down or sign out", Message::Panel(PanelMsg::WinXPower(true)))));
+    v.push(Some(item("user-desktop-symbolic", "Desktop", Message::ShowDesktop)));
+    v
+}
+
+/// Selectable rows only (dividers skipped), for keyboard navigation.
+fn selectable(shell: &Shell, power: bool) -> Vec<Message> {
+    winx_items(shell, power).into_iter().flatten().map(|i| i.msg).collect()
+}
+
+/// Run-dialog input: open paths/URLs with the default app, otherwise run
+/// it as a command line.
+pub fn run_command(input: &str) -> std::process::Command {
+    let t = input.trim();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let expanded = if t == "~" {
+        home.clone()
+    } else if let Some(rest) = t.strip_prefix("~/") {
+        format!("{home}/{rest}")
+    } else {
+        t.to_string()
+    };
+    let looks_like_target = expanded.contains("://") || (expanded.starts_with('/') && std::path::Path::new(&expanded).exists());
+    if looks_like_target && !expanded.contains(' ') {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(expanded);
+        c
+    } else {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(t);
+        c
+    }
+}
+
+impl Shell {
+    pub(crate) fn close_panel(&mut self) -> Task<Message> {
+        match self.panel.take() {
+            Some(p) => {
+                self.panel_closed_at = std::time::Instant::now();
+                destroy_layer_surface(p.id)
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
+        let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
+        let id = window::Id::unique();
+        let (anchor, margin, width) = match &kind {
+            PanelKind::WinX { .. } => {
+                // Just above the Start button, like the benchmark.
+                let left = self
+                    .bars
+                    .first()
+                    .and_then(|b| self.rects.get(&rect_key(b.id, "start")))
+                    .map_or(12, |r| r.x.max(0.0) as i32);
+                (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 8, left }, WINX_WIDTH)
+            }
+            PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 12, left: 12 }, RUN_WIDTH),
+        };
+        let focus_run = matches!(kind, PanelKind::Run { .. });
+        self.panel = Some(Panel { id, kind });
+        let r = style::PANEL_RADIUS as u32;
+        tasks.push(cosmic::surface::surface_task(app_layer_shell(
+            move |_: &Shell| LiveSettings {
+                blur: Some(true),
+                corners: Some(CornerRadius { top_left: r, top_right: r, bottom_left: r, bottom_right: r }),
+                ..Default::default()
+            },
+            move |_: &mut Shell| SctkLayerSurfaceSettings {
+                id,
+                layer: Layer::Top,
+                keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                anchor,
+                output: IcedOutput::Active,
+                namespace: "lapin-ux-panel".into(),
+                margin,
+                size: Some((Some(width), Some(1))),
+                exclusive_zone: 0,
+                size_limits: Limits::NONE.min_width(width as f32).max_width(width as f32).min_height(1.0).max_height(900.0),
+                ..Default::default()
+            },
+            None,
+        )));
+        if focus_run {
+            tasks.push(text_input::focus(RUN_INPUT.clone()));
+            tasks.push(text_input::select_all(RUN_INPUT.clone()));
+        }
+        Task::batch(tasks)
+    }
+
+    pub(crate) fn update_panel(&mut self, msg: PanelMsg) -> Task<Message> {
+        match msg {
+            PanelMsg::OpenWinX => {
+                if matches!(self.panel.as_ref().map(|p| &p.kind), Some(PanelKind::WinX { .. })) {
+                    return self.close_panel();
+                }
+                self.open_panel(PanelKind::WinX { power: false, selected: 0 })
+            }
+            PanelMsg::OpenRun => {
+                let input = self.state.run_history.first().cloned().unwrap_or_default();
+                self.open_panel(PanelKind::Run { input })
+            }
+            PanelMsg::Close => self.close_panel(),
+            PanelMsg::Do(m) => {
+                let close = self.close_panel();
+                Task::batch([close, self.update(*m)])
+            }
+            PanelMsg::WinXPower(power) => {
+                if let Some(Panel { kind: PanelKind::WinX { power: p, selected }, .. }) = &mut self.panel {
+                    *p = power;
+                    *selected = 0;
+                }
+                Task::none()
+            }
+            PanelMsg::RunInput(s) => {
+                if let Some(Panel { kind: PanelKind::Run { input }, .. }) = &mut self.panel {
+                    *input = s;
+                }
+                Task::none()
+            }
+            PanelMsg::RunSubmit => {
+                let Some(Panel { kind: PanelKind::Run { input }, .. }) = &self.panel else { return Task::none() };
+                let input = input.trim().to_string();
+                if input.is_empty() {
+                    return Task::none();
+                }
+                self.state.record_run(&input);
+                self.persist_state();
+                let close = self.close_panel();
+                let cmd = run_command(&input);
+                Task::batch([
+                    close,
+                    Task::future(async move {
+                        if cosmic::process::spawn(cmd).await.is_none() {
+                            tracing::warn!("run: could not start {input:?}");
+                        }
+                        cosmic::Action::App(Message::Noop)
+                    }),
+                ])
+            }
+        }
+    }
+
+    /// Arrow keys / Enter / Esc inside a panel.
+    pub(crate) fn panel_key(&mut self, key: Named) -> Task<Message> {
+        let Some(panel) = &self.panel else { return Task::none() };
+        match (&panel.kind, key) {
+            (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
+            (_, Named::Escape) => self.close_panel(),
+            (PanelKind::WinX { power, selected }, Named::ArrowDown | Named::ArrowUp) => {
+                let n = selectable(self, *power).len();
+                let next = if key == Named::ArrowDown { (*selected + 1) % n.max(1) } else { (*selected + n.max(1) - 1) % n.max(1) };
+                if let Some(Panel { kind: PanelKind::WinX { selected, .. }, .. }) = &mut self.panel {
+                    *selected = next;
+                }
+                Task::none()
+            }
+            (PanelKind::WinX { power, selected }, Named::Enter) => {
+                let msgs = selectable(self, *power);
+                match msgs.get(*selected).cloned() {
+                    Some(m @ Message::Panel(PanelMsg::WinXPower(_))) => self.update(m),
+                    Some(m @ Message::Panel(PanelMsg::OpenRun)) => self.update(m),
+                    Some(m) => self.update_panel(PanelMsg::Do(Box::new(m))),
+                    None => Task::none(),
+                }
+            }
+            _ => Task::none(),
+        }
+    }
+}
+
+pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
+    let content: Element<'_, Message> = match &panel.kind {
+        PanelKind::WinX { power, selected } => {
+            let mut col = column::with_capacity(20).spacing(1);
+            let mut idx = 0usize;
+            for entry in winx_items(shell, *power) {
+                match entry {
+                    None => col = col.push(container(widget::divider::horizontal::light()).padding([4, 8])),
+                    Some(it) => {
+                        let msg = match it.msg {
+                            m @ Message::Panel(_) => m,
+                            m => Message::Panel(PanelMsg::Do(Box::new(m))),
+                        };
+                        col = col.push(
+                            button::custom(
+                                row::with_children(vec![
+                                    icon::from_name(it.icon).size(16).into(),
+                                    text::body(it.label).width(Length::Fill).into(),
+                                ])
+                                .spacing(12)
+                                .align_y(Alignment::Center),
+                            )
+                            .width(Length::Fill)
+                            .padding([7, 12])
+                            .class(style::flat_button(idx == *selected))
+                            .on_press(msg),
+                        );
+                        idx += 1;
+                    }
+                }
+            }
+            container(col).padding(4).into()
+        }
+        PanelKind::Run { input } => {
+            let field = text_input::text_input("", input)
+                .id(RUN_INPUT.clone())
+                .on_input(|s| Message::Panel(PanelMsg::RunInput(s)))
+                .on_submit(|_| Message::Panel(PanelMsg::RunSubmit))
+                .width(Length::Fill);
+            column::with_children(vec![
+                row::with_children(vec![
+                    icon::from_name("system-run-symbolic").size(32).into(),
+                    text::body("Type the name of a program, folder, document or website, and Lapin UX will open it for you.")
+                        .width(Length::Fill)
+                        .into(),
+                ])
+                .spacing(16)
+                .align_y(Alignment::Center)
+                .into(),
+                row::with_children(vec![text::body("Open:").into(), field.into()])
+                    .spacing(12)
+                    .align_y(Alignment::Center)
+                    .into(),
+                row::with_children(vec![
+                    widget::Space::new().width(Length::Fill).into(),
+                    button::suggested("OK").on_press(Message::Panel(PanelMsg::RunSubmit)).into(),
+                    button::standard("Cancel").on_press(Message::Panel(PanelMsg::Close)).into(),
+                ])
+                .spacing(8)
+                .into(),
+            ])
+            .spacing(16)
+            .padding(20)
+            .into()
+        }
+    };
+    let width = match panel.kind {
+        PanelKind::WinX { .. } => WINX_WIDTH,
+        PanelKind::Run { .. } => RUN_WIDTH,
+    } as f32;
+    widget::autosize::autosize(
+        container(content).width(Length::Fill).class(style::panel_bg()),
+        AUTOSIZE.clone(),
+    )
+    .min_width(width)
+    .max_width(width)
+    .min_height(1.0)
+    .max_height(900.0)
+    .into()
+}

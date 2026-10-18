@@ -73,9 +73,12 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Pin an app, log out and back in: it is still pinned
 - [ ] Clicking the clock opens a calendar; arrows change month
 - [ ] The thin strip at the far right hides all windows; clicking again brings them back
+- [ ] Drag a pinned icon left/right to reorder it; the order is kept after logging out
+- [ ] Right-click empty taskbar space: alignment, Search box and desktop button options work (and Task Manager if one is installed)
 
 ### System tray
-- [ ] Apps with tray icons (Discord, Steam, Nextcloud, …) show them left of the clock
+- [ ] Apps with tray icons (Discord, Steam, Nextcloud, …) appear under the ^ button left of the clock
+- [ ] Right-click a tray icon → "Show on taskbar" moves it next to the clock; "Hide in overflow menu" moves it back
 - [ ] Left-click opens/activates the app
 - [ ] Right-click shows the app's menu; submenus open; items work
 
@@ -105,6 +108,9 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super opens/closes Start
 - [ ] Super+E file manager · Super+D show desktop · Super+L lock
 - [ ] Super+↑ maximise · Super+↓ minimise · Super+Shift+S screenshot
+- [ ] Super+X opens the power-user menu above Start; arrow keys + Enter work; "Shut down or sign out" shows the power options
+- [ ] Super+R opens Run: try `firefox`, `~/Documents`, `https://example.com`
+- [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
 - [ ] Alt+Tab switches windows · Ctrl+Alt+Del shows the sign-out/power dialog
 
 ### Session

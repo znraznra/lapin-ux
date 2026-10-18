@@ -6,13 +6,18 @@
 //!   lapin-ux-shell start    toggle the Start menu in the running instance
 //!                         (bound to the Super key by the session)
 //!   lapin-ux-shell desktop  show the desktop / restore windows (Super+D)
+//!   lapin-ux-shell winx     power-user menu (Super+X)
+//!   lapin-ux-shell run      Run dialog (Super+R)
+//!   lapin-ux-shell taskbar-item N   open/switch to the N-th taskbar app (Super+N)
 
 mod app;
 mod catalog;
 mod config;
 mod defaults;
+mod panels;
 mod style;
 mod start_view;
+mod taskbar_extras;
 mod taskbar_view;
 mod tray;
 mod wayland;
@@ -22,6 +27,7 @@ use cosmic::app::{CosmicFlags, Settings};
 #[derive(Debug, Clone, Default)]
 pub struct Args {
     pub action: Option<String>,
+    pub args: Vec<String>,
 }
 
 impl CosmicFlags for Args {
@@ -30,6 +36,10 @@ impl CosmicFlags for Args {
 
     fn action(&self) -> Option<&String> {
         self.action.as_ref()
+    }
+
+    fn args(&self) -> Vec<&str> {
+        self.args.iter().map(String::as_str).collect()
     }
 }
 
@@ -47,8 +57,9 @@ fn main() -> cosmic::iced::Result {
         .init();
 
     let action = std::env::args().nth(1);
+    let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start|desktop]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | taskbar-item N]");
         return Ok(());
     }
 
@@ -68,6 +79,6 @@ fn main() -> cosmic::iced::Result {
             .default_text_size(14.0)
             .no_main_window(true)
             .exit_on_close(false),
-        Args { action },
+        Args { action, args },
     )
 }
