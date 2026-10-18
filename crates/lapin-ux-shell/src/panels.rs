@@ -340,7 +340,23 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
                 .on_input(|s| Message::Panel(PanelMsg::RunInput(s)))
                 .on_submit(|_| Message::Panel(PanelMsg::RunSubmit))
                 .width(Length::Fill);
-            column::with_children(vec![
+            // A title bar like the benchmark's Run window.
+            let title = container(
+                row::with_children(vec![
+                    icon::from_name("system-run-symbolic").size(16).into(),
+                    text::body("Run").width(Length::Fill).into(),
+                    button::custom(icon::from_name("window-close-symbolic").size(16))
+                        .padding(6)
+                        .class(style::flat_button(false))
+                        .on_press(Message::Panel(PanelMsg::Close))
+                        .into(),
+                ])
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .padding([4, 4, 4, 14])
+            .class(style::panel_footer());
+            let body = column::with_children(vec![
                 row::with_children(vec![
                     icon::from_name("system-run-symbolic").size(32).into(),
                     text::body("Type the name of a program, folder, document or website, and Lapin UX will open it for you.")
@@ -363,8 +379,8 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
                 .into(),
             ])
             .spacing(16)
-            .padding(20)
-            .into()
+            .padding(20);
+            column::with_children(vec![title.into(), body.into()]).into()
         }
         PanelKind::Quick(q) => crate::quick::view(shell, q),
         PanelKind::Clip(c) => crate::clipboard::view(shell, c),

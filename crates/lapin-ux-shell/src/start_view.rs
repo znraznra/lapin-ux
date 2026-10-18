@@ -361,7 +361,9 @@ fn item_row<'a>(shell: &'a Shell, start: &'a StartMenu, item: &StartItem, select
 
 fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
     let head = |handle: icon::Handle, title: String, sub: String| {
+        // Full width so everything centres in the card, whatever its contents.
         column::with_capacity(8)
+            .width(Length::Fill)
             .spacing(8)
             .align_x(Alignment::Center)
             .push(widget::Space::new().height(16))

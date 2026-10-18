@@ -26,6 +26,7 @@ mod previews;
 mod quick;
 mod start_search;
 mod style;
+mod submenu;
 mod start_view;
 mod taskbar_extras;
 mod taskbar_view;

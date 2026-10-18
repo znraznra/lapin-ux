@@ -15,6 +15,8 @@ pub struct DesktopItem {
     /// A `.desktop` launcher (shown with the app's name and icon).
     pub launcher: bool,
     pub modified: Option<SystemTime>,
+    /// Bytes (0 for folders).
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -23,6 +25,8 @@ pub enum SortBy {
     Name,
     Modified,
     Type,
+    /// Largest last, folders first (like the benchmark).
+    Size,
 }
 
 /// The desktop folder: XDG_DESKTOP_DIR from user-dirs.dirs, else ~/Desktop.
@@ -43,6 +47,7 @@ pub fn list(dir: &Path, sort: SortBy) -> Vec<DesktopItem> {
             let meta = std::fs::metadata(e.path()).ok();
             let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
             Some(DesktopItem {
+                size: if is_dir { 0 } else { meta.as_ref().map_or(0, |m| m.len()) },
                 launcher: !is_dir && file_name.ends_with(".desktop"),
                 modified: meta.and_then(|m| m.modified().ok()),
                 path: e.path(),
@@ -60,6 +65,7 @@ pub fn sort_items(items: &mut [DesktopItem], sort: SortBy) {
     match sort {
         // Folders first, like a file manager.
         SortBy::Name => items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(key(a).cmp(&key(b)))),
+        SortBy::Size => items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.size.cmp(&b.size)).then(key(a).cmp(&key(b)))),
         SortBy::Modified => items.sort_by(|a, b| b.modified.cmp(&a.modified).then(key(a).cmp(&key(b)))),
         SortBy::Type => items.sort_by(|a, b| {
             let ext = |i: &DesktopItem| if i.is_dir { String::new() } else { i.file_name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default() };
@@ -189,7 +195,7 @@ mod tests {
     }
 
     fn item(name: &str) -> DesktopItem {
-        DesktopItem { path: name.into(), file_name: name.into(), is_dir: false, launcher: false, modified: None }
+        DesktopItem { path: name.into(), file_name: name.into(), is_dir: false, launcher: false, modified: None, size: 0 }
     }
 
     #[test]

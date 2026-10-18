@@ -43,6 +43,8 @@ pub struct ShellConfig {
     pub desktop_sort: lapin_ux_core::desktop::SortBy,
     /// View > Show desktop icons (unchecked).
     pub hide_desktop_icons: bool,
+    /// View > Auto arrange icons: keep icons in sort order.
+    pub desktop_auto_arrange: bool,
     /// Automatically hide the taskbar.
     pub auto_hide: bool,
 }

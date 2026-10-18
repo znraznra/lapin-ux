@@ -24,7 +24,7 @@ use cosmic::cctk::wayland_client::protocol::wl_output::WlOutput;
 
 use crate::app::{Message, PopupKind, Shell, rect_key};
 use crate::config::{DesktopSlot, IconSize};
-use crate::taskbar_view::{menu_check, menu_divider, menu_item, panel};
+use crate::taskbar_view::{menu_divider, menu_item, panel};
 
 static RENAME_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-desktop-rename"));
 
@@ -112,6 +112,8 @@ pub enum DesktopMsg {
     Sort(SortBy),
     Size(IconSize),
     ToggleIcons,
+    ToggleAutoArrange,
+    Paste,
     Settings(&'static str),
     Terminal,
 }
@@ -254,6 +256,9 @@ impl Shell {
     }
 
     fn saved_cells(&self) -> HashMap<String, Cell> {
+        if self.config.desktop_auto_arrange {
+            return HashMap::new();
+        }
         self.state.desktop_cells.iter().map(|s| (s.name.clone(), (s.col, s.row))).collect()
     }
 
@@ -484,12 +489,20 @@ impl Shell {
                 return self.open_popup(id, &key, PopupKind::DesktopMenu(on, MenuPage::Main));
             }
             DesktopMsg::Menu(page) => {
-                if let Some(p) = &mut self.popup
-                    && let PopupKind::DesktopMenu(_, pg) = &mut p.kind
-                {
-                    *pg = page;
-                }
+                let key = match page {
+                    MenuPage::Main => return self.close_submenu(),
+                    MenuPage::View => "desk-view",
+                    MenuPage::Sort => "desk-sort",
+                    MenuPage::New => "desk-new",
+                };
+                return self.open_submenu(key, PopupKind::DesktopMenu(None, page));
             }
+            DesktopMsg::ToggleAutoArrange => {
+                self.config.desktop_auto_arrange = !self.config.desktop_auto_arrange;
+                self.persist_config();
+                return self.close_popup();
+            }
+            DesktopMsg::Paste => return self.paste_files(),
             DesktopMsg::Key(key) => match key {
                 Named::Escape => {
                     if d.rename.take().is_none() {
@@ -775,8 +788,10 @@ pub fn rename_view(shell: &Shell) -> Element<'_, Message> {
 
 /// Right-click menus for the desktop and its icons.
 pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> Element<'a, Message> {
+    use crate::submenu::{Lead, entry, leaf, parent_entry};
     let m = |x: DesktopMsg| Message::Desktop(x);
-    let back = || menu_item("go-previous-symbolic", "Back", m(DesktopMsg::Menu(MenuPage::Main)));
+    let pick = |on: bool| if on { Lead::Mark("\u{2022}") } else { Lead::None };
+    let tick = |on: bool| if on { Lead::Mark("\u{2713}") } else { Lead::None };
     let items: Vec<Element<'a, Message>> = match (on, page) {
         (Some(path), _) => {
             let launcher = shell
@@ -796,45 +811,63 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
             ]);
             v
         }
-        (None, MenuPage::Main) => vec![
-            menu_item("view-grid-symbolic", "View \u{203A}", m(DesktopMsg::Menu(MenuPage::View))),
-            menu_item("view-sort-ascending-symbolic", "Sort by \u{203A}", m(DesktopMsg::Menu(MenuPage::Sort))),
-            menu_item("view-refresh-symbolic", "Refresh", m(DesktopMsg::Refresh)),
-            menu_divider(),
-            menu_item("list-add-symbolic", "New \u{203A}", m(DesktopMsg::Menu(MenuPage::New))),
-            menu_divider(),
-            menu_item("preferences-desktop-display-symbolic", "Display settings", m(DesktopMsg::Settings("displays"))),
-            menu_item("preferences-desktop-wallpaper-symbolic", "Personalize", m(DesktopMsg::Settings("wallpaper"))),
-            menu_item("utilities-terminal-symbolic", "Open in Terminal", m(DesktopMsg::Terminal)),
-        ],
+        // The desktop menu, laid out like the benchmark's classic one:
+        // submenus cascade to the side with their arrow at the far right.
+        (None, MenuPage::Main) => {
+            let pid = shell.popup.as_ref().map_or(window::Id::NONE, |p| p.id);
+            vec![
+                parent_entry(shell, pid, "desk-view", "View", m(DesktopMsg::Menu(MenuPage::View))),
+                parent_entry(shell, pid, "desk-sort", "Sort by", m(DesktopMsg::Menu(MenuPage::Sort))),
+                leaf(entry(Lead::None, "Refresh", None, Some(m(DesktopMsg::Refresh)))),
+                leaf(menu_divider()),
+                leaf(entry(Lead::None, "Paste", None, shell.can_paste_files().then(|| m(DesktopMsg::Paste)))),
+                leaf(menu_divider()),
+                parent_entry(shell, pid, "desk-new", "New", m(DesktopMsg::Menu(MenuPage::New))),
+                leaf(menu_divider()),
+                leaf(entry(Lead::Icon("preferences-desktop-display-symbolic"), "Display settings", None, Some(m(DesktopMsg::Settings("displays"))))),
+                leaf(entry(Lead::Icon("preferences-desktop-wallpaper-symbolic"), "Personalize", None, Some(m(DesktopMsg::Settings("wallpaper"))))),
+                leaf(entry(Lead::Icon("utilities-terminal-symbolic"), "Open in Terminal", None, Some(m(DesktopMsg::Terminal)))),
+            ]
+        }
         (None, MenuPage::View) => {
             let s = shell.config.desktop_icon_size;
             vec![
-                back(),
+                entry(pick(s == IconSize::Large), "Large icons", None, Some(m(DesktopMsg::Size(IconSize::Large)))),
+                entry(pick(s == IconSize::Medium), "Medium icons", None, Some(m(DesktopMsg::Size(IconSize::Medium)))),
+                entry(pick(s == IconSize::Small), "Small icons", None, Some(m(DesktopMsg::Size(IconSize::Small)))),
                 menu_divider(),
-                menu_check("Large icons", s == IconSize::Large, m(DesktopMsg::Size(IconSize::Large))),
-                menu_check("Medium icons", s == IconSize::Medium, m(DesktopMsg::Size(IconSize::Medium))),
-                menu_check("Small icons", s == IconSize::Small, m(DesktopMsg::Size(IconSize::Small))),
+                entry(tick(shell.config.desktop_auto_arrange), "Auto arrange icons", None, Some(m(DesktopMsg::ToggleAutoArrange))),
+                entry(tick(true), "Align icons to grid", None, None),
                 menu_divider(),
-                menu_check("Show desktop icons", !shell.config.hide_desktop_icons, m(DesktopMsg::ToggleIcons)),
+                entry(tick(!shell.config.hide_desktop_icons), "Show desktop icons", None, Some(m(DesktopMsg::ToggleIcons))),
             ]
         }
         (None, MenuPage::Sort) => {
             let s = shell.config.desktop_sort;
             vec![
-                back(),
-                menu_divider(),
-                menu_check("Name", s == SortBy::Name, m(DesktopMsg::Sort(SortBy::Name))),
-                menu_check("Date modified", s == SortBy::Modified, m(DesktopMsg::Sort(SortBy::Modified))),
-                menu_check("Item type", s == SortBy::Type, m(DesktopMsg::Sort(SortBy::Type))),
+                entry(pick(s == SortBy::Name), "Name", None, Some(m(DesktopMsg::Sort(SortBy::Name)))),
+                entry(pick(s == SortBy::Size), "Size", None, Some(m(DesktopMsg::Sort(SortBy::Size)))),
+                entry(pick(s == SortBy::Type), "Item type", None, Some(m(DesktopMsg::Sort(SortBy::Type)))),
+                entry(pick(s == SortBy::Modified), "Date modified", None, Some(m(DesktopMsg::Sort(SortBy::Modified)))),
             ]
         }
         (None, MenuPage::New) => vec![
-            back(),
+            entry(Lead::Icon("folder-new-symbolic"), "Folder", None, Some(m(DesktopMsg::NewFolder))),
             menu_divider(),
-            menu_item("folder-new-symbolic", "Folder", m(DesktopMsg::NewFolder)),
-            menu_item("text-x-generic-symbolic", "Text Document", m(DesktopMsg::NewText)),
+            entry(Lead::Icon("text-x-generic-symbolic"), "Text Document", None, Some(m(DesktopMsg::NewText))),
         ],
     };
-    panel(column::with_children(items).spacing(2), 240.0)
+    let width = if matches!(page, MenuPage::Main) && on.is_none() { 250.0 } else { 220.0 };
+    panel(column::with_children(items).spacing(1), width)
+}
+
+impl Shell {
+    /// Files are on the clipboard (copied or cut in a file manager or here).
+    pub(crate) fn can_paste_files(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn paste_files(&mut self) -> Task<Message> {
+        self.close_popup()
+    }
 }

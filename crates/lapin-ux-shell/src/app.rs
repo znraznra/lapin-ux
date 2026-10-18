@@ -179,6 +179,7 @@ pub enum Message {
     Desktop(crate::desktop::DesktopMsg),
     Clip(crate::clipboard::ClipMsg),
     Preview(crate::previews::PreviewMsg),
+    CloseSubmenu,
     /// Auto-hide: pointer entered/left a taskbar.
     BarHover(window::Id, bool),
     /// Auto-hide: hide this bar now if nothing needs it.
@@ -237,6 +238,8 @@ pub struct Shell {
     pub desktop: Option<crate::desktop::DesktopView>,
     pub clip: crate::clipboard::ClipState,
     pub thumbs: std::collections::HashMap<Handle, crate::previews::Thumb>,
+    /// A cascading submenu of `popup`.
+    pub sub: Option<Popup>,
     pub hover: Option<crate::previews::Hover>,
     pub hover_gen: u64,
     /// Windows, most recently focused first (Alt+Tab order).
@@ -391,9 +394,10 @@ impl Shell {
     }
 
     pub(crate) fn close_popup(&mut self) -> Task<Message> {
+        let sub = self.close_submenu();
         match self.popup.take() {
-            Some(p) => destroy_popup(p.id),
-            None => Task::none(),
+            Some(p) => Task::batch([sub, destroy_popup(p.id)]),
+            None => sub,
         }
     }
 
@@ -634,6 +638,7 @@ impl Application for Shell {
             desktop: None,
             clip: Default::default(),
             thumbs: Default::default(),
+            sub: None,
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
@@ -673,6 +678,14 @@ impl Application for Shell {
         }
         if let Some(panel) = self.panel.as_ref().filter(|p| p.id == id) {
             return crate::panels::view(self, panel);
+        }
+        if let Some(sub) = self.sub.as_ref().filter(|p| p.id == id) {
+            return cosmic::widget::autosize::autosize(crate::taskbar_view::popup(self, sub), crate::submenu::SUB_AUTOSIZE.clone())
+                .min_width(1.0)
+                .min_height(1.0)
+                .max_width(440.0)
+                .max_height(720.0)
+                .into();
         }
         if let Some(popup) = self.popup.as_ref().filter(|p| p.id == id) {
             // Popups size themselves to their content.
@@ -852,6 +865,9 @@ impl Shell {
             Message::PopupClosed(id) => {
                 if self.popup.as_ref().is_some_and(|p| p.id == id) {
                     self.popup = None;
+                }
+                if self.sub.as_ref().is_some_and(|p| p.id == id) {
+                    self.sub = None;
                 }
             }
             Message::Config(cfg) => {
@@ -1107,6 +1123,7 @@ impl Shell {
             Message::Desktop(m) => return self.update_desktop(m),
             Message::Clip(m) => return self.update_clip(m),
             Message::Preview(m) => return self.update_preview(m),
+            Message::CloseSubmenu => return self.close_submenu(),
             Message::BarHover(id, inside) => self.bar_hover(id, inside),
             Message::AutoHide(id) => return self.auto_hide_now(id),
             Message::UninstallAsk(app) => return self.uninstall_ask(app),

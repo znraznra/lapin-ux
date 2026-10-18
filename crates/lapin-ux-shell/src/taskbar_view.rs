@@ -14,7 +14,7 @@ use crate::wayland::WindowId as Handle;
 
 pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/lapin-ux-start.svg");
 
-fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+pub(crate) fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     match &shell.tracker {
         Some(t) => t.container(key, content).into(),
         None => content.into(),
