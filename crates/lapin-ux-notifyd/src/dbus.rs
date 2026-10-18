@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lapin_ux_core::notify::{CloseReason, Notification, Urgency, strip_markup};
+use lapin_ux_core::notify::{CloseReason, Image, Notification, Urgency, strip_markup};
 use cosmic::iced::{Subscription, stream};
 use futures::SinkExt;
 use tokio::sync::mpsc;
@@ -26,6 +26,10 @@ pub enum Event {
     Failed(String),
     Notify(Box<Notification>),
     Close(u32),
+    /// From the desktop (clock click, Super+N).
+    ToggleCenter,
+    SetDoNotDisturb(bool),
+    ClearAll,
 }
 
 struct Server {
@@ -69,6 +73,7 @@ impl Server {
             .iter()
             .find_map(|k| hints.get(*k).and_then(|v| String::try_from(v.clone()).ok()))
             .filter(|s| !s.is_empty());
+        let picture = ["image-data", "image_data", "icon_data"].iter().find_map(|k| hints.get(*k).and_then(parse_image));
         let n = Notification {
             id,
             app_name,
@@ -80,6 +85,8 @@ impl Server {
             expire_timeout,
             transient,
             desktop_entry,
+            received: std::time::SystemTime::now(),
+            image: picture,
         };
         let _ = self.tx.send(Event::Notify(Box::new(n)));
         id
@@ -103,15 +110,76 @@ impl Server {
     pub async fn activation_token(emitter: &SignalEmitter<'_>, id: u32, activation_token: &str) -> zbus::Result<()>;
 }
 
+/// `image-data` is a (iiibiiay) structure.
+fn parse_image(v: &OwnedValue) -> Option<Image> {
+    let (w, h, stride, alpha, bits, ch, data): (i32, i32, i32, bool, i32, i32, Vec<u8>) = v.try_clone().ok()?.try_into().ok()?;
+    Image::from_hint(w, h, stride, alpha, bits, ch, &data)
+}
+
+/// Desktop-facing control interface: the taskbar reads the unread count
+/// and Do Not Disturb state, and asks for the notification centre.
+pub const CONTROL_NAME: &str = "dev.lapinux.Notifications";
+pub const CONTROL_PATH: &str = "/dev/lapinux/Notifications";
+
+pub struct Control {
+    tx: mpsc::UnboundedSender<Event>,
+    pub unread: u32,
+    pub dnd: bool,
+}
+
+#[zbus::interface(name = "dev.lapinux.Notifications")]
+impl Control {
+    fn toggle_center(&self) {
+        let _ = self.tx.send(Event::ToggleCenter);
+    }
+
+    fn clear_all(&self) {
+        let _ = self.tx.send(Event::ClearAll);
+    }
+
+    #[zbus(property)]
+    fn unread(&self) -> u32 {
+        self.unread
+    }
+
+    #[zbus(property)]
+    fn do_not_disturb(&self) -> bool {
+        self.dnd
+    }
+
+    #[zbus(property)]
+    fn set_do_not_disturb(&mut self, on: bool) {
+        let _ = self.tx.send(Event::SetDoNotDisturb(on));
+    }
+}
+
+/// Push new state to D-Bus listeners (emits PropertiesChanged).
+pub async fn publish_state(conn: zbus::Connection, unread: u32, dnd: bool) {
+    let Ok(iface) = conn.object_server().interface::<_, Control>(CONTROL_PATH).await else { return };
+    let mut c = iface.get_mut().await;
+    let emitter = iface.signal_emitter();
+    if c.unread != unread {
+        c.unread = unread;
+        let _ = c.unread_changed(emitter).await;
+    }
+    if c.dnd != dnd {
+        c.dnd = dnd;
+        let _ = c.do_not_disturb_changed(emitter).await;
+    }
+}
+
 pub fn subscription() -> Subscription<Event> {
     Subscription::run_with("lapin-ux-notifications-dbus", |_| {
         stream::channel(64, |mut output: futures::channel::mpsc::Sender<Event>| async move {
             let (tx, mut rx) = mpsc::unbounded_channel();
-            let server = Server { tx, next_id: AtomicU32::new(1) };
+            let server = Server { tx: tx.clone(), next_id: AtomicU32::new(1) };
+            let control = Control { tx, unread: 0, dnd: false };
             let conn = async {
                 zbus::connection::Builder::session()?
                     .serve_at(PATH, server)?
+                    .serve_at(CONTROL_PATH, control)?
                     .name(NAME)?
+                    .name(CONTROL_NAME)?
                     .build()
                     .await
             }

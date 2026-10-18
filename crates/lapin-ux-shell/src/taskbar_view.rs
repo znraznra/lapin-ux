@@ -79,13 +79,16 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
     let clock_style = shell.clock_style();
-    let clock = button::custom(
-        column::with_children(vec![
-            text::caption(clock_style.time(&shell.now)).into(),
-            text::caption(clock_style.date(&shell.now)).into(),
-        ])
-        .align_x(Alignment::End),
-    )
+    let time = column::with_children(vec![
+        text::caption(clock_style.time(&shell.now)).into(),
+        text::caption(clock_style.date(&shell.now)).into(),
+    ])
+    .align_x(Alignment::End);
+    let mut clock_content = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(time);
+    if shell.notify.available {
+        clock_content = clock_content.push(notify_badge(shell.notify));
+    }
+    let clock = button::custom(clock_content)
     .padding([4, 10])
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
     .on_press(Message::ClockClick(bar.id));
@@ -504,4 +507,30 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             )
         }
     }
+}
+
+/// Bell next to the clock: a count bubble for unread notifications, or a
+/// crossed-out bell while Do Not Disturb is on.
+fn notify_badge(state: crate::notify_client::State) -> Element<'static, Message> {
+    if state.dnd {
+        return icon::from_name("notification-disabled-symbolic").size(16).into();
+    }
+    if state.unread == 0 {
+        return icon::from_name("notification-symbolic").size(16).into();
+    }
+    let label = if state.unread > 99 { "99+".to_string() } else { state.unread.to_string() };
+    container(text::caption(label))
+        .padding([0, 6])
+        .height(18)
+        .center_y(18)
+        .class(cosmic::theme::Container::custom(|t| {
+            let c = t.cosmic();
+            container::Style {
+                background: Some(cosmic::iced::Background::Color(c.accent_color().into())),
+                text_color: Some(c.on_accent_color().into()),
+                border: cosmic::iced::Border { radius: 9.0.into(), ..Default::default() },
+                ..Default::default()
+            }
+        }))
+        .into()
 }

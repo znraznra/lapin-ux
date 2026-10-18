@@ -7,8 +7,9 @@
 //! critical ones stay until dismissed, and "Do not disturb" holds back
 //! everything except critical notifications.
 
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -49,6 +50,43 @@ pub struct Notification {
     pub expire_timeout: i32,
     pub transient: bool,
     pub desktop_entry: Option<String>,
+    /// When it arrived (for "5m ago" in the notification centre).
+    pub received: SystemTime,
+    /// Picture sent with the notification (e.g. a contact photo).
+    pub image: Option<Image>,
+}
+
+/// RGBA pixels, shared cheaply between the toast and the history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<Vec<u8>>,
+}
+
+impl Image {
+    /// Convert the spec's `image-data` hint (width, height, rowstride,
+    /// has_alpha, bits_per_sample, channels, data) to tightly packed RGBA.
+    pub fn from_hint(width: i32, height: i32, rowstride: i32, has_alpha: bool, bits: i32, channels: i32, data: &[u8]) -> Option<Image> {
+        if width <= 0 || height <= 0 || bits != 8 || !(channels == 3 || channels == 4) {
+            return None;
+        }
+        if has_alpha != (channels == 4) {
+            return None;
+        }
+        let (w, h, stride, ch) = (width as usize, height as usize, rowstride as usize, channels as usize);
+        if stride < w * ch || data.len() < stride * (h - 1) + w * ch {
+            return None;
+        }
+        let mut out = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            let row = &data[y * stride..y * stride + w * ch];
+            for px in row.chunks_exact(ch) {
+                out.extend_from_slice(&[px[0], px[1], px[2], if ch == 4 { px[3] } else { 255 }]);
+            }
+        }
+        Some(Image { width: width as u32, height: height as u32, rgba: Arc::new(out) })
+    }
 }
 
 impl Notification {
@@ -101,6 +139,8 @@ pub struct Queue {
     /// Everything not transient, newest first, for the notification center.
     history: VecDeque<Notification>,
     pub history_limit: usize,
+    /// History entries the user hasn't seen in the notification centre yet.
+    unread: HashSet<u32>,
 }
 
 impl Default for Queue {
@@ -113,6 +153,7 @@ impl Default for Queue {
             pending: VecDeque::new(),
             history: VecDeque::new(),
             history_limit: 100,
+            unread: HashSet::new(),
         }
     }
 }
@@ -146,13 +187,56 @@ impl Queue {
         self.pending.len()
     }
 
+    fn remember(&mut self, n: &Notification) {
+        if n.transient {
+            return;
+        }
+        self.history.retain(|h| h.id != n.id);
+        self.history.push_front(n.clone());
+        self.unread.insert(n.id);
+        while self.history.len() > self.history_limit {
+            if let Some(old) = self.history.pop_back() {
+                self.unread.remove(&old.id);
+            }
+        }
+    }
+
+    /// Record a notification without showing a toast (used while the
+    /// notification centre is open, where it appears directly).
+    pub fn push_silent(&mut self, n: Notification) {
+        self.remember(&n);
+        self.unread.remove(&n.id);
+    }
+
+    pub fn unread_count(&self) -> usize {
+        self.unread.len()
+    }
+
+    pub fn mark_all_read(&mut self) {
+        self.unread.clear();
+    }
+
+    /// Clear the notification centre. Returns the ids removed.
+    pub fn clear_history(&mut self) -> Vec<u32> {
+        self.unread.clear();
+        self.history.drain(..).map(|n| n.id).collect()
+    }
+
+    /// History grouped by app, newest group first, newest entry first.
+    pub fn history_by_app(&self) -> Vec<(&str, Vec<&Notification>)> {
+        let mut groups: Vec<(&str, Vec<&Notification>)> = Vec::new();
+        for n in &self.history {
+            match groups.iter_mut().find(|(app, _)| *app == n.app_name) {
+                Some((_, v)) => v.push(n),
+                None => groups.push((n.app_name.as_str(), vec![n])),
+            }
+        }
+        groups
+    }
+
     /// Add or replace a notification.
     pub fn push(&mut self, n: Notification, now: Instant) {
-        if !n.transient {
-            self.history.retain(|h| h.id != n.id);
-            self.history.push_front(n.clone());
-            self.history.truncate(self.history_limit);
-        }
+        self.remember(&n);
         // Replacement updates in place without resetting the slot order.
         if let Some(t) = self.visible.iter_mut().find(|t| t.notification.id == n.id) {
             t.deadline = n.display_time().map(|d| now + d);
@@ -183,6 +267,7 @@ impl Queue {
     /// Dismiss from the notification center too.
     pub fn forget(&mut self, id: u32) {
         self.history.retain(|n| n.id != id);
+        self.unread.remove(&id);
     }
 
     /// Expire toasts whose time is up. Returns the ids that expired.
@@ -290,7 +375,54 @@ mod tests {
             expire_timeout: timeout,
             transient: false,
             desktop_entry: None,
+            received: SystemTime::UNIX_EPOCH,
+            image: None,
         }
+    }
+
+    #[test]
+    fn unread_and_grouping() {
+        let t0 = Instant::now();
+        let mut q = Queue::default();
+        let mut a = n(1, Urgency::Normal, -1);
+        a.app_name = "Mail".into();
+        let mut b = n(2, Urgency::Normal, -1);
+        b.app_name = "Chat".into();
+        let mut c = n(3, Urgency::Normal, -1);
+        c.app_name = "Mail".into();
+        q.push(a, t0);
+        q.push(b, t0);
+        q.push(c, t0);
+        assert_eq!(q.unread_count(), 3);
+        let g = q.history_by_app();
+        assert_eq!(g.iter().map(|(a, v)| (*a, v.len())).collect::<Vec<_>>(), vec![("Mail", 2), ("Chat", 1)]);
+        assert_eq!(g[0].1[0].id, 3);
+        q.forget(2);
+        assert_eq!(q.unread_count(), 2);
+        q.mark_all_read();
+        assert_eq!(q.unread_count(), 0);
+        q.push_silent(n(9, Urgency::Normal, -1));
+        assert_eq!(q.unread_count(), 0);
+        assert_eq!(q.history().count(), 3);
+        let mut cleared = q.clear_history();
+        cleared.sort();
+        assert_eq!(cleared, vec![1, 3, 9]);
+        assert_eq!(q.history().count(), 0);
+    }
+
+    #[test]
+    fn image_hint_conversion() {
+        // 2x1 RGB with padded rows (rowstride 8).
+        let data = [255, 0, 0, 0, 255, 0, 9, 9];
+        let img = Image::from_hint(2, 1, 8, false, 8, 3, &data).unwrap();
+        assert_eq!(*img.rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+        // RGBA passes through.
+        let img = Image::from_hint(1, 1, 4, true, 8, 4, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(*img.rgba, vec![1, 2, 3, 4]);
+        // Bad input is rejected rather than read out of bounds.
+        assert!(Image::from_hint(4, 4, 16, true, 8, 4, &[0; 10]).is_none());
+        assert!(Image::from_hint(1, 1, 3, true, 8, 3, &[0; 3]).is_none());
+        assert!(Image::from_hint(1, 1, 4, true, 16, 4, &[0; 8]).is_none());
     }
 
     fn ids(q: &Queue) -> Vec<u32> {

@@ -173,7 +173,7 @@ impl Shell {
             },
             move |_: &mut Shell| SctkLayerSurfaceSettings {
                 id,
-                layer: Layer::Top,
+                layer: Layer::Overlay,
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
                 anchor,
                 output: IcedOutput::Active,

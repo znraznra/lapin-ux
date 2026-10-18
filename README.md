@@ -49,7 +49,14 @@ COSMIC compositor. Arch Linux first.
 - Full `org.freedesktop.Notifications` server: actions, urgency, replace-id,
   transient, image-path, markup stripped to plain text.
 - Up to 3 toasts stacked above the taskbar, 5 s default, critical ones stay,
-  hover pauses the timer, Do-not-disturb ready in the queue logic.
+  hover pauses the timer. Raw `image-data` pictures (chat avatars, photos) shown.
+- **Notification centre** (click the clock or Super+N): notifications grouped
+  by app with time, per-item and per-app dismiss, Clear all, Do not disturb,
+  and a collapsible calendar underneath. Clicking a notification opens its app.
+- The clock shows a bell with the unread count, or a muted bell during
+  Do not disturb. `lapin-ux-notifyd center` toggles the centre from scripts;
+  `dev.lapinux.Notifications` on the session bus exposes `Unread`,
+  `DoNotDisturb`, `ToggleCenter` and `ClearAll`.
 
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
 - Starts cosmic-comp in normal (not kiosk) mode using the same handshake as
@@ -71,6 +78,7 @@ COSMIC compositor. Arch Linux first.
 | Super + D | Show desktop / restore |
 | Super + X | Power-user menu |
 | Super + R | Run dialog |
+| Super + N | Notification centre |
 | Super + 1…9 | Open / switch to the n-th taskbar app |
 | Super + L | Lock |
 | Super + ↑ / ↓ | Maximize / minimize |
@@ -84,7 +92,7 @@ COSMIC compositor. Arch Linux first.
 display manager ──> start-lapin-ux ──> lapin-ux-session
                                       ├─ cosmic-comp            compositor (reused, unmodified)
                                       ├─ lapin-ux-shell           taskbar ×N, Start menu, tray   ← ours
-                                      ├─ lapin-ux-notifyd         notification toasts            ← ours
+                                      ├─ lapin-ux-notifyd         notification toasts + centre   ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
                                       ├─ cosmic-bg              wallpaper                      (reused)
                                       ├─ cosmic-osd             volume OSD, polkit dialogs     (reused)
@@ -159,10 +167,9 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 
 - **Settings app** (display, network, Bluetooth, sound, power, users, default
   apps) and a **quick-settings flyout** (Wi-Fi/volume/battery) next to the clock.
-- **Notification center** (history is already kept in the queue).
 - Own **Alt+Tab** switcher and **Task view**; until then Alt+Tab uses cosmic-launcher.
 - **Snap** halves/quarters on Super+←/→ and snap layouts (needs compositor work).
-- Hover **thumbnails** on taskbar buttons, drag-to-reorder pins, badges/progress.
+- Hover **thumbnails** on taskbar buttons, badges/progress.
 - File manager, update center (pacman + Flatpak + fwupd), control panel.
 
 ## License

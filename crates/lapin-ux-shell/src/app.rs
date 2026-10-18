@@ -163,6 +163,12 @@ pub enum Message {
     UnpinStart(String),
     ShowDesktop,
     ClockClick(window::Id),
+    /// Click outside an open Start menu or panel.
+    CatcherClick,
+    /// Notification daemon state (unread count, Do Not Disturb).
+    NotifyState(crate::notify_client::State),
+    /// The notification centre couldn't be reached; show the calendar popup instead.
+    CalendarFallback(window::Id),
     PowerMenu,
     Power(PowerAction),
     Tray(crate::tray::Event),
@@ -177,6 +183,8 @@ pub enum Message {
 }
 
 pub struct Shell {
+    /// Transparent full-screen surface under Start / panels; see catcher.rs.
+    pub(crate) catcher: Option<window::Id>,
     pub(crate) core: Core,
     pub config: ShellConfig,
     pub(crate) config_handle: Option<cosmic_config::Config>,
@@ -194,6 +202,7 @@ pub struct Shell {
     pub clock: ClockStyle,
     pub now: chrono::NaiveDateTime,
     pub calendar: cosmic::widget::calendar::CalendarModel,
+    pub notify: crate::notify_client::State,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -301,7 +310,7 @@ impl Shell {
                 },
                 move |_: &mut Shell| SctkLayerSurfaceSettings {
                     id,
-                    layer: Layer::Top,
+                    layer: Layer::Overlay,
                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
@@ -551,12 +560,14 @@ impl Application for Shell {
             bars: Vec::new(),
             start: None,
             start_closed_at: Instant::now() - Duration::from_secs(10),
+            catcher: None,
             popup: None,
             rects: HashMap::new(),
             tracker: None,
             clock: ClockStyle::from_env(),
             now: chrono::Local::now().naive_local(),
             calendar: cosmic::widget::calendar::CalendarModel::now(),
+            notify: Default::default(),
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -578,6 +589,9 @@ impl Application for Shell {
     fn view_window(&self, id: window::Id) -> Element<'_, Message> {
         if let Some(bar) = self.bars.iter().find(|b| b.id == id) {
             return crate::taskbar_view::taskbar(self, bar);
+        }
+        if self.catcher == Some(id) {
+            return crate::catcher::view();
         }
         if let Some(start) = self.start.as_ref().filter(|s| s.id == id) {
             return crate::start_view::start_menu(self, start);
@@ -631,6 +645,7 @@ impl Application for Shell {
         });
         Subscription::batch(tray_subs.chain([
             crate::tray::subscription().map(Message::Tray),
+            crate::notify_client::subscription().map(Message::NotifyState),
             wl::subscription().map(Message::Wayland),
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
@@ -660,6 +675,13 @@ impl Application for Shell {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        Task::batch([task, self.sync_catcher()])
+    }
+}
+
+impl Shell {
+    fn handle(&mut self, message: Message) -> Task<Message> {
         if !matches!(message, Message::Tick | Message::Rect(_) | Message::Wayland(_) | Message::BarPointer(..)) {
             tracing::trace!(?message);
         }
@@ -939,7 +961,23 @@ impl Application for Shell {
                     }
                 }
             }
+            Message::NotifyState(s) => self.notify = s,
+            Message::CatcherClick => return self.catcher_click(),
             Message::ClockClick(bar) => {
+                if self.notify.available {
+                    let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);
+                    let toggle = Task::future(async move {
+                        if crate::notify_client::toggle_center().await {
+                            cosmic::Action::App(Message::Noop)
+                        } else {
+                            cosmic::Action::App(Message::CalendarFallback(bar))
+                        }
+                    });
+                    return Task::batch([close, toggle]);
+                }
+                return self.update(Message::CalendarFallback(bar));
+            }
+            Message::CalendarFallback(bar) => {
                 self.calendar = cosmic::widget::calendar::CalendarModel::now();
                 let key = rect_key(bar, "clock");
                 return self.open_popup(bar, &key, PopupKind::Calendar);

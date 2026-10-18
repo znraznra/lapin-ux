@@ -1,46 +1,81 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Lapin UX notification daemon: owns `org.freedesktop.Notifications` and
-//! shows toasts stacked in the bottom-right corner above the taskbar.
+//! Lapin UX notification daemon: owns `org.freedesktop.Notifications`,
+//! shows toasts stacked in the bottom-right corner above the taskbar, and
+//! the notification centre (history + calendar) opened from the clock.
+//!
+//!   lapin-ux-notifyd          run the daemon
+//!   lapin-ux-notifyd center   toggle the notification centre (Super+N)
 
+mod center;
 mod dbus;
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use lapin_ux_core::notify::{CloseReason, Queue, Toast, Urgency};
 use cosmic::app::{Core, Settings, Task};
+use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
 };
+use cosmic::iced::event::wayland::{self, LayerEvent};
+use cosmic::iced::event::PlatformSpecific;
+use cosmic::iced::keyboard::{self, Key, key::Named};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Limits, Shadow, Subscription, Vector, window};
+use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{self, autosize, button, column, container, icon, mouse_area, row, text};
 use cosmic::{Application, Element, theme};
+use lapin_ux_core::notify::{CloseReason, Notification, Queue, Toast, Urgency};
 
 const WIDTH: u32 = 364;
 
 static AUTOSIZE: LazyLock<cosmic::widget::Id> = LazyLock::new(|| cosmic::widget::Id::new("lapin-ux-toasts"));
 
 #[derive(Debug, Clone)]
-enum Message {
+pub enum Message {
     Dbus(dbus::Event),
     Tick,
     Hover(bool),
     Dismiss(u32),
     Invoke(u32, String),
+    /// Click on a card in the notification centre.
+    CenterOpen(u32),
+    /// Remove from the notification centre (×).
+    Forget(u32),
+    /// Remove every notification of one app.
+    ForgetApp(String),
+    ClearAll,
+    ToggleDnd,
+    CloseCenter,
+    /// Collapse or expand the calendar under the notifications.
+    ToggleCalendar,
+    Layer(LayerEvent, window::Id),
+    Escape(window::Id),
+    CalendarSelect(jiff::civil::Date),
+    CalendarPrev,
+    CalendarNext,
     Noop,
 }
 
-struct App {
+pub struct App {
     core: Core,
-    queue: Queue,
+    pub queue: Queue,
     conn: Option<zbus::Connection>,
     surface: Option<window::Id>,
     hovered: bool,
+    /// The notification centre's layer surface, when open.
+    pub center: Option<window::Id>,
+    center_closed_at: Instant,
+    /// Transparent surface under the centre so clicking elsewhere closes it
+    /// (cosmic-comp keeps focus on exclusive-keyboard surfaces).
+    catcher: Option<window::Id>,
+    pub calendar: cosmic::widget::calendar::CalendarModel,
+    pub calendar_collapsed: bool,
+    settings: Option<cosmic::cosmic_config::Config>,
 }
 
 impl App {
-    /// Create or destroy the layer surface to match whether toasts exist.
+    /// Create or destroy the toast layer surface to match whether toasts exist.
     fn sync_surface(&mut self) -> Task<Message> {
         match (self.queue.visible().is_empty(), self.surface) {
             (false, None) => {
@@ -82,6 +117,107 @@ impl App {
             cosmic::Action::App(Message::Noop)
         })
     }
+
+    /// Tell the taskbar about the unread count and Do Not Disturb.
+    fn publish(&self) -> Task<Message> {
+        let Some(conn) = self.conn.clone() else { return Task::none() };
+        let unread = self.queue.unread_count() as u32;
+        let dnd = self.queue.do_not_disturb;
+        Task::future(async move {
+            dbus::publish_state(conn, unread, dnd).await;
+            cosmic::Action::App(Message::Noop)
+        })
+    }
+
+    fn set_dnd(&mut self, on: bool) -> Task<Message> {
+        self.queue.do_not_disturb = on;
+        if let Some(cfg) = &self.settings
+            && let Err(e) = cosmic::cosmic_config::ConfigSet::set(cfg, "do_not_disturb", on)
+        {
+            tracing::warn!("saving Do Not Disturb: {e}");
+        }
+        self.publish()
+    }
+
+    fn open_center(&mut self) -> Task<Message> {
+        if self.center.is_some() {
+            return Task::none();
+        }
+        // The click that closed it (focus moved to the clock) also toggles.
+        if self.center_closed_at.elapsed() < Duration::from_millis(250) {
+            return Task::none();
+        }
+        let id = window::Id::unique();
+        self.center = Some(id);
+        self.queue.mark_all_read();
+        self.calendar = cosmic::widget::calendar::CalendarModel::now();
+        let r = 8u32;
+        let catcher = window::Id::unique();
+        self.catcher = Some(catcher);
+        Task::batch([
+            get_layer_surface(SctkLayerSurfaceSettings {
+                id: catcher,
+                layer: Layer::Top,
+                keyboard_interactivity: KeyboardInteractivity::None,
+                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                output: IcedOutput::Active,
+                namespace: "lapin-ux-dismiss".into(),
+                size: Some((None, None)),
+                exclusive_zone: 0,
+                ..Default::default()
+            }),
+            cosmic::surface::surface_task(app_layer_shell(
+                move |_: &App| LiveSettings {
+                    blur: Some(true),
+                    corners: Some(CornerRadius { top_left: r, top_right: r, bottom_left: r, bottom_right: r }),
+                    ..Default::default()
+                },
+                move |_: &mut App| SctkLayerSurfaceSettings {
+                    id,
+                    layer: Layer::Overlay,
+                    keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                    anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::RIGHT,
+                    output: IcedOutput::Active,
+                    namespace: "lapin-ux-notification-centre".into(),
+                    margin: IcedMargin { top: 12, right: 12, bottom: 12, left: 0 },
+                    size: Some((Some(center::WIDTH), None)),
+                    exclusive_zone: 0,
+                    size_limits: Limits::NONE.min_width(center::WIDTH as f32).max_width(center::WIDTH as f32),
+                    ..Default::default()
+                },
+                None,
+            )),
+            self.publish(),
+        ])
+    }
+
+    fn close_center(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        if let Some(id) = self.catcher.take() {
+            tasks.push(destroy_layer_surface(id));
+        }
+        if let Some(id) = self.center.take() {
+            self.center_closed_at = Instant::now();
+            tasks.push(destroy_layer_surface(id));
+        }
+        Task::batch(tasks)
+    }
+
+    fn invoke(&mut self, id: u32, key: String) -> Task<Message> {
+        let now = Instant::now();
+        self.queue.close(id, now);
+        self.queue.forget(id);
+        let mut tasks = vec![self.sync_surface(), self.publish()];
+        if let Some(conn) = self.conn.clone() {
+            tasks.push(Task::future(async move {
+                dbus::emit_action(conn.clone(), id, key, None).await;
+                // Invoking an action also closes the notification.
+                dbus::emit_closed(conn, id, CloseReason::Dismissed).await;
+                cosmic::Action::App(Message::Noop)
+            }));
+        }
+        Task::batch(tasks)
+    }
 }
 
 impl Application for App {
@@ -98,14 +234,44 @@ impl Application for App {
     }
 
     fn init(core: Core, _: ()) -> (Self, Task<Message>) {
-        (App { core, queue: Queue::default(), conn: None, surface: None, hovered: false }, Task::none())
+        let settings = cosmic::cosmic_config::Config::new(lapin_ux_core::ids::NOTIFYD_APP_ID, 1)
+            .inspect_err(|e| tracing::warn!("notification settings unavailable: {e}"))
+            .ok();
+        let mut queue = Queue::default();
+        use cosmic::cosmic_config::ConfigGet;
+        queue.do_not_disturb = settings.as_ref().and_then(|c| c.get::<bool>("do_not_disturb").ok()).unwrap_or(false);
+        (
+            App {
+                core,
+                queue,
+                conn: None,
+                surface: None,
+                hovered: false,
+                center: None,
+                center_closed_at: Instant::now() - Duration::from_secs(10),
+                catcher: None,
+                calendar: cosmic::widget::calendar::CalendarModel::now(),
+                calendar_collapsed: settings.as_ref().and_then(|c| c.get::<bool>("calendar_collapsed").ok()).unwrap_or(false),
+                settings,
+            },
+            Task::none(),
+        )
     }
 
     fn view(&self) -> Element<'_, Message> {
         unreachable!("no main window")
     }
 
-    fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
+    fn view_window(&self, id: window::Id) -> Element<'_, Message> {
+        if self.center == Some(id) {
+            return center::view(self);
+        }
+        if self.catcher == Some(id) {
+            return mouse_area(widget::Space::new().width(Length::Fill).height(Length::Fill))
+                .on_press(Message::CloseCenter)
+                .on_right_press(Message::CloseCenter)
+                .into();
+        }
         let cards: Vec<Element<'_, Message>> = self.queue.visible().iter().map(toast).collect();
         let list = column::with_children(cards).spacing(8).width(Length::Fixed(WIDTH as f32));
         let area = mouse_area(list).on_enter(Message::Hover(true)).on_exit(Message::Hover(false));
@@ -129,14 +295,20 @@ impl Application for App {
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             dbus::subscription().map(Message::Dbus),
-            // The pointer can leave the surface without crossing a widget
-            // edge (e.g. the toast under it closes); treat that as un-hover.
-            cosmic::iced::event::listen_raw(|e, _, _| match e {
+            cosmic::iced::event::listen_raw(|e, _, window| match e {
+                // The pointer can leave the surface without crossing a widget
+                // edge (e.g. the toast under it closes); treat that as un-hover.
                 cosmic::iced::Event::Mouse(cosmic::iced::mouse::Event::CursorLeft) => Some(Message::Hover(false)),
+                cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(wayland::Event::Layer(e, _, id))) => {
+                    Some(Message::Layer(e, id))
+                }
+                cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(Named::Escape), .. }) => {
+                    Some(Message::Escape(window))
+                }
                 _ => None,
             }),
         ];
-        if self.surface.is_some() {
+        if self.surface.is_some() || self.center.is_some() {
             subs.push(cosmic::iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
         Subscription::batch(subs)
@@ -146,20 +318,36 @@ impl Application for App {
         let now = Instant::now();
         match message {
             Message::Dbus(ev) => match ev {
-                dbus::Event::Ready(conn) => self.conn = Some(conn),
+                dbus::Event::Ready(conn) => {
+                    self.conn = Some(conn);
+                    return self.publish();
+                }
                 dbus::Event::Failed(e) => {
                     tracing::error!("cannot own {}: {e} (is another notification daemon running?)", dbus::NAME);
                 }
                 dbus::Event::Notify(n) => {
+                    if self.center.is_some() {
+                        // Shown directly in the open centre; no toast.
+                        self.queue.push_silent(*n);
+                        return Task::none();
+                    }
                     self.queue.push(*n, now);
-                    return self.sync_surface();
+                    return Task::batch([self.sync_surface(), self.publish()]);
                 }
                 dbus::Event::Close(id) => {
                     let existed = self.queue.close(id, now);
                     self.queue.forget(id);
                     let signal = if existed { self.signal_closed([id], CloseReason::CloseCall) } else { Task::none() };
-                    return Task::batch([signal, self.sync_surface()]);
+                    return Task::batch([signal, self.sync_surface(), self.publish()]);
                 }
+                dbus::Event::ToggleCenter => {
+                    if self.center.is_some() {
+                        return self.close_center();
+                    }
+                    return self.open_center();
+                }
+                dbus::Event::SetDoNotDisturb(on) => return self.set_dnd(on),
+                dbus::Event::ClearAll => return self.update(Message::ClearAll),
             },
             Message::Tick => {
                 if self.hovered {
@@ -183,26 +371,72 @@ impl Application for App {
                 let signal = self.signal_closed([id], CloseReason::Dismissed);
                 return Task::batch([signal, self.sync_surface()]);
             }
-            Message::Invoke(id, key) => {
-                self.queue.close(id, now);
-                let mut tasks = vec![self.sync_surface()];
-                if let Some(conn) = self.conn.clone() {
-                    tasks.push(Task::future(async move {
-                        dbus::emit_action(conn.clone(), id, key, None).await;
-                        // Invoking an action also closes the notification.
-                        dbus::emit_closed(conn, id, CloseReason::Dismissed).await;
-                        cosmic::Action::App(Message::Noop)
-                    }));
+            Message::Invoke(id, key) => return self.invoke(id, key),
+            Message::CenterOpen(id) => {
+                let default = self
+                    .queue
+                    .history()
+                    .find(|n| n.id == id)
+                    .and_then(|n| n.actions.iter().find(|a| a.key == "default"))
+                    .map(|a| a.key.clone());
+                if let Some(key) = default {
+                    let close = self.close_center();
+                    return Task::batch([close, self.invoke(id, key)]);
                 }
-                return Task::batch(tasks);
             }
+            Message::Forget(id) => {
+                self.queue.close(id, now);
+                self.queue.forget(id);
+                let signal = self.signal_closed([id], CloseReason::Dismissed);
+                return Task::batch([signal, self.sync_surface(), self.publish()]);
+            }
+            Message::ForgetApp(app) => {
+                let ids: Vec<u32> = self.queue.history().filter(|n| n.app_name == app).map(|n| n.id).collect();
+                for id in &ids {
+                    self.queue.close(*id, now);
+                    self.queue.forget(*id);
+                }
+                let signal = self.signal_closed(ids, CloseReason::Dismissed);
+                return Task::batch([signal, self.sync_surface(), self.publish()]);
+            }
+            Message::ClearAll => {
+                let ids = self.queue.clear_history();
+                for id in &ids {
+                    self.queue.close(*id, now);
+                }
+                let signal = self.signal_closed(ids, CloseReason::Dismissed);
+                return Task::batch([signal, self.sync_surface(), self.publish()]);
+            }
+            Message::ToggleDnd => {
+                let on = !self.queue.do_not_disturb;
+                return self.set_dnd(on);
+            }
+            Message::CloseCenter => return self.close_center(),
+            Message::ToggleCalendar => {
+                self.calendar_collapsed = !self.calendar_collapsed;
+                if let Some(cfg) = &self.settings
+                    && let Err(e) = cosmic::cosmic_config::ConfigSet::set(cfg, "calendar_collapsed", self.calendar_collapsed)
+                {
+                    tracing::warn!("saving calendar state: {e}");
+                }
+            }
+            Message::Layer(LayerEvent::Unfocused, id) if self.center == Some(id) => return self.close_center(),
+            Message::Layer(..) => {}
+            Message::Escape(id) if self.center == Some(id) => return self.close_center(),
+            Message::Escape(_) => {}
+            Message::CalendarSelect(d) => self.calendar.set_selected_visible(d),
+            Message::CalendarPrev => self.calendar.show_prev_month(),
+            Message::CalendarNext => self.calendar.show_next_month(),
             Message::Noop => {}
         }
         Task::none()
     }
 }
 
-fn icon_for(n: &lapin_ux_core::notify::Notification) -> icon::Handle {
+pub fn icon_for(n: &Notification) -> icon::Handle {
+    if let Some(img) = &n.image {
+        return icon::from_raster_pixels(img.width, img.height, img.rgba.as_ref().clone());
+    }
     let name = if !n.app_icon.is_empty() {
         n.app_icon.as_str()
     } else {
@@ -285,12 +519,36 @@ fn toast(t: &Toast) -> Element<'_, Message> {
     container(body).padding([10, 14]).width(Length::Fill).class(card_style(n.urgency == Urgency::Critical)).into()
 }
 
+/// `lapin-ux-notifyd center`: ask the running daemon to toggle the centre.
+fn toggle_center_and_exit() -> ! {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
+    let res: zbus::Result<()> = rt.block_on(async {
+        let conn = zbus::Connection::session().await?;
+        conn.call_method(Some(dbus::CONTROL_NAME), dbus::CONTROL_PATH, Some(dbus::CONTROL_NAME), "ToggleCenter", &())
+            .await?;
+        Ok(())
+    });
+    if let Err(e) = res {
+        eprintln!("lapin-ux-notifyd: could not reach the running notification daemon: {e}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,lapin_ux_notifyd=info".into()),
         )
         .init();
+    match std::env::args().nth(1).as_deref() {
+        Some("center" | "centre") => toggle_center_and_exit(),
+        Some("-h" | "--help") => {
+            println!("usage: lapin-ux-notifyd [center]");
+            return Ok(());
+        }
+        _ => {}
+    }
     cosmic::app::run::<App>(
         Settings::default().antialiasing(true).client_decorations(true).no_main_window(true).exit_on_close(false),
         (),

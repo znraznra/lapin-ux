@@ -141,7 +141,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 2;
+pub const DEFAULTS_VERSION: u32 = 3;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -164,6 +164,7 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Super], key: "d"): Spawn("lapin-ux-shell desktop"),"#.to_string(),
         r#"(modifiers: [Super], key: "x"): Spawn("lapin-ux-shell winx"),"#.to_string(),
         r#"(modifiers: [Super], key: "r"): Spawn("lapin-ux-shell run"),"#.to_string(),
+        r#"(modifiers: [Super], key: "n"): Spawn("lapin-ux-notifyd center"),"#.to_string(),
         r#"(modifiers: [Super], key: "Up"): Maximize,"#.to_string(),
         r#"(modifiers: [Super], key: "Down"): Minimize,"#.to_string(),
         r#"(modifiers: [Super, Shift], key: "s"): System(Screenshot),"#.to_string(),

@@ -71,7 +71,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Middle-click an icon opens a new window of that app
 - [ ] Right-click an icon: app actions (e.g. Firefox "New Private Window"), Pin/Unpin, Close
 - [ ] Pin an app, log out and back in: it is still pinned
-- [ ] Clicking the clock opens a calendar; arrows change month
+- [ ] Clicking the clock opens the notification centre with a calendar; arrows change month; clicking the clock again closes it
 - [ ] The thin strip at the far right hides all windows; clicking again brings them back
 - [ ] Drag a pinned icon left/right to reorder it; the order is kept after logging out
 - [ ] Right-click empty taskbar space: alignment, Search box and desktop button options work (and Task Manager if one is installed)
@@ -83,7 +83,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Right-click shows the app's menu; submenus open; items work
 
 ### Start menu
-- [ ] Start button and Search box both open it; click outside or Esc closes it
+- [ ] Start button and Search box both open it; clicking outside it (desktop or a window) or Esc closes it
 - [ ] Typing searches immediately; Enter opens the top result
 - [ ] Try: `firefox`, `browser`, `files`, part of a name, initials (`vsc`)
 - [ ] Arrow keys move the highlight
@@ -98,6 +98,12 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Hovering a toast keeps it open
 - [ ] `notify-send -u critical "Stays" "until closed"` stays until you click ×
 - [ ] Notifications from real apps (browser, chat) look right and their buttons work
+- [ ] A bell with a number appears next to the clock after notifications arrive; opening the centre clears the number
+- [ ] The centre lists notifications grouped by app with "Just now"/"5m ago"; × removes one, × on the app header removes the group, "Clear all" empties it
+- [ ] Clicking a notification from a real app (e.g. a chat message) opens that app
+- [ ] Do not disturb switch: new notifications no longer pop up (they still appear in the centre); the bell next to the clock is crossed out; it stays on after logging out and in
+- [ ] The arrow next to the date collapses/expands the calendar; the choice is remembered
+- [ ] Clicking anywhere outside the centre (or Esc) closes it
 
 ### Look and feel
 - [ ] Interface text uses the Inter font
@@ -109,6 +115,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super+E file manager · Super+D show desktop · Super+L lock
 - [ ] Super+↑ maximise · Super+↓ minimise · Super+Shift+S screenshot
 - [ ] Super+X opens the power-user menu above Start; arrow keys + Enter work; "Shut down or sign out" shows the power options
+- [ ] Super+N opens/closes the notification centre
 - [ ] Super+R opens Run: try `firefox`, `~/Documents`, `https://example.com`
 - [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
 - [ ] Alt+Tab switches windows · Ctrl+Alt+Del shows the sign-out/power dialog

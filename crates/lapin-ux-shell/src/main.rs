@@ -12,8 +12,10 @@
 
 mod app;
 mod catalog;
+mod catcher;
 mod config;
 mod defaults;
+mod notify_client;
 mod panels;
 mod style;
 mod start_view;

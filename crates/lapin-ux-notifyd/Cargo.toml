@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 lapin-ux-core.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
+jiff = "0.2"
 futures.workspace = true
 libcosmic.workspace = true
 serde.workspace = true
