@@ -19,6 +19,19 @@ pub struct Window<W> {
     pub active: bool,
     pub minimized: bool,
     pub urgent: bool,
+    /// Names of the monitors it's on (e.g. "eDP-1"); empty when unknown.
+    pub outputs: Vec<String>,
+}
+
+/// "Show my taskbar apps on" (with a taskbar on every monitor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MultiDisplay {
+    #[default]
+    AllTaskbars,
+    /// Pinned apps on the main taskbar; each taskbar shows its monitor's windows.
+    WhereOpen,
+    /// The main taskbar shows everything; the others only their monitor's windows.
+    MainAndWhereOpen,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +153,26 @@ impl<W: Clone + PartialEq> Taskbar<W> {
         out
     }
 
+    /// Buttons for the taskbar on monitor `output`. `main` is the taskbar on
+    /// the main monitor; windows with no known monitor count as on it.
+    pub fn buttons_for(&self, output: Option<&str>, main: bool, mode: MultiDisplay) -> Vec<Button<W>> {
+        let all = self.buttons();
+        if mode == MultiDisplay::AllTaskbars || (main && mode == MultiDisplay::MainAndWhereOpen) {
+            return all;
+        }
+        let here = |w: &Window<W>| match output {
+            Some(o) if !w.outputs.is_empty() => w.outputs.iter().any(|x| x == o),
+            _ => main,
+        };
+        all.into_iter()
+            .filter_map(|mut b| {
+                b.windows.retain(|w| here(w));
+                let keep = !b.windows.is_empty() || (main && b.pinned);
+                keep.then_some(b)
+            })
+            .collect()
+    }
+
     /// Left-click behaviour for the button of `app`.
     pub fn click(&self, app: &str) -> ClickAction<W> {
         let wins: Vec<&Window<W>> = self.windows.iter().filter(|w| w.app == app).collect();
@@ -157,7 +190,7 @@ mod tests {
     use super::*;
 
     fn w(handle: u32, app: &str, active: bool) -> Window<u32> {
-        Window { handle, app: app.into(), title: format!("{app} {handle}"), active, minimized: false, urgent: false }
+        Window { handle, app: app.into(), title: format!("{app} {handle}"), active, minimized: false, urgent: false, outputs: vec![] }
     }
 
     #[test]
@@ -235,5 +268,25 @@ mod tests {
         t.unpin("a");
         let apps: Vec<_> = t.buttons().into_iter().map(|b| b.app).collect();
         assert_eq!(apps, ["b", "a"]);
+    }
+
+    #[test]
+    fn per_monitor_buttons() {
+        let mut t = Taskbar::new(vec!["files".into(), "browser".into()]);
+        let mut on = |h: u32, app: &str, out: &str| {
+            let mut x = w(h, app, false);
+            x.outputs = vec![out.into()];
+            t.upsert(x);
+        };
+        on(1, "browser", "DP-1");
+        on(2, "editor", "HDMI-1");
+        on(3, "browser", "HDMI-1");
+        let names = |v: Vec<Button<u32>>| v.into_iter().map(|b| (b.app, b.windows.len())).collect::<Vec<_>>();
+        use MultiDisplay::*;
+        assert_eq!(names(t.buttons_for(Some("HDMI-1"), false, AllTaskbars)).len(), 3);
+        assert_eq!(names(t.buttons_for(Some("DP-1"), true, WhereOpen)), vec![("files".into(), 0), ("browser".into(), 1)]);
+        assert_eq!(names(t.buttons_for(Some("HDMI-1"), false, WhereOpen)), vec![("browser".into(), 1), ("editor".into(), 1)]);
+        assert_eq!(names(t.buttons_for(Some("DP-1"), true, MainAndWhereOpen)).len(), 3);
+        assert_eq!(names(t.buttons_for(Some("HDMI-1"), false, MainAndWhereOpen)), vec![("browser".into(), 1), ("editor".into(), 1)]);
     }
 }

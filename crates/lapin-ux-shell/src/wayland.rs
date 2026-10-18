@@ -63,6 +63,8 @@ pub struct WindowInfo {
     pub title: String,
     pub activated: bool,
     pub minimized: bool,
+    /// Monitor names (e.g. "eDP-1") the window is on.
+    pub outputs: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +166,7 @@ struct WlrPending {
     app_id: String,
     activated: bool,
     minimized: bool,
+    outputs: Vec<wl_output::WlOutput>,
 }
 
 struct AppData {
@@ -281,9 +284,14 @@ impl AppData {
         }
     }
 
+    fn output_names<'a>(&self, outputs: impl IntoIterator<Item = &'a wl_output::WlOutput>) -> Vec<String> {
+        outputs.into_iter().filter_map(|o| self.output_state.info(o).and_then(|i| i.name)).collect()
+    }
+
     fn send_cosmic(&mut self, ext: &ExtForeignToplevelHandleV1) {
         let Some(Backend::Cosmic { info, .. }) = &self.backend else { return };
         let Some(info) = info.info(ext).cloned() else { return };
+        let outputs = self.output_names(&info.output);
         let id = self.id_for(ext.id(), Toplevel::Cosmic(ext.clone()));
         let _ = self.tx.unbounded_send(WaylandUpdate::Window(WindowInfo {
             id,
@@ -291,6 +299,7 @@ impl AppData {
             title: info.title,
             activated: info.state.contains(&zcosmic_toplevel_handle_v1::State::Activated),
             minimized: info.state.contains(&zcosmic_toplevel_handle_v1::State::Minimized),
+            outputs,
         }));
     }
 }
@@ -411,15 +420,19 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for AppData {
                 p.activated = flags.contains(&(wlr_handle::State::Activated as u32));
                 p.minimized = flags.contains(&(wlr_handle::State::Minimized as u32));
             }
+            wlr_handle::Event::OutputEnter { output } => state.wlr_pending.entry(key).or_default().outputs.push(output),
+            wlr_handle::Event::OutputLeave { output } => state.wlr_pending.entry(key).or_default().outputs.retain(|o| o != &output),
             wlr_handle::Event::Done => {
                 let id = state.id_for(key.clone(), Toplevel::Wlr(handle.clone()));
                 if let Some(p) = state.wlr_pending.get(&key) {
+                    let outputs = state.output_names(&p.outputs);
                     let _ = state.tx.unbounded_send(WaylandUpdate::Window(WindowInfo {
                         id,
                         app_id: p.app_id.clone(),
                         title: p.title.clone(),
                         activated: p.activated,
                         minimized: p.minimized,
+                        outputs,
                     }));
                 }
             }

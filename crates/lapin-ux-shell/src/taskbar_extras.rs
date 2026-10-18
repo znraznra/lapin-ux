@@ -26,6 +26,9 @@ pub enum TaskbarOption {
     ToggleSearch,
     ToggleDesktopButton,
     ToggleAutoHide,
+    /// Open the "Show taskbar apps on" submenu.
+    DisplaysMenu,
+    MultiDisplay(lapin_ux_core::taskbar::MultiDisplay),
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +41,8 @@ pub struct Drag {
 
 /// Pixels the pointer must travel before a press becomes a drag.
 const DRAG_THRESHOLD: f32 = 6.0;
+/// How long a dragged file must rest on a button to bring its window up.
+const DRAG_HOVER_DELAY: Duration = Duration::from_millis(600);
 
 impl Shell {
     pub(crate) fn bar_pointer(&mut self, surface: window::Id, ev: Pointer) -> Task<Message> {
@@ -124,6 +129,38 @@ impl Shell {
         close
     }
 
+    /// Dragging a file onto a running app's button brings its window up
+    /// after a moment, so the file can be dropped into it.
+    pub(crate) fn drag_hover(&mut self, app: String, inside: bool) -> Task<Message> {
+        if !inside {
+            if self.drag_hover.as_ref().is_some_and(|(a, _)| *a == app) {
+                self.drag_hover = None;
+            }
+            return Task::none();
+        }
+        self.drag_serial += 1;
+        let serial = self.drag_serial;
+        self.drag_hover = Some((app, serial));
+        Task::future(async move {
+            tokio::time::sleep(DRAG_HOVER_DELAY).await;
+            cosmic::Action::App(Message::DragHoverFire(serial))
+        })
+    }
+
+    pub(crate) fn drag_hover_fire(&mut self, serial: u64) -> Task<Message> {
+        let Some((app, s)) = self.drag_hover.take() else { return Task::none() };
+        if s != serial {
+            self.drag_hover = Some((app, s));
+            return Task::none();
+        }
+        let Some(button) = self.taskbar.buttons().into_iter().find(|b| b.app == app) else { return Task::none() };
+        let pick = button.windows.iter().find(|w| w.active).or_else(|| button.windows.first());
+        if let Some(w) = pick {
+            self.request(WaylandRequest::Activate(w.handle));
+        }
+        Task::none()
+    }
+
     pub(crate) fn note_item_context(&mut self) {
         self.item_context_at = Instant::now();
     }
@@ -148,6 +185,8 @@ impl Shell {
             TaskbarOption::Align(a) => self.config.alignment = a,
             TaskbarOption::ToggleSearch => self.config.show_search = !self.config.show_search,
             TaskbarOption::ToggleDesktopButton => self.config.show_desktop_corner = !self.config.show_desktop_corner,
+            TaskbarOption::DisplaysMenu => return self.open_submenu("tb-displays", PopupKind::TaskbarDisplays),
+            TaskbarOption::MultiDisplay(m) => self.config.multi_display = m,
             TaskbarOption::ToggleAutoHide => {
                 self.config.auto_hide = !self.config.auto_hide;
                 self.persist_config();

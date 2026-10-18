@@ -113,6 +113,36 @@ pub fn indicator(active: bool) -> theme::Container<'static> {
     })
 }
 
+/// The small count bubble on a taskbar button.
+pub fn badge() -> theme::Container<'static> {
+    theme::Container::custom(|t| {
+        let c = t.cosmic();
+        container::Style {
+            background: Some(Background::Color(c.accent_color().into())),
+            text_color: Some(c.on_accent_color().into()),
+            border: Border { radius: 8.0.into(), width: 1.5, color: c.bg_color().into() },
+            ..Default::default()
+        }
+    })
+}
+
+/// Progress on a taskbar button: track and fill.
+pub fn progress_track() -> theme::Container<'static> {
+    theme::Container::custom(|t| container::Style {
+        background: Some(Background::Color(with_alpha(t.cosmic().on_bg_color(), 0.2))),
+        border: Border { radius: 2.0.into(), ..Default::default() },
+        ..Default::default()
+    })
+}
+
+pub fn progress_fill() -> theme::Container<'static> {
+    theme::Container::custom(|t| container::Style {
+        background: Some(Background::Color(t.cosmic().success_color().into())),
+        border: Border { radius: 2.0.into(), ..Default::default() },
+        ..Default::default()
+    })
+}
+
 pub fn urgent_indicator() -> theme::Container<'static> {
     theme::Container::custom(|t| container::Style {
         background: Some(Background::Color(t.cosmic().warning_color().into())),

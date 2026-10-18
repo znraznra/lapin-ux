@@ -7,11 +7,13 @@
 //! clock formatting.
 
 pub mod apps;
+pub mod badge;
 pub mod clip;
 pub mod clock;
 pub mod desktop;
 pub mod files;
 pub mod notify;
+pub mod procs;
 pub mod quick;
 pub mod recent;
 pub mod search;

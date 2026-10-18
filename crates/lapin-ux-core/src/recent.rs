@@ -14,6 +14,14 @@ pub struct RecentFile {
     pub name: String,
     /// RFC 3339 timestamp as written by the app; sorts correctly as text.
     pub modified: String,
+    /// Apps that opened it (`exec` is the program's command line).
+    pub apps: Vec<RecentApp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentApp {
+    pub name: String,
+    pub exec: String,
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -46,12 +54,132 @@ pub fn parse(xml: &str, limit: usize, exists: impl Fn(&std::path::Path) -> bool)
             continue;
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // The bookmark's body lists the apps that opened it.
+        let body_end = rest.find("</bookmark>").unwrap_or(rest.len());
+        let apps = bookmark_apps(&rest[..body_end]);
         out.retain(|r| r.uri != href);
-        out.push(RecentFile { uri: href, path, name, modified: modified.unwrap_or_default() });
+        out.push(RecentFile { uri: href, path, name, modified: modified.unwrap_or_default(), apps });
     }
     out.sort_by(|a, b| b.modified.cmp(&a.modified));
     out.truncate(limit);
     out
+}
+
+fn bookmark_apps(body: &str) -> Vec<RecentApp> {
+    let mut apps = Vec::new();
+    let mut rest = body;
+    while let Some(i) = rest.find("<bookmark:application ") {
+        rest = &rest[i + "<bookmark:application ".len()..];
+        let tag = &rest[..rest.find('>').unwrap_or(rest.len())];
+        if let (Some(name), Some(exec)) = (attr(tag, "name"), attr(tag, "exec")) {
+            apps.push(RecentApp { name, exec });
+        }
+    }
+    apps
+}
+
+/// The program a command line runs: first word, quotes stripped, no path.
+pub fn program_of(exec: &str) -> String {
+    // GTK records the whole command as one quoted word ('loupe %u').
+    let mut words = split_exec(exec);
+    if words.len() == 1 && words[0].contains(char::is_whitespace) {
+        words = split_exec(&words[0]);
+    }
+    let first = words
+        .into_iter()
+        .find(|w| w != "env" && !(w.contains('=') && !w.starts_with('/')))
+        .unwrap_or_default();
+    first.rsplit('/').next().unwrap_or(&first).to_string()
+}
+
+/// Split a desktop-entry Exec line into words (double and single quotes).
+pub fn split_exec(exec: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = exec.trim().chars().peekable();
+    let mut has = false;
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') => {
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                has = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if !cur.is_empty() || has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    if !cur.is_empty() || has {
+        out.push(cur);
+    }
+    out
+}
+
+/// Files this app opened recently (a taskbar jump list), newest first.
+/// An app matches by program name or display name.
+pub fn jump_list<'a>(files: &'a [RecentFile], app_name: &str, exec: Option<&str>, limit: usize) -> Vec<&'a RecentFile> {
+    let program = exec.map(program_of).filter(|p| !p.is_empty());
+    let name = app_name.to_lowercase();
+    files
+        .iter()
+        .filter(|f| {
+            f.apps.iter().any(|a| {
+                a.name.to_lowercase() == name || program.as_ref().is_some_and(|p| &program_of(&a.exec) == p)
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
+/// The app's command line opening `path`: `%f/%F` become the path, `%u/%U`
+/// its file URI; other field codes are dropped; with no file code the
+/// path is appended.
+pub fn exec_with_file(exec: &str, path: &std::path::Path) -> Vec<String> {
+    let p = path.to_string_lossy().into_owned();
+    let uri = format!("file://{}", encode_uri_path(&p));
+    let mut used = false;
+    let mut out = Vec::new();
+    for w in split_exec(exec) {
+        match w.as_str() {
+            "%f" | "%F" => {
+                out.push(p.clone());
+                used = true;
+            }
+            "%u" | "%U" => {
+                out.push(uri.clone());
+                used = true;
+            }
+            "%i" | "%c" | "%k" | "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => {}
+            _ => out.push(w.replace("%%", "%")),
+        }
+    }
+    if !used {
+        out.push(p);
+    }
+    out
+}
+
+fn encode_uri_path(p: &str) -> String {
+    let mut s = String::new();
+    for b in p.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => s.push(b as char),
+            _ => s.push_str(&format!("%{b:02X}")),
+        }
+    }
+    s
 }
 
 fn attr(tag: &str, name: &str) -> Option<String> {
@@ -156,5 +284,33 @@ mod tests {
         assert_eq!(file_uri_to_path("file://otherhost/x"), None);
         assert_eq!(file_uri_to_path("https://example.com"), None);
         assert_eq!(file_uri_to_path("file:///trailing%2"), Some(PathBuf::from("/trailing%2")));
+    }
+
+    #[test]
+    fn jump_lists() {
+        let xml = r#"<xbel>
+<bookmark href="file:///d/a.txt" added="2026-10-01T10:00:00Z" modified="2026-10-02T10:00:00Z"><info><metadata><bookmark:applications>
+<bookmark:application name="Text Editor" exec="&apos;gnome-text-editor %u&apos;" modified="x" count="1"/>
+</bookmark:applications></metadata></info></bookmark>
+<bookmark href="file:///d/b.png" added="2026-10-03T10:00:00Z"><info><metadata><bookmark:applications>
+<bookmark:application name="Image Viewer" exec="&apos;loupe %u&apos;" count="2"/>
+</bookmark:applications></metadata></info></bookmark>
+</xbel>"#;
+        let files = parse(xml, 10, |_| true);
+        assert_eq!(files[1].apps[0].exec, "'gnome-text-editor %u'");
+        let j = jump_list(&files, "Text Editor", Some("gnome-text-editor --new-window %U"), 5);
+        assert_eq!(j.len(), 1);
+        assert_eq!(j[0].name, "a.txt");
+        let j = jump_list(&files, "Photos", Some("/usr/bin/loupe %U"), 5);
+        assert_eq!(j[0].name, "b.png");
+        assert_eq!(program_of("env GTK_THEME=x /usr/bin/firefox %u"), "firefox");
+        assert_eq!(program_of("'gnome-text-editor %u'"), "gnome-text-editor");
+        assert_eq!(
+            exec_with_file("code --new-window %F", std::path::Path::new("/d/my file.txt")),
+            vec!["code", "--new-window", "/d/my file.txt"]
+        );
+        assert_eq!(exec_with_file("\"/opt/App\" %U", std::path::Path::new("/d/a b")), vec!["/opt/App", "file:///d/a%20b"]);
+        assert_eq!(exec_with_file("vlc --started-from-file", std::path::Path::new("/m.mp4")), vec!["vlc", "--started-from-file", "/m.mp4"]);
+        assert_eq!(exec_with_file("app %i %c %f", std::path::Path::new("/x")), vec!["app", "/x"]);
     }
 }

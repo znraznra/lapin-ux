@@ -20,6 +20,7 @@ mod clipboard;
 mod config;
 mod defaults;
 mod desktop;
+mod launcher_entry;
 mod notify_client;
 mod panels;
 mod previews;

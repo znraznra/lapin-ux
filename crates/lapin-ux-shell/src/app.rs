@@ -47,6 +47,8 @@ pub struct Bar {
     pub output: WlOutput,
     /// Logical output height, used to size the Start menu.
     pub output_height: Option<u32>,
+    /// Monitor name (e.g. "eDP-1"), for per-monitor taskbar buttons.
+    pub output_name: Option<String>,
     /// Auto-hide: shown at full height right now.
     pub revealed: bool,
     pub hovered: bool,
@@ -85,6 +87,8 @@ pub enum PopupKind {
     TrayOverflow,
     /// Right-click on empty taskbar space.
     TaskbarMenu,
+    /// Its "Show taskbar apps on" submenu (several monitors).
+    TaskbarDisplays,
     /// Window thumbnails shown while hovering a taskbar button.
     Preview(String),
     /// "This app and its related info will be uninstalled."
@@ -161,6 +165,16 @@ pub enum Message {
     CalendarPrev,
     CalendarNext,
     OpenFile(std::path::PathBuf),
+    /// Something is dragged onto (true) or off (false) a taskbar button.
+    DragHover(String, bool),
+    /// The drag stayed long enough over the button with this serial.
+    DragHoverFire(u64),
+    /// A LauncherEntry update from an app.
+    Badge(crate::launcher_entry::Update),
+    /// Force-quit an app's processes (taskbar "End task").
+    EndTask(String),
+    /// Open a jump-list file with the app it belongs to.
+    OpenWith(String, std::path::PathBuf),
     TaskClick(window::Id, String),
     TaskContext(window::Id, String),
     StartContext(String),
@@ -240,6 +254,13 @@ pub struct Shell {
     pub thumbs: std::collections::HashMap<Handle, crate::previews::Thumb>,
     /// A cascading submenu of `popup`.
     pub sub: Option<Popup>,
+    /// A file being dragged over a taskbar button: (app, serial).
+    pub drag_hover: Option<(String, u64)>,
+    pub drag_serial: u64,
+    /// Badge counts / progress / attention announced by apps, by app id.
+    pub badges: HashMap<String, lapin_ux_core::badge::Badge>,
+    /// Jump list of the task whose right-click menu is open.
+    pub jump: Vec<RecentFile>,
     pub hover: Option<crate::previews::Hover>,
     pub hover_gen: u64,
     /// Windows, most recently focused first (Alt+Tab order).
@@ -298,9 +319,9 @@ impl Shell {
         c
     }
 
-    fn create_bar(&mut self, output: WlOutput, output_height: Option<u32>) -> Task<Message> {
+    fn create_bar(&mut self, output: WlOutput, output_height: Option<u32>, output_name: Option<String>) -> Task<Message> {
         let id = window::Id::unique();
-        self.bars.push(Bar { id, output: output.clone(), output_height, revealed: !self.config.auto_hide, hovered: false, hide_pending: false });
+        self.bars.push(Bar { id, output: output.clone(), output_name, output_height, revealed: !self.config.auto_hide, hovered: false, hide_pending: false });
         let zone = if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 };
         let hidden_input = self.config.auto_hide.then(|| {
             let h = style::TASKBAR_HEIGHT as f32;
@@ -501,6 +522,7 @@ impl Shell {
             active: info.activated,
             minimized: info.minimized,
             urgent: false,
+            outputs: info.outputs,
         });
     }
 
@@ -540,6 +562,44 @@ impl Shell {
             cosmic::Action::App(Message::Noop)
         });
         Task::batch([close, job])
+    }
+}
+
+impl Shell {
+    /// An app's badge; ids are matched loosely since apps report their
+    /// desktop id and windows their app id ("org.mozilla.firefox" vs "firefox").
+    pub(crate) fn badge_for(&self, app: &str) -> Option<&lapin_ux_core::badge::Badge> {
+        self.badges.get(app).or_else(|| {
+            let short = |s: &str| s.rsplit('.').next().unwrap_or(s).to_lowercase();
+            let a = short(app);
+            self.badges.iter().find(|(k, _)| short(k) == a).map(|(_, b)| b)
+        })
+    }
+
+    /// Files this app opened recently (newest first), for its taskbar menu.
+    fn jump_list(&self, app: &str) -> Vec<RecentFile> {
+        let Some(data) = self.catalog.data_for(app) else { return Vec::new() };
+        let all = lapin_ux_core::recent::load(300);
+        lapin_ux_core::recent::jump_list(&all, &data.name, data.exec.as_deref(), 8).into_iter().cloned().collect()
+    }
+}
+
+/// SIGTERM the app's processes, then SIGKILL whatever is left 2 s later.
+async fn end_task(m: lapin_ux_core::procs::AppMatch) {
+    use std::os::unix::fs::MetadataExt;
+    let proc = std::path::Path::new("/proc");
+    let Ok(uid) = std::fs::metadata("/proc/self").map(|m| m.uid()) else { return };
+    let me = std::process::id();
+    let pids: Vec<u32> = lapin_ux_core::procs::find(proc, uid, &m).into_iter().filter(|p| *p != me).collect();
+    tracing::info!(?m, ?pids, "end task");
+    for &p in &pids {
+        unsafe { libc::kill(p as i32, libc::SIGTERM) };
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    for p in lapin_ux_core::procs::find(proc, uid, &m) {
+        if pids.contains(&p) {
+            unsafe { libc::kill(p as i32, libc::SIGKILL) };
+        }
     }
 }
 
@@ -639,6 +699,10 @@ impl Application for Shell {
             clip: Default::default(),
             thumbs: Default::default(),
             sub: None,
+            jump: Vec::new(),
+            badges: HashMap::new(),
+            drag_hover: None,
+            drag_serial: 0,
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
@@ -739,6 +803,7 @@ impl Application for Shell {
         Subscription::batch(tray_subs.chain([
             crate::tray::subscription().map(Message::Tray),
             crate::notify_client::subscription().map(Message::NotifyState),
+            crate::launcher_entry::subscription().map(Message::Badge),
             crate::clipboard::subscription().map(Message::Clip),
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             wl::subscription().map(Message::Wayland),
@@ -807,7 +872,8 @@ impl Shell {
                 OutputEvent::Created(info) => {
                     if !self.bars.iter().any(|b| b.output == output) {
                         let size = info.as_ref().and_then(|i| i.logical_size).map(|(w, h)| (w.max(0) as u32, h.max(0) as u32));
-                        let bar = self.create_bar(output.clone(), size.map(|s| s.1));
+                        let name = info.as_ref().and_then(|i| i.name.clone());
+                        let bar = self.create_bar(output.clone(), size.map(|s| s.1), name);
                         // Desktop icons live on the first monitor, like the benchmark's main display.
                         let desk = self.create_desktop(output, size.unwrap_or((1280, 720)));
                         return Task::batch([bar, desk]);
@@ -816,6 +882,9 @@ impl Shell {
                 OutputEvent::InfoUpdate(info) => {
                     if let Some(bar) = self.bars.iter_mut().find(|b| b.output == output) {
                         bar.output_height = info.logical_size.map(|(_, h)| h.max(0) as u32);
+                        if info.name.is_some() {
+                            bar.output_name = info.name.clone();
+                        }
                     }
                     if let Some((w, h)) = info.logical_size {
                         self.desktop_resized(&output, (w.max(0) as u32, h.max(0) as u32));
@@ -1011,6 +1080,44 @@ impl Shell {
             Message::CalendarSelect(date) => self.calendar.set_selected_visible(date),
             Message::CalendarPrev => self.calendar.show_prev_month(),
             Message::CalendarNext => self.calendar.show_next_month(),
+            Message::DragHover(app, inside) => return self.drag_hover(app, inside),
+            Message::DragHoverFire(serial) => return self.drag_hover_fire(serial),
+            Message::Badge((app, props)) => {
+                let b = self.badges.entry(app.clone()).or_default();
+                for p in props {
+                    b.apply(p);
+                }
+                if b.is_empty() {
+                    self.badges.remove(&app);
+                }
+            }
+            Message::EndTask(app) => {
+                let close = self.close_popup();
+                let exec = self.catalog.data_for(&app).and_then(|d| d.exec.clone());
+                let Some(m) = lapin_ux_core::procs::app_match(&app, exec.as_deref()) else { return close };
+                let end = Task::future(async move {
+                    end_task(m).await;
+                    cosmic::Action::App(Message::Noop)
+                });
+                return Task::batch([close, end]);
+            }
+            Message::OpenWith(app, path) => {
+                let close = self.close_popup();
+                let exec = self.catalog.data_for(&app).and_then(|d| d.exec.clone());
+                let open = Task::future(async move {
+                    let args = match exec {
+                        Some(e) => lapin_ux_core::recent::exec_with_file(&e, &path),
+                        None => vec!["xdg-open".into(), path.to_string_lossy().into_owned()],
+                    };
+                    if let Some((prog, rest)) = args.split_first() {
+                        if let Err(e) = tokio::process::Command::new(prog).args(rest).spawn() {
+                            tracing::warn!("jump list: {prog}: {e}");
+                        }
+                    }
+                    cosmic::Action::App(Message::Noop)
+                });
+                return Task::batch([close, open]);
+            }
             Message::OpenFile(path) => {
                 let close = self.close_start();
                 let open = Task::future(async move {
@@ -1049,6 +1156,7 @@ impl Shell {
             Message::TaskContext(bar, app) => {
                 self.note_item_context();
                 let key = rect_key(bar, &app);
+                self.jump = self.jump_list(&app);
                 return self.open_popup(bar, &key, PopupKind::TaskContext(app));
             }
             Message::StartContext(app) => {

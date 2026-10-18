@@ -47,6 +47,8 @@ pub struct ShellConfig {
     pub desktop_auto_arrange: bool,
     /// Automatically hide the taskbar.
     pub auto_hide: bool,
+    /// With several monitors: which taskbars show which windows.
+    pub multi_display: lapin_ux_core::taskbar::MultiDisplay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

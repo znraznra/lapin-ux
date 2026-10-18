@@ -79,7 +79,9 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
 
     // Task buttons get their own row so the widget tree keeps a stable
     // shape when the search box is toggled or buttons come and go.
-    let tasks: Vec<Element<'_, Message>> = shell.taskbar.buttons().into_iter().map(|b| task_button(shell, bar, b)).collect();
+    let main = shell.bars.first().is_some_and(|b| b.id == bar.id);
+    let buttons = shell.taskbar.buttons_for(bar.output_name.as_deref(), main, shell.config.multi_display);
+    let tasks: Vec<Element<'_, Message>> = buttons.into_iter().map(|b| task_button(shell, bar, b)).collect();
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
     let clock_style = shell.clock_style();
@@ -172,7 +174,15 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
 
 fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element<'a, Message> {
     let active = b.active();
-    let indicator: Element<'_, Message> = if b.urgent() {
+    let badge = shell.badge_for(&b.app).copied().unwrap_or_default();
+    let indicator: Element<'_, Message> = if let Some(p) = badge.progress() {
+        // Progress replaces the running line, like the benchmark.
+        let fill = (24.0 * p).round().max(2.0);
+        container(container(widget::Space::new().width(fill).height(3)).class(style::progress_fill()))
+            .width(24)
+            .class(style::progress_track())
+            .into()
+    } else if b.urgent() || badge.urgent {
         container(widget::Space::new().width(16).height(3)).class(style::urgent_indicator()).into()
     } else if b.running() {
         container(widget::Space::new().width(if active { 16 } else { 6 }).height(3))
@@ -182,9 +192,24 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
         widget::Space::new().width(6).height(3).into()
     };
 
+    let app_icon_el: Element<'_, Message> = match badge.label() {
+        Some(label) => cosmic::iced::widget::stack![
+            container(icon(app_icon(shell, &b.app)).size(style::TASK_ICON)).padding([4, 6, 0, 6]),
+            container(
+                container(text::caption(label).size(10))
+                    .padding([0, 4])
+                    .height(16)
+                    .align_y(Alignment::Center)
+                    .class(style::badge())
+            )
+            .width(Length::Fill)
+            .align_x(Alignment::End),
+        ]
+        .into(),
+        None => container(icon(app_icon(shell, &b.app)).size(style::TASK_ICON)).padding([4, 6, 0, 6]).into(),
+    };
     let content = column::with_children(vec![
-        widget::Space::new().height(4).into(),
-        icon(app_icon(shell, &b.app)).size(style::TASK_ICON).into(),
+        app_icon_el,
         widget::Space::new().height(Length::Fill).into(),
         indicator,
         widget::Space::new().height(1).into(),
@@ -207,6 +232,16 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
         .on_enter(Message::Preview(crate::previews::PreviewMsg::ButtonHover(bar.id, b.app.clone(), true)))
         .on_exit(Message::Preview(crate::previews::PreviewMsg::ButtonHover(bar.id, b.app.clone(), false)));
 
+    // A file dragged onto a running app's button brings that app forward.
+    let area: Element<'_, Message> = if b.running() {
+        let (enter, leave) = (b.app.clone(), b.app.clone());
+        cosmic::widget::dnd_destination::dnd_destination(area, vec!["text/uri-list".into(), "text/plain".into()])
+            .on_enter(move |_, _, _| Message::DragHover(enter.clone(), true))
+            .on_leave(move || Message::DragHover(leave.clone(), false))
+            .into()
+    } else {
+        area.into()
+    };
     track(shell, rect_key(bar.id, &b.app), area)
 }
 
@@ -330,7 +365,7 @@ pub fn menu_check<'a>(label: &'a str, on: bool, msg: Message) -> Element<'a, Mes
         .into()
 }
 
-fn taskbar_menu(shell: &Shell) -> Element<'_, Message> {
+fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, Message> {
     use crate::config::{Role, find_app};
     use crate::taskbar_extras::TaskbarOption as O;
     let mut items: Vec<Element<'_, Message>> = Vec::new();
@@ -349,7 +384,37 @@ fn taskbar_menu(shell: &Shell) -> Element<'_, Message> {
         shell.config.show_desktop_corner,
         Message::TaskbarOption(O::ToggleDesktopButton),
     ));
+    if shell.bars.len() > 1 {
+        // Plain rows close the submenu when hovered.
+        items = items.into_iter().map(crate::submenu::leaf).collect();
+        items.push(menu_divider());
+        items.push(crate::submenu::parent_entry(
+            shell,
+            popup,
+            "tb-displays",
+            "Show taskbar apps on",
+            Message::TaskbarOption(O::DisplaysMenu),
+        ));
+    }
     panel(column::with_children(items).spacing(2), 260.0)
+}
+
+fn taskbar_displays(shell: &Shell) -> Element<'_, Message> {
+    use crate::taskbar_extras::TaskbarOption as O;
+    use lapin_ux_core::taskbar::MultiDisplay as M;
+    use crate::submenu::{Lead, entry};
+    let items = [
+        (M::AllTaskbars, "All taskbars"),
+        (M::MainAndWhereOpen, "Main taskbar and taskbar where window is open"),
+        (M::WhereOpen, "Taskbar where window is open"),
+    ]
+    .into_iter()
+    .map(|(m, label)| {
+        let lead = if shell.config.multi_display == m { Lead::Mark("\u{2022}") } else { Lead::None };
+        entry(lead, label, None, Some(Message::TaskbarOption(O::MultiDisplay(m))))
+    })
+    .collect::<Vec<_>>();
+    panel(column::with_children(items).spacing(2), 0.0)
 }
 
 fn tray_overflow(shell: &Shell, bar: cosmic::iced::window::Id) -> Element<'_, Message> {
@@ -409,6 +474,17 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::Windows(app) | PopupKind::Preview(app) => crate::previews::preview(shell, app),
         PopupKind::TaskContext(app) => {
             let mut items: Vec<Element<'_, Message>> = Vec::new();
+            if !shell.jump.is_empty() {
+                items.push(container(text::caption("Recent").class(style::dim_text())).padding([6, 12, 2, 12]).into());
+                for f in &shell.jump {
+                    items.push(menu_item(
+                        crate::start_view::mime_icon(&f.name),
+                        f.name.clone(),
+                        Message::OpenWith(app.clone(), f.path.clone()),
+                    ));
+                }
+                items.push(menu_divider());
+            }
             if let Some(data) = shell.catalog.data_for(app) {
                 for action in &data.desktop_actions {
                     items.push(menu_item(
@@ -444,6 +520,10 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             let n = shell.taskbar.windows().iter().filter(|w| &w.app == app).count();
             if n > 0 {
                 let label = if n == 1 { "Close window" } else { "Close all windows" };
+                let exec = shell.catalog.data_for(app).and_then(|d| d.exec.as_deref());
+                if lapin_ux_core::procs::app_match(app, exec).is_some() {
+                    items.push(menu_item("process-stop-symbolic", "End task", Message::EndTask(app.clone())));
+                }
                 items.push(menu_item("window-close-symbolic", label, Message::CloseApp(app.clone())));
             }
             panel(column::with_children(items).spacing(2), 280.0)
@@ -483,7 +563,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             )
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
-        PopupKind::TaskbarMenu => taskbar_menu(shell),
+        PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
+        PopupKind::TaskbarDisplays => taskbar_displays(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),
         PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),
         PopupKind::Power => panel(
