@@ -7,6 +7,7 @@
 //! clock formatting.
 
 pub mod apps;
+pub mod clip;
 pub mod clock;
 pub mod desktop;
 pub mod files;

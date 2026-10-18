@@ -28,6 +28,7 @@ depends=(
     'adwaita-icon-theme'       # battery and power-mode icons missing from cosmic-icon-theme
     'xdg-desktop-portal-cosmic'
     'inter-font'               # interface font
+    'noto-fonts-emoji'         # colour emoji in the emoji panel and apps
     'fontconfig'
     # Runtime libraries
     'libxkbcommon'

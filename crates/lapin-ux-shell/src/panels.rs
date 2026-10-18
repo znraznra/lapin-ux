@@ -24,7 +24,7 @@ use crate::config::{Role, find_app};
 use crate::style;
 
 static AUTOSIZE: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-panel-autosize"));
-static RUN_INPUT: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-run-input"));
+pub(crate) static RUN_INPUT: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-run-input"));
 
 const WINX_WIDTH: u32 = 280;
 const RUN_WIDTH: u32 = 420;
@@ -35,6 +35,7 @@ pub enum PanelKind {
     WinX { power: bool, selected: usize },
     Run { input: String },
     Quick(crate::quick::QuickPanel),
+    Clip(crate::clipboard::ClipPanel),
 }
 
 pub struct Panel {
@@ -162,6 +163,7 @@ impl Shell {
                 (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 8, left }, WINX_WIDTH)
             }
             PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 12, left: 12 }, RUN_WIDTH),
+            PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: 12, left: 0 }, crate::clipboard::WIDTH),
             PanelKind::Quick(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
                 IcedMargin { top: 0, right: 12, bottom: 12, left: 0 },
@@ -249,6 +251,16 @@ impl Shell {
                     }),
                 ])
             }
+        }
+    }
+
+    /// A panel's surface got the keyboard: focus its text field. (Asking
+    /// earlier does nothing — the widget doesn't exist until the surface does.)
+    pub(crate) fn panel_focused(&self) -> Task<Message> {
+        match self.panel.as_ref().map(|p| &p.kind) {
+            Some(PanelKind::Run { .. }) => Task::batch([text_input::focus(RUN_INPUT.clone()), text_input::select_all(RUN_INPUT.clone())]),
+            Some(PanelKind::Clip(_)) => text_input::focus(crate::clipboard::SEARCH_ID.clone()),
+            _ => Task::none(),
         }
     }
 
@@ -350,11 +362,13 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
             .into()
         }
         PanelKind::Quick(q) => crate::quick::view(shell, q),
+        PanelKind::Clip(c) => crate::clipboard::view(shell, c),
     };
     let width = match panel.kind {
         PanelKind::WinX { .. } => WINX_WIDTH,
         PanelKind::Run { .. } => RUN_WIDTH,
         PanelKind::Quick(_) => crate::quick::WIDTH,
+        PanelKind::Clip(_) => crate::clipboard::WIDTH,
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),

@@ -171,6 +171,7 @@ pub enum Message {
     CatcherClick,
     FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
     Desktop(crate::desktop::DesktopMsg),
+    Clip(crate::clipboard::ClipMsg),
     /// Installed apps changed (e.g. after uninstalling): reload .desktop files.
     ReloadApps,
     UninstallAsk(String),
@@ -223,6 +224,7 @@ pub struct Shell {
     pub files: std::sync::Arc<lapin_ux_core::files::FileIndex>,
     pub indexing: bool,
     pub desktop: Option<crate::desktop::DesktopView>,
+    pub clip: crate::clipboard::ClipState,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -599,6 +601,7 @@ impl Application for Shell {
             files: Default::default(),
             indexing: false,
             desktop: None,
+            clip: Default::default(),
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -660,6 +663,8 @@ impl Application for Shell {
                 "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
                 "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
+                "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
+                "emoji" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Emoji))),
                 "notifications" => self.update(Message::ToggleNotifications),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
@@ -685,6 +690,7 @@ impl Application for Shell {
         Subscription::batch(tray_subs.chain([
             crate::tray::subscription().map(Message::Tray),
             crate::notify_client::subscription().map(Message::NotifyState),
+            crate::clipboard::subscription().map(Message::Clip),
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             wl::subscription().map(Message::Wayland),
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
@@ -779,6 +785,9 @@ impl Shell {
                     return Task::none();
                 }
                 return self.close_start();
+            }
+            Message::Layer(LayerEvent::Focused, id) if self.panel.as_ref().is_some_and(|p| p.id == id) => {
+                return self.panel_focused();
             }
             Message::Layer(LayerEvent::Focused, id) if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) => {
                 return self.rename_focused();
@@ -1039,6 +1048,7 @@ impl Shell {
             }
             Message::ReloadApps => self.catalog = Catalog::load(),
             Message::Desktop(m) => return self.update_desktop(m),
+            Message::Clip(m) => return self.update_clip(m),
             Message::UninstallAsk(app) => return self.uninstall_ask(app),
             Message::Uninstall(app) => return self.uninstall(app),
             Message::StartActivate(item) => return self.activate(item),

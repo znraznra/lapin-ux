@@ -69,6 +69,10 @@ pub struct ShellState {
     pub run_history: Vec<String>,
     /// Where desktop icons were placed (by file name).
     pub desktop_cells: Vec<DesktopSlot>,
+    /// Emoji panel "Most recently used".
+    pub recent_emoji: Vec<String>,
+    /// Pinned clipboard history texts survive restarts (unpinned ones don't).
+    pub pinned_clips: Vec<String>,
 }
 
 impl ShellState {

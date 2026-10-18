@@ -79,6 +79,17 @@ COSMIC compositor. Arch Linux first.
   icons), Sort by (Name, Date modified, Item type), Refresh, New (Folder,
   Text Document), Display settings, Personalize, Open in Terminal.
 
+**Clipboard history and emoji** (Super+V, Super+.)
+- One panel with tabs: Emoji (search by name, categories, recently used),
+  Kaomoji, Symbols, Clipboard.
+- Clipboard history keeps the last 25 texts and pictures you copied
+  (watched with `ext-data-control-v1`); pin items to keep them (pinned
+  texts survive a restart), delete them, or Clear all. Copies marked as
+  secrets by password managers are never recorded.
+- Picking a history item puts it back on the clipboard and pastes it into
+  the app you were using; picking an emoji or symbol types it there
+  (virtual keyboard), without touching your clipboard.
+
 **Quick settings** (network / volume / battery button left of the clock, or Super+A)
 - Tiles: Wi-Fi, Bluetooth, Airplane mode, Energy saver, Do not disturb. Each
   appears only when its service exists (NetworkManager, BlueZ,
@@ -114,6 +125,8 @@ COSMIC compositor. Arch Linux first.
 | Super + R | Run dialog |
 | Super + N | Notification centre |
 | Super + A | Quick settings |
+| Super + V | Clipboard history |
+| Super + . | Emoji, kaomoji and symbols |
 | Super + 1…9 | Open / switch to the n-th taskbar app |
 | Super + L | Lock |
 | Super + ↑ / ↓ | Maximize / minimize |

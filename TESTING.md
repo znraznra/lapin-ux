@@ -95,6 +95,14 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] A downloaded `.desktop` file doesn't run until you choose "Allow launching"
 - [ ] Files added to ~/Desktop by other apps appear within a couple of seconds
 
+### Clipboard and emoji
+- [ ] Copy a few texts and a picture (e.g. a screenshot) in apps, press Super+V: they're listed, newest first
+- [ ] Click an older item: it's pasted into the app you were typing in
+- [ ] Pin an item, log out and in: it's still there; Clear all keeps pinned items
+- [ ] A password copied from a password manager (KeePassXC etc.) does not appear
+- [ ] Super+. in a text field: type "heart", click one: it's inserted; it shows under "Most recently used" next time
+- [ ] Kaomoji and Symbols tabs insert what you click
+
 ### Quick settings
 - [ ] Network, volume and (on laptops) battery icons show left of the clock and match reality
 - [ ] Clicking them opens Quick settings bottom-right; clicking outside or Esc closes it
@@ -150,6 +158,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super+X opens the power-user menu above Start; arrow keys + Enter work; "Shut down or sign out" shows the power options
 - [ ] Super+N opens/closes the notification centre
 - [ ] Super+A opens/closes Quick settings
+- [ ] Super+V opens clipboard history, Super+. the emoji panel
 - [ ] Super+R opens Run: try `firefox`, `~/Documents`, `https://example.com`
 - [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
 - [ ] Alt+Tab switches windows · Ctrl+Alt+Del shows the sign-out/power dialog

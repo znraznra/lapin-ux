@@ -25,7 +25,7 @@ esac
 echo "Runtime packages"
 missing=""
 for p in cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic inter-font \
+         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic inter-font noto-fonts-emoji \
          fontconfig libxkbcommon wayland dbus xdg-utils networkmanager upower wireplumber; do
     if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else fail "$p"; missing="$missing $p"; fi
 done

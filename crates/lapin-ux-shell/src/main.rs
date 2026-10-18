@@ -15,6 +15,7 @@
 mod app;
 mod catalog;
 mod catcher;
+mod clipboard;
 mod config;
 mod defaults;
 mod desktop;
@@ -66,7 +67,7 @@ fn main() -> cosmic::iced::Result {
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | taskbar-item N]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | taskbar-item N]");
         return Ok(());
     }
 
