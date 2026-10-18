@@ -346,6 +346,7 @@ impl Application for App {
                     }
                     return self.open_center();
                 }
+                dbus::Event::CloseCenter => return self.close_center(),
                 dbus::Event::SetDoNotDisturb(on) => return self.set_dnd(on),
                 dbus::Event::ClearAll => return self.update(Message::ClearAll),
             },

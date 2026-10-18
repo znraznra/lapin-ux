@@ -28,6 +28,7 @@ pub enum Event {
     Close(u32),
     /// From the desktop (clock click, Super+N).
     ToggleCenter,
+    CloseCenter,
     SetDoNotDisturb(bool),
     ClearAll,
 }
@@ -129,6 +130,10 @@ pub struct Control {
 
 #[zbus::interface(name = "dev.lapinux.Notifications")]
 impl Control {
+    fn close_center(&self) {
+        let _ = self.tx.send(Event::CloseCenter);
+    }
+
     fn toggle_center(&self) {
         let _ = self.tx.send(Event::ToggleCenter);
     }

@@ -7,6 +7,8 @@
 //!                         (bound to the Super key by the session)
 //!   lapin-ux-shell desktop  show the desktop / restore windows (Super+D)
 //!   lapin-ux-shell winx     power-user menu (Super+X)
+//!   lapin-ux-shell quick    quick settings (Super+A)
+//!   lapin-ux-shell notifications  notification centre (Super+N)
 //!   lapin-ux-shell run      Run dialog (Super+R)
 //!   lapin-ux-shell taskbar-item N   open/switch to the N-th taskbar app (Super+N)
 
@@ -17,6 +19,7 @@ mod config;
 mod defaults;
 mod notify_client;
 mod panels;
+mod quick;
 mod style;
 mod start_view;
 mod taskbar_extras;
@@ -61,7 +64,7 @@ fn main() -> cosmic::iced::Result {
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start | desktop | winx | run | taskbar-item N]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | taskbar-item N]");
         return Ok(());
     }
 

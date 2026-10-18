@@ -25,10 +25,16 @@ esac
 echo "Runtime packages"
 missing=""
 for p in cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-         cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font \
-         fontconfig libxkbcommon wayland dbus xdg-utils; do
+         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic inter-font \
+         fontconfig libxkbcommon wayland dbus xdg-utils networkmanager upower wireplumber; do
     if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else fail "$p"; missing="$missing $p"; fi
 done
+
+echo "Optional (quick settings)"
+for p in bluez power-profiles-daemon libpulse; do
+    if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else note "$p not installed (its quick settings tile/page is hidden)"; fi
+done
+systemctl is-active -q NetworkManager 2>/dev/null && pass "NetworkManager is running" || note "NetworkManager is not running: Wi-Fi won't appear in quick settings (sudo systemctl enable --now NetworkManager)"
 
 echo "Build tools"
 for p in base-devel git python-numpy python-pillow; do

@@ -82,6 +82,20 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Left-click opens/activates the app
 - [ ] Right-click shows the app's menu; submenus open; items work
 
+### Quick settings
+- [ ] Network, volume and (on laptops) battery icons show left of the clock and match reality
+- [ ] Clicking them opens Quick settings bottom-right; clicking outside or Esc closes it
+- [ ] Wi-Fi tile turns Wi-Fi off/on; the arrow opens the network list
+- [ ] Connect to a saved network, an open one, and one with a password (type it, Enter); Disconnect works
+- [ ] Bluetooth tile turns Bluetooth off/on; its arrow lists paired devices; clicking one connects/disconnects
+- [ ] Airplane mode turns Wi-Fi and Bluetooth off; turning it off brings them back
+- [ ] Energy saver (if power-profiles-daemon is installed) toggles the power mode
+- [ ] Brightness slider changes screen brightness (laptops)
+- [ ] Volume slider and the speaker (mute) button work; the arrow (when you have several outputs) switches output, e.g. to Bluetooth headphones
+- [ ] Scrolling over the taskbar icons changes the volume
+- [ ] Battery shows % and time remaining; the gear opens Settings
+- [ ] Opening Quick settings closes the notification centre and vice versa
+
 ### Start menu
 - [ ] Start button and Search box both open it; clicking outside it (desktop or a window) or Esc closes it
 - [ ] Typing searches immediately; Enter opens the top result
@@ -116,6 +130,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super+↑ maximise · Super+↓ minimise · Super+Shift+S screenshot
 - [ ] Super+X opens the power-user menu above Start; arrow keys + Enter work; "Shut down or sign out" shows the power options
 - [ ] Super+N opens/closes the notification centre
+- [ ] Super+A opens/closes Quick settings
 - [ ] Super+R opens Run: try `firefox`, `~/Documents`, `https://example.com`
 - [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
 - [ ] Alt+Tab switches windows · Ctrl+Alt+Del shows the sign-out/power dialog

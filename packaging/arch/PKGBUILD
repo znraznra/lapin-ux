@@ -25,6 +25,7 @@ depends=(
     'cosmic-launcher'          # Alt+Tab window switcher (until Lapin UX has its own)
     'cosmic-screenshot'        # Super+Shift+S
     'cosmic-icon-theme'
+    'adwaita-icon-theme'       # battery and power-mode icons missing from cosmic-icon-theme
     'xdg-desktop-portal-cosmic'
     'inter-font'               # interface font
     'fontconfig'
@@ -34,8 +35,15 @@ depends=(
     'dbus'
     'systemd-libs'
     'xdg-utils'
+    # Quick settings
+    'networkmanager'           # Wi-Fi and network status
+    'upower'                   # battery
+    'wireplumber'              # volume (wpctl)
 )
 optdepends=(
+    'bluez: Bluetooth in quick settings'
+    'power-profiles-daemon: Energy saver in quick settings'
+    'libpulse: choosing the sound output in quick settings (pactl)'
     'gnome-keyring: saved passwords and SSH keys'
     'papirus-icon-theme: broader app icon coverage'
     'xdg-desktop-portal-gtk: file pickers for GTK apps'

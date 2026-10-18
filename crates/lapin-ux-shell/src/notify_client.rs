@@ -13,10 +13,13 @@ use std::time::Duration;
 )]
 trait Control {
     fn toggle_center(&self) -> zbus::Result<()>;
+    fn close_center(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn unread(&self) -> zbus::Result<u32>;
     #[zbus(property)]
     fn do_not_disturb(&self) -> zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_do_not_disturb(&self, on: bool) -> zbus::Result<()>;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -64,4 +67,21 @@ pub async fn toggle_center() -> bool {
     let Ok(conn) = zbus::Connection::session().await else { return false };
     let Ok(proxy) = ControlProxy::new(&conn).await else { return false };
     proxy.toggle_center().await.is_ok()
+}
+
+pub async fn close_center() {
+    if let Ok(conn) = zbus::Connection::session().await
+        && let Ok(proxy) = ControlProxy::new(&conn).await
+    {
+        let _ = proxy.close_center().await;
+    }
+}
+
+pub async fn set_dnd(on: bool) {
+    if let Ok(conn) = zbus::Connection::session().await
+        && let Ok(proxy) = ControlProxy::new(&conn).await
+        && let Err(e) = proxy.set_do_not_disturb(on).await
+    {
+        tracing::warn!("Do not disturb: {e}");
+    }
 }

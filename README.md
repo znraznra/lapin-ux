@@ -58,6 +58,19 @@ COSMIC compositor. Arch Linux first.
   `dev.lapinux.Notifications` on the session bus exposes `Unread`,
   `DoNotDisturb`, `ToggleCenter` and `ClearAll`.
 
+**Quick settings** (network / volume / battery button left of the clock, or Super+A)
+- Tiles: Wi-Fi, Bluetooth, Airplane mode, Energy saver, Do not disturb. Each
+  appears only when its service exists (NetworkManager, BlueZ,
+  power-profiles-daemon, the notification daemon).
+- Wi-Fi page: nearby networks, connect to saved, open and password-protected
+  networks, disconnect. Bluetooth page: connect/disconnect paired devices.
+- Brightness slider (laptops; through logind, no root needed), volume slider
+  with mute, sound output picker. Scroll over the taskbar button to change volume.
+- Battery percentage and time remaining (UPower); the settings gear opens
+  COSMIC Settings, and each page links to its settings page.
+- Pairing new Bluetooth devices and advanced network setup (VPN, static IP)
+  are in COSMIC Settings for now.
+
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
 - Starts cosmic-comp in normal (not kiosk) mode using the same handshake as
   cosmic-session, exports the display to systemd/D-Bus, then starts and
@@ -79,6 +92,7 @@ COSMIC compositor. Arch Linux first.
 | Super + X | Power-user menu |
 | Super + R | Run dialog |
 | Super + N | Notification centre |
+| Super + A | Quick settings |
 | Super + 1…9 | Open / switch to the n-th taskbar app |
 | Super + L | Lock |
 | Super + ↑ / ↓ | Maximize / minimize |
@@ -166,7 +180,7 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 ## Not done yet (next phases)
 
 - **Settings app** (display, network, Bluetooth, sound, power, users, default
-  apps) and a **quick-settings flyout** (Wi-Fi/volume/battery) next to the clock.
+  apps); COSMIC Settings fills in until then.
 - Own **Alt+Tab** switcher and **Task view**; until then Alt+Tab uses cosmic-launcher.
 - **Snap** halves/quarters on Super+←/→ and snap layouts (needs compositor work).
 - Hover **thumbnails** on taskbar buttons, badges/progress.

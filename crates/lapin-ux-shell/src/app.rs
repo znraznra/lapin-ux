@@ -165,6 +165,9 @@ pub enum Message {
     ClockClick(window::Id),
     /// Click outside an open Start menu or panel.
     CatcherClick,
+    Quick(crate::quick::QuickMsg),
+    /// Super+N: close our panels, then toggle the notification centre.
+    ToggleNotifications,
     /// Notification daemon state (unread count, Do Not Disturb).
     NotifyState(crate::notify_client::State),
     /// The notification centre couldn't be reached; show the calendar popup instead.
@@ -203,6 +206,7 @@ pub struct Shell {
     pub now: chrono::NaiveDateTime,
     pub calendar: cosmic::widget::calendar::CalendarModel,
     pub notify: crate::notify_client::State,
+    pub quick: crate::quick::QuickState,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -568,6 +572,7 @@ impl Application for Shell {
             now: chrono::Local::now().naive_local(),
             calendar: cosmic::widget::calendar::CalendarModel::now(),
             notify: Default::default(),
+            quick: Default::default(),
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -622,6 +627,8 @@ impl Application for Shell {
                 "desktop" => self.update(Message::ShowDesktop),
                 "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
                 "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
+                "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
+                "notifications" => self.update(Message::ToggleNotifications),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
                     None => Task::none(),
@@ -646,6 +653,7 @@ impl Application for Shell {
         Subscription::batch(tray_subs.chain([
             crate::tray::subscription().map(Message::Tray),
             crate::notify_client::subscription().map(Message::NotifyState),
+            crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             wl::subscription().map(Message::Wayland),
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
@@ -963,6 +971,15 @@ impl Shell {
             }
             Message::NotifyState(s) => self.notify = s,
             Message::CatcherClick => return self.catcher_click(),
+            Message::Quick(m) => return self.update_quick(m),
+            Message::ToggleNotifications => {
+                let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);
+                let toggle = Task::future(async {
+                    crate::notify_client::toggle_center().await;
+                    cosmic::Action::App(Message::Noop)
+                });
+                return Task::batch([close, toggle]);
+            }
             Message::ClockClick(bar) => {
                 if self.notify.available {
                     let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);

@@ -34,6 +34,7 @@ pub enum PanelKind {
     /// Power-user menu. `power` shows the shut down / sign out list.
     WinX { power: bool, selected: usize },
     Run { input: String },
+    Quick(crate::quick::QuickPanel),
 }
 
 pub struct Panel {
@@ -147,7 +148,7 @@ impl Shell {
         }
     }
 
-    fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
+    pub(crate) fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
         let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
         let id = window::Id::unique();
         let (anchor, margin, width) = match &kind {
@@ -161,6 +162,11 @@ impl Shell {
                 (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 8, left }, WINX_WIDTH)
             }
             PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 12, left: 12 }, RUN_WIDTH),
+            PanelKind::Quick(_) => (
+                Anchor::BOTTOM | Anchor::RIGHT,
+                IcedMargin { top: 0, right: 12, bottom: 12, left: 0 },
+                crate::quick::WIDTH,
+            ),
         };
         let focus_run = matches!(kind, PanelKind::Run { .. });
         self.panel = Some(Panel { id, kind });
@@ -251,6 +257,10 @@ impl Shell {
         let Some(panel) = &self.panel else { return Task::none() };
         match (&panel.kind, key) {
             (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
+            (PanelKind::Quick(_), Named::Escape) => match self.quick_escape() {
+                Some(t) => t,
+                None => self.close_panel(),
+            },
             (_, Named::Escape) => self.close_panel(),
             (PanelKind::WinX { power, selected }, Named::ArrowDown | Named::ArrowUp) => {
                 let n = selectable(self, *power).len();
@@ -339,10 +349,12 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
             .padding(20)
             .into()
         }
+        PanelKind::Quick(q) => crate::quick::view(shell, q),
     };
     let width = match panel.kind {
         PanelKind::WinX { .. } => WINX_WIDTH,
         PanelKind::Run { .. } => RUN_WIDTH,
+        PanelKind::Quick(_) => crate::quick::WIDTH,
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),

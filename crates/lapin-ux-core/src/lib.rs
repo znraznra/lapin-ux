@@ -9,6 +9,7 @@
 pub mod apps;
 pub mod clock;
 pub mod notify;
+pub mod quick;
 pub mod recent;
 pub mod search;
 pub mod taskbar;

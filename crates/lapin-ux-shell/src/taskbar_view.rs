@@ -106,8 +106,28 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         tray.push(track(shell, rect_key(bar.id, "tray-overflow"), btn));
     }
     tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
-    let mut right = row::with_capacity(3).spacing(2).align_y(Alignment::Center);
+    let mut right = row::with_capacity(4).spacing(2).align_y(Alignment::Center);
     right = right.push(row::with_children(tray).spacing(0).align_y(Alignment::Center));
+    let status = crate::quick::status_icons(shell);
+    let mut status_slot: Vec<Element<'_, Message>> = Vec::with_capacity(1);
+    if !status.is_empty() {
+        let btn = button::custom(container(row::with_children(status).spacing(8).align_y(Alignment::Center)).center_y(Length::Fill))
+            .height(style::TASK_BUTTON)
+            .padding([0, 10])
+            .class(style::flat_button(shell.quick_open()))
+            .on_press(Message::Quick(crate::quick::QuickMsg::Toggle));
+        // Scrolling over it changes the volume, like the benchmark.
+        let area = mouse_area(btn).on_scroll(|d| {
+            let dy = match d {
+                cosmic::iced::mouse::ScrollDelta::Lines { y, .. } => y,
+                cosmic::iced::mouse::ScrollDelta::Pixels { y, .. } => y / 20.0,
+            };
+            Message::Quick(crate::quick::QuickMsg::Scroll(dy))
+        });
+        status_slot.push(track(shell, rect_key(bar.id, "quick"), area));
+    }
+    // Own row so the widget tree keeps its shape when the icons come and go.
+    right = right.push(row::with_children(status_slot));
     right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
     if shell.config.show_desktop_corner {
         right = right.push(
