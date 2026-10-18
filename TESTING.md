@@ -67,7 +67,8 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Pinned apps (file manager, browser, store if installed) open on click
 - [ ] An open app shows a short dash under its icon; the focused one a longer blue pill
 - [ ] Clicking the focused app's icon minimises it; clicking again restores it
-- [ ] With two windows of one app, clicking its icon shows a list of both
+- [ ] Hovering an open app's icon shows a live thumbnail of each of its windows after a moment; clicking one switches to it, × closes it; moving away hides it
+- [ ] With two windows of one app, clicking its icon shows both thumbnails
 - [ ] Middle-click an icon opens a new window of that app
 - [ ] Right-click an icon: app actions (e.g. Firefox "New Private Window"), Pin/Unpin, Close
 - [ ] Pin an app, log out and back in: it is still pinned
@@ -161,7 +162,9 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super+V opens clipboard history, Super+. the emoji panel
 - [ ] Super+R opens Run: try `firefox`, `~/Documents`, `https://example.com`
 - [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
-- [ ] Alt+Tab switches windows · Ctrl+Alt+Del shows the sign-out/power dialog
+- [ ] Alt+Tab: hold Alt, press Tab repeatedly: thumbnails of all windows, most recent first; releasing Alt switches to the highlighted one (and you can type in it right away)
+- [ ] A quick Alt+Tab tap flips between the last two windows; Alt+Shift+Tab goes backwards; Esc cancels
+- [ ] Ctrl+Alt+Del shows the sign-out/power dialog
 
 ### Session
 - [ ] Apps set to start at login (autostart) start

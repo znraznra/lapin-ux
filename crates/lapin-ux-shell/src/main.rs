@@ -21,6 +21,7 @@ mod defaults;
 mod desktop;
 mod notify_client;
 mod panels;
+mod previews;
 mod quick;
 mod start_search;
 mod style;
@@ -67,7 +68,7 @@ fn main() -> cosmic::iced::Result {
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | taskbar-item N]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskbar-item N]");
         return Ok(());
     }
 

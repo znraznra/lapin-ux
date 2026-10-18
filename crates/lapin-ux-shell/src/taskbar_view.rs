@@ -197,7 +197,9 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
 
     let area = mouse_area(btn)
         .on_right_press(Message::TaskContext(bar.id, b.app.clone()))
-        .on_middle_press(Message::Launch(b.app.clone()));
+        .on_middle_press(Message::Launch(b.app.clone()))
+        .on_enter(Message::Preview(crate::previews::PreviewMsg::ButtonHover(bar.id, b.app.clone(), true)))
+        .on_exit(Message::Preview(crate::previews::PreviewMsg::ButtonHover(bar.id, b.app.clone(), false)));
 
     track(shell, rect_key(bar.id, &b.app), area)
 }
@@ -396,40 +398,8 @@ pub(crate) fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) ->
 
 pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
     match &popup.kind {
-        PopupKind::Windows(app) => {
-            let items: Vec<Element<'_, Message>> = shell
-                .taskbar
-                .windows()
-                .iter()
-                .filter(|w| &w.app == app)
-                .map(|w| {
-                    let title = if w.title.is_empty() { app_name(shell, app) } else { w.title.clone() };
-                    row::with_children(vec![
-                        button::custom(
-                            row::with_children(vec![
-                                icon(app_icon(shell, app)).size(16).into(),
-                                text::body(title).width(Length::Fill).into(),
-                            ])
-                            .spacing(10)
-                            .align_y(Alignment::Center),
-                        )
-                        .width(Length::Fill)
-                        .padding([8, 10])
-                        .class(style::flat_button(w.active))
-                        .on_press(Message::ActivateWindow(w.handle))
-                        .into(),
-                        button::custom(icon::from_name("window-close-symbolic").size(16))
-                            .padding(8)
-                            .class(style::flat_button(false))
-                            .on_press(Message::CloseWindow(w.handle))
-                            .into(),
-                    ])
-                    .align_y(Alignment::Center)
-                    .into()
-                })
-                .collect();
-            panel(column::with_children(items).spacing(2), 320.0)
-        }
+        // Clicking an app with several windows shows the same thumbnails.
+        PopupKind::Windows(app) | PopupKind::Preview(app) => crate::previews::preview(shell, app),
         PopupKind::TaskContext(app) => {
             let mut items: Vec<Element<'_, Message>> = Vec::new();
             if let Some(data) = shell.catalog.data_for(app) {

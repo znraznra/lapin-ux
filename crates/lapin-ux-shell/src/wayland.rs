@@ -29,6 +29,11 @@ use cosmic::cctk::{
         reexports::{calloop, calloop_wayland_source::WaylandSource},
         registry::{ProvidesRegistryState, RegistryState},
         seat::{SeatHandler, SeatState},
+        shm::{Shm, ShmHandler, slot::{Buffer, SlotPool}},
+    },
+    screencopy::{
+        CaptureFrame, CaptureOptions, CaptureSession, CaptureSource, Formats, Frame, ScreencopyFrameData,
+        ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
     },
     toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
     toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
@@ -36,7 +41,7 @@ use cosmic::cctk::{
         Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
         backend::ObjectId,
         globals::{GlobalList, registry_queue_init},
-        protocol::{wl_output, wl_seat::WlSeat, wl_surface::WlSurface},
+        protocol::{wl_output, wl_seat::WlSeat, wl_shm, wl_surface::WlSurface},
     },
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
 };
@@ -67,6 +72,8 @@ pub enum WaylandUpdate {
     Window(WindowInfo),
     Closed(WindowId),
     ActivationToken { token: Option<String>, app_id: String, exec: String, terminal: bool },
+    /// A preview picture of a window (RGBA).
+    Thumbnail { id: WindowId, width: u32, height: u32, rgba: std::sync::Arc<Vec<u8>> },
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +83,39 @@ pub enum WaylandRequest {
     Close(WindowId),
     /// Ask the compositor for an activation token so the launched app gets focus.
     TokenRequest { app_id: String, exec: String, terminal: bool },
+    /// Capture one frame of a window for a thumbnail.
+    Capture(WindowId),
+}
+
+/// Thumbnails are captured at most this size.
+const THUMB_MAX: (u32, u32) = (480, 300);
+
+struct SessionData {
+    window: WindowId,
+    inner: ScreencopySessionData,
+}
+impl ScreencopySessionDataExt for SessionData {
+    fn screencopy_session_data(&self) -> &ScreencopySessionData {
+        &self.inner
+    }
+}
+struct FrameData {
+    window: WindowId,
+    inner: ScreencopyFrameData,
+}
+impl ScreencopyFrameDataExt for FrameData {
+    fn screencopy_frame_data(&self) -> &ScreencopyFrameData {
+        &self.inner
+    }
+}
+
+/// One in-flight window capture.
+struct Capture {
+    session: CaptureSession,
+    pool: Option<SlotPool>,
+    buffer: Option<Buffer>,
+    format: Option<wl_shm::Format>,
+    size: (u32, u32),
 }
 
 static WAYLAND_RX: LazyLock<Mutex<Option<UnboundedReceiver<WaylandUpdate>>>> = LazyLock::new(|| Mutex::new(None));
@@ -139,6 +179,9 @@ struct AppData {
     ids: HashMap<ObjectId, WindowId>,
     objects: HashMap<WindowId, Toplevel>,
     wlr_pending: HashMap<ObjectId, WlrPending>,
+    screencopy: Option<ScreencopyState>,
+    shm: Option<Shm>,
+    captures: HashMap<WindowId, Capture>,
 }
 
 impl AppData {
@@ -203,6 +246,7 @@ impl AppData {
                 Some(Toplevel::Wlr(h)) => h.close(),
                 None => {}
             },
+            WaylandRequest::Capture(id) => self.start_capture(id),
             WaylandRequest::TokenRequest { app_id, exec, terminal } => match &self.activation_state {
                 Some(state) => state.request_token_with_data(
                     &self.queue_handle,
@@ -220,6 +264,20 @@ impl AppData {
                     let _ = self.tx.unbounded_send(WaylandUpdate::ActivationToken { token: None, app_id, exec, terminal });
                 }
             },
+        }
+    }
+
+    fn start_capture(&mut self, id: WindowId) {
+        if self.captures.contains_key(&id) {
+            return;
+        }
+        let (Some(Toplevel::Cosmic(ext)), Some(sc)) = (self.objects.get(&id).cloned(), &self.screencopy) else { return };
+        let data = SessionData { window: id, inner: Default::default() };
+        match sc.capturer().create_session(&CaptureSource::Toplevel(ext), CaptureOptions::empty(), &self.queue_handle, data) {
+            Ok(session) => {
+                self.captures.insert(id, Capture { session, pool: None, buffer: None, format: None, size: (0, 0) });
+            }
+            Err(e) => tracing::debug!("capture: {e}"),
         }
     }
 
@@ -292,12 +350,15 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         seat_state: SeatState::new(&globals, &qh),
         activation_state: ActivationState::bind::<AppData>(&globals, &qh).ok(),
         registry_state,
-        queue_handle: qh,
+        queue_handle: qh.clone(),
         backend,
         next_id: 0,
         ids: HashMap::new(),
         objects: HashMap::new(),
         wlr_pending: HashMap::new(),
+        screencopy: Some(ScreencopyState::new(&globals, &qh)),
+        shm: Shm::bind(&globals, &qh).ok(),
+        captures: HashMap::new(),
     };
 
     while !data.exit {
@@ -469,6 +530,74 @@ impl ActivationHandler for AppData {
     }
 }
 
+// ---- thumbnails -----------------------------------------------------------------
+
+impl ShmHandler for AppData {
+    fn shm_state(&mut self) -> &mut Shm {
+        self.shm.as_mut().expect("shm events only arrive when shm is bound")
+    }
+}
+
+impl ScreencopyHandler for AppData {
+    fn screencopy_state(&mut self) -> &mut ScreencopyState {
+        self.screencopy.as_mut().expect("screencopy events only arrive when it is set up")
+    }
+
+    fn init_done(&mut self, _: &Connection, qh: &QueueHandle<Self>, session: &CaptureSession, formats: &Formats) {
+        let Some(id) = session.data::<SessionData>().map(|d| d.window) else { return };
+        let preferred = [wl_shm::Format::Abgr8888, wl_shm::Format::Xbgr8888, wl_shm::Format::Argb8888, wl_shm::Format::Xrgb8888];
+        let Some(format) = preferred.into_iter().find(|f| formats.shm_formats.contains(f)) else {
+            tracing::debug!("capture: no usable shm format");
+            self.captures.remove(&id);
+            return;
+        };
+        let (w, h) = formats.buffer_size;
+        let Some(shm) = &self.shm else { return };
+        let Ok(mut pool) = SlotPool::new((w * h * 4) as usize, shm) else { return };
+        let Ok((buffer, _)) = pool.create_buffer(w as i32, h as i32, (w * 4) as i32, format) else { return };
+        let Some(c) = self.captures.get_mut(&id) else { return };
+        c.session.capture(buffer.wl_buffer(), &[], qh, FrameData { window: id, inner: Default::default() });
+        c.pool = Some(pool);
+        c.buffer = Some(buffer);
+        c.format = Some(format);
+        c.size = (w, h);
+    }
+
+    fn stopped(&mut self, _: &Connection, _: &QueueHandle<Self>, session: &CaptureSession) {
+        if let Some(d) = session.data::<SessionData>() {
+            self.captures.remove(&d.window);
+        }
+    }
+
+    fn ready(&mut self, _: &Connection, _: &QueueHandle<Self>, frame: &CaptureFrame, _: Frame) {
+        let Some(id) = frame.data::<FrameData>().map(|d| d.window) else { return };
+        // One frame is enough; dropping the capture ends the session.
+        let Some(mut c) = self.captures.remove(&id) else { return };
+        let (Some(pool), Some(buffer), Some(format)) = (c.pool.as_mut(), c.buffer.as_ref(), c.format) else { return };
+        let Some(canvas) = buffer.canvas(pool) else { return };
+        use lapin_ux_core::thumb::{Frame as Pixels, PixelOrder, shrink};
+        let (order, opaque) = match format {
+            wl_shm::Format::Abgr8888 => (PixelOrder::Rgba, false),
+            wl_shm::Format::Xbgr8888 => (PixelOrder::Rgba, true),
+            wl_shm::Format::Argb8888 => (PixelOrder::Bgra, false),
+            _ => (PixelOrder::Bgra, true),
+        };
+        let (w, h) = c.size;
+        if let Some((width, height, rgba)) = shrink(Pixels { data: canvas, width: w, height: h, stride: w * 4, order, opaque }, THUMB_MAX.0, THUMB_MAX.1) {
+            let _ = self.tx.unbounded_send(WaylandUpdate::Thumbnail { id, width, height, rgba: std::sync::Arc::new(rgba) });
+        }
+    }
+
+    fn failed(&mut self, _: &Connection, _: &QueueHandle<Self>, frame: &CaptureFrame, reason: WEnum<cosmic::cctk::wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_frame_v1::FailureReason>) {
+        if let Some(d) = frame.data::<FrameData>() {
+            tracing::debug!(?reason, "capture failed");
+            self.captures.remove(&d.window);
+        }
+    }
+}
+
+sctk::delegate_shm!(AppData);
+cctk::delegate_screencopy!(AppData);
 sctk::delegate_seat!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);

@@ -81,6 +81,8 @@ pub enum PopupKind {
     TrayOverflow,
     /// Right-click on empty taskbar space.
     TaskbarMenu,
+    /// Window thumbnails shown while hovering a taskbar button.
+    Preview(String),
     /// "This app and its related info will be uninstalled."
     ConfirmUninstall(String),
     /// Right-click on the desktop (`Some` = on an icon).
@@ -172,6 +174,7 @@ pub enum Message {
     FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
     Desktop(crate::desktop::DesktopMsg),
     Clip(crate::clipboard::ClipMsg),
+    Preview(crate::previews::PreviewMsg),
     /// Installed apps changed (e.g. after uninstalling): reload .desktop files.
     ReloadApps,
     UninstallAsk(String),
@@ -225,6 +228,11 @@ pub struct Shell {
     pub indexing: bool,
     pub desktop: Option<crate::desktop::DesktopView>,
     pub clip: crate::clipboard::ClipState,
+    pub thumbs: std::collections::HashMap<Handle, crate::previews::Thumb>,
+    pub hover: Option<crate::previews::Hover>,
+    pub hover_gen: u64,
+    /// Windows, most recently focused first (Alt+Tab order).
+    pub mru: Vec<Handle>,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -385,6 +393,8 @@ impl Shell {
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         let above = self.bars.iter().any(|b| b.id == parent);
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
+        // Hover previews must not take the pointer or keyboard.
+        let grab = !matches!(kind, PopupKind::Preview(_));
         let settings = SctkPopupSettings {
             parent,
             id,
@@ -416,7 +426,7 @@ impl Shell {
                 reactive: true,
             },
             parent_size: None,
-            grab: true,
+            grab,
             close_with_children: false,
             input_zone: None,
         };
@@ -455,6 +465,11 @@ impl Shell {
         let app = self.catalog.resolve_window(&info.app_id, &info.title).id;
         let app = if app.is_empty() { info.app_id.clone() } else { app };
         let was_active = self.taskbar.windows().iter().any(|w| w.handle == info.id && w.active);
+        if info.activated && !was_active {
+            self.note_activation(info.id);
+        } else if !self.mru.contains(&info.id) {
+            self.mru.push(info.id);
+        }
         if info.activated && !was_active && !info.minimized {
             // The user focused something after "Show desktop": a second
             // click should hide again rather than restore the old set.
@@ -471,6 +486,7 @@ impl Shell {
     }
 
     fn window_closed(&mut self, id: Handle) {
+        self.forget_window(id);
         self.taskbar.remove(&id);
         self.desktop_shown.retain(|h| h != &id);
     }
@@ -602,6 +618,10 @@ impl Application for Shell {
             indexing: false,
             desktop: None,
             clip: Default::default(),
+            thumbs: Default::default(),
+            hover: None,
+            hover_gen: 0,
+            mru: Vec::new(),
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -663,6 +683,7 @@ impl Application for Shell {
                 "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
                 "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
+                "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 "emoji" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Emoji))),
                 "notifications" => self.update(Message::ToggleNotifications),
@@ -696,7 +717,8 @@ impl Application for Shell {
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
             cosmic::iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick),
-            listen_raw(|event, _status, window| match event {
+            listen_raw(|event, _status, window| {
+                match event {
                 cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(w)) => match w {
                     wayland::Event::Layer(e, _, id) => Some(Message::Layer(e, id)),
                     wayland::Event::Output(e, output) => Some(Message::Output(e, output)),
@@ -705,6 +727,12 @@ impl Application for Shell {
                 },
                 cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), .. }) => {
                     Some(Message::KeyNamed(window, named))
+                }
+                cosmic::iced::Event::Mouse(mouse::Event::CursorLeft) => {
+                    Some(Message::Preview(crate::previews::PreviewMsg::SurfaceLeft(window)))
+                }
+                cosmic::iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => {
+                    Some(Message::Preview(crate::previews::PreviewMsg::Alt(window, m.alt())))
                 }
                 cosmic::iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
                     Some(Message::BarPointer(window, Pointer::Move(position)))
@@ -716,7 +744,7 @@ impl Application for Shell {
                     Some(Message::BarPointer(window, Pointer::Up))
                 }
                 _ => None,
-            }),
+            }}),
         ]))
     }
 
@@ -739,6 +767,9 @@ impl Shell {
                 WaylandUpdate::Closed(id) => self.window_closed(id),
                 WaylandUpdate::ActivationToken { token, app_id, exec, terminal } => {
                     return spawn(exec, app_id, terminal, token);
+                }
+                WaylandUpdate::Thumbnail { id, width, height, rgba } => {
+                    return self.update_preview(crate::previews::PreviewMsg::Thumbnail(id, width, height, rgba));
                 }
             },
             Message::Output(event, output) => match event {
@@ -954,7 +985,7 @@ impl Shell {
                 if self.click_suppressed() {
                     return Task::none();
                 }
-                let close = self.close_popup();
+                let close = Task::batch([self.close_preview(), self.close_popup()]);
                 let action = self.taskbar.click(&app);
                 let next = match action {
                     ClickAction::Launch(id) => self.launch(&id),
@@ -967,6 +998,10 @@ impl Shell {
                         Task::none()
                     }
                     ClickAction::ShowPicker => {
+                        self.hover = None;
+                        for w in self.taskbar.windows().iter().filter(|w| w.app == app) {
+                            self.request(WaylandRequest::Capture(w.handle));
+                        }
                         let key = rect_key(bar, &app);
                         return self.open_popup(bar, &key, PopupKind::Windows(app));
                     }
@@ -1049,6 +1084,7 @@ impl Shell {
             Message::ReloadApps => self.catalog = Catalog::load(),
             Message::Desktop(m) => return self.update_desktop(m),
             Message::Clip(m) => return self.update_clip(m),
+            Message::Preview(m) => return self.update_preview(m),
             Message::UninstallAsk(app) => return self.uninstall_ask(app),
             Message::Uninstall(app) => return self.uninstall(app),
             Message::StartActivate(item) => return self.activate(item),

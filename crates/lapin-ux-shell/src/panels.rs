@@ -36,6 +36,7 @@ pub enum PanelKind {
     Run { input: String },
     Quick(crate::quick::QuickPanel),
     Clip(crate::clipboard::ClipPanel),
+    AltTab(crate::previews::AltTab),
 }
 
 pub struct Panel {
@@ -163,6 +164,7 @@ impl Shell {
                 (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 8, left }, WINX_WIDTH)
             }
             PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 12, left: 12 }, RUN_WIDTH),
+            PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
             PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: 12, left: 0 }, crate::clipboard::WIDTH),
             PanelKind::Quick(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
@@ -260,6 +262,7 @@ impl Shell {
         match self.panel.as_ref().map(|p| &p.kind) {
             Some(PanelKind::Run { .. }) => Task::batch([text_input::focus(RUN_INPUT.clone()), text_input::select_all(RUN_INPUT.clone())]),
             Some(PanelKind::Clip(_)) => text_input::focus(crate::clipboard::SEARCH_ID.clone()),
+            Some(PanelKind::AltTab(_)) => self.alt_tab_focused(),
             _ => Task::none(),
         }
     }
@@ -269,6 +272,7 @@ impl Shell {
         let Some(panel) = &self.panel else { return Task::none() };
         match (&panel.kind, key) {
             (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
+            (PanelKind::AltTab(_), k) => self.alt_tab_key(k),
             (PanelKind::Quick(_), Named::Escape) => match self.quick_escape() {
                 Some(t) => t,
                 None => self.close_panel(),
@@ -363,12 +367,14 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         }
         PanelKind::Quick(q) => crate::quick::view(shell, q),
         PanelKind::Clip(c) => crate::clipboard::view(shell, c),
+        PanelKind::AltTab(a) => crate::previews::switcher(shell, a),
     };
-    let width = match panel.kind {
+    let width = match &panel.kind {
         PanelKind::WinX { .. } => WINX_WIDTH,
         PanelKind::Run { .. } => RUN_WIDTH,
         PanelKind::Quick(_) => crate::quick::WIDTH,
         PanelKind::Clip(_) => crate::clipboard::WIDTH,
+        PanelKind::AltTab(a) => crate::previews::switcher_width(a.order.len()),
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),
