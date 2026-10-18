@@ -68,6 +68,9 @@ pub struct DesktopView {
     /// The small text box shown over an icon's label while renaming.
     pub rename_surface: Option<window::Id>,
     rename_cell: Cell,
+    /// A right-click on an icon also reaches the desktop behind it; this
+    /// keeps the second one from replacing the icon's menu.
+    item_context_at: std::time::Instant,
 }
 
 struct Drag {
@@ -161,6 +164,7 @@ impl Shell {
             pointer: Point::ORIGIN,
             rename_surface: None,
             rename_cell: (0, 0),
+            item_context_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
         });
         self.reload_desktop();
         get_layer_surface(SctkLayerSurfaceSettings {
@@ -461,6 +465,11 @@ impl Shell {
                 return self.open_item(&path);
             }
             DesktopMsg::Context(on) => {
+                if on.is_some() {
+                    d.item_context_at = std::time::Instant::now();
+                } else if d.item_context_at.elapsed() < std::time::Duration::from_millis(150) {
+                    return Task::none();
+                }
                 let id = d.id;
                 if let Some(p) = &on
                     && !d.selected.contains(p)
