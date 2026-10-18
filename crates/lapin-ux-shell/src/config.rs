@@ -39,6 +39,25 @@ pub struct ShellConfig {
     pub web_search: String,
     /// Don't offer "Search the web" in Start.
     pub hide_web_search: bool,
+    pub desktop_icon_size: IconSize,
+    pub desktop_sort: lapin_ux_core::desktop::SortBy,
+    /// View > Show desktop icons (unchecked).
+    pub hide_desktop_icons: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum IconSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopSlot {
+    pub name: String,
+    pub col: u32,
+    pub row: u32,
 }
 
 /// Small runtime state (not settings): recently launched apps.
@@ -48,6 +67,8 @@ pub struct ShellState {
     pub recent_apps: Vec<String>,
     /// Commands typed in the Run dialog, newest first.
     pub run_history: Vec<String>,
+    /// Where desktop icons were placed (by file name).
+    pub desktop_cells: Vec<DesktopSlot>,
 }
 
 impl ShellState {

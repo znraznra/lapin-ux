@@ -17,6 +17,7 @@ mod catalog;
 mod catcher;
 mod config;
 mod defaults;
+mod desktop;
 mod notify_client;
 mod panels;
 mod quick;

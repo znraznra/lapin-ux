@@ -68,6 +68,17 @@ COSMIC compositor. Arch Linux first.
   `dev.lapinux.Notifications` on the session bus exposes `Unread`,
   `DoNotDisturb`, `ToggleCenter` and `ClearAll`.
 
+**Desktop icons** (the contents of ~/Desktop, on the main monitor)
+- Click selects, double-click / Enter opens, drag moves an icon to another
+  spot (remembered), F2 renames in place, Delete moves to the Trash
+  (restorable from the file manager), picture files show thumbnails.
+- Right-click an icon: Open, Copy as path, Rename, Delete. App launchers
+  (`.desktop`) show the app's name and icon; one that isn't an installed app
+  only runs after *Allow launching* (it could have come from a download).
+- Right-click the desktop: View (Large/Medium/Small icons, Show desktop
+  icons), Sort by (Name, Date modified, Item type), Refresh, New (Folder,
+  Text Document), Display settings, Personalize, Open in Terminal.
+
 **Quick settings** (network / volume / battery button left of the clock, or Super+A)
 - Tiles: Wi-Fi, Bluetooth, Airplane mode, Energy saver, Do not disturb. Each
   appears only when its service exists (NetworkManager, BlueZ,
@@ -138,7 +149,7 @@ niri…), so the shell also runs on wlroots compositors.
 All settings use cosmic-config and apply live:
 `~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
 `alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
-`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`).
+`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`).
 
 ## Install on Arch
 

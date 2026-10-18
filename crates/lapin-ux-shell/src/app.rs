@@ -83,6 +83,8 @@ pub enum PopupKind {
     TaskbarMenu,
     /// "This app and its related info will be uninstalled."
     ConfirmUninstall(String),
+    /// Right-click on the desktop (`Some` = on an icon).
+    DesktopMenu(Option<std::path::PathBuf>, crate::desktop::MenuPage),
 }
 
 /// One icon in the notification area.
@@ -168,6 +170,7 @@ pub enum Message {
     /// Click outside an open Start menu or panel.
     CatcherClick,
     FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
+    Desktop(crate::desktop::DesktopMsg),
     /// Installed apps changed (e.g. after uninstalling): reload .desktop files.
     ReloadApps,
     UninstallAsk(String),
@@ -219,6 +222,7 @@ pub struct Shell {
     /// Start search over the user's folders.
     pub files: std::sync::Arc<lapin_ux_core::files::FileIndex>,
     pub indexing: bool,
+    pub desktop: Option<crate::desktop::DesktopView>,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -378,7 +382,7 @@ impl Shell {
         let id = window::Id::unique();
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         let above = self.bars.iter().any(|b| b.id == parent);
-        let at_pointer = matches!(kind, PopupKind::TaskbarMenu);
+        let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         let settings = SctkPopupSettings {
             parent,
             id,
@@ -594,6 +598,7 @@ impl Application for Shell {
             quick: Default::default(),
             files: Default::default(),
             indexing: false,
+            desktop: None,
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
@@ -618,6 +623,12 @@ impl Application for Shell {
         }
         if self.catcher == Some(id) {
             return crate::catcher::view();
+        }
+        if self.desktop.as_ref().is_some_and(|d| d.id == id) {
+            return crate::desktop::view(self);
+        }
+        if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
+            return crate::desktop::rename_view(self);
         }
         if let Some(start) = self.start.as_ref().filter(|s| s.id == id) {
             return crate::start_view::start_menu(self, start);
@@ -727,20 +738,38 @@ impl Shell {
             Message::Output(event, output) => match event {
                 OutputEvent::Created(info) => {
                     if !self.bars.iter().any(|b| b.output == output) {
-                        let h = info.and_then(|i| i.logical_size).map(|(_, h)| h.max(0) as u32);
-                        return self.create_bar(output, h);
+                        let size = info.as_ref().and_then(|i| i.logical_size).map(|(w, h)| (w.max(0) as u32, h.max(0) as u32));
+                        let bar = self.create_bar(output.clone(), size.map(|s| s.1));
+                        // Desktop icons live on the first monitor, like the benchmark's main display.
+                        let desk = self.create_desktop(output, size.unwrap_or((1280, 720)));
+                        return Task::batch([bar, desk]);
                     }
                 }
                 OutputEvent::InfoUpdate(info) => {
                     if let Some(bar) = self.bars.iter_mut().find(|b| b.output == output) {
                         bar.output_height = info.logical_size.map(|(_, h)| h.max(0) as u32);
                     }
+                    if let Some((w, h)) = info.logical_size {
+                        self.desktop_resized(&output, (w.max(0) as u32, h.max(0) as u32));
+                    }
                 }
                 OutputEvent::Removed => {
+                    let mut tasks = Vec::new();
+                    if self.desktop.as_ref().is_some_and(|d| d.output == output) {
+                        tasks.push(self.destroy_desktop());
+                    }
                     if let Some(pos) = self.bars.iter().position(|b| b.output == output) {
                         let bar = self.bars.remove(pos);
-                        return destroy_layer_surface(bar.id);
+                        tasks.push(destroy_layer_surface(bar.id));
                     }
+                    // Move the desktop to a remaining monitor.
+                    if self.desktop.is_none()
+                        && let Some(b) = self.bars.first()
+                    {
+                        let (o, h) = (b.output.clone(), b.output_height.unwrap_or(720));
+                        tasks.push(self.create_desktop(o, (1920, h)));
+                    }
+                    return Task::batch(tasks);
                 }
             },
             Message::Layer(LayerEvent::Unfocused, id) if self.start.as_ref().is_some_and(|s| s.id == id) => {
@@ -750,6 +779,13 @@ impl Shell {
                     return Task::none();
                 }
                 return self.close_start();
+            }
+            Message::Layer(LayerEvent::Focused, id) if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) => {
+                return self.rename_focused();
+            }
+            Message::Layer(LayerEvent::Unfocused, id) if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) => {
+                // Clicked somewhere else: keep the new name.
+                return self.update_desktop(crate::desktop::DesktopMsg::RenameCommit);
             }
             Message::Layer(LayerEvent::Unfocused, id) if self.panel.as_ref().is_some_and(|p| p.id == id) => {
                 return self.close_panel();
@@ -768,6 +804,7 @@ impl Shell {
             }
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
+                self.desktop_tick();
             }
             Message::Rect(u) => match u {
                 RectangleUpdate::Init(t) => self.tracker = Some(t),
@@ -804,6 +841,9 @@ impl Shell {
                 }
                 if self.panel.as_ref().is_some_and(|p| p.id == id) {
                     return self.panel_key(named);
+                }
+                if self.desktop.as_ref().is_some_and(|d| d.id == id || d.rename_surface == Some(id)) {
+                    return self.update_desktop(crate::desktop::DesktopMsg::Key(named));
                 }
             }
             Message::OpenStartAt(page) => {
@@ -998,6 +1038,7 @@ impl Shell {
                 self.indexing = false;
             }
             Message::ReloadApps => self.catalog = Catalog::load(),
+            Message::Desktop(m) => return self.update_desktop(m),
             Message::UninstallAsk(app) => return self.uninstall_ask(app),
             Message::Uninstall(app) => return self.uninstall(app),
             Message::StartActivate(item) => return self.activate(item),

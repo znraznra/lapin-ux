@@ -82,6 +82,19 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Left-click opens/activates the app
 - [ ] Right-click shows the app's menu; submenus open; items work
 
+### Desktop
+- [ ] Files and folders in ~/Desktop show as icons top-left; pictures show a thumbnail
+- [ ] Click selects; double-click opens (folders in the file manager, documents in their app)
+- [ ] Drag an icon somewhere else: it stays there after logging out and in
+- [ ] F2 (or right-click → Rename): type a name, Enter. Clicking elsewhere also keeps the name; Esc cancels
+- [ ] Delete (or right-click → Delete) moves it to the Trash; you can restore it from the file manager's Trash
+- [ ] Right-click empty space → New → Folder: a folder appears where you clicked, ready to be named
+- [ ] View → Small/Medium/Large icons and Show desktop icons work; Sort by rearranges
+- [ ] Display settings, Personalize, Open in Terminal open the right thing
+- [ ] Copy a `.desktop` file of an installed app to the desktop: it shows the app's icon and starts it
+- [ ] A downloaded `.desktop` file doesn't run until you choose "Allow launching"
+- [ ] Files added to ~/Desktop by other apps appear within a couple of seconds
+
 ### Quick settings
 - [ ] Network, volume and (on laptops) battery icons show left of the clock and match reality
 - [ ] Clicking them opens Quick settings bottom-right; clicking outside or Esc closes it

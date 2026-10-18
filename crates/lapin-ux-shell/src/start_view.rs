@@ -445,7 +445,7 @@ fn search_results<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
 }
 
 /// Rough file-type icon from the extension (no MIME database lookup yet).
-fn mime_icon(name: &str) -> &'static str {
+pub(crate) fn mime_icon(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "avif" | "heic" => "image-x-generic",

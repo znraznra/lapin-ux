@@ -384,12 +384,12 @@ pub fn menu_item<'a>(icon_name: &'a str, label: impl Into<String>, msg: Message)
     .into()
 }
 
-fn menu_divider<'a>() -> Element<'a, Message> {
+pub(crate) fn menu_divider<'a>() -> Element<'a, Message> {
     container(widget::divider::horizontal::light()).padding([4, 8]).into()
 }
 
 /// `width` 0 means "fit the content".
-fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
+pub(crate) fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
     let c = container(content).padding(4).class(style::panel_bg());
     if width > 0.0 { c.width(width).into() } else { c.into() }
 }
@@ -507,6 +507,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell),
+        PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),
         PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),
         PopupKind::Power => panel(
             column::with_children(vec![
