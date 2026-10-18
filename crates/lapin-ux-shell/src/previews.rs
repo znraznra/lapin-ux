@@ -165,6 +165,7 @@ impl Shell {
                 }
             }
             PreviewMsg::SurfaceLeft(id) => {
+                self.bar_hover(id, false);
                 if let Some(h) = &self.hover
                     && h.bar == id
                 {

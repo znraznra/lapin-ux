@@ -47,6 +47,10 @@ pub struct Bar {
     pub output: WlOutput,
     /// Logical output height, used to size the Start menu.
     pub output_height: Option<u32>,
+    /// Auto-hide: shown at full height right now.
+    pub revealed: bool,
+    pub hovered: bool,
+    pub hide_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +179,10 @@ pub enum Message {
     Desktop(crate::desktop::DesktopMsg),
     Clip(crate::clipboard::ClipMsg),
     Preview(crate::previews::PreviewMsg),
+    /// Auto-hide: pointer entered/left a taskbar.
+    BarHover(window::Id, bool),
+    /// Auto-hide: hide this bar now if nothing needs it.
+    AutoHide(window::Id),
     /// Installed apps changed (e.g. after uninstalling): reload .desktop files.
     ReloadApps,
     UninstallAsk(String),
@@ -289,9 +297,14 @@ impl Shell {
 
     fn create_bar(&mut self, output: WlOutput, output_height: Option<u32>) -> Task<Message> {
         let id = window::Id::unique();
-        self.bars.push(Bar { id, output: output.clone(), output_height });
+        self.bars.push(Bar { id, output: output.clone(), output_height, revealed: !self.config.auto_hide, hovered: false, hide_pending: false });
+        let zone = if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 };
+        let hidden_input = self.config.auto_hide.then(|| {
+            let h = style::TASKBAR_HEIGHT as f32;
+            vec![Rectangle { x: 0.0, y: h - crate::autohide::STRIP as f32, width: 100_000.0, height: crate::autohide::STRIP as f32 }]
+        });
         let task = cosmic::surface::surface_task(app_layer_shell(
-            |_: &Shell| LiveSettings { blur: Some(true), ..Default::default() },
+            move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id)), ..Default::default() },
             move |_: &mut Shell| SctkLayerSurfaceSettings {
                 id,
                 layer: Layer::Top,
@@ -300,7 +313,8 @@ impl Shell {
                 output: IcedOutput::Output(output.clone()),
                 namespace: "lapin-ux-taskbar".into(),
                 size: Some((None, Some(style::TASKBAR_HEIGHT))),
-                exclusive_zone: style::TASKBAR_HEIGHT as i32,
+                exclusive_zone: zone,
+                input_zone: hidden_input.clone(),
                 size_limits: Limits::NONE.min_height(style::TASKBAR_HEIGHT as f32).max_height(style::TASKBAR_HEIGHT as f32),
                 ..Default::default()
             },
@@ -334,6 +348,7 @@ impl Shell {
             recent_files: lapin_ux_core::recent::load(6),
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
+        let above = self.above_bar();
         let r = style::PANEL_RADIUS as u32;
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
@@ -349,7 +364,7 @@ impl Shell {
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    margin: IcedMargin { top: 0, right: 0, bottom: 12, left: if left { 12 } else { 0 } },
+                    margin: IcedMargin { top: 0, right: 0, bottom: above, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
@@ -728,6 +743,9 @@ impl Application for Shell {
                 cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), .. }) => {
                     Some(Message::KeyNamed(window, named))
                 }
+                // The pointer reaching the hidden taskbar strip (it's too thin
+                // for a widget to see any motion inside it).
+                cosmic::iced::Event::Mouse(mouse::Event::CursorEntered) => Some(Message::BarHover(window, true)),
                 cosmic::iced::Event::Mouse(mouse::Event::CursorLeft) => {
                     Some(Message::Preview(crate::previews::PreviewMsg::SurfaceLeft(window)))
                 }
@@ -750,7 +768,7 @@ impl Application for Shell {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
-        Task::batch([task, self.sync_catcher()])
+        Task::batch([task, self.sync_catcher(), self.sync_autohide()])
     }
 }
 
@@ -840,7 +858,11 @@ impl Shell {
                 if cfg.pinned_taskbar != *self.taskbar.pinned() {
                     self.taskbar.set_pinned(cfg.pinned_taskbar.clone());
                 }
+                let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
                 self.config = cfg;
+                if auto_hide_changed {
+                    return self.auto_hide_changed();
+                }
             }
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
@@ -1085,6 +1107,8 @@ impl Shell {
             Message::Desktop(m) => return self.update_desktop(m),
             Message::Clip(m) => return self.update_clip(m),
             Message::Preview(m) => return self.update_preview(m),
+            Message::BarHover(id, inside) => self.bar_hover(id, inside),
+            Message::AutoHide(id) => return self.auto_hide_now(id),
             Message::UninstallAsk(app) => return self.uninstall_ask(app),
             Message::Uninstall(app) => return self.uninstall(app),
             Message::StartActivate(item) => return self.activate(item),

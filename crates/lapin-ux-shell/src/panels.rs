@@ -153,6 +153,7 @@ impl Shell {
     pub(crate) fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
         let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
         let id = window::Id::unique();
+        let above = self.above_bar();
         let (anchor, margin, width) = match &kind {
             PanelKind::WinX { .. } => {
                 // Just above the Start button, like the benchmark.
@@ -161,14 +162,14 @@ impl Shell {
                     .first()
                     .and_then(|b| self.rects.get(&rect_key(b.id, "start")))
                     .map_or(12, |r| r.x.max(0.0) as i32);
-                (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 8, left }, WINX_WIDTH)
+                (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above - 4, left }, WINX_WIDTH)
             }
-            PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: 12, left: 12 }, RUN_WIDTH),
+            PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above, left: 12 }, RUN_WIDTH),
             PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
-            PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: 12, left: 0 }, crate::clipboard::WIDTH),
+            PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: above, left: 0 }, crate::clipboard::WIDTH),
             PanelKind::Quick(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 12, bottom: 12, left: 0 },
+                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
                 crate::quick::WIDTH,
             ),
         };

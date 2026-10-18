@@ -79,6 +79,10 @@ COSMIC compositor. Arch Linux first.
   icons), Sort by (Name, Date modified, Item type), Refresh, New (Folder,
   Text Document), Display settings, Personalize, Open in Terminal.
 
+**Auto-hide** (right-click the taskbar → Automatically hide the taskbar):
+the taskbar disappears and windows use the whole screen; touching the bottom
+edge brings it back, and it stays while Start, a menu or a panel is open.
+
 **Window previews**
 - Hovering a taskbar button shows a live thumbnail of each of that app's
   windows (captured with `ext-image-copy-capture`); click to switch, × to close.
@@ -170,7 +174,7 @@ niri…), so the shell also runs on wlroots compositors.
 All settings use cosmic-config and apply live:
 `~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
 `alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
-`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`).
+`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`, `auto_hide`).
 
 ## Install on Arch
 

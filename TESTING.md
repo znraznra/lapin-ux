@@ -76,6 +76,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] The thin strip at the far right hides all windows; clicking again brings them back
 - [ ] Drag a pinned icon left/right to reorder it; the order is kept after logging out
 - [ ] Right-click empty taskbar space: alignment, Search box and desktop button options work (and Task Manager if one is installed)
+- [ ] "Automatically hide the taskbar": it disappears and maximized windows grow to the bottom; pointer to the bottom edge shows it; it stays while you use it or Start is open; it hides again shortly after you move away
 
 ### System tray
 - [ ] Apps with tray icons (Discord, Steam, Nextcloud, …) appear under the ^ button left of the clock

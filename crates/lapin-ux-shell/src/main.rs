@@ -13,6 +13,7 @@
 //!   lapin-ux-shell taskbar-item N   open/switch to the N-th taskbar app (Super+N)
 
 mod app;
+mod autohide;
 mod catalog;
 mod catcher;
 mod clipboard;

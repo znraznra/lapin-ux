@@ -35,6 +35,10 @@ pub fn app_name(shell: &Shell, app: &str) -> String {
 }
 
 pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
+    if shell.config.auto_hide && !bar.revealed {
+        // Hidden: an invisible strip along the screen edge that wakes the bar.
+        return widget::Space::new().width(Length::Fill).height(Length::Fill).into();
+    }
     let start_open = shell.start.is_some();
     let start_btn = button::custom(
         container(icon(icon::from_svg_bytes(START_ICON)).size(style::TASK_ICON))
@@ -161,6 +165,8 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         .height(Length::Fill)
         .align_y(Alignment::Center)
         .class(style::taskbar_bg());
+    // Hover for auto-hide comes from the surface's own enter/leave events
+    // (see app.rs), which are exact; a widget can report a stray exit.
     mouse_area(bar_body).on_right_press(Message::TaskbarContext(bar.id)).into()
 }
 
@@ -336,6 +342,7 @@ fn taskbar_menu(shell: &Shell) -> Element<'_, Message> {
     items.push(menu_check("Center taskbar icons", center, Message::TaskbarOption(O::Align(TaskbarAlignment::Center))));
     items.push(menu_check("Left-align taskbar icons", !center, Message::TaskbarOption(O::Align(TaskbarAlignment::Left))));
     items.push(menu_divider());
+    items.push(menu_check("Automatically hide the taskbar", shell.config.auto_hide, Message::TaskbarOption(O::ToggleAutoHide)));
     items.push(menu_check("Show Search box", shell.config.show_search, Message::TaskbarOption(O::ToggleSearch)));
     items.push(menu_check(
         "Show desktop button",

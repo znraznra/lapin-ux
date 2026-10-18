@@ -25,6 +25,7 @@ pub enum TaskbarOption {
     Align(TaskbarAlignment),
     ToggleSearch,
     ToggleDesktopButton,
+    ToggleAutoHide,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +148,12 @@ impl Shell {
             TaskbarOption::Align(a) => self.config.alignment = a,
             TaskbarOption::ToggleSearch => self.config.show_search = !self.config.show_search,
             TaskbarOption::ToggleDesktopButton => self.config.show_desktop_corner = !self.config.show_desktop_corner,
+            TaskbarOption::ToggleAutoHide => {
+                self.config.auto_hide = !self.config.auto_hide;
+                self.persist_config();
+                let close = self.close_popup();
+                return Task::batch([close, self.auto_hide_changed()]);
+            }
         }
         self.persist_config();
         self.close_popup()
