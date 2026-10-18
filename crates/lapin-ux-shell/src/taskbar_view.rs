@@ -569,6 +569,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         }
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
+        PopupKind::Account => crate::account::menu(shell),
         PopupKind::PinContext(i) => crate::start_pins::context(shell, *i),
         PopupKind::TaskbarDisplays => taskbar_displays(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),

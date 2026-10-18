@@ -12,6 +12,7 @@
 //!   lapin-ux-shell run      Run dialog (Super+R)
 //!   lapin-ux-shell taskbar-item N   open/switch to the N-th taskbar app (Super+N)
 
+mod account;
 mod app;
 mod autohide;
 mod catalog;

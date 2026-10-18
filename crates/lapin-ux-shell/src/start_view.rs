@@ -41,6 +41,14 @@ static ACCOUNT: LazyLock<Account> = LazyLock::new(|| {
     Account { name: full.unwrap_or(login), avatar: avatar.exists().then_some(avatar) }
 });
 
+pub(crate) fn account_name() -> String {
+    ACCOUNT.name.clone()
+}
+
+pub(crate) fn account_avatar() -> Option<std::path::PathBuf> {
+    ACCOUNT.avatar.clone()
+}
+
 fn section_header<'a>(title: &'static str, action: Option<(&'static str, Message)>) -> Element<'a, Message> {
     let mut r = row::with_capacity(3)
         .align_y(Alignment::Center)
@@ -115,20 +123,21 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
         }
     };
 
-    let avatar: Element<'_, Message> = match &ACCOUNT.avatar {
-        Some(p) => icon(icon::from_path(p.clone())).size(28).into(),
-        None => icon::from_name("avatar-default-symbolic").size(20).into(),
-    };
     let footer = container(
         row::with_children(vec![
-            container(
-                row::with_children(vec![avatar, text::body(ACCOUNT.name.clone()).into()])
-                    .spacing(10)
-                    .align_y(Alignment::Center),
-            )
-            .padding([6, 10])
-            .width(Length::Fill)
-            .into(),
+            tracked(
+                shell,
+                rect_key(start.id, "account"),
+                button::custom(
+                    row::with_children(vec![crate::account::avatar(shell, 28), text::body(ACCOUNT.name.clone()).into()])
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                )
+                .padding([6, 10])
+                .class(style::flat_button(false))
+                .on_press(Message::Account(crate::account::AccountMsg::Menu)),
+            ),
+            widget::Space::new().width(Length::Fill).into(),
             tracked(
                 shell,
                 rect_key(start.id, "power"),

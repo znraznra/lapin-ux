@@ -48,6 +48,8 @@ optdepends=(
     'gnome-keyring: saved passwords and SSH keys'
     'papirus-icon-theme: broader app icon coverage'
     'xdg-desktop-portal-gtk: file pickers for GTK apps'
+    'localsearch: search inside documents from Start'
+    'accountsservice: changing the account picture'
 )
 makedepends=('cargo' 'git' 'python' 'python-numpy' 'python-pillow')
 provides=('lapin-ux-desktop')

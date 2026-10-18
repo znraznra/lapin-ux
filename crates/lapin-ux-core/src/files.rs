@@ -232,3 +232,41 @@ mod tests {
         assert_eq!(web_search_url("https://example.org/search?q=", "é"), "https://example.org/search?q=%C3%A9");
     }
 }
+
+/// Commands that search file contents with LocalSearch (formerly Tracker),
+/// newest name first; whichever is installed is used.
+pub fn content_search_commands(query: &str, limit: usize) -> Vec<Vec<String>> {
+    let args = |bin: &str| {
+        let mut v: Vec<String> =
+            [bin, "search", "--disable-color", "--disable-snippets", "-l", &limit.to_string()].iter().map(|s| s.to_string()).collect();
+        v.extend(query.split_whitespace().map(str::to_string));
+        v
+    };
+    vec![args("localsearch"), args("tracker3")]
+}
+
+/// Local files in a content search's output (any `file://` URI on a line).
+pub fn content_hits(output: &str) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for word in output.split_whitespace() {
+        // Strip any leftover colour codes around the URI.
+        let Some(start) = word.find("file://") else { continue };
+        let uri: String = word[start..].chars().take_while(|c| !c.is_control()).collect();
+        if let Some(p) = crate::recent::file_uri_to_path(&uri)
+            && !out.contains(&p)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod content_tests {
+    #[test]
+    fn hits() {
+        let out = "Files:\n  \u{1b}[32mfile:///home/u/a%20b.txt\u{1b}[0m\n  file:///home/u/c.odt\n  file:///home/u/c.odt\n";
+        assert_eq!(super::content_hits(out), vec![std::path::PathBuf::from("/home/u/a b.txt"), "/home/u/c.odt".into()]);
+        assert_eq!(super::content_search_commands("tax 2025", 5)[0].last().unwrap(), "2025");
+    }
+}

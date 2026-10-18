@@ -72,6 +72,8 @@ pub struct StartMenu {
     /// A folder of pinned apps is open (its stored pin index).
     pub folder: Option<usize>,
     pub pin_drag: Option<crate::start_pins::PinDrag>,
+    /// Files whose contents match the query (query, hits), from LocalSearch.
+    pub content: Option<(String, Vec<std::path::PathBuf>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +90,8 @@ pub enum PopupKind {
     TrayMenu(String),
     /// Hidden tray icons behind the ^ button.
     TrayOverflow,
+    /// The account button's menu in Start.
+    Account,
     /// Right-click on a pinned file, site or folder in Start.
     PinContext(usize),
     /// Right-click on empty taskbar space.
@@ -189,6 +193,9 @@ pub enum Message {
     Pin(String),
     Unpin(String),
     PinStart(String),
+    Account(crate::account::AccountMsg),
+    /// Content-search hits for a query.
+    ContentHits(String, Vec<std::path::PathBuf>),
     Pins(crate::start_pins::PinMsg),
     UnpinStart(String),
     ShowDesktop,
@@ -260,6 +267,9 @@ pub struct Shell {
     pub thumbs: std::collections::HashMap<Handle, crate::previews::Thumb>,
     /// A cascading submenu of `popup`.
     pub sub: Option<Popup>,
+    /// Account picture chosen this session (AccountsService keeps it too).
+    pub avatar: Option<std::path::PathBuf>,
+    pub can_switch_user: bool,
     /// A file being dragged over a taskbar button: (app, serial).
     pub drag_hover: Option<(String, u64)>,
     pub drag_serial: u64,
@@ -378,6 +388,7 @@ impl Shell {
             recent_files: lapin_ux_core::recent::load(6),
             folder: None,
             pin_drag: None,
+            content: None,
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
@@ -458,11 +469,14 @@ impl Shell {
                 // Menus opened at the pointer grow up and to the right of
                 // it; the rest are centred over the button they belong to.
                 anchor: match (at_pointer, above) {
+                    // The account menu rises from the account button, left-aligned.
+                    _ if kind == PopupKind::Account => PAnchor::TopLeft,
                     (true, _) => PAnchor::TopLeft,
                     (false, true) => PAnchor::Top,
                     (false, false) => PAnchor::Bottom,
                 },
                 gravity: match (at_pointer, above) {
+                    _ if kind == PopupKind::Account => Gravity::TopRight,
                     (true, true) => Gravity::TopRight,
                     (true, false) => Gravity::BottomRight,
                     (false, true) => Gravity::Top,
@@ -722,6 +736,8 @@ impl Application for Shell {
             jump: Vec::new(),
             badges: HashMap::new(),
             drag_hover: None,
+            avatar: None,
+            can_switch_user: false,
             drag_serial: 0,
             hover: None,
             hover_gen: 0,
@@ -737,7 +753,7 @@ impl Application for Shell {
             suppress_click_until: Instant::now(),
             item_context_at: Instant::now() - Duration::from_secs(10),
         };
-        (shell, Task::none())
+        (shell, crate::account::check_switch_user())
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -1057,7 +1073,8 @@ impl Shell {
             Message::StartQuery(q) => {
                 if let Some(s) = &mut self.start {
                     s.selected = (!q.trim().is_empty()).then_some(0);
-                    s.query = q;
+                    s.query = q.clone();
+                    return crate::start_search::content_search(q);
                 }
             }
             Message::StartSubmit => {
@@ -1230,6 +1247,14 @@ impl Shell {
                 return self.close_popup();
             }
             Message::Pins(m) => return self.update_pins(m),
+            Message::Account(m) => return self.update_account(m),
+            Message::ContentHits(q, hits) => {
+                if let Some(s) = &mut self.start
+                    && s.query == q
+                {
+                    s.content = Some((q, hits));
+                }
+            }
             Message::ShowDesktop => {
                 if self.desktop_shown.is_empty() {
                     // Remember visible windows, focused one last, so restoring

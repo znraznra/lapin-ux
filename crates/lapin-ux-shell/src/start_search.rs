@@ -50,6 +50,37 @@ impl Results {
     }
 }
 
+/// Search file contents after a short pause in typing (LocalSearch or
+/// Tracker, when installed; otherwise nothing happens).
+pub(crate) fn content_search(query: String) -> Task<Message> {
+    let q = query.trim().to_string();
+    if q.chars().count() < 3 {
+        return Task::none();
+    }
+    // Only the last keystroke's search runs.
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    Task::future(async move {
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        if SERIAL.load(std::sync::atomic::Ordering::Relaxed) != serial {
+            return cosmic::Action::App(Message::Noop);
+        }
+        let mut hits = Vec::new();
+        for cmd in files::content_search_commands(&q, 10) {
+            let run = tokio::process::Command::new(&cmd[0]).args(&cmd[1..]).kill_on_drop(true).output();
+            match tokio::time::timeout(Duration::from_secs(3), run).await {
+                Ok(Ok(out)) if out.status.success() => {
+                    hits = files::content_hits(&String::from_utf8_lossy(&out.stdout));
+                    break;
+                }
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                _ => break,
+            }
+        }
+        cosmic::Action::App(Message::ContentHits(query, hits))
+    })
+}
+
 /// How long a file index is trusted before Start rebuilds it in the background.
 const INDEX_MAX_AGE: Duration = Duration::from_secs(120);
 
@@ -65,6 +96,20 @@ impl Shell {
         let found = self.files.search(q, 10);
         r.folders = found.iter().filter(|f| f.is_dir).take(3).map(|f| StartItem::File { path: f.path.clone(), is_dir: true }).collect();
         r.documents = found.iter().filter(|f| !f.is_dir).take(5).map(|f| StartItem::File { path: f.path.clone(), is_dir: false }).collect();
+        // Documents whose contents match, after the ones whose names do.
+        if let Some((cq, hits)) = self.start.as_ref().and_then(|s| s.content.as_ref())
+            && cq.trim() == q
+        {
+            for p in hits {
+                if r.documents.len() >= 8 {
+                    break;
+                }
+                let item = StartItem::File { path: p.clone(), is_dir: p.is_dir() };
+                if !r.documents.contains(&item) && !r.folders.contains(&item) && !p.is_dir() {
+                    r.documents.push(item);
+                }
+            }
+        }
         if !self.config.hide_web_search {
             r.web = Some(StartItem::Web(q.to_string()));
         }
