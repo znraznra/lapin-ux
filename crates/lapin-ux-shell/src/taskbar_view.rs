@@ -189,6 +189,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     right = right.push(row::with_children(status_slot));
     right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
     if shell.config.show_desktop_corner {
+        // Resting on it peeks at the desktop (see bar_pointer).
         right = right.push(
             button::custom(widget::Space::new().width(6).height(Length::Fill))
                 .padding(0)

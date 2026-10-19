@@ -1,7 +1,7 @@
 From 099ceaceeb634ed43a572e49cc9832433a8768ab Mon Sep 17 00:00:00 2001
 From: Lapin UX <noreply@anthropic.com>
 Date: Mon, 19 Oct 2026 09:30:32 +0800
-Subject: [PATCH] Add lapin_shell_v1: snap to a fraction of the work area,
+Subject: [PATCH 1/2] Add lapin_shell_v1: snap to a fraction of the work area,
  attention events
 
 Lapin UX's taskbar flashes a window's button when it asks for the focus

@@ -108,8 +108,12 @@ pub enum WaylandUpdate {
     Workspaces(Vec<WorkspaceInfo>, bool),
     /// A window asked for attention (lapin-ux-comp only).
     Attention(WindowId),
-    /// Whether snap layouts are possible (lapin-ux-comp is running).
-    SnapSupported(bool),
+    /// Whether snap layouts are possible (lapin-ux-comp is running), and
+    /// the lapin_shell version (2+: peek, night light, gestures).
+    SnapSupported(bool, u32),
+    /// A touchpad swipe for the shell: fingers, direction (0 up, 1 down,
+    /// 2 left, 3 right).
+    Gesture(u32, u32),
 }
 
 /// What the compositor reports about its accessibility features.
@@ -145,6 +149,10 @@ pub enum WaylandRequest {
     MoveToWorkspace(WindowId, WorkspaceId),
     /// Put a window in part of its monitor's work area (fractions 0..1).
     Snap(WindowId, [f32; 4]),
+    /// Hide every window while peeking at the desktop.
+    Peek(bool),
+    /// Night light temperature in kelvin, 0 = off.
+    NightLight(u32),
 }
 
 /// Thumbnails are captured at most this size.
@@ -306,6 +314,18 @@ impl AppData {
                 }
                 return;
             }
+            WaylandRequest::Peek(on) => {
+                if let Some(m) = self.lapin.as_ref().filter(|m| m.version() >= 2) {
+                    m.peek(on as u32);
+                }
+                return;
+            }
+            WaylandRequest::NightLight(k) => {
+                if let Some(m) = self.lapin.as_ref().filter(|m| m.version() >= 2) {
+                    m.night_light(k);
+                }
+                return;
+            }
             _ => {}
         }
         let target = |id: &WindowId| self.objects.get(id).cloned();
@@ -317,7 +337,9 @@ impl AppData {
             | WaylandRequest::NewWorkspace
             | WaylandRequest::RemoveWorkspace(_)
             | WaylandRequest::MoveToWorkspace(..)
-            | WaylandRequest::Snap(..) => {}
+            | WaylandRequest::Snap(..)
+            | WaylandRequest::Peek(_)
+            | WaylandRequest::NightLight(_) => {}
             WaylandRequest::Activate(id) => match target(&id) {
                 Some(Toplevel::Cosmic(ext)) => {
                     if let (Some(Backend::Cosmic { manager: Some(m), .. }), Some(t), Some(seat)) =
@@ -571,11 +593,11 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         workspace_state: WorkspaceState::new(&registry_state_for_ws, &qh),
         ws_ids: HashMap::new(),
         ws_objects: HashMap::new(),
-        lapin: globals.bind::<LapinShellManagerV1, _, _>(&qh, 1..=1, ()).ok(),
+        lapin: globals.bind::<LapinShellManagerV1, _, _>(&qh, 1..=2, ()).ok(),
         by_identifier: HashMap::new(),
         identifiers: HashMap::new(),
     };
-    let _ = data.tx.unbounded_send(WaylandUpdate::SnapSupported(data.lapin.is_some()));
+    let _ = data.tx.unbounded_send(WaylandUpdate::SnapSupported(data.lapin.is_some(), data.lapin.as_ref().map_or(0, |m| m.version())));
     if data.a11y.is_some() {
         data.a11y_state.available = true;
         let _ = data.tx.unbounded_send(WaylandUpdate::A11y(data.a11y_state));
@@ -871,10 +893,19 @@ impl Dispatch<ZcosmicKeyboardLayoutV1, ()> for AppData {
 
 impl Dispatch<LapinShellManagerV1, ()> for AppData {
     fn event(state: &mut Self, _: &LapinShellManagerV1, event: lapin_shell_manager_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let lapin_shell_manager_v1::Event::Attention { identifier } = event
-            && let Some(id) = state.by_identifier.get(&identifier)
-        {
-            let _ = state.tx.unbounded_send(WaylandUpdate::Attention(*id));
+        match event {
+            lapin_shell_manager_v1::Event::Attention { identifier } => {
+                if let Some(id) = state.by_identifier.get(&identifier) {
+                    let _ = state.tx.unbounded_send(WaylandUpdate::Attention(*id));
+                }
+            }
+            lapin_shell_manager_v1::Event::Gesture { fingers, direction } => {
+                let d = match direction {
+                    WEnum::Value(d) => d as u32,
+                    WEnum::Unknown(d) => d,
+                };
+                let _ = state.tx.unbounded_send(WaylandUpdate::Gesture(fingers, d));
+            }
         }
     }
 }

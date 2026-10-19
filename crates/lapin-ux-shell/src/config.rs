@@ -62,6 +62,16 @@ pub struct ShellConfig {
     pub desktop_special: Vec<String>,
     /// Desktop icon settings: Recycle Bin unchecked.
     pub hide_recycle_bin: bool,
+    /// Night light on (the tile; the schedule flips it at its times).
+    pub night_light: bool,
+    /// Night light temperature in kelvin (0 = default, 4000 K).
+    pub night_light_kelvin: u32,
+    /// Turn night light on and off at these times (minutes since midnight).
+    pub night_light_schedule: Option<(u16, u16)>,
+    /// Rotation lock (tablets and convertibles).
+    pub rotation_lock: bool,
+    /// Don't peek at the desktop when hovering the taskbar's far corner.
+    pub no_desktop_peek: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -208,6 +208,7 @@ pub enum Message {
     Unpin(String),
     PinStart(String),
     TaskView(crate::taskview::TaskViewMsg),
+    Extras(crate::comp_extras::ExtrasMsg),
     Snap(crate::snap::SnapMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
@@ -303,6 +304,7 @@ pub struct Shell {
     pub attention: HashMap<Handle, Instant>,
     /// lapin-ux-comp is running: snap layouts work.
     pub snap_supported: bool,
+    pub extras: crate::comp_extras::Extras,
     /// Virtual desktops.
     pub desktops: crate::taskview::Desktops,
     pub mods: keyboard::Modifiers,
@@ -805,6 +807,7 @@ impl Application for Shell {
             anims: Default::default(),
             attention: HashMap::new(),
             snap_supported: false,
+            extras: Default::default(),
             desktops: Default::default(),
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
@@ -932,6 +935,7 @@ impl Application for Shell {
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
+            crate::comp_extras::sensor_subscription().map(|s| Message::Extras(crate::comp_extras::ExtrasMsg::Sensor(s))),
             wl::subscription().map(Message::Wayland),
             // Watch the files directly: works even when COSMIC's settings
             // daemon (which relays config changes over D-Bus) isn't running.
@@ -1021,7 +1025,13 @@ impl Shell {
                         self.attention.insert(id, Instant::now());
                     }
                 }
-                WaylandUpdate::SnapSupported(on) => self.snap_supported = on,
+                WaylandUpdate::SnapSupported(on, version) => {
+                    self.snap_supported = on;
+                    self.extras_connected(version);
+                }
+                WaylandUpdate::Gesture(fingers, dir) => {
+                    return self.update_extras(crate::comp_extras::ExtrasMsg::Gesture(fingers, dir));
+                }
                 WaylandUpdate::Workspaces(list, can_create) => {
                     self.desktops.list = list;
                     self.desktops.can_create = can_create;
@@ -1123,6 +1133,7 @@ impl Shell {
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
                 let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
                 self.config = cfg;
+                self.sync_night_light();
                 if icons_changed {
                     self.reload_desktop();
                 }
@@ -1133,6 +1144,7 @@ impl Shell {
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
                 self.desktop_tick();
+                self.extras_tick();
             }
             Message::Rect(u) => match u {
                 RectangleUpdate::Init(t) => self.tracker = Some(t),
@@ -1422,6 +1434,7 @@ impl Shell {
             }
             Message::Pins(m) => return self.update_pins(m),
             Message::TaskView(m) => return self.update_taskview(m),
+            Message::Extras(m) => return self.update_extras(m),
             Message::Snap(m) => return self.update_snap(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {
@@ -1453,6 +1466,7 @@ impl Shell {
                 }
             }
             Message::ShowDesktop => {
+                let _ = self.set_peek(false);
                 if self.desktop_shown.is_empty() {
                     // Remember visible windows, focused one last, so restoring
                     // in order leaves it on top with focus.

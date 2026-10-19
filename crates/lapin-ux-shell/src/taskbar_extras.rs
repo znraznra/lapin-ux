@@ -57,6 +57,13 @@ impl Shell {
         match ev {
             Pointer::Move(p) => {
                 self.pointer = Some((surface, p));
+                // The far corner ("Show desktop"): resting there peeks.
+                let width = self.bars.iter().find(|b| b.id == surface).and_then(|b| b.output_width);
+                let in_corner = self.config.show_desktop_corner && width.is_some_and(|w| p.x >= w as f32 - 8.0);
+                if in_corner != self.extras.in_corner {
+                    self.extras.in_corner = in_corner;
+                    return self.update_extras(crate::comp_extras::ExtrasMsg::CornerHover(in_corner));
+                }
                 let Some(drag) = &mut self.drag else { return Task::none() };
                 if drag.bar != surface {
                     return Task::none();

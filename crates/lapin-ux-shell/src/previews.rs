@@ -166,6 +166,10 @@ impl Shell {
             }
             PreviewMsg::SurfaceLeft(id) => {
                 self.bar_hover(id, false);
+                if self.extras.in_corner && self.bars.iter().any(|b| b.id == id) {
+                    self.extras.in_corner = false;
+                    let _ = self.update_extras(crate::comp_extras::ExtrasMsg::CornerHover(false));
+                }
                 if let Some(h) = &self.hover
                     && h.bar == id
                 {

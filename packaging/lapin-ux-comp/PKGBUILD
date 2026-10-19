@@ -2,7 +2,8 @@
 #
 # Lapin UX's build of the COSMIC compositor: upstream cosmic-comp at a
 # pinned commit plus the patches in this folder (lapin_shell_v1: snap
-# layouts and taskbar attention). Installed next to cosmic-comp as
+# layouts, taskbar attention, desktop peek, night light, touchpad swipes for
+# the shell, and a window open animation). Installed next to cosmic-comp as
 # `lapin-ux-comp`; the Lapin UX session uses it when it's there.
 #
 # packaging/arch builds and installs this automatically together with Lapin
@@ -14,15 +15,16 @@ pkgname=lapin-ux-comp
 _commit=742b800b518f0dafd89d0c1ace4de4935334ed18
 pkgver=1.0.0.r0.742b800
 pkgrel=1
-pkgdesc="COSMIC compositor with Lapin UX's snap layouts and attention support"
+pkgdesc="COSMIC compositor with Lapin UX's additions (snap layouts, peek, night light, gestures)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/pop-os/cosmic-comp"
 license=('GPL-3.0-only')
 depends=('libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayland' 'libdisplay-info' 'fontconfig')
 makedepends=('cargo' 'git' 'clang')
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_commit}"
-        "0001-Add-lapin_shell_v1-snap-to-a-fraction-of-the-work-ar.patch")
-sha256sums=('SKIP' 'SKIP')
+        "0001-Add-lapin_shell_v1-snap-to-a-fraction-of-the-work-ar.patch"
+        "0002-lapin_shell-v2-desktop-peek-night-light-shell-touchp.patch")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 prepare() {
     cd cosmic-comp

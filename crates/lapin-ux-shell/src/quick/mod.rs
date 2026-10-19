@@ -937,6 +937,18 @@ fn tile_specs(shell: &Shell) -> Vec<TileSpec> {
             None,
         ));
     }
+    // Night light and rotation lock (lapin-ux-comp / iio-sensor-proxy).
+    if shell.extras.version >= 2 {
+        let on = shell.config.night_light;
+        let toggle = Message::Extras(crate::comp_extras::ExtrasMsg::NightLight(!on));
+        specs.push(TileSpec::new("nightlight", "night-light-symbolic", "Night light", on, Some(toggle), None));
+    }
+    if shell.extras.can_rotate {
+        let on = shell.config.rotation_lock;
+        let icon = if on { "rotation-locked-symbolic" } else { "rotation-allowed-symbolic" };
+        let toggle = Message::Extras(crate::comp_extras::ExtrasMsg::RotationLock(!on));
+        specs.push(TileSpec::new("rotation", icon, "Rotation lock", on, Some(toggle), None));
+    }
     if q.a11y.available || crate::account::which("orca") {
         let on = q.a11y.magnifier || q.a11y.filter_on || q.screen_reader;
         specs.push(TileSpec::new("accessibility", 

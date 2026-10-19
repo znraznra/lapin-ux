@@ -10,7 +10,7 @@
     identifier of their ext_foreign_toplevel_handle_v1.
   </description>
 
-  <interface name="lapin_shell_manager_v1" version="1">
+  <interface name="lapin_shell_manager_v1" version="2">
     <request name="destroy" type="destructor"/>
 
     <request name="snap">
@@ -31,6 +31,40 @@
         Sent when a window asks to be activated but isn't given the focus.
       </description>
       <arg name="identifier" type="string"/>
+    </event>
+
+    <!-- version 2 -->
+
+    <request name="peek" since="2">
+      <description summary="look through the windows at the desktop">
+        While enabled, windows aren't drawn: only the wallpaper, desktop and
+        panels are visible (taskbar "Show desktop" hover).
+      </description>
+      <arg name="enabled" type="uint"/>
+    </request>
+
+    <request name="night_light" since="2">
+      <description summary="warm the screen colours">
+        Tint every output towards the given colour temperature in kelvin
+        (1200 to 6500). 0 turns night light off.
+      </description>
+      <arg name="kelvin" type="uint"/>
+    </request>
+
+    <enum name="direction" since="2">
+      <entry name="up" value="0"/>
+      <entry name="down" value="1"/>
+      <entry name="left" value="2"/>
+      <entry name="right" value="3"/>
+    </enum>
+
+    <event name="gesture" since="2">
+      <description summary="a touchpad swipe the shell handles">
+        Sent once per swipe, when its direction is known, for three-finger
+        swipes and four-finger swipes the compositor doesn't use itself.
+      </description>
+      <arg name="fingers" type="uint"/>
+      <arg name="direction" type="uint" enum="direction"/>
     </event>
   </interface>
 </protocol>

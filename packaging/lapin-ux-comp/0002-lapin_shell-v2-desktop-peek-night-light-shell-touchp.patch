@@ -1,0 +1,466 @@
+From 593caae78694363d7de866b2a2fe978b41afd1c8 Mon Sep 17 00:00:00 2001
+From: Lapin UX <arnz.lee16@gmail.com>
+Date: Mon, 19 Oct 2026 19:37:52 +0800
+Subject: [PATCH 2/2] lapin_shell v2: desktop peek, night light, shell touchpad
+ swipes; window open animation
+
+---
+ resources/protocols/lapin-shell-v1.xml    | 36 +++++++++++++-
+ src/backend/render/mod.rs                 | 15 ++++++
+ src/backend/render/shaders/offscreen.frag |  4 ++
+ src/config/mod.rs                         | 33 ++++++++++++-
+ src/input/mod.rs                          | 14 ++++++
+ src/shell/layout/floating/mod.rs          | 57 ++++++++++++++++++++++-
+ src/shell/mod.rs                          |  6 +++
+ src/wayland/handlers/lapin_shell.rs       | 29 ++++++++++++
+ src/wayland/protocols/lapin_shell.rs      | 19 +++++++-
+ 9 files changed, 209 insertions(+), 4 deletions(-)
+
+diff --git a/resources/protocols/lapin-shell-v1.xml b/resources/protocols/lapin-shell-v1.xml
+index 555965e..0f653dd 100644
+--- a/resources/protocols/lapin-shell-v1.xml
++++ b/resources/protocols/lapin-shell-v1.xml
+@@ -10,7 +10,7 @@
+     identifier of their ext_foreign_toplevel_handle_v1.
+   </description>
+ 
+-  <interface name="lapin_shell_manager_v1" version="1">
++  <interface name="lapin_shell_manager_v1" version="2">
+     <request name="destroy" type="destructor"/>
+ 
+     <request name="snap">
+@@ -32,5 +32,39 @@
+       </description>
+       <arg name="identifier" type="string"/>
+     </event>
++
++    <!-- version 2 -->
++
++    <request name="peek" since="2">
++      <description summary="look through the windows at the desktop">
++        While enabled, windows aren't drawn: only the wallpaper, desktop and
++        panels are visible (taskbar "Show desktop" hover).
++      </description>
++      <arg name="enabled" type="uint"/>
++    </request>
++
++    <request name="night_light" since="2">
++      <description summary="warm the screen colours">
++        Tint every output towards the given colour temperature in kelvin
++        (1200 to 6500). 0 turns night light off.
++      </description>
++      <arg name="kelvin" type="uint"/>
++    </request>
++
++    <enum name="direction" since="2">
++      <entry name="up" value="0"/>
++      <entry name="down" value="1"/>
++      <entry name="left" value="2"/>
++      <entry name="right" value="3"/>
++    </enum>
++
++    <event name="gesture" since="2">
++      <description summary="a touchpad swipe the shell handles">
++        Sent once per swipe, when its direction is known, for three-finger
++        swipes and four-finger swipes the compositor doesn't use itself.
++      </description>
++      <arg name="fingers" type="uint"/>
++      <arg name="direction" type="uint" enum="direction"/>
++    </event>
+   </interface>
+ </protocol>
+diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
+index 9ad6158..ac8f760 100644
+--- a/src/backend/render/mod.rs
++++ b/src/backend/render/mod.rs
+@@ -421,6 +421,7 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
+         &[
+             UniformName::new("invert", UniformType::_1f),
+             UniformName::new("color_mode", UniformType::_1f),
++            UniformName::new("warm", UniformType::_3f),
+         ],
+     )?;
+     let clipping_shader = renderer.compile_custom_texture_shader(
+@@ -833,7 +834,20 @@ where
+         )
+     };
+ 
++    let peek = shell.peek;
+     render_input_order::<()>(&shell, output, previous, current, element_filter, |stage| {
++        // Lapin UX desktop peek: draw no windows.
++        if peek
++            && matches!(
++                stage,
++                Stage::Workspace { .. }
++                    | Stage::WorkspacePopups { .. }
++                    | Stage::Sticky(_)
++                    | Stage::StickyPopups(_)
++            )
++        {
++            return ControlFlow::Continue(());
++        }
+         match stage {
+             Stage::ZoomUI => {
+                 ZoomState::render(renderer, output, &mut |elem| {
+@@ -1377,6 +1391,7 @@ where
+                                 .map(|val| val as u8 as f32)
+                                 .unwrap_or(0.),
+                         ),
++                        Uniform::new("warm", screen_filter.filter.night_light_gains()),
+                     ],
+                 );
+                 constrain_render_elements(
+diff --git a/src/backend/render/shaders/offscreen.frag b/src/backend/render/shaders/offscreen.frag
+index d95859c..ea69eca 100644
+--- a/src/backend/render/shaders/offscreen.frag
++++ b/src/backend/render/shaders/offscreen.frag
+@@ -22,6 +22,7 @@ uniform float tint;
+ 
+ uniform float invert;
+ uniform float color_mode;
++uniform vec3 warm;
+ 
+ void main() {
+     vec4 color = texture2D(tex, v_coords);
+@@ -83,6 +84,9 @@ void main() {
+         color.rgb += correction;
+     }
+ 
++    // Lapin UX night light
++    color.rgb *= warm;
++
+     // re-multiply
+     color.rgb *= color.a;
+ 
+diff --git a/src/config/mod.rs b/src/config/mod.rs
+index be509e7..805dad6 100644
+--- a/src/config/mod.rs
++++ b/src/config/mod.rs
+@@ -153,11 +153,41 @@ pub struct ScreenFilter {
+     pub inverted: bool,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub color_filter: Option<ColorFilter>,
++    /// Lapin UX night light: colour temperature in kelvin, 0 when off.
++    #[serde(default, skip_serializing_if = "is_zero")]
++    pub night_light: u32,
++}
++
++fn is_zero(v: &u32) -> bool {
++    *v == 0
+ }
+ 
+ impl ScreenFilter {
+     pub fn is_noop(&self) -> bool {
+-        !self.inverted && self.color_filter.is_none()
++        !self.inverted && self.color_filter.is_none() && self.night_light == 0
++    }
++
++    /// Per-channel gains for the night light (1.0 each when off), from the
++    /// black-body colour of the temperature, normalised so 6500 K is white.
++    pub fn night_light_gains(&self) -> [f32; 3] {
++        if self.night_light == 0 {
++            return [1.0; 3];
++        }
++        let t = self.night_light.clamp(1000, 6500) as f32 / 100.0;
++        let r = if t <= 66.0 { 1.0 } else { (1.292_936_2 * (t - 60.0).powf(-0.133_204_76)).clamp(0.0, 1.0) };
++        let g = if t <= 66.0 {
++            ((99.470_8 * t.ln() - 161.119_57) / 255.0).clamp(0.0, 1.0)
++        } else {
++            (1.129_890_9 * (t - 60.0).powf(-0.075_514_85)).clamp(0.0, 1.0)
++        };
++        let b = if t >= 66.0 {
++            1.0
++        } else if t <= 19.0 {
++            0.0
++        } else {
++            ((138.517_73 * (t - 10.0).ln() - 305.044_8) / 255.0).clamp(0.0, 1.0)
++        };
++        [r, g, b]
+     }
+ }
+ 
+@@ -414,6 +444,7 @@ impl Config {
+         ScreenFilter {
+             inverted: false,
+             color_filter: None,
++            night_light: 0,
+         }
+     }
+ 
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 2aa1692..329cac1 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -1283,6 +1283,20 @@ impl State {
+                             };
+ 
+                             gesture_state.action = activate_action;
++
++                            // Lapin UX: swipes the compositor doesn't use go to the shell.
++                            if activate_action.is_none()
++                                && let Some(direction) = gesture_state.direction
++                            {
++                                use crate::wayland::protocols::lapin_shell::lapin_shell_manager_v1::Direction as D;
++                                let d = match direction {
++                                    Direction::Up => D::Up,
++                                    Direction::Down => D::Down,
++                                    Direction::Left => D::Left,
++                                    Direction::Right => D::Right,
++                                };
++                                self.common.lapin_shell_state.gesture(gesture_state.fingers, d);
++                            }
+                         }
+ 
+                         match gesture_state.action {
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index 75473bf..3116a97 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -55,6 +55,9 @@ pub use self::grabs::*;
+ pub const ANIMATION_DURATION: Duration = Duration::from_millis(200);
+ pub const MINIMIZE_ANIMATION_DURATION: Duration = Duration::from_millis(320);
+ const SHAKE_ANIMATION_DURATION: Duration = Duration::from_millis(320);
++/// Lapin UX: a new window fades in while growing from 92% of its size.
++const OPEN_ANIMATION_DURATION: Duration = Duration::from_millis(200);
++const OPEN_ANIMATION_START_SCALE: f64 = 0.92;
+ const SHAKE_AMPLITUDE: f32 = 10.0;
+ 
+ #[derive(Debug, Default)]
+@@ -89,6 +92,10 @@ enum Animation {
+         start: Instant,
+         geometry: Rectangle<i32, Local>,
+     },
++    Open {
++        start: Instant,
++        geometry: Rectangle<i32, Local>,
++    },
+ }
+ 
+ impl Animation {
+@@ -98,12 +105,21 @@ impl Animation {
+             Animation::Minimize { start, .. } => start,
+             Animation::Unminimize { start, .. } => start,
+             Animation::Shake { start, .. } => start,
++            Animation::Open { start, .. } => start,
+         }
+     }
+ 
+     fn alpha(&self) -> f32 {
+         match self {
+             Animation::Tiled { .. } | Animation::Shake { .. } => 1.0,
++            Animation::Open { start, .. } => {
++                let percentage = Instant::now()
++                    .duration_since(*start)
++                    .min(OPEN_ANIMATION_DURATION)
++                    .as_secs_f32()
++                    / OPEN_ANIMATION_DURATION.as_secs_f32();
++                ease(EaseOutCubic, 0.0, 1.0, percentage)
++            }
+             Animation::Minimize { start, .. } => {
+                 let percentage = Instant::now()
+                     .duration_since(*start)
+@@ -135,6 +151,7 @@ impl Animation {
+                 previous_geometry, ..
+             } => previous_geometry,
+             Animation::Shake { geometry, .. } => geometry,
++            Animation::Open { geometry, .. } => geometry,
+         }
+     }
+ 
+@@ -161,6 +178,24 @@ impl Animation {
+                 geometry.loc.x += offset;
+                 return geometry;
+             }
++            Animation::Open { start, geometry } => {
++                let progress = Instant::now()
++                    .duration_since(*start)
++                    .min(OPEN_ANIMATION_DURATION)
++                    .as_secs_f64()
++                    / OPEN_ANIMATION_DURATION.as_secs_f64();
++                let scale: f64 = ease(EaseOutCubic, OPEN_ANIMATION_START_SCALE, 1.0, progress);
++                let w = (geometry.size.w as f64 * scale).round() as i32;
++                let h = (geometry.size.h as f64 * scale).round() as i32;
++                return Rectangle::new(
++                    (
++                        geometry.loc.x + (geometry.size.w - w) / 2,
++                        geometry.loc.y + (geometry.size.h - h) / 2,
++                    )
++                        .into(),
++                    (w.max(1), h.max(1)).into(),
++                );
++            }
+             Animation::Minimize {
+                 target_geometry, ..
+             }
+@@ -411,7 +446,8 @@ impl FloatingLayout {
+                     }
+                     Animation::Minimize { .. }
+                     | Animation::Tiled { .. }
+-                    | Animation::Shake { .. } => {}
++                    | Animation::Shake { .. }
++                    | Animation::Open { .. } => {}
+                 }
+             } else {
+                 self.animations.insert(
+@@ -1454,6 +1490,24 @@ impl FloatingLayout {
+         }
+     }
+ 
++    /// Lapin UX: fade a newly mapped window in.
++    pub fn animate_open(&mut self, mapped: &CosmicMapped) {
++        if self.animations.contains_key(mapped) {
++            return;
++        }
++        let Some(geometry) = self.space.element_geometry(mapped) else {
++            return;
++        };
++        self.animations.insert(
++            mapped.clone(),
++            Animation::Open {
++                start: Instant::now(),
++                geometry: geometry.as_local(),
++            },
++        );
++        self.dirty.store(true, Ordering::SeqCst);
++    }
++
+     pub fn animations_going(&self) -> bool {
+         self.dirty.swap(false, Ordering::SeqCst) || !self.animations.is_empty()
+     }
+@@ -1464,6 +1518,7 @@ impl FloatingLayout {
+             let duration = match anim {
+                 Animation::Tiled { .. } => ANIMATION_DURATION,
+                 Animation::Shake { .. } => SHAKE_ANIMATION_DURATION,
++                Animation::Open { .. } => OPEN_ANIMATION_DURATION,
+                 _ => MINIMIZE_ANIMATION_DURATION,
+             };
+             Instant::now().duration_since(*anim.start()) < duration
+diff --git a/src/shell/mod.rs b/src/shell/mod.rs
+index 108307b..07a9157 100644
+--- a/src/shell/mod.rs
++++ b/src/shell/mod.rs
+@@ -297,6 +297,8 @@ pub struct Shell {
+ 
+     theme: cosmic::Theme,
+     pub active_hint: bool,
++    /// Lapin UX: windows hidden while peeking at the desktop.
++    pub peek: bool,
+     overview_mode: OverviewMode,
+     swap_indicator: Option<SwapIndicator>,
+     resize_mode: ResizeMode,
+@@ -1760,6 +1762,7 @@ impl Shell {
+ 
+             theme,
+             active_hint: config.cosmic_conf.active_hint,
++            peek: false,
+             overview_mode: OverviewMode::None,
+             swap_indicator: None,
+             resize_mode: ResizeMode::None,
+@@ -3140,6 +3143,9 @@ impl Shell {
+             } else {
+                 workspace.floating_layer.map(mapped.clone(), None);
+             }
++            if !should_be_minimized {
++                workspace.floating_layer.animate_open(&mapped);
++            }
+         } else {
+             for mapped in workspace
+                 .mapped()
+diff --git a/src/wayland/handlers/lapin_shell.rs b/src/wayland/handlers/lapin_shell.rs
+index 0f58d80..aa19a7c 100644
+--- a/src/wayland/handlers/lapin_shell.rs
++++ b/src/wayland/handlers/lapin_shell.rs
+@@ -31,4 +31,33 @@ impl LapinShellHandler for State {
+             workspace.floating_layer.snap_to_fraction(&mapped, x, y, width, height);
+         }
+     }
++
++    fn peek(&mut self, enabled: bool) {
++        let outputs: Vec<_> = {
++            let mut shell = self.common.shell.write();
++            if shell.peek == enabled {
++                return;
++            }
++            shell.peek = enabled;
++            shell.outputs().cloned().collect()
++        };
++        for output in outputs {
++            self.backend.schedule_render(&output);
++        }
++    }
++
++    fn night_light(&mut self, kelvin: u32) {
++        let kelvin = if kelvin == 0 { 0 } else { kelvin.clamp(1200, 6500) };
++        let mut config = self.common.config.dynamic_conf.screen_filter_mut();
++        if config.night_light == kelvin {
++            return;
++        }
++        let mut updated = (*config).clone();
++        updated.night_light = kelvin;
++        if let Err(err) = self.backend.update_screen_filter(&updated) {
++            tracing::warn!("Failed to apply night light: {}", err);
++        } else {
++            *config = updated;
++        }
++    }
+ }
+diff --git a/src/wayland/protocols/lapin_shell.rs b/src/wayland/protocols/lapin_shell.rs
+index ac26d8f..e3ff6bd 100644
+--- a/src/wayland/protocols/lapin_shell.rs
++++ b/src/wayland/protocols/lapin_shell.rs
+@@ -22,12 +22,17 @@ use smithay::{
+     reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New},
+     wayland::{Dispatch2, GlobalDispatch2},
+ };
++use smithay::reexports::wayland_server::Resource;
+ use wayland_backend::server::{ClientId, GlobalId};
+ 
+ pub trait LapinShellHandler {
+     fn lapin_shell_state(&mut self) -> &mut LapinShellState;
+     /// Place the window in this part of its work area (fractions 0..1).
+     fn snap(&mut self, identifier: &str, x: f64, y: f64, width: f64, height: f64);
++    /// Hide (or show again) every window, for "peek at desktop".
++    fn peek(&mut self, enabled: bool);
++    /// Warm the screen towards `kelvin` (0: off).
++    fn night_light(&mut self, kelvin: u32);
+ }
+ 
+ #[derive(Debug)]
+@@ -48,7 +53,7 @@ impl LapinShellState {
+         D: GlobalDispatch<LapinShellManagerV1, LapinShellGlobalData> + 'static,
+         F: for<'a> Fn(&'a Client) -> bool + Send + Sync + 'static,
+     {
+-        let global = dh.create_global::<D, LapinShellManagerV1, _>(1, LapinShellGlobalData { filter: Box::new(client_filter) });
++        let global = dh.create_global::<D, LapinShellManagerV1, _>(2, LapinShellGlobalData { filter: Box::new(client_filter) });
+         LapinShellState { global, managers: Vec::new() }
+     }
+ 
+@@ -58,6 +63,16 @@ impl LapinShellState {
+             m.attention(identifier.to_string());
+         }
+     }
++
++    /// Hand a touchpad swipe to the shell. Returns whether anyone listens.
++    pub fn gesture(&self, fingers: u32, direction: lapin_shell_manager_v1::Direction) -> bool {
++        let mut sent = false;
++        for m in self.managers.iter().filter(|m| m.version() >= 2) {
++            m.gesture(fingers, direction);
++            sent = true;
++        }
++        sent
++    }
+ }
+ 
+ impl<D> GlobalDispatch2<LapinShellManagerV1, D> for LapinShellGlobalData
+@@ -94,6 +109,8 @@ where
+                     state.snap(&identifier, f(x), f(y), f(width), f(height));
+                 }
+             }
++            lapin_shell_manager_v1::Request::Peek { enabled } => state.peek(enabled != 0),
++            lapin_shell_manager_v1::Request::NightLight { kelvin } => state.night_light(kelvin),
+             lapin_shell_manager_v1::Request::Destroy => {}
+         }
+     }
+-- 
+2.43.0
+

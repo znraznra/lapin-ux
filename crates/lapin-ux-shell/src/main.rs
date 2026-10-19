@@ -19,6 +19,7 @@ mod autohide;
 mod catalog;
 mod catcher;
 mod clipboard;
+mod comp_extras;
 mod config;
 mod defaults;
 mod desktop;
