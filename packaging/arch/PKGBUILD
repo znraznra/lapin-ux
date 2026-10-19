@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -24,11 +24,16 @@ makedepends=(
     'cargo' 'git' 'clang' 'python' 'python-numpy' 'python-pillow' 'gtk-update-icon-cache'
     # lapin-ux-comp (COSMIC compositor) build
     'libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayland' 'libdisplay-info' 'fontconfig'
+    # lapin-ux-greeter (COSMIC greeter and lock screen) build
+    'just' 'pam' 'dav1d'
 )
 # Lapin UX's compositor: upstream cosmic-comp at a pinned commit plus our patches.
 _comp_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
-source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}")
-sha256sums=('SKIP')
+# The lock and sign-in screens: upstream cosmic-greeter plus our patches.
+_greeter_commit=5b912ba331af1f6c1cb0cb53fa9366c8f54662c1
+source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}"
+        "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}")
+sha256sums=('SKIP' 'SKIP')
 options=('!lto')
 
 _src="$startdir/../.."
@@ -45,6 +50,12 @@ prepare() {
     git apply "$_src"/packaging/lapin-ux-comp/*.patch
     rm -f rust-toolchain rust-toolchain.toml   # build with the system's stable toolchain
     cargo fetch --locked --target "$host"
+
+    cd "$srcdir/cosmic-greeter"
+    git reset -q --hard
+    git apply "$_src"/packaging/lapin-ux-greeter/*.patch
+    rm -f rust-toolchain rust-toolchain.toml
+    cargo fetch --locked --target "$host"
 }
 
 build() {
@@ -55,6 +66,9 @@ build() {
 
     cd "$srcdir/cosmic-comp"
     CARGO_TARGET_DIR="$srcdir/comp-target" cargo build --frozen --release
+
+    cd "$srcdir/cosmic-greeter"
+    just build-release --frozen
 }
 
 check() {
@@ -74,7 +88,7 @@ package_lapin-ux-desktop-git() {
         'cosmic-bg'
         'cosmic-osd'
         'cosmic-idle'
-        'cosmic-greeter'           # login and lock screen
+        'cosmic-greeter'           # login and lock screen (lapin-ux-greeter provides it)
         'cosmic-launcher'
         'cosmic-screenshot'        # Super+Shift+S
         'cosmic-randr'             # Win+P display switching, auto-rotate
@@ -163,4 +177,16 @@ package_lapin-ux-comp() {
     depends=('libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayland' 'libdisplay-info' 'fontconfig')
     install -Dm755 "$srcdir/comp-target/release/cosmic-comp" "$pkgdir/usr/bin/lapin-ux-comp"
     install -Dm644 "$srcdir/cosmic-comp/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-ux-greeter() {
+    pkgdesc="COSMIC greeter and lock screen with Lapin UX's Windows 11-style faces"
+    url="https://github.com/pop-os/cosmic-greeter"
+    license=('GPL-3.0-only')
+    depends=('cosmic-comp' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
+    provides=('cosmic-greeter')
+    conflicts=('cosmic-greeter')
+    cd "$srcdir/cosmic-greeter"
+    just rootdir="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

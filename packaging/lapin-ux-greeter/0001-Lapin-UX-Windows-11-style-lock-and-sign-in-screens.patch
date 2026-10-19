@@ -1,0 +1,885 @@
+From df0c0dc233aaa826b32048a5098d625f746d76f8 Mon Sep 17 00:00:00 2001
+From: Lapin UX <arnz.lee16@gmail.com>
+Date: Mon, 19 Oct 2026 20:44:30 +0800
+Subject: [PATCH] Lapin UX: Windows 11-style lock and sign-in screens
+
+Lock screen: big clock and date over the wallpaper; a click or key slides
+to the sign-in panel (round picture, name, password, dimmed wallpaper,
+network/battery/accessibility/power at the bottom right). The greeter
+gets the same faces plus Windows' user list at the bottom left.
+examples/lapin_preview shows both in a window.
+---
+ examples/lapin_preview.rs |  66 ++++++++++
+ src/greeter.rs            | 222 ++++++++++++++++-----------------
+ src/lapin.rs              | 149 +++++++++++++++++++++++
+ src/lib.rs                |   2 +
+ src/locker.rs             | 249 ++++++++++++--------------------------
+ 5 files changed, 411 insertions(+), 277 deletions(-)
+ create mode 100644 examples/lapin_preview.rs
+ create mode 100644 src/lapin.rs
+
+diff --git a/examples/lapin_preview.rs b/examples/lapin_preview.rs
+new file mode 100644
+index 0000000..12b3ef0
+--- /dev/null
++++ b/examples/lapin_preview.rs
+@@ -0,0 +1,66 @@
++//! Shows Lapin UX's lock and sign-in faces in a normal window, for checking
++//! the design without locking the session: `cargo run --example lapin_preview [signin]`.
++use cosmic::app::{Core, Settings, Task};
++use cosmic::iced::{Length, Size};
++use cosmic::{Element, widget};
++use cosmic_greeter::lapin;
++
++#[derive(Clone, Debug)]
++enum Msg {
++    Reveal,
++    Input(String),
++}
++
++struct App {
++    core: Core,
++    signin: bool,
++    value: String,
++    bg: widget::image::Handle,
++}
++
++impl cosmic::Application for App {
++    type Executor = cosmic::executor::Default;
++    type Flags = bool;
++    type Message = Msg;
++    const APP_ID: &'static str = "dev.lapinux.LockPreview";
++    fn core(&self) -> &Core { &self.core }
++    fn core_mut(&mut self) -> &mut Core { &mut self.core }
++    fn init(mut core: Core, signin: bool) -> (Self, Task<Msg>) {
++        core.window.show_headerbar = false;
++        let bg = widget::image::Handle::from_path(std::env::var("LAPIN_BG").unwrap_or_else(|_| "/usr/share/backgrounds/lapin-ux/lapin-ux-dark.jpg".into()));
++        (App { core, signin, value: String::new(), bg }, Task::none())
++    }
++    fn update(&mut self, m: Msg) -> Task<Msg> {
++        match m { Msg::Reveal => self.signin = true, Msg::Input(s) => self.value = s }
++        Task::none()
++    }
++    fn view(&self) -> Element<'_, Msg> {
++        let status: Element<'_, Msg> = widget::row::with_children(vec![
++            widget::icon::from_name("network-wireless-signal-excellent-symbolic").size(20).into(),
++            widget::icon::from_name("battery-good-symbolic").size(20).into(),
++            widget::text("73%").into(),
++        ]).spacing(8).into();
++        let face = if !self.signin {
++            lapin::lock_face("8:42".into(), "Monday, October 19".into(), widget::container(status).class(cosmic::theme::Container::custom(|_| widget::container::Style { text_color: Some(cosmic::iced::Color::WHITE), icon_color: Some(cosmic::iced::Color::WHITE), ..Default::default() })).into(), Msg::Reveal)
++        } else {
++            let input = widget::secure_input("Password", self.value.as_str(), None, true).on_input(Msg::Input).password();
++            let corner = widget::row::with_children(vec![
++                status,
++                lapin::corner_button("preferences-desktop-accessibility-symbolic", Some(Msg::Reveal)),
++                lapin::corner_button("system-shutdown-symbolic", Some(Msg::Reveal)),
++            ]).spacing(8).align_y(cosmic::iced::Alignment::Center);
++            lapin::sign_in(lapin::avatar(None, 190.0), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into())
++        };
++        widget::container(
++            cosmic::iced::widget::stack![
++                widget::image(self.bg.clone()).width(Length::Fill).height(Length::Fill).content_fit(cosmic::iced::ContentFit::Cover),
++                face,
++            ]
++        ).width(Length::Fill).height(Length::Fill).into()
++    }
++}
++
++fn main() -> cosmic::iced::Result {
++    let signin = std::env::args().any(|a| a == "signin");
++    cosmic::app::run::<App>(Settings::default().size(Size::new(1200.0, 720.0)).client_decorations(false), signin)
++}
+diff --git a/src/greeter.rs b/src/greeter.rs
+index 852e219..f977c6c 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -416,6 +416,8 @@ pub enum Message {
+     HighContrast(bool),
+     InvertColors(bool),
+     WaylandUpdate(WaylandUpdate),
++    /// Lapin UX: leave the clock face for the sign-in panel.
++    Reveal,
+ }
+ 
+ impl From<common::Message> for Message {
+@@ -445,6 +447,8 @@ pub struct App {
+ 
+     accessibility: Accessibility,
+     authenticating: bool,
++    /// Lapin UX: the sign-in panel is showing (else the clock face).
++    signing_in: bool,
+ }
+ 
+ #[derive(Default)]
+@@ -512,10 +516,9 @@ impl App {
+                 .and_then(|i| self.flags.user_datas.get(i))
+                 .map(|user_data| user_data.time_applet_config.military_time)
+                 .unwrap_or_default();
+-            let date_time_column = self.common.time.date_time_widget(military_time);
++            let _ = military_time;
+ 
+             let mut status_row = widget::row::with_capacity(2)
+-                .padding(16.0)
+                 .spacing(12.0)
+                 .align_y(Alignment::Center);
+ 
+@@ -780,22 +783,16 @@ impl App {
+                         widget::tooltip::Position::Top,
+                     ));
+             }
+-            let button_row = button_row.padding([16.0, 0.0, 0.0, 0.0]).spacing(8.0);
+-
+-            widget::container(iced::widget::column![
+-                date_time_column,
+-                widget::divider::horizontal::default().width(Length::Fixed(menu_width / 2. - 16.)),
+-                status_row,
+-                widget::divider::horizontal::default().width(Length::Fixed(menu_width / 2. - 16.)),
+-                button_row,
+-            ])
+-            .align_x(Alignment::Start)
++            let button_row = button_row.spacing(4.0).align_y(Alignment::Center);
++            let _ = menu_width;
++            (status_row, button_row)
+         };
+ 
+         let right_element = {
+             let mut column = widget::column::with_capacity(5)
+-                .spacing(12.0)
+-                .max_width(280.0);
++                .spacing(8.0)
++                .align_x(Alignment::Center)
++                .max_width(296.0);
+ 
+             let military_time = self
+                 .selected_username
+@@ -808,56 +805,12 @@ impl App {
+                 false => 10.0,
+             };
+ 
+-            // Add top spacing for better visual appearance
+-            // Bottom of the password text input field should align with bottom of time widget
+-            column = column.push(widget::space::vertical().height(Length::Fixed(space_height)));
+-
++            let _ = space_height;
+             match &self.socket_state {
+                 SocketState::Pending => {
+                     column = column.push(widget::text("Opening GREETD_SOCK"));
+                 }
+                 SocketState::Open => {
+-                    for (user_data, user_icon) in self
+-                        .flags
+-                        .user_datas
+-                        .iter()
+-                        .zip(self.flags.user_icons.iter())
+-                    {
+-                        if !self.entering_name && user_data.name == self.selected_username.username
+-                        {
+-                            // Display user icon or empty transparent box
+-                            if let Some(icon_handle) = user_icon {
+-                                column = column.push(
+-                                    widget::container(
+-                                        widget::image(icon_handle)
+-                                            .width(Length::Fixed(78.0))
+-                                            .height(Length::Fixed(78.0))
+-                                            .content_fit(iced::ContentFit::Fill),
+-                                    )
+-                                    .padding(0.0)
+-                                    .width(Length::Fill)
+-                                    .height(Length::Fixed(78.0))
+-                                    .align_x(Alignment::Center),
+-                                );
+-                            } else {
+-                                // Empty transparent box for users without icons
+-                                column = column.push(
+-                                    widget::container(
+-                                        widget::space::horizontal().width(Length::Fixed(78.0)),
+-                                    )
+-                                    .padding(0.0)
+-                                    .width(Length::Fill)
+-                                    .height(Length::Fixed(78.0))
+-                                    .align_x(Alignment::Center),
+-                                );
+-                            }
+-                            column = column.push(
+-                                widget::container(widget::text::title4(&user_data.full_name))
+-                                    .width(Length::Fill)
+-                                    .align_x(Alignment::Center),
+-                            );
+-                        }
+-                    }
+                     if self.entering_name {
+                         column = column.push(
+                             widget::text_input(
+@@ -984,43 +937,91 @@ impl App {
+             )
+         };
+ 
+-        let menu = widget::layer_container(
+-            iced::widget::row![left_element, right_element].align_y(Alignment::Start),
+-        )
+-        .layer(cosmic::cosmic_theme::Layer::Background)
+-        .padding(16)
+-        .class(cosmic::theme::Container::Custom(Box::new(
+-            |theme: &cosmic::Theme| {
+-                // Use background appearance as the base
+-                let mut appearance =
+-                    widget::container::Catalog::style(theme, &cosmic::theme::Container::Background);
+-                appearance.background = Some(iced::Background::Color(
+-                    // TODO if we can use popups instead of subsurfaces for the greeter and the lockscreen
+-                    // then we can allow transparency
+-                    theme.cosmic().background(theme.transparent).base.into(),
+-                ));
+-                appearance.border = iced::Border::default().rounded(16);
+-                appearance
+-            },
+-        )))
+-        .width(Length::Fixed(MAX_WIDTH));
++        // Lapin UX: Windows 11-style sign-in screen (clock face first).
++        let (status_row, button_row) = left_element;
++        let selected = self
++            .flags
++            .user_datas
++            .iter()
++            .zip(self.flags.user_icons.iter())
++            .find(|(d, _)| d.name == self.selected_username.username);
++        let military_time = selected.map(|(d, _)| d.time_applet_config.military_time).unwrap_or_default();
++        let on_white = |c: Element<'static, Message>| -> Element<'static, Message> {
++            widget::container(c)
++                .class(theme::Container::custom(|_| widget::container::Style {
++                    text_color: Some(iced::Color::WHITE),
++                    icon_color: Some(iced::Color::WHITE),
++                    ..Default::default()
++                }))
++                .into()
++        };
++        let _ = on_white;
++        let menu: Element<'_, Message> = if !self.signing_in {
++            crate::lapin::lock_face(
++                crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
++                self.common.time.format_date(),
++                widget::container(status_row)
++                    .class(theme::Container::custom(|_| widget::container::Style {
++                        text_color: Some(iced::Color::WHITE),
++                        icon_color: Some(iced::Color::WHITE),
++                        ..Default::default()
++                    }))
++                    .into(),
++                Message::Reveal,
++            )
++        } else {
++            // Other people who can sign in, bottom left (Windows' user list).
++            let mut users = widget::column::with_capacity(self.flags.user_datas.len()).spacing(4.0);
++            for (data, icon) in self.flags.user_datas.iter().zip(self.flags.user_icons.iter()) {
++                let current = data.name == self.selected_username.username && !self.entering_name;
++                users = users.push(
++                    widget::button::custom(
++                        widget::row::with_capacity(2)
++                            .push(crate::lapin::avatar(icon.as_ref(), 40.0))
++                            .push(widget::text(data.full_name.clone()).class(theme::Text::Color(iced::Color::WHITE)))
++                            .spacing(12.0)
++                            .align_y(Alignment::Center),
++                    )
++                    .padding([6, 10])
++                    .class(crate::lapin::list_button(current))
++                    .on_press(Message::Username(data.name.clone())),
++                );
++            }
++            users = users.push(
++                widget::button::custom(
++                    widget::row::with_capacity(2)
++                        .push(crate::lapin::avatar(None, 40.0))
++                        .push(widget::text(fl!("enter-user")).class(theme::Text::Color(iced::Color::WHITE)))
++                        .spacing(12.0)
++                        .align_y(Alignment::Center),
++                )
++                .padding([6, 10])
++                .class(crate::lapin::list_button(self.entering_name))
++                .on_press(Message::EnterUser(true, String::new())),
++            );
++            let (name, picture) = match selected {
++                Some((d, icon)) if !self.entering_name => (d.full_name.clone(), crate::lapin::avatar(icon.as_ref(), 190.0)),
++                _ => (String::new(), crate::lapin::avatar(None, 190.0)),
++            };
++            let corner = widget::row::with_capacity(2)
++                .push(
++                    widget::container(status_row)
++                        .padding([0, 12, 0, 0])
++                        .class(theme::Container::custom(|_| widget::container::Style {
++                            text_color: Some(iced::Color::WHITE),
++                            icon_color: Some(iced::Color::WHITE),
++                            ..Default::default()
++                        })),
++                )
++                .push(button_row)
++                .align_y(Alignment::Center);
++            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into())
++        };
+         let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((id, false), menu))
+         } else {
+-            menu.into()
++            menu
+         };
+-        let menu = widget::container(widget::column::with_children(vec![
+-            widget::space::vertical()
+-                .height(Length::FillPortion(1))
+-                .into(),
+-            menu,
+-            widget::space::vertical()
+-                .height(Length::FillPortion(4))
+-                .into(),
+-        ]))
+-        .width(Length::Fill)
+-        .height(Length::Fill)
+-        .align_x(Alignment::Center);
+ 
+         // TODO make these opaque?
+         let popover = widget::popover(menu).modal(true);
+@@ -1212,6 +1213,7 @@ impl cosmic::Application for App {
+             randr_list: None,
+             surface_id_pairs: Vec::new(),
+             authenticating: false,
++            signing_in: false,
+         };
+         (app, Task::batch(tasks))
+     }
+@@ -1219,7 +1221,22 @@ impl cosmic::Application for App {
+     /// Handle application events here.
+     fn update(&mut self, message: Self::Message) -> Task<Message> {
+         match message {
++            Message::Reveal => {
++                self.signing_in = true;
++                if let Some(surface_id) = self.common.active_surface_id_opt
++                    && let Some(id) = self.common.surface_names.get(&surface_id).and_then(|n| self.common.text_input_ids.get(n))
++                {
++                    return widget::text_input::focus(id.clone());
++                }
++            }
++            Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
++                self.signing_in = false;
++                self.dropdown_opt = None;
++            }
+             Message::Common(common_message) => {
++                if matches!(common_message, common::Message::Key(..)) && !self.signing_in {
++                    self.signing_in = true;
++                }
+                 if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
+                     && self.authenticating
+                 {
+@@ -1291,17 +1308,9 @@ impl cosmic::Application for App {
+                         let unwrapped_size = size
+                             .map(|s| (s.0.unwrap_or(1920), s.1.unwrap_or(1080)))
+                             .unwrap_or((1920, 1080));
+-                        let (loc, sub_size) = if unwrapped_size.0 as f32 > MAX_WIDTH {
+-                            (
+-                                Point::new((unwrapped_size.0 as f32 - MAX_WIDTH) / 2., 32.),
+-                                Size::new(MAX_WIDTH, unwrapped_size.1 as f32 - 32.),
+-                            )
+-                        } else {
+-                            (
+-                                Point::new(0., 32.),
+-                                Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32 - 32.),
+-                            )
+-                        };
++                        // Lapin UX: the faces cover the whole screen.
++                        let (loc, sub_size) =
++                            (Point::new(0., 0.), Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32));
+                         self.common.window_size.insert(
+                             surface_id,
+                             Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32),
+@@ -1915,11 +1924,8 @@ impl cosmic::Application for App {
+                     tracing::error!("Failed to find subsurface menu id");
+                     return Task::none();
+                 };
+-                let loc = if size.width > MAX_WIDTH {
+-                    Point::new((size.width - MAX_WIDTH) / 2., 32.)
+-                } else {
+-                    Point::new(0., 32.)
+-                };
++                let _ = size;
++                let loc = Point::new(0., 0.);
+                 return reposition_subsurface(*subsurface_id, loc.x as i32, loc.y as i32);
+             }
+         }
+diff --git a/src/lapin.rs b/src/lapin.rs
+new file mode 100644
+index 0000000..3565f8c
+--- /dev/null
++++ b/src/lapin.rs
+@@ -0,0 +1,149 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Lapin UX's Windows 11-style faces for the lock and sign-in screens:
++//! the lock screen is a big clock and date over the wallpaper; clicking or
++//! typing slides to the sign-in panel (picture, name, password) over a
++//! dimmed wallpaper, with network, battery and power at the bottom right.
++
++use cosmic::iced::{self, Alignment, Background, Border, Color, Length};
++use cosmic::{Element, theme, widget};
++
++/// Text colour on the wallpaper (white with a soft shadow look).
++fn on_wallpaper() -> theme::Text {
++    theme::Text::Color(Color::WHITE)
++}
++
++/// The lock screen: time and date, top centre-ish.
++pub fn lock_face<'a, M: Clone + 'static>(time: String, date: String, status: Element<'a, M>, reveal: M) -> Element<'a, M> {
++    let clock = widget::column::with_capacity(2)
++        .push(widget::text(time).size(128.0).class(on_wallpaper()))
++        .push(widget::text(date).size(26.0).class(on_wallpaper()))
++        .align_x(Alignment::Center)
++        .spacing(0.0);
++    let page = widget::column::with_capacity(4)
++        .push(widget::space::vertical().height(Length::FillPortion(2)))
++        .push(widget::container(clock).width(Length::Fill).align_x(Alignment::Center))
++        .push(widget::space::vertical().height(Length::FillPortion(7)))
++        .push(widget::container(status).width(Length::Fill).align_x(Alignment::End).padding([0, 32, 28, 32]))
++        .width(Length::Fill)
++        .height(Length::Fill);
++    widget::mouse_area(page).on_press(reveal).into()
++}
++
++/// A round account picture (or a plain person glyph).
++pub fn avatar<'a, M: 'static>(icon: Option<&widget::image::Handle>, size: f32) -> Element<'a, M> {
++    match icon {
++        Some(h) => widget::image(h.clone())
++            .width(Length::Fixed(size))
++            .height(Length::Fixed(size))
++            .content_fit(iced::ContentFit::Cover)
++            .border_radius([size / 2.0; 4])
++            .into(),
++        None => widget::container(widget::icon::from_name("avatar-default-symbolic").size((size * 0.55) as u16))
++            .width(Length::Fixed(size))
++            .height(Length::Fixed(size))
++            .align_x(Alignment::Center)
++            .align_y(Alignment::Center)
++            .class(theme::Container::custom(move |_| widget::container::Style {
++                background: Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.18))),
++                border: Border { radius: (size / 2.0).into(), ..Default::default() },
++                icon_color: Some(Color::WHITE),
++                ..Default::default()
++            }))
++            .into(),
++    }
++}
++
++/// The sign-in panel: picture, name, the prompt (password box) and the
++/// message line under it, over a dimmed wallpaper.
++pub fn sign_in<'a, M: 'static>(
++    picture: Element<'a, M>,
++    name: String,
++    prompt: Element<'a, M>,
++    message: Element<'a, M>,
++    bottom_left: Element<'a, M>,
++    bottom_right: Element<'a, M>,
++) -> Element<'a, M> {
++    let panel = widget::column::with_capacity(5)
++        .push(picture)
++        .push(widget::text(name).size(30.0).class(on_wallpaper()))
++        .push(widget::space::vertical().height(Length::Fixed(8.0)))
++        .push(widget::container(prompt).width(Length::Fixed(296.0)))
++        .push(widget::container(message).width(Length::Fixed(296.0)).align_x(Alignment::Center))
++        .align_x(Alignment::Center)
++        .spacing(12.0);
++    let page = widget::column::with_capacity(4)
++        .push(widget::space::vertical().height(Length::FillPortion(3)))
++        .push(widget::container(panel).width(Length::Fill).align_x(Alignment::Center))
++        .push(widget::space::vertical().height(Length::FillPortion(4)))
++        .push(
++            widget::row::with_capacity(3)
++                .push(bottom_left)
++                .push(widget::space::horizontal().width(Length::Fill))
++                .push(bottom_right)
++                .align_y(Alignment::End)
++                .padding([0, 32, 28, 32]),
++        )
++        .width(Length::Fill)
++        .height(Length::Fill);
++    widget::container(page)
++        .width(Length::Fill)
++        .height(Length::Fill)
++        .class(theme::Container::custom(|_| widget::container::Style {
++            // Windows blurs the wallpaper here; a dark veil reads the same.
++            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.42))),
++            text_color: Some(Color::WHITE),
++            icon_color: Some(Color::WHITE),
++            ..Default::default()
++        }))
++        .into()
++}
++
++/// Round, translucent icon buttons (network, accessibility, power…).
++pub fn corner_button<'a, M: Clone + 'static>(icon: &'static str, msg: Option<M>) -> Element<'a, M> {
++    widget::button::custom(widget::icon::from_name(icon).size(20))
++        .padding(10.0)
++        .class(theme::Button::Custom {
++            active: Box::new(|_, _| bg_style(0.0)),
++            disabled: Box::new(|_| bg_style(0.0)),
++            hovered: Box::new(|_, _| bg_style(0.15)),
++            pressed: Box::new(|_, _| bg_style(0.25)),
++        })
++        .on_press_maybe(msg)
++        .into()
++}
++
++fn bg_style(alpha: f32) -> widget::button::Style {
++    widget::button::Style {
++        background: (alpha > 0.0).then_some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, alpha))),
++        border_radius: 6.0.into(),
++        icon_color: Some(Color::WHITE),
++        text_color: Some(Color::WHITE),
++        ..Default::default()
++    }
++}
++
++/// Windows' lock screen shows "8:42", not "8:42 PM".
++pub fn short_time(formatted: &str, military: bool) -> String {
++    if military {
++        return formatted.to_string();
++    }
++    let t: String = formatted.chars().take_while(|c| c.is_ascii_digit() || *c == ':').collect();
++    if t.is_empty() { formatted.to_string() } else { t }
++}
++
++/// A row in the user list: highlighted when it's the one signing in.
++pub fn list_button(selected: bool) -> theme::Button {
++    let style = move |hover: f32| widget::button::Style {
++        background: Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, if selected { 0.22 } else { hover }))),
++        border_radius: 6.0.into(),
++        text_color: Some(Color::WHITE),
++        icon_color: Some(Color::WHITE),
++        ..Default::default()
++    };
++    theme::Button::Custom {
++        active: Box::new(move |_, _| style(0.0)),
++        disabled: Box::new(move |_| style(0.0)),
++        hovered: Box::new(move |_, _| style(0.12)),
++        pressed: Box::new(move |_, _| style(0.2)),
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 91736b9..96f87b1 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -8,6 +8,8 @@ mod wayland;
+ 
+ mod common;
+ 
++pub mod lapin;
++
+ mod keyboard_layout_wayland;
+ 
+ mod localize;
+diff --git a/src/locker.rs b/src/locker.rs
+index ce1b3d1..cb02932 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -281,6 +281,8 @@ pub enum Message {
+     Error(String),
+     Lock,
+     Unlock,
++    /// Lapin UX: leave the clock face for the sign-in panel.
++    Reveal,
+ }
+ 
+ impl From<common::Message> for Message {
+@@ -318,40 +320,37 @@ pub struct App {
+     inhibit_opt: Option<Arc<OwnedFd>>,
+     value_tx_opt: Option<mpsc::Sender<String>>,
+     authenticating: bool,
++    /// Lapin UX: the sign-in panel is showing (else the clock face).
++    signing_in: bool,
+ }
+ 
+ impl App {
+     fn menu(&self, surface_id: SurfaceId) -> Element<'_, Message> {
+-        let window_width = self
+-            .common
+-            .window_size
+-            .get(&surface_id)
+-            .map(|s| s.width)
+-            .unwrap_or(MAX_WIDTH);
+-        let menu_width = if window_width > MAX_WIDTH {
+-            MAX_WIDTH
+-        } else {
+-            window_width
+-        };
+-        let left_element = {
+-            let military_time = self.flags.user_data.time_applet_config.military_time;
+-            let date_time_column = self.common.time.date_time_widget(military_time);
+-
+-            let mut status_row = widget::row::with_capacity(2).padding(16.0).spacing(12.0);
+-
+-            if let Some(network_icon) = self.common.network_icon_opt.as_ref() {
+-                status_row = status_row.push(network_icon.clone());
+-            }
+-
+-            if let Some((power_icon, power_percent)) = &self.common.power_info_opt {
+-                status_row = status_row.push(
+-                    iced::widget::row![
+-                        power_icon.clone(),
+-                        widget::text(format!("{:.0}%", power_percent)),
+-                    ]
++        // Lapin UX: Windows 11-style lock screen and sign-in panel.
++        let military_time = self.flags.user_data.time_applet_config.military_time;
++        let mut status_row = widget::row::with_capacity(3).spacing(16.0).align_y(Alignment::Center);
++        if let Some(network_icon) = self.common.network_icon_opt.as_ref() {
++            status_row = status_row.push(network_icon.clone());
++        }
++        if let Some((power_icon, power_percent)) = &self.common.power_info_opt {
++            status_row = status_row.push(
++                iced::widget::row![power_icon.clone(), widget::text(format!("{:.0}%", power_percent))]
++                    .spacing(4.0)
+                     .align_y(Alignment::Center),
+-                );
+-            }
++            );
++        }
++        if !self.signing_in {
++            return crate::lapin::lock_face(
++                crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
++                self.common.time.format_date(),
++                widget::container(status_row).class(theme::Container::custom(|_| widget::container::Style {
++                    text_color: Some(iced::Color::WHITE),
++                    icon_color: Some(iced::Color::WHITE),
++                    ..Default::default()
++                })).into(),
++                Message::Reveal,
++            );
++        }
+ 
+             //TODO: move code for custom dropdowns to libcosmic
+             let menu_checklist = |label, value, message| {
+@@ -449,96 +448,8 @@ impl App {
+                 input_button = input_button.popup(dropdown_menu(items));
+             }
+ 
+-            //TODO: implement these buttons
+-            let mut button_row = iced::widget::row![
+-                /*TODO: greeter accessibility options
+-                widget::button::custom(widget::icon::from_name(
+-                    "applications-accessibility-symbolic"
+-                ))
+-                .padding(12.0)
+-                .on_press(Message::None),
+-                */
+-                widget::tooltip(
+-                    widget::button::custom(widget::icon::from_name("input-keyboard-symbolic"))
+-                        .padding(12.0)
+-                        .on_press(Message::Common(common::Message::OnScreenKeyboard)),
+-                    widget::text(fl!("on-screen-keyboard")),
+-                    widget::tooltip::Position::Top,
+-                ),
+-                widget::tooltip(
+-                    input_button,
+-                    widget::text(fl!("keyboard-layout")),
+-                    widget::tooltip::Position::Top
+-                ),
+-            ];
+-            if cfg!(feature = "logind") && self.flags.logind_available {
+-                button_row = button_row.push(widget::tooltip(
+-                    widget::button::custom(widget::icon::from_name("system-suspend-symbolic"))
+-                        .padding(12.0)
+-                        .on_press(Message::Suspend),
+-                    widget::text(fl!("suspend")),
+-                    widget::tooltip::Position::Top,
+-                ));
+-            }
+-            let button_row = button_row.padding([16.0, 0.0, 0.0, 0.0]).spacing(8.0);
+-
+-            widget::container(iced::widget::column![
+-                date_time_column,
+-                widget::divider::horizontal::default().width(Length::Fixed(menu_width / 2. - 16.)),
+-                status_row,
+-                widget::divider::horizontal::default().width(Length::Fixed(menu_width / 2. - 16.)),
+-                button_row,
+-            ])
+-            .align_x(Alignment::Start)
+-        };
+-
+-        let right_element = {
+-            let mut column = widget::column::with_capacity(5)
+-                .spacing(12.0)
+-                .max_width(280.0);
+-
+-            let military_time = self.flags.user_data.time_applet_config.military_time;
+-            let space_height = match military_time {
+-                true => 63.0,
+-                false => 10.0,
+-            };
+-
+-            // Add top spacing for better visual appearance
+-            // Bottom of the password text input field should align with bottom of time widget
+-            column = column.push(widget::space::vertical().height(Length::Fixed(space_height)));
+-
+-            // Display user icon or empty transparent box
+-            if let Some(icon_handle) = &self.flags.user_icon {
+-                column = column.push(
+-                    widget::container(
+-                        widget::image(icon_handle)
+-                            .width(Length::Fixed(78.0))
+-                            .height(Length::Fixed(78.0))
+-                            .content_fit(iced::ContentFit::Fill),
+-                    )
+-                    .padding(0.0)
+-                    .width(Length::Fill)
+-                    .height(Length::Fixed(78.0))
+-                    .align_x(Alignment::Center),
+-                );
+-            } else {
+-                // Empty transparent box for users without icons
+-                column = column.push(
+-                    widget::container(widget::space::horizontal().width(Length::Fixed(78.0)))
+-                        .padding(0.0)
+-                        .width(Length::Fill)
+-                        .height(Length::Fixed(78.0))
+-                        .align_x(Alignment::Center),
+-                );
+-            }
+-
+-            column = column.push(
+-                widget::container(widget::text::title4(&self.flags.user_data.full_name))
+-                    .width(Length::Fill)
+-                    .align_x(Alignment::Center),
+-            );
+-
+-            if let Some((prompt, secret, value_opt)) = &self.common.prompt_opt {
++        let mut column = widget::column::with_capacity(3).spacing(8.0).align_x(Alignment::Center);
++        if let Some((prompt, secret, value_opt)) = &self.common.prompt_opt {
+                 match value_opt {
+                     Some(value) => {
+                         let text_input_id = self
+@@ -617,47 +528,35 @@ impl App {
+                 column = column.push(widget::text(""));
+             }
+ 
+-            widget::container(column)
+-                .align_x(Alignment::Center)
+-                .width(Length::Fill)
+-        };
+-        let menu = widget::layer_container(
+-            iced::widget::row![left_element, right_element].align_y(Alignment::Start),
+-        )
+-        .layer(cosmic::cosmic_theme::Layer::Background)
+-        .padding(16)
+-        .class(cosmic::theme::Container::Custom(Box::new(
+-            |theme: &cosmic::Theme| {
+-                // Use background appearance as the base
+-                let mut appearance =
+-                    widget::container::Catalog::style(theme, &cosmic::theme::Container::Background);
+-                let c: iced::Color = theme.cosmic().background(theme.transparent).base.into();
+-                appearance.background = Some(iced::Background::Color(c));
+-                appearance.border = iced::Border::default().rounded(16.0);
+-                appearance
+-            },
+-        )))
+-        .width(Length::Fill)
+-        .height(Length::Shrink);
+-        let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
++
++        let mut corner = widget::row::with_capacity(5).spacing(8.0).align_y(Alignment::Center);
++        corner = corner.push(status_row);
++        corner = corner.push(widget::tooltip(input_button, widget::text(fl!("keyboard-layout")), widget::tooltip::Position::Top));
++        corner = corner.push(widget::tooltip(
++            crate::lapin::corner_button("preferences-desktop-accessibility-symbolic", Some(Message::Common(common::Message::OnScreenKeyboard))),
++            widget::text(fl!("on-screen-keyboard")),
++            widget::tooltip::Position::Top,
++        ));
++        if cfg!(feature = "logind") && self.flags.logind_available {
++            corner = corner.push(widget::tooltip(
++                crate::lapin::corner_button("system-shutdown-symbolic", Some(Message::Suspend)),
++                widget::text(fl!("suspend")),
++                widget::tooltip::Position::Top,
++            ));
++        }
++        let menu = crate::lapin::sign_in(
++            crate::lapin::avatar(self.flags.user_icon.as_ref(), 190.0),
++            self.flags.user_data.full_name.clone(),
++            column.into(),
++            widget::space::vertical().height(Length::Fixed(0.0)).into(),
++            widget::space::horizontal().width(Length::Fixed(0.0)).into(),
++            corner.into(),
++        );
++        if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((surface_id, false), menu))
+         } else {
+-            menu.into()
+-        };
+-        widget::container(widget::column::with_children(vec![
+-            widget::space::vertical()
+-                .height(Length::FillPortion(1))
+-                .into(),
+-            menu,
+-            widget::space::vertical()
+-                .height(Length::FillPortion(4))
+-                .into(),
+-        ]))
+-        .width(Length::Fill)
+-        .height(Length::Fill)
+-        .align_x(Alignment::Center)
+-        .class(cosmic::theme::Container::Transparent)
+-        .into()
++            menu
++        }
+     }
+ }
+ 
+@@ -707,6 +606,7 @@ impl cosmic::Application for App {
+             inhibit_opt: None,
+             value_tx_opt: None,
+             authenticating: false,
++            signing_in: false,
+         };
+ 
+         let task = if cfg!(feature = "logind") && app.flags.logind_available {
+@@ -733,7 +633,26 @@ impl cosmic::Application for App {
+     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
+         match message {
+             Message::None => {}
++            Message::Reveal => {
++                self.signing_in = true;
++                if let Some(surface_id) = self.common.active_surface_id_opt
++                    && let Some(id) = self.common.surface_names.get(&surface_id).and_then(|n| self.common.text_input_ids.get(n))
++                {
++                    return widget::text_input::focus(id.clone());
++                }
++            }
++            Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
++                // Back to the clock, like Windows.
++                self.signing_in = false;
++                if let Some((_, _, Some(value))) = &mut self.common.prompt_opt {
++                    value.clear();
++                }
++                return Task::none();
++            }
+             Message::Common(common_message) => {
++                if matches!(common_message, common::Message::Key(..)) && !self.signing_in {
++                    self.signing_in = true;
++                }
+                 if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
+                     && self.authenticating
+                 {
+@@ -805,17 +724,9 @@ impl cosmic::Application for App {
+                         let unwrapped_size = size
+                             .map(|s| (s.0.unwrap_or(1920), s.1.unwrap_or(1080)))
+                             .unwrap_or((1920, 1080));
+-                        let (loc, sub_size) = if unwrapped_size.0 as f32 > MAX_WIDTH {
+-                            (
+-                                Point::new(unwrapped_size.0 as f32 / 2. - 400., 32.),
+-                                Size::new(MAX_WIDTH, unwrapped_size.1 as f32 - 32.),
+-                            )
+-                        } else {
+-                            (
+-                                Point::new(0., 32.),
+-                                Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32 - 32.),
+-                            )
+-                        };
++                        // Lapin UX: the faces cover the whole screen.
++                        let (loc, sub_size) =
++                            (Point::new(0., 0.), Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32));
+                         self.common.window_size.insert(
+                             surface_id,
+                             Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32),
+-- 
+2.43.0
+
