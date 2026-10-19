@@ -67,7 +67,7 @@ fn entry<'a>(app: &'a App, n: &'a Notification) -> Element<'a, Message> {
         texts.into(),
         button::custom(icon::from_name("window-close-symbolic").size(12))
             .padding(4)
-            .class(theme::Button::Icon)
+            .class(lapin_ux_ui::icon())
             .on_press(Message::Forget(n.id))
             .into(),
     ])
@@ -83,7 +83,7 @@ fn entry<'a>(app: &'a App, n: &'a Notification) -> Element<'a, Message> {
         .iter()
         .filter(|a| a.key != "default" && a.key != lapin_ux_core::notify::INLINE_REPLY)
         .take(3)
-        .map(|a| button::standard(a.label.clone()).width(Length::Fill).on_press(Message::Invoke(n.id, a.key.clone())).into())
+        .map(|a| lapin_ux_ui::button::standard(a.label.clone()).width(Length::Fill).on_press(Message::Invoke(n.id, a.key.clone())).into())
         .collect();
     if !buttons.is_empty() {
         body = body.push(row::with_children(buttons).spacing(8));
@@ -101,10 +101,10 @@ fn notifications(app: &App) -> Element<'_, Message> {
         text::title4("Notifications").width(Length::Fill).into(),
         button::custom(icon::from_name("emblem-system-symbolic").size(16))
             .padding(6)
-            .class(theme::Button::Icon)
+            .class(lapin_ux_ui::icon())
             .on_press(Message::Quiet(crate::quiet::QuietMsg::OpenSettings(true)))
             .into(),
-        button::text("Clear all").on_press_maybe((app.queue.history().next().is_some()).then_some(Message::ClearAll)).into(),
+        lapin_ux_ui::button::text("Clear all").on_press_maybe((app.queue.history().next().is_some()).then_some(Message::ClearAll)).into(),
     ])
     .align_y(Alignment::Center);
     let dnd_row = row::with_children(vec![
@@ -136,7 +136,7 @@ fn notifications(app: &App) -> Element<'_, Message> {
             text::heading(shown.to_string()).width(Length::Fill).into(),
             button::custom(icon::from_name("window-close-symbolic").size(12))
                 .padding(4)
-                .class(theme::Button::Icon)
+                .class(lapin_ux_ui::icon())
                 .on_press(Message::ForgetApp(name.to_string()))
                 .into(),
         ])
@@ -169,7 +169,7 @@ fn calendar(app: &App, compact: bool) -> Element<'_, Message> {
         text::heading(now.format("%A, %B %-d").to_string()).width(Length::Fill).into(),
         button::custom(icon::from_name(if collapsed { "go-up-symbolic" } else { "go-down-symbolic" }).size(16))
             .padding(4)
-            .class(theme::Button::Icon)
+            .class(lapin_ux_ui::icon())
             .on_press(Message::ToggleCalendar)
             .into(),
     ])

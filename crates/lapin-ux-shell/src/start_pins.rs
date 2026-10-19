@@ -382,7 +382,7 @@ fn folder_view<'a>(shell: &'a Shell, start: &'a StartMenu, name: String, apps: V
                 widget::Space::new().width(Length::Fill).into(),
                 title.into(),
                 widget::Space::new().width(Length::Fill).into(),
-                button::icon(icon::from_name("window-close-symbolic").size(16))
+                lapin_ux_ui::button::icon(icon::from_name("window-close-symbolic").size(16))
                     .on_press(Message::Pins(PinMsg::CloseFolder))
                     .into(),
             ])

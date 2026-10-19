@@ -12,6 +12,7 @@ chrono.workspace = true
 jiff = "0.2"
 futures.workspace = true
 libcosmic.workspace = true
+lapin-ux-ui.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

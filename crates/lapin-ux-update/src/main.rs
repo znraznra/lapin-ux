@@ -224,9 +224,9 @@ impl cosmic::Application for App {
         };
         let action: Element<'_, Message> = match &self.state {
             State::Checking | State::Installing => widget::Space::new().width(0).into(),
-            State::Available => button::suggested("Download & install all").on_press(Message::Install).into(),
-            State::Done(true) => button::suggested("Restart now").on_press(Message::Restart).into(),
-            _ => button::suggested("Check for updates").on_press(Message::Check).into(),
+            State::Available => lapin_ux_ui::button::suggested("Download & install all").on_press(Message::Install).into(),
+            State::Done(true) => lapin_ux_ui::button::suggested("Restart now").on_press(Message::Restart).into(),
+            _ => lapin_ux_ui::button::suggested("Check for updates").on_press(Message::Check).into(),
         };
         let hero = row::with_children(vec![
             container(icon::from_name(glyph).size(40)).padding(8).into(),
@@ -258,7 +258,7 @@ impl cosmic::Application for App {
             page = page.push(card(list));
         }
         if !self.log.is_empty() {
-            page = page.push(button::text(if self.show_log { "Hide details" } else { "Show details" }).on_press(Message::ShowLog(!self.show_log)));
+            page = page.push(lapin_ux_ui::button::text(if self.show_log { "Hide details" } else { "Show details" }).on_press(Message::ShowLog(!self.show_log)));
             if self.show_log {
                 let lines: Vec<Element<'_, Message>> = self.log.iter().rev().take(200).rev().map(|l| text::caption(l.clone()).into()).collect();
                 page = page.push(card(column::with_children(lines).spacing(2)));

@@ -1,4 +1,4 @@
-From df0c0dc233aaa826b32048a5098d625f746d76f8 Mon Sep 17 00:00:00 2001
+From 7cc5fb3c14e2fbcfd95d0761f0be2d5b463aa729 Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 20:44:30 +0800
 Subject: [PATCH] Lapin UX: Windows 11-style lock and sign-in screens
@@ -9,21 +9,21 @@ network/battery/accessibility/power at the bottom right). The greeter
 gets the same faces plus Windows' user list at the bottom left.
 examples/lapin_preview shows both in a window.
 ---
- examples/lapin_preview.rs |  66 ++++++++++
- src/greeter.rs            | 222 ++++++++++++++++-----------------
- src/lapin.rs              | 149 +++++++++++++++++++++++
+ examples/lapin_preview.rs |  74 +++++++++++
+ src/greeter.rs            | 224 +++++++++++++++++----------------
+ src/lapin.rs              | 161 ++++++++++++++++++++++++
  src/lib.rs                |   2 +
- src/locker.rs             | 249 ++++++++++++--------------------------
- 5 files changed, 411 insertions(+), 277 deletions(-)
+ src/locker.rs             | 252 +++++++++++++-------------------------
+ 5 files changed, 436 insertions(+), 277 deletions(-)
  create mode 100644 examples/lapin_preview.rs
  create mode 100644 src/lapin.rs
 
 diff --git a/examples/lapin_preview.rs b/examples/lapin_preview.rs
 new file mode 100644
-index 0000000..12b3ef0
+index 0000000..e020bf0
 --- /dev/null
 +++ b/examples/lapin_preview.rs
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,74 @@
 +//! Shows Lapin UX's lock and sign-in faces in a normal window, for checking
 +//! the design without locking the session: `cargo run --example lapin_preview [signin]`.
 +use cosmic::app::{Core, Settings, Task};
@@ -61,25 +61,33 @@ index 0000000..12b3ef0
 +        Task::none()
 +    }
 +    fn view(&self) -> Element<'_, Msg> {
++        // Size the faces for the window, as the real screens are sized for the output.
++        let (signin, value, bg) = (self.signin, self.value.clone(), self.bg.clone());
++        widget::responsive(move |size| face(signin, value.clone(), bg.clone(), lapin::scale(size.height))).into()
++    }
++}
++
++fn face<'a>(signin: bool, value: String, bg: widget::image::Handle, scale: f32) -> Element<'a, Msg> {
++    {
 +        let status: Element<'_, Msg> = widget::row::with_children(vec![
 +            widget::icon::from_name("network-wireless-signal-excellent-symbolic").size(20).into(),
 +            widget::icon::from_name("battery-good-symbolic").size(20).into(),
 +            widget::text("73%").into(),
 +        ]).spacing(8).into();
-+        let face = if !self.signin {
-+            lapin::lock_face("8:42".into(), "Monday, October 19".into(), widget::container(status).class(cosmic::theme::Container::custom(|_| widget::container::Style { text_color: Some(cosmic::iced::Color::WHITE), icon_color: Some(cosmic::iced::Color::WHITE), ..Default::default() })).into(), Msg::Reveal)
++        let face = if !signin {
++            lapin::lock_face("8:42".into(), "Monday, October 19".into(), widget::container(status).class(cosmic::theme::Container::custom(|_| widget::container::Style { text_color: Some(cosmic::iced::Color::WHITE), icon_color: Some(cosmic::iced::Color::WHITE), ..Default::default() })).into(), Msg::Reveal, scale)
 +        } else {
-+            let input = widget::secure_input("Password", self.value.as_str(), None, true).on_input(Msg::Input).password();
++            let input = widget::secure_input("Password", value, None, true).on_input(Msg::Input).password();
 +            let corner = widget::row::with_children(vec![
 +                status,
 +                lapin::corner_button("preferences-desktop-accessibility-symbolic", Some(Msg::Reveal)),
 +                lapin::corner_button("system-shutdown-symbolic", Some(Msg::Reveal)),
 +            ]).spacing(8).align_y(cosmic::iced::Alignment::Center);
-+            lapin::sign_in(lapin::avatar(None, 190.0), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into())
++            lapin::sign_in(lapin::avatar(None, lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale)
 +        };
 +        widget::container(
 +            cosmic::iced::widget::stack![
-+                widget::image(self.bg.clone()).width(Length::Fill).height(Length::Fill).content_fit(cosmic::iced::ContentFit::Cover),
++                widget::image(bg).width(Length::Fill).height(Length::Fill).content_fit(cosmic::iced::ContentFit::Cover),
 +                face,
 +            ]
 +        ).width(Length::Fill).height(Length::Fill).into()
@@ -91,7 +99,7 @@ index 0000000..12b3ef0
 +    cosmic::app::run::<App>(Settings::default().size(Size::new(1200.0, 720.0)).client_decorations(false), signin)
 +}
 diff --git a/src/greeter.rs b/src/greeter.rs
-index 852e219..f977c6c 100644
+index 852e219..0f6d6c8 100644
 --- a/src/greeter.rs
 +++ b/src/greeter.rs
 @@ -416,6 +416,8 @@ pub enum Message {
@@ -211,7 +219,7 @@ index 852e219..f977c6c 100644
                      if self.entering_name {
                          column = column.push(
                              widget::text_input(
-@@ -984,43 +937,91 @@ impl App {
+@@ -984,43 +937,93 @@ impl App {
              )
          };
  
@@ -254,6 +262,7 @@ index 852e219..f977c6c 100644
 +                .into()
 +        };
 +        let _ = on_white;
++        let scale = crate::lapin::scale(self.common.window_size.get(&id).map_or(1080.0, |s| s.height));
 +        let menu: Element<'_, Message> = if !self.signing_in {
 +            crate::lapin::lock_face(
 +                crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
@@ -266,6 +275,7 @@ index 852e219..f977c6c 100644
 +                    }))
 +                    .into(),
 +                Message::Reveal,
++                scale,
 +            )
 +        } else {
 +            // Other people who can sign in, bottom left (Windows' user list).
@@ -298,8 +308,8 @@ index 852e219..f977c6c 100644
 +                .on_press(Message::EnterUser(true, String::new())),
 +            );
 +            let (name, picture) = match selected {
-+                Some((d, icon)) if !self.entering_name => (d.full_name.clone(), crate::lapin::avatar(icon.as_ref(), 190.0)),
-+                _ => (String::new(), crate::lapin::avatar(None, 190.0)),
++                Some((d, icon)) if !self.entering_name => (d.full_name.clone(), crate::lapin::avatar(icon.as_ref(), crate::lapin::PICTURE * scale)),
++                _ => (String::new(), crate::lapin::avatar(None, crate::lapin::PICTURE * scale)),
 +            };
 +            let corner = widget::row::with_capacity(2)
 +                .push(
@@ -313,7 +323,7 @@ index 852e219..f977c6c 100644
 +                )
 +                .push(button_row)
 +                .align_y(Alignment::Center);
-+            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into())
++            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale)
 +        };
          let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
              Element::from(t.container((id, false), menu))
@@ -336,7 +346,7 @@ index 852e219..f977c6c 100644
  
          // TODO make these opaque?
          let popover = widget::popover(menu).modal(true);
-@@ -1212,6 +1213,7 @@ impl cosmic::Application for App {
+@@ -1212,6 +1215,7 @@ impl cosmic::Application for App {
              randr_list: None,
              surface_id_pairs: Vec::new(),
              authenticating: false,
@@ -344,7 +354,7 @@ index 852e219..f977c6c 100644
          };
          (app, Task::batch(tasks))
      }
-@@ -1219,7 +1221,22 @@ impl cosmic::Application for App {
+@@ -1219,7 +1223,22 @@ impl cosmic::Application for App {
      /// Handle application events here.
      fn update(&mut self, message: Self::Message) -> Task<Message> {
          match message {
@@ -367,7 +377,7 @@ index 852e219..f977c6c 100644
                  if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
                      && self.authenticating
                  {
-@@ -1291,17 +1308,9 @@ impl cosmic::Application for App {
+@@ -1291,17 +1310,9 @@ impl cosmic::Application for App {
                          let unwrapped_size = size
                              .map(|s| (s.0.unwrap_or(1920), s.1.unwrap_or(1080)))
                              .unwrap_or((1920, 1080));
@@ -388,7 +398,7 @@ index 852e219..f977c6c 100644
                          self.common.window_size.insert(
                              surface_id,
                              Size::new(unwrapped_size.0 as f32, unwrapped_size.1 as f32),
-@@ -1915,11 +1924,8 @@ impl cosmic::Application for App {
+@@ -1915,11 +1926,8 @@ impl cosmic::Application for App {
                      tracing::error!("Failed to find subsurface menu id");
                      return Task::none();
                  };
@@ -404,10 +414,10 @@ index 852e219..f977c6c 100644
          }
 diff --git a/src/lapin.rs b/src/lapin.rs
 new file mode 100644
-index 0000000..3565f8c
+index 0000000..d3d9214
 --- /dev/null
 +++ b/src/lapin.rs
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,161 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +//! Lapin UX's Windows 11-style faces for the lock and sign-in screens:
 +//! the lock screen is a big clock and date over the wallpaper; clicking or
@@ -422,15 +432,24 @@ index 0000000..3565f8c
 +    theme::Text::Color(Color::WHITE)
 +}
 +
-+/// The lock screen: time and date, top centre-ish.
-+pub fn lock_face<'a, M: Clone + 'static>(time: String, date: String, status: Element<'a, M>, reveal: M) -> Element<'a, M> {
++/// Sizes below are Windows 11's on a 1080-pixel-high screen; other screens
++/// (and the preview window) scale them by height.
++pub fn scale(screen_height: f32) -> f32 {
++    (screen_height / 1080.0).clamp(0.4, 2.0)
++}
++
++/// Account picture size on the sign-in panel.
++pub const PICTURE: f32 = 192.0;
++
++/// The lock screen: time and date, top centre.
++pub fn lock_face<'a, M: Clone + 'static>(time: String, date: String, status: Element<'a, M>, reveal: M, scale: f32) -> Element<'a, M> {
 +    let clock = widget::column::with_capacity(2)
-+        .push(widget::text(time).size(128.0).class(on_wallpaper()))
-+        .push(widget::text(date).size(26.0).class(on_wallpaper()))
++        .push(widget::text(time).size(112.0 * scale).font(cosmic::font::semibold()).class(on_wallpaper()))
++        .push(widget::text(date).size(24.0 * scale).class(on_wallpaper()))
 +        .align_x(Alignment::Center)
 +        .spacing(0.0);
 +    let page = widget::column::with_capacity(4)
-+        .push(widget::space::vertical().height(Length::FillPortion(2)))
++        .push(widget::space::vertical().height(Length::FillPortion(1)))
 +        .push(widget::container(clock).width(Length::Fill).align_x(Alignment::Center))
 +        .push(widget::space::vertical().height(Length::FillPortion(7)))
 +        .push(widget::container(status).width(Length::Fill).align_x(Alignment::End).padding([0, 32, 28, 32]))
@@ -472,19 +491,22 @@ index 0000000..3565f8c
 +    message: Element<'a, M>,
 +    bottom_left: Element<'a, M>,
 +    bottom_right: Element<'a, M>,
++    scale: f32,
 +) -> Element<'a, M> {
++    let box_width = 296.0 * scale;
 +    let panel = widget::column::with_capacity(5)
 +        .push(picture)
-+        .push(widget::text(name).size(30.0).class(on_wallpaper()))
-+        .push(widget::space::vertical().height(Length::Fixed(8.0)))
-+        .push(widget::container(prompt).width(Length::Fixed(296.0)))
-+        .push(widget::container(message).width(Length::Fixed(296.0)).align_x(Alignment::Center))
++        .push(widget::text(name).size(28.0 * scale).class(on_wallpaper()))
++        .push(widget::space::vertical().height(Length::Fixed(4.0 * scale)))
++        .push(widget::container(prompt).width(Length::Fixed(box_width)))
++        .push(widget::container(message).width(Length::Fixed(box_width)).align_x(Alignment::Center))
 +        .align_x(Alignment::Center)
-+        .spacing(12.0);
++        .spacing(12.0 * scale);
++    // Windows centres the panel a little above the middle of the screen.
 +    let page = widget::column::with_capacity(4)
-+        .push(widget::space::vertical().height(Length::FillPortion(3)))
++        .push(widget::space::vertical().height(Length::FillPortion(5)))
 +        .push(widget::container(panel).width(Length::Fill).align_x(Alignment::Center))
-+        .push(widget::space::vertical().height(Length::FillPortion(4)))
++        .push(widget::space::vertical().height(Length::FillPortion(6)))
 +        .push(
 +            widget::row::with_capacity(3)
 +                .push(bottom_left)
@@ -571,7 +593,7 @@ index 91736b9..96f87b1 100644
  
  mod localize;
 diff --git a/src/locker.rs b/src/locker.rs
-index ce1b3d1..cb02932 100644
+index ce1b3d1..b24bbad 100644
 --- a/src/locker.rs
 +++ b/src/locker.rs
 @@ -281,6 +281,8 @@ pub enum Message {
@@ -583,7 +605,7 @@ index ce1b3d1..cb02932 100644
  }
  
  impl From<common::Message> for Message {
-@@ -318,40 +320,37 @@ pub struct App {
+@@ -318,40 +320,39 @@ pub struct App {
      inhibit_opt: Option<Arc<OwnedFd>>,
      value_tx_opt: Option<mpsc::Sender<String>>,
      authenticating: bool,
@@ -635,6 +657,7 @@ index ce1b3d1..cb02932 100644
 -            }
 +            );
 +        }
++        let scale = crate::lapin::scale(self.common.window_size.get(&surface_id).map_or(1080.0, |s| s.height));
 +        if !self.signing_in {
 +            return crate::lapin::lock_face(
 +                crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
@@ -645,12 +668,13 @@ index ce1b3d1..cb02932 100644
 +                    ..Default::default()
 +                })).into(),
 +                Message::Reveal,
++                scale,
 +            );
 +        }
  
              //TODO: move code for custom dropdowns to libcosmic
              let menu_checklist = |label, value, message| {
-@@ -449,96 +448,8 @@ impl App {
+@@ -449,96 +450,8 @@ impl App {
                  input_button = input_button.popup(dropdown_menu(items));
              }
  
@@ -749,7 +773,7 @@ index ce1b3d1..cb02932 100644
                  match value_opt {
                      Some(value) => {
                          let text_input_id = self
-@@ -617,47 +528,35 @@ impl App {
+@@ -617,47 +530,36 @@ impl App {
                  column = column.push(widget::text(""));
              }
  
@@ -793,12 +817,13 @@ index ce1b3d1..cb02932 100644
 +            ));
 +        }
 +        let menu = crate::lapin::sign_in(
-+            crate::lapin::avatar(self.flags.user_icon.as_ref(), 190.0),
++            crate::lapin::avatar(self.flags.user_icon.as_ref(), crate::lapin::PICTURE * scale),
 +            self.flags.user_data.full_name.clone(),
 +            column.into(),
 +            widget::space::vertical().height(Length::Fixed(0.0)).into(),
 +            widget::space::horizontal().width(Length::Fixed(0.0)).into(),
 +            corner.into(),
++            scale,
 +        );
 +        if let Some(t) = self.common.rectangle_tracker.as_ref() {
              Element::from(t.container((surface_id, false), menu))
@@ -824,7 +849,7 @@ index ce1b3d1..cb02932 100644
      }
  }
  
-@@ -707,6 +606,7 @@ impl cosmic::Application for App {
+@@ -707,6 +609,7 @@ impl cosmic::Application for App {
              inhibit_opt: None,
              value_tx_opt: None,
              authenticating: false,
@@ -832,7 +857,7 @@ index ce1b3d1..cb02932 100644
          };
  
          let task = if cfg!(feature = "logind") && app.flags.logind_available {
-@@ -733,7 +633,26 @@ impl cosmic::Application for App {
+@@ -733,7 +636,26 @@ impl cosmic::Application for App {
      fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
          match message {
              Message::None => {}
@@ -859,7 +884,7 @@ index ce1b3d1..cb02932 100644
                  if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
                      && self.authenticating
                  {
-@@ -805,17 +724,9 @@ impl cosmic::Application for App {
+@@ -805,17 +727,9 @@ impl cosmic::Application for App {
                          let unwrapped_size = size
                              .map(|s| (s.0.unwrap_or(1920), s.1.unwrap_or(1080)))
                              .unwrap_or((1920, 1080));

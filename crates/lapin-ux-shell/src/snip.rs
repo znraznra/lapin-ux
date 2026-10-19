@@ -263,7 +263,7 @@ fn mode_button<'a>(ic: &'static str, label: &'static str, m: Mode, current: Mode
     widget::tooltip(
         button::custom(icon::from_name(ic).size(18))
             .padding(8)
-            .class(if m == current { theme::Button::Suggested } else { theme::Button::Icon })
+            .class(if m == current { lapin_ux_ui::suggested() } else { lapin_ux_ui::icon() })
             .on_press(Message::Snip(SnipMsg::Mode(m))),
         text::body(label),
         widget::tooltip::Position::Bottom,
@@ -312,7 +312,7 @@ pub fn view<'a>(shell: &'a Shell, s: &'a SnipPanel) -> Element<'a, Message> {
             widget::divider::vertical::default().height(24).into(),
             button::custom(icon::from_name("window-close-symbolic").size(18))
                 .padding(8)
-                .class(theme::Button::Icon)
+                .class(lapin_ux_ui::icon())
                 .on_press(Message::Panel(crate::panels::PanelMsg::Close))
                 .into(),
         ])

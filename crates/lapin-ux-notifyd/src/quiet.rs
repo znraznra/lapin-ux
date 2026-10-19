@@ -10,7 +10,7 @@ use chrono::Timelike;
 use cosmic::app::Task;
 use cosmic::cosmic_config::{ConfigGet, ConfigSet};
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input, toggler};
+use cosmic::widget::{self, column, container, icon, row, scrollable, text, text_input, toggler};
 use cosmic::{Element, theme};
 use lapin_ux_core::dnd::{self, AppRule, Dnd, Schedule};
 use lapin_ux_core::ics::{self, Event};
@@ -240,9 +240,9 @@ fn dim_text<'a>(s: impl Into<String>) -> cosmic::widget::Text<'a, cosmic::Theme>
 
 fn stepper<'a>(value: String, minus: Message, plus: Message) -> Element<'a, Message> {
     row::with_children(vec![
-        button::icon(icon::from_name("list-remove-symbolic").size(14)).on_press(minus).into(),
+        lapin_ux_ui::button::icon(icon::from_name("list-remove-symbolic").size(14)).on_press(minus).into(),
         container(text::body(value)).width(80).align_x(Alignment::Center).into(),
-        button::icon(icon::from_name("list-add-symbolic").size(14)).on_press(plus).into(),
+        lapin_ux_ui::button::icon(icon::from_name("list-add-symbolic").size(14)).on_press(plus).into(),
     ])
     .align_y(Alignment::Center)
     .into()
@@ -324,7 +324,7 @@ pub fn focus_row(app: &App) -> Element<'_, Message> {
             row::with_children(vec![
                 icon::from_name("alarm-symbolic").size(16).into(),
                 text::body(format!("Focus · {}:{:02} left", s / 60, s % 60)).width(Length::Fill).into(),
-                button::standard("End session").on_press(Message::Quiet(QuietMsg::StopFocus)).into(),
+                lapin_ux_ui::button::standard("End session").on_press(Message::Quiet(QuietMsg::StopFocus)).into(),
             ])
             .spacing(8)
             .align_y(Alignment::Center)
@@ -337,7 +337,7 @@ pub fn focus_row(app: &App) -> Element<'_, Message> {
                 Message::Quiet(QuietMsg::FocusLength(5)),
             ),
             widget::Space::new().width(Length::Fill).into(),
-            button::standard("Focus").leading_icon(icon::from_name("alarm-symbolic").size(16)).on_press(Message::Quiet(QuietMsg::StartFocus)).into(),
+            lapin_ux_ui::button::standard("Focus").leading_icon(icon::from_name("alarm-symbolic").size(16)).on_press(Message::Quiet(QuietMsg::StartFocus)).into(),
         ])
         .align_y(Alignment::Center)
         .into(),
@@ -349,7 +349,7 @@ pub fn settings(app: &App) -> Element<'_, Message> {
     let q = &app.quiet;
     let s = q.dnd.schedule;
     let header = row::with_children(vec![
-        button::icon(icon::from_name("go-previous-symbolic").size(16)).on_press(Message::Quiet(QuietMsg::OpenSettings(false))).into(),
+        lapin_ux_ui::button::icon(icon::from_name("go-previous-symbolic").size(16)).on_press(Message::Quiet(QuietMsg::OpenSettings(false))).into(),
         text::title4("Notification settings").into(),
     ])
     .spacing(8)
@@ -418,7 +418,7 @@ pub fn settings(app: &App) -> Element<'_, Message> {
         cals = cals.push(
             row::with_children(vec![
                 text::caption(c.clone()).width(Length::Fill).into(),
-                button::icon(icon::from_name("user-trash-symbolic").size(14)).on_press(Message::Quiet(QuietMsg::RemoveCalendar(c.clone()))).into(),
+                lapin_ux_ui::button::icon(icon::from_name("user-trash-symbolic").size(14)).on_press(Message::Quiet(QuietMsg::RemoveCalendar(c.clone()))).into(),
             ])
             .align_y(Alignment::Center),
         );
@@ -430,7 +430,7 @@ pub fn settings(app: &App) -> Element<'_, Message> {
                 .on_submit(|_| Message::Quiet(QuietMsg::AddCalendar))
                 .width(Length::Fill)
                 .into(),
-            button::standard("Add").on_press(Message::Quiet(QuietMsg::AddCalendar)).into(),
+            lapin_ux_ui::button::standard("Add").on_press(Message::Quiet(QuietMsg::AddCalendar)).into(),
         ])
         .spacing(8)
         .align_y(Alignment::Center),

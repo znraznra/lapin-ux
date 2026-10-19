@@ -282,7 +282,7 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 
 | Crate | What it is | Depends on libcosmic |
 |---|---|---|
-| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts, displays, night light, process and system monitoring, updates, sounds. 91 unit tests. | no |
+| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts, displays, night light, process and system monitoring, updates, sounds, OS name. 93 unit tests. | no |
 | `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
 | `lapin-ux-notifyd` | Notification server and toasts | yes |
 | `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
@@ -290,6 +290,7 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 | `lapin-ux-control` | Control Panel | yes |
 | `lapin-ux-update` | Update (pacman + Flatpak) | yes |
 | `lapin-ux-welcome` | First-run setup | yes |
+| `lapin-ux-ui` | Shared Windows-style widget styles (4 px buttons, round slider thumbs, sidebar items) | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
 pinned commit plus two patches adding `lapin_shell_v1` (`protocols/`): snap a

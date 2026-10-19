@@ -136,7 +136,7 @@ pub fn view<'a>(shell: &'a Shell, p: &'a OpenWithPanel) -> Element<'a, Message> 
         }
     } else {
         list = list.push(
-            button::text("More apps ↓").on_press(Message::OpenWithPick(OpenWithMsg::More)),
+            lapin_ux_ui::button::text("More apps ↓").on_press(Message::OpenWithPick(OpenWithMsg::More)),
         );
     }
     let always = match &ext {
@@ -151,7 +151,7 @@ pub fn view<'a>(shell: &'a Shell, p: &'a OpenWithPanel) -> Element<'a, Message> 
         container(
             row::with_children(vec![
                 widget::Space::new().width(Length::Fill).into(),
-                button::suggested("OK").on_press_maybe(p.selected.is_some().then_some(Message::OpenWithPick(OpenWithMsg::Ok))).into(),
+                lapin_ux_ui::button::suggested("OK").on_press_maybe(p.selected.is_some().then_some(Message::OpenWithPick(OpenWithMsg::Ok))).into(),
             ]),
         )
         .padding([12, 20, 16, 20])

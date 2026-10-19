@@ -445,8 +445,8 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
                     .into(),
                 row::with_children(vec![
                     widget::Space::new().width(Length::Fill).into(),
-                    button::suggested("OK").on_press(Message::Panel(PanelMsg::RunSubmit)).into(),
-                    button::standard("Cancel").on_press(Message::Panel(PanelMsg::Close)).into(),
+                    lapin_ux_ui::button::suggested("OK").on_press(Message::Panel(PanelMsg::RunSubmit)).into(),
+                    lapin_ux_ui::button::standard("Cancel").on_press(Message::Panel(PanelMsg::Close)).into(),
                 ])
                 .spacing(8)
                 .into(),

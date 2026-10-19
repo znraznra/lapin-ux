@@ -263,9 +263,9 @@ pub fn view<'a>(shell: &'a Shell, p: &'a PropsPanel) -> Element<'a, Message> {
     body = body.push(
         row::with_children(vec![
             widget::Space::new().width(Length::Fill).into(),
-            button::suggested("OK").on_press(Message::Props(PropsMsg::Ok)).into(),
-            button::standard("Cancel").on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
-            button::standard("Apply").on_press_maybe(changed.then_some(Message::Props(PropsMsg::Apply))).into(),
+            lapin_ux_ui::button::suggested("OK").on_press(Message::Props(PropsMsg::Ok)).into(),
+            lapin_ux_ui::button::standard("Cancel").on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
+            lapin_ux_ui::button::standard("Apply").on_press_maybe(changed.then_some(Message::Props(PropsMsg::Apply))).into(),
         ])
         .spacing(8),
     );

@@ -1,0 +1,9 @@
+[package]
+name = "lapin-ux-ui"
+description = "Lapin UX: shared Windows-style widget styles for the Lapin apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libcosmic.workspace = true

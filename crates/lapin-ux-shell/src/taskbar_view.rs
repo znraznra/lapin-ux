@@ -136,13 +136,12 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
     let clock_style = shell.clock_style();
-    // Smaller buttons: a slightly smaller clock so both lines fit the 40 px bar.
-    let clock_size = if style::small_taskbar() { 11.0 } else { 12.0 };
-    let time = column::with_children(vec![
-        text::caption(clock_style.time(&shell.now)).size(clock_size).into(),
-        text::caption(clock_style.date(&shell.now)).size(clock_size).into(),
-    ])
-    .align_x(Alignment::End);
+    // Smaller buttons: like Windows, the slim bar shows only the time.
+    let mut time = column::with_capacity(2).align_x(Alignment::End);
+    time = time.push(text::caption(clock_style.time(&shell.now)).size(12.0));
+    if !style::small_taskbar() {
+        time = time.push(text::caption(clock_style.date(&shell.now)).size(12.0));
+    }
     let mut clock_content = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(time);
     if shell.notify.available {
         clock_content = clock_content.push(notify_badge(shell.notify));
@@ -733,7 +732,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
                     text::body(format!("{name} and its related info will be uninstalled.")).into(),
                     row::with_children(vec![
                         widget::Space::new().width(Length::Fill).into(),
-                        button::destructive("Uninstall").on_press(Message::Uninstall(app.clone())).into(),
+                        lapin_ux_ui::button::destructive("Uninstall").on_press(Message::Uninstall(app.clone())).into(),
                     ])
                     .into(),
                 ])
@@ -755,8 +754,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
                 text::body("Are you sure you want to permanently delete everything in the Recycle Bin?").into(),
                 row::with_children(vec![
                     widget::Space::new().width(Length::Fill).into(),
-                    button::standard("No").on_press(Message::ClosePopup).into(),
-                    button::destructive("Yes").on_press(Message::Desktop(crate::desktop::DesktopMsg::EmptyTrash)).into(),
+                    lapin_ux_ui::button::standard("No").on_press(Message::ClosePopup).into(),
+                    lapin_ux_ui::button::destructive("Yes").on_press(Message::Desktop(crate::desktop::DesktopMsg::EmptyTrash)).into(),
                 ])
                 .spacing(8)
                 .into(),

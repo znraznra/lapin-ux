@@ -584,7 +584,7 @@ pub fn extras<'a>(app: &'a App, n: &'a Notification) -> Vec<Element<'a, Message>
                     .on_submit(move |_| Message::ReplySend(id))
                     .width(Length::Fill)
                     .into(),
-                button::suggested(r.submit.clone()).on_press_maybe((!draft.trim().is_empty()).then_some(Message::ReplySend(id))).into(),
+                lapin_ux_ui::button::suggested(r.submit.clone()).on_press_maybe((!draft.trim().is_empty()).then_some(Message::ReplySend(id))).into(),
             ])
             .spacing(8)
             .align_y(Alignment::Center)
@@ -602,7 +602,7 @@ fn toast<'a>(app: &'a App, t: &'a Toast) -> Element<'a, Message> {
             .into(),
         button::custom(icon::from_name("window-close-symbolic").size(12))
             .padding(4)
-            .class(theme::Button::Icon)
+            .class(lapin_ux_ui::icon())
             .on_press(Message::Dismiss(n.id))
             .into(),
     ])
@@ -635,7 +635,7 @@ fn toast<'a>(app: &'a App, t: &'a Toast) -> Element<'a, Message> {
         .filter(|a| a.key != "default" && a.key != lapin_ux_core::notify::INLINE_REPLY)
         .take(3)
         .map(|a| {
-            button::standard(a.label.clone())
+            lapin_ux_ui::button::standard(a.label.clone())
                 .width(Length::Fill)
                 .on_press(Message::Invoke(n.id, a.key.clone()))
                 .into()

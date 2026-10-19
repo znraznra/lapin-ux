@@ -789,7 +789,7 @@ fn header<'a>(title: &'static str, toggle: Option<HeaderToggle>) -> Element<'a, 
 }
 
 fn link<'a>(label: &'static str, page: &'static str) -> Element<'a, Message> {
-    button::text(label).on_press(Message::Quick(QuickMsg::Settings(page))).into()
+    lapin_ux_ui::button::text(label).on_press(Message::Quick(QuickMsg::Settings(page))).into()
 }
 
 fn list_row<'a>(content: impl Into<Element<'a, Message>>, selected: bool, msg: Message) -> Element<'a, Message> {
@@ -1078,6 +1078,7 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
         body = body.push(slider_row(
             sym("display-brightness-symbolic", &[]).into(),
             slider(0.0..=1.0, b.fraction(), |v| Message::Quick(QuickMsg::Brightness(v)))
+                .class(lapin_ux_ui::slider())
                 .step(0.01f32)
                 .on_release(Message::Quick(QuickMsg::BrightnessDone))
                 .width(Length::Fill)
@@ -1093,6 +1094,7 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
                 .on_press(Message::Quick(QuickMsg::Mute))
                 .into(),
             slider(0.0..=1.0, q.volume.level.min(1.0), |v| Message::Quick(QuickMsg::Volume(v)))
+                .class(lapin_ux_ui::slider())
                 .step(0.01f32)
                 .on_release(Message::Quick(QuickMsg::VolumeDone))
                 .width(Length::Fill)
@@ -1122,7 +1124,7 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
     };
     // Battery on the left; Edit (pencil) and Settings on the right, or Done while editing.
     let right: Vec<Element<'a, Message>> = if p.editing {
-        vec![button::suggested("Done").on_press(Message::Quick(QuickMsg::Edit(false))).into()]
+        vec![lapin_ux_ui::button::suggested("Done").on_press(Message::Quick(QuickMsg::Edit(false))).into()]
     } else {
         vec![
             button::custom(sym("document-edit-symbolic", &["edit-symbolic"]))
@@ -1227,7 +1229,7 @@ fn wifi_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
                 content = content.push(
                     row::with_children(vec![
                         widget::Space::new().width(Length::Fill).into(),
-                        button::standard("Disconnect").on_press(Message::Quick(QuickMsg::Disconnect)).into(),
+                        lapin_ux_ui::button::standard("Disconnect").on_press(Message::Quick(QuickMsg::Disconnect)).into(),
                     ]),
                 );
             } else {
@@ -1241,7 +1243,7 @@ fn wifi_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
                 }
                 content = content.push(row::with_children(vec![
                     widget::Space::new().width(Length::Fill).into(),
-                    button::suggested("Connect").on_press(Message::Quick(QuickMsg::Connect)).into(),
+                    lapin_ux_ui::button::suggested("Connect").on_press(Message::Quick(QuickMsg::Connect)).into(),
                 ]));
             }
         }
@@ -1285,7 +1287,7 @@ fn bluetooth_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         scrollable(container(list).padding([0, 12])).height(Length::Fixed(300.0)).into(),
         container(
             row::with_children(vec![
-                button::standard("Add device").on_press_maybe(bt.powered.then_some(Message::Quick(QuickMsg::Page(Page::BtAdd)))).into(),
+                lapin_ux_ui::button::standard("Add device").on_press_maybe(bt.powered.then_some(Message::Quick(QuickMsg::Page(Page::BtAdd)))).into(),
                 widget::Space::new().width(Length::Fill).into(),
                 link("More Bluetooth settings", "bluetooth"),
             ])
@@ -1331,6 +1333,7 @@ fn sound_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
                         .on_press(Message::Quick(QuickMsg::StreamMute(index, !muted)))
                         .into(),
                     slider(0.0..=1.0, s.level.min(1.0), move |v| Message::Quick(QuickMsg::StreamVolume(index, v)))
+                .class(lapin_ux_ui::slider())
                         .step(0.01f32)
                         .width(Length::Fill)
                         .into(),
@@ -1454,8 +1457,8 @@ fn bt_add_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         let yes_no = |yes: &'static str| {
             row::with_children(vec![
                 widget::Space::new().width(Length::Fill).into(),
-                button::standard("Cancel").on_press(Message::Quick(QuickMsg::BtAnswer(false))).into(),
-                button::suggested(yes).on_press(Message::Quick(QuickMsg::BtAnswer(true))).into(),
+                lapin_ux_ui::button::standard("Cancel").on_press(Message::Quick(QuickMsg::BtAnswer(false))).into(),
+                lapin_ux_ui::button::suggested(yes).on_press(Message::Quick(QuickMsg::BtAnswer(true))).into(),
             ])
             .spacing(8)
         };

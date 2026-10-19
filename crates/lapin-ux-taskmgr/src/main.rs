@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Size, Subscription};
-use cosmic::widget::{self, button, column, container, icon, nav_bar, row, scrollable, text, text_input};
+use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
 use cosmic::{ApplicationExt, Core, Element, theme};
 use lapin_ux_core::sysmon::{self, Memory, Proc, Startup};
 
@@ -70,6 +70,10 @@ enum Message {
     StartupToggle(String, bool),
     StartupSelect(String),
     Expand(u32),
+    /// A page in the sidebar.
+    Page(Page),
+    /// The ☰ button: icons only, or icons and names.
+    ToggleNav,
 }
 
 /// One line in the Processes list: an app (head process plus children)
@@ -95,7 +99,8 @@ struct DesktopApp {
 
 struct App {
     core: Core,
-    nav: nav_bar::Model,
+    page: Page,
+    nav_collapsed: bool,
     apps: Vec<DesktopApp>,
     last: Option<Sample>,
     procs: Vec<Proc>,
@@ -414,16 +419,6 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, _: ()) -> (Self, Task<Message>) {
-        let mut nav = nav_bar::Model::default();
-        for (label, ic, page) in [
-            ("Processes", "view-grid-symbolic", Page::Processes),
-            ("Performance", "utilities-system-monitor-symbolic", Page::Performance),
-            ("Startup apps", "system-run-symbolic", Page::Startup),
-            ("Details", "view-list-symbolic", Page::Details),
-        ] {
-            nav.insert().text(label).icon(icon::from_name(ic).icon()).data(page);
-        }
-        nav.activate_position(0);
         let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
             .ok()
             .and_then(|s| s.lines().find(|l| l.starts_with("model name")).and_then(|l| l.split(':').nth(1)).map(|m| m.trim().to_string()))
@@ -432,7 +427,8 @@ impl cosmic::Application for App {
         let uid = std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(0);
         let mut app = App {
             core,
-            nav,
+            page: Page::Processes,
+            nav_collapsed: false,
             apps: load_desktop_apps(),
             last: None,
             procs: Vec::new(),
@@ -469,16 +465,14 @@ impl cosmic::Application for App {
         (app, Task::batch([title, Task::done(cosmic::Action::App(Message::Tick))]))
     }
 
-    fn nav_model(&self) -> Option<&nav_bar::Model> {
-        Some(&self.nav)
-    }
-
-    fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Message> {
-        self.nav.activate(id);
-        if self.nav.active_data::<Page>() == Some(&Page::Startup) {
-            self.reload_startup();
-        }
-        Task::none()
+    fn header_start(&self) -> Vec<Element<'_, Message>> {
+        vec![
+            button::custom(icon::from_name("open-menu-symbolic").size(16))
+                .padding([8, 12])
+                .class(lapin_ux_ui::nav_item(false))
+                .on_press(Message::ToggleNav)
+                .into(),
+        ]
     }
 
     fn header_center(&self) -> Vec<Element<'_, Message>> {
@@ -508,6 +502,13 @@ impl cosmic::Application for App {
             Message::Sampled(s) => self.absorb(*s),
             Message::Search(q) => self.search = q,
             Message::Select(pid) => self.selected = Some(pid),
+            Message::Page(p) => {
+                self.page = p;
+                if p == Page::Startup {
+                    self.reload_startup();
+                }
+            }
+            Message::ToggleNav => self.nav_collapsed = !self.nav_collapsed,
             Message::Expand(pid) => {
                 if let Some(i) = self.expanded.iter().position(|p| *p == pid) {
                     self.expanded.remove(i);
@@ -545,14 +546,53 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let page = self.nav.active_data::<Page>().copied().unwrap_or(Page::Processes);
+        let page = self.page;
         let body = match page {
             Page::Processes => self.processes_view(),
             Page::Performance => self.performance_view(),
             Page::Startup => self.startup_view(),
             Page::Details => self.details_view(),
         };
-        container(body).padding([8, 16, 16, 16]).width(Length::Fill).height(Length::Fill).into()
+        let body = container(body).padding([8, 16, 16, 16]).width(Length::Fill).height(Length::Fill);
+        row::with_children(vec![self.sidebar(), body.into()]).height(Length::Fill).into()
+    }
+}
+
+const PAGES: [(&str, &str, Page); 4] = [
+    ("Processes", "view-grid-symbolic", Page::Processes),
+    ("Performance", "utilities-system-monitor-symbolic", Page::Performance),
+    ("Startup apps", "system-run-symbolic", Page::Startup),
+    ("Details", "view-list-symbolic", Page::Details),
+];
+
+/// Space between the sidebar's edge and its icons; the longest name gets
+/// the same space on its right.
+const NAV_INSET: u16 = 12;
+/// Wide enough for "Startup apps" plus NAV_INSET on its right.
+const NAV_ITEM_WIDTH: f32 = 132.0;
+
+impl App {
+    /// The page list on the left: names and icons, or icons only after ☰.
+    fn sidebar(&self) -> Element<'_, Message> {
+        let mut col = column::with_capacity(PAGES.len()).spacing(4);
+        for (label, ic, page) in PAGES {
+            let mut content = row::with_capacity(2).spacing(12).align_y(Alignment::Center);
+            content = content.push(icon::from_name(ic).size(16));
+            if !self.nav_collapsed {
+                content = content.push(text::body(label));
+            }
+            col = col.push(
+                button::custom(content)
+                    .width(if self.nav_collapsed { Length::Shrink } else { Length::Fixed(NAV_ITEM_WIDTH) })
+                    .padding([8, NAV_INSET])
+                    .class(lapin_ux_ui::nav_item(self.page == page))
+                    .on_press(Message::Page(page)),
+            );
+        }
+        container(col)
+            .padding(8)
+            .height(Length::Fill)
+            .into()
     }
 }
 
@@ -575,8 +615,8 @@ impl App {
                             .on_submit(|_| Message::RunGo)
                             .width(Length::Fill)
                             .into(),
-                        button::suggested("OK").on_press(Message::RunGo).into(),
-                        button::standard("Cancel").on_press(Message::RunOpen(false)).into(),
+                        lapin_ux_ui::button::suggested("OK").on_press(Message::RunGo).into(),
+                        lapin_ux_ui::button::standard("Cancel").on_press(Message::RunOpen(false)).into(),
                     ])
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -602,8 +642,8 @@ impl App {
     fn processes_view(&self) -> Element<'_, Message> {
         let mem_frac = if self.mem.total == 0 { 0.0 } else { self.mem.used() as f64 / self.mem.total as f64 };
         let buttons = vec![
-            button::standard("Run new task").leading_icon(icon::from_name("list-add-symbolic").size(16)).on_press(Message::RunOpen(true)).into(),
-            button::standard("End task")
+            lapin_ux_ui::button::standard("Run new task").leading_icon(icon::from_name("list-add-symbolic").size(16)).on_press(Message::RunOpen(true)).into(),
+            lapin_ux_ui::button::standard("End task")
                 .leading_icon(icon::from_name("process-stop-symbolic").size(16))
                 .on_press_maybe(self.selected.map(|_| Message::EndTask))
                 .into(),
@@ -648,7 +688,7 @@ impl App {
         let chevron: Element<'a, Message> = if l.members.len() > 1 {
             button::custom(icon::from_name(if self.expanded.contains(&l.pid) { "pan-down-symbolic" } else { "pan-end-symbolic" }).size(12))
                 .padding(2)
-                .class(theme::Button::Text)
+                .class(lapin_ux_ui::text())
                 .on_press(Message::Expand(l.pid))
                 .into()
         } else {
@@ -778,7 +818,7 @@ impl App {
         .spacing(10)
         .width(Length::Fill);
         column::with_children(vec![
-            self.page_head("Performance", vec![button::standard("Run new task").on_press(Message::RunOpen(true)).into()]),
+            self.page_head("Performance", vec![lapin_ux_ui::button::standard("Run new task").on_press(Message::RunOpen(true)).into()]),
             row::with_children(vec![
                 tiles.into(),
                 container(scrollable(container(detail).padding([0, 16, 0, 0]))).padding(16).class(card()).width(Length::Fill).height(Length::Fill).into(),
@@ -793,8 +833,8 @@ impl App {
     fn startup_view(&self) -> Element<'_, Message> {
         let sel = self.startup.iter().find(|s| Some(&s.file) == self.startup_selected.as_ref());
         let buttons: Vec<Element<'_, Message>> = vec![
-            button::standard("Enable").on_press_maybe(sel.filter(|s| !s.enabled).map(|s| Message::StartupToggle(s.file.clone(), true))).into(),
-            button::standard("Disable").on_press_maybe(sel.filter(|s| s.enabled).map(|s| Message::StartupToggle(s.file.clone(), false))).into(),
+            lapin_ux_ui::button::standard("Enable").on_press_maybe(sel.filter(|s| !s.enabled).map(|s| Message::StartupToggle(s.file.clone(), true))).into(),
+            lapin_ux_ui::button::standard("Disable").on_press_maybe(sel.filter(|s| s.enabled).map(|s| Message::StartupToggle(s.file.clone(), false))).into(),
         ];
         let header = row::with_children(vec![
             text::caption("Name").width(Length::Fill).into(),
@@ -877,8 +917,8 @@ impl App {
             );
         }
         let buttons = vec![
-            button::standard("Run new task").on_press(Message::RunOpen(true)).into(),
-            button::standard("End task").on_press_maybe(self.selected.map(|_| Message::EndTask)).into(),
+            lapin_ux_ui::button::standard("Run new task").on_press(Message::RunOpen(true)).into(),
+            lapin_ux_ui::button::standard("End task").on_press_maybe(self.selected.map(|_| Message::EndTask)).into(),
         ];
         column::with_children(vec![
             self.page_head("Details", buttons),

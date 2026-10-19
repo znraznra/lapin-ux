@@ -354,7 +354,7 @@ fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
         StartItem::App(id) => {
             let Some(app) = shell.catalog.get(id) else { return widget::Space::new().into() };
             let mut card = head(app_icon(shell, id), app.data.name.clone(), app.generic_name.clone().unwrap_or_else(|| "App".into()))
-                .push(button::suggested("Open").on_press(Message::Launch(id.clone())));
+                .push(lapin_ux_ui::button::suggested("Open").on_press(Message::Launch(id.clone())));
             for a in app.data.desktop_actions.iter().take(5) {
                 card = card.push(action(a.name.clone(), Message::LaunchAction(id.clone(), a.exec.clone())));
             }
@@ -364,17 +364,17 @@ fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
             card
         }
         StartItem::Setting(p) => head(named(p.icon), p.title.to_string(), "System settings".into())
-            .push(button::suggested("Open").on_press(Message::StartActivate(item.clone()))),
+            .push(lapin_ux_ui::button::suggested("Open").on_press(Message::StartActivate(item.clone()))),
         StartItem::File { path, is_dir } => {
             let kind = if *is_dir { "Folder" } else { "File" };
             head(file_icon(path, *is_dir), file_name(path), format!("{kind} \u{00B7} {}", location(path)))
-                .push(button::suggested("Open").on_press(Message::StartActivate(item.clone())))
+                .push(lapin_ux_ui::button::suggested("Open").on_press(Message::StartActivate(item.clone())))
                 .push(action("Open file location".into(), Message::ShowInFolder(path.clone())))
                 .push(action("Pin to Start".into(), Message::Pins(crate::start_pins::PinMsg::PinPath(path.clone()))))
         }
         StartItem::Pin(_) => return widget::Space::new().into(),
         StartItem::Web(q) => head(named("system-search-symbolic"), q.clone(), "Search the web".into())
-            .push(button::suggested("Open results in browser").on_press(Message::StartActivate(item.clone()))),
+            .push(lapin_ux_ui::button::suggested("Open results in browser").on_press(Message::StartActivate(item.clone()))),
     };
     card.into()
 }

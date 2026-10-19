@@ -149,9 +149,18 @@ fn available(t: Target) -> bool {
     }
 }
 
+/// Every category's links get the width of "Hardware and Sound", as in
+/// Windows; longer names wrap onto the next line.
+const LINKS_WIDTH: f32 = 206.0;
+
 fn link<'a>(label: &'a str, t: Target, big: bool) -> Element<'a, Message> {
-    let txt: Element<'a, Message> = if big { text::title4(label).into() } else { text::body(label).into() };
-    button::custom(txt).padding([2, 0]).class(theme::Button::Link).on_press_maybe(available(t).then_some(Message::Open(t))).into()
+    let txt: Element<'a, Message> = if big { text::title4(label).width(Length::Fill).into() } else { text::body(label).width(Length::Fill).into() };
+    button::custom(txt)
+        .width(Length::Fill)
+        .padding([2, 0])
+        .class(theme::Button::Link)
+        .on_press_maybe(available(t).then_some(Message::Open(t)))
+        .into()
 }
 
 impl cosmic::Application for App {
@@ -181,7 +190,7 @@ impl cosmic::Application for App {
         vec![
             button::custom(row::with_children(vec![icon::from_name("go-home-symbolic").size(16).into(), text::body("Control Panel").into()]).spacing(8).align_y(Alignment::Center))
                 .padding([4, 10])
-                .class(theme::Button::Text)
+                .class(lapin_ux_ui::text())
                 .on_press(Message::Home)
                 .into(),
         ]
@@ -247,7 +256,7 @@ impl cosmic::Application for App {
                     for t in c.tasks {
                         links = links.push(link(t.label, t.target, false));
                     }
-                    row::with_children(vec![icon::from_name(c.icon).size(48).into(), links.into()])
+                    row::with_children(vec![icon::from_name(c.icon).size(48).into(), links.width(Length::Fixed(LINKS_WIDTH)).into()])
                         .spacing(16)
                         .width(Length::Fill)
                         .into()

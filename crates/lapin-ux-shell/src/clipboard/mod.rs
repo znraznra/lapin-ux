@@ -358,7 +358,7 @@ fn clipboard_tab(shell: &Shell) -> Element<'_, Message> {
     let mut list = column::with_capacity(items.len() + 1).spacing(6);
     list = list.push(row::with_children(vec![
         widget::Space::new().width(Length::Fill).into(),
-        button::text("Clear all").on_press(Message::Clip(ClipMsg::ClearAll)).into(),
+        lapin_ux_ui::button::text("Clear all").on_press(Message::Clip(ClipMsg::ClearAll)).into(),
     ]));
     for it in items {
         let content: Element<'_, Message> = match &it.data {

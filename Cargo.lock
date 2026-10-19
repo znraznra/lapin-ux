@@ -2940,6 +2940,7 @@ name = "lapin-ux-control"
 version = "0.1.0"
 dependencies = [
  "lapin-ux-core",
+ "lapin-ux-ui",
  "libcosmic",
 ]
 
@@ -2960,6 +2961,7 @@ dependencies = [
  "futures",
  "jiff",
  "lapin-ux-core",
+ "lapin-ux-ui",
  "libcosmic",
  "serde",
  "tokio",
@@ -2993,6 +2995,7 @@ dependencies = [
  "futures",
  "jiff",
  "lapin-ux-core",
+ "lapin-ux-ui",
  "libc",
  "libcosmic",
  "mime_guess",
@@ -3014,10 +3017,18 @@ name = "lapin-ux-taskmgr"
 version = "0.1.0"
 dependencies = [
  "lapin-ux-core",
+ "lapin-ux-ui",
  "libcosmic",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "lapin-ux-ui"
+version = "0.1.0"
+dependencies = [
+ "libcosmic",
 ]
 
 [[package]]
@@ -3026,6 +3037,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lapin-ux-core",
+ "lapin-ux-ui",
  "libcosmic",
  "tokio",
  "zbus",
@@ -3035,6 +3047,7 @@ dependencies = [
 name = "lapin-ux-welcome"
 version = "0.1.0"
 dependencies = [
+ "lapin-ux-ui",
  "libcosmic",
  "tokio",
 ]

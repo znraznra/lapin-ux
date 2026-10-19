@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 lapin-ux-core.workspace = true
 libcosmic.workspace = true
+lapin-ux-ui.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

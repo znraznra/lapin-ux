@@ -289,7 +289,7 @@ impl cosmic::Application for App {
                 if self.name.is_empty() { "Hi there".into() } else { format!("Hi, {}", self.name) },
                 "Let's get a few things ready. It only takes a minute.".into(),
                 icon::from_name("dev.lapinux.Shell").size(128).into(),
-                button::suggested("Next").on_press(Message::Next).into(),
+                lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),
             Step::Network => {
                 let mut list = column::with_capacity(self.networks.len()).spacing(4);
@@ -328,7 +328,7 @@ impl cosmic::Application for App {
                         rowc = rowc.push(
                             row::with_children(vec![
                                 widget::Space::new().width(Length::Fill).into(),
-                                button::suggested(if self.connecting { "Connecting…" } else { "Connect" })
+                                lapin_ux_ui::button::suggested(if self.connecting { "Connecting…" } else { "Connect" })
                                     .on_press_maybe((!self.connecting).then_some(Message::Connect))
                                     .into(),
                             ]),
@@ -341,7 +341,7 @@ impl cosmic::Application for App {
                         button::custom(container(rowc).padding(10).width(Length::Fill))
                             .width(Length::Fill)
                             .padding(0)
-                            .class(if selected { theme::Button::Standard } else { theme::Button::MenuItem })
+                            .class(if selected { lapin_ux_ui::standard() } else { theme::Button::MenuItem })
                             .on_press(Message::Pick(n.ssid.clone())),
                     );
                 }
@@ -350,7 +350,7 @@ impl cosmic::Application for App {
                     "Let's connect you to a network".into(),
                     "You'll need an internet connection for updates and apps.".into(),
                     scrollable(list).height(Length::Fill).into(),
-                    button::suggested(if online { "Next" } else { "Skip for now" }).on_press(Message::Next).into(),
+                    lapin_ux_ui::button::suggested(if online { "Next" } else { "Skip for now" }).on_press(Message::Next).into(),
                 )
             }
             Step::Mode => (
@@ -362,7 +362,7 @@ impl cosmic::Application for App {
                 ])
                 .spacing(24)
                 .into(),
-                button::suggested("Next").on_press(Message::Next).into(),
+                lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),
             Step::Pointers => (
                 "Windows 11-style mouse pointers".into(),
@@ -370,27 +370,32 @@ impl cosmic::Application for App {
                 match self.pointers {
                     Some(false) => text::body("They couldn't be installed. You can try again later with lapin-ux-cursors.").into(),
                     _ if self.installing_pointers => text::body("Getting them…").into(),
-                    _ => button::standard("Get the pointers").on_press(Message::Pointers).into(),
+                    _ => lapin_ux_ui::button::standard("Get the pointers").on_press(Message::Pointers).into(),
                 },
-                button::suggested("Next").on_press(Message::Next).into(),
+                lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),
             Step::Done => (
                 "You're all set".into(),
                 "Start is in the middle of the taskbar. Press the Windows key any time.".into(),
                 icon::from_name("emblem-ok-symbolic").size(96).into(),
-                button::suggested("Get started").on_press(Message::Finish).into(),
+                lapin_ux_ui::button::suggested("Get started").on_press(Message::Finish).into(),
             ),
         };
         let page = column::with_children(vec![
             text::title1(title).into(),
-            text::body(sub).width(Length::Fixed(520.0)).align_x(cosmic::iced::alignment::Horizontal::Center).into(),
+            container(text::body(sub).align_x(cosmic::iced::alignment::Horizontal::Center))
+                .width(Length::Fixed(520.0))
+                .center_x(Length::Fixed(520.0))
+                .into(),
             widget::Space::new().height(16).into(),
             container(body).width(Length::Fixed(520.0)).height(Length::Fill).align_x(Alignment::Center).into(),
             row::with_children(vec![widget::Space::new().width(Length::Fill).into(), primary]).width(Length::Fixed(520.0)).into(),
         ])
         .spacing(12)
         .align_x(Alignment::Center);
-        container(page).padding([40, 32, 32, 32]).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).into()
+        // The title's line height adds about 12 px above it, so the bottom gets
+        // that much more to look even with the top.
+        container(page).padding([40, 32, 52, 32]).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).into()
     }
 }
 

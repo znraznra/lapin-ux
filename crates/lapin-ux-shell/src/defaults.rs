@@ -22,7 +22,10 @@ fn srgb(hex: u32) -> Srgb {
     Srgb::new(((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0)
 }
 
-/// Small radii on controls, 8 px on windows and panels.
+/// Small radii on controls, 8 px on windows and panels. The largest radius
+/// stays fully round: libcosmic draws toggle switches, slider thumbs and
+/// progress bars with it (Lapin apps give push buttons 4 px corners via
+/// lapin-ux-ui).
 fn radii() -> CornerRadii {
     CornerRadii {
         radius_0: [0.0; 4],
@@ -30,7 +33,7 @@ fn radii() -> CornerRadii {
         radius_s: [4.0; 4],
         radius_m: [8.0; 4],
         radius_l: [8.0; 4],
-        radius_xl: [8.0; 4],
+        radius_xl: [160.0; 4],
     }
 }
 
@@ -42,7 +45,21 @@ fn apply_theme_variant(dark: bool) -> Result<bool, cosmic_config::Error> {
     };
     // Someone who already styled COSMIC (accent or roundness) keeps their look.
     let id = if dark { "com.system76.CosmicTheme.Dark.Builder" } else { "com.system76.CosmicTheme.Light.Builder" };
-    if ["accent", "corner_radii"].iter().any(|k| cfg_path(id).join(k).exists()) {
+    // The theme moved from v1 to v2 config; look in both.
+    let dirs = [cfg_path(id), cfg_path(id).with_file_name("v2")];
+    if ["accent", "corner_radii"].iter().any(|k| dirs.iter().any(|d| d.join(k).exists())) {
+        // Earlier Lapin builds wrote an 8 px largest radius, which squared off
+        // toggles and slider thumbs; move those installs to the round one.
+        let mut b = ThemeBuilder::get_entry(&builder_cfg).unwrap_or_else(|(_, b)| b);
+        let mut old = radii();
+        old.radius_xl = [8.0; 4];
+        if b.corner_radii == old {
+            b.corner_radii = radii();
+            b.write_entry(&builder_cfg)?;
+            b.build().write_entry(&theme_cfg)?;
+            tracing::info!("updated Lapin corner radii (round toggles and sliders)");
+            return Ok(true);
+        }
         tracing::info!("existing {} theme customisation found; leaving it", if dark { "dark" } else { "light" });
         return Ok(false);
     }
@@ -195,7 +212,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 13;
+pub const DEFAULTS_VERSION: u32 = 14;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -310,6 +327,14 @@ pub fn apply_upgrade(from: u32) {
             Ok(true) => tracing::info!("apps on other desktops now ask for attention"),
             Ok(false) => {}
             Err(e) => tracing::warn!("could not set the activation policy: {e}"),
+        }
+    }
+    if from < 14 {
+        // Round toggle switches and slider thumbs again (see `radii`).
+        for dark in [true, false] {
+            if let Err(e) = apply_theme_variant(dark) {
+                tracing::warn!("could not update corner radii: {e}");
+            }
         }
     }
     match apply_keybindings() {

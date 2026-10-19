@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 libcosmic.workspace = true
+lapin-ux-ui.workspace = true
 tokio.workspace = true

@@ -17,7 +17,7 @@ use crate::config::{Role, find_app};
 use crate::panels::{Panel, PanelKind};
 use crate::style;
 
-pub const SHUTDOWN_WIDTH: u32 = 420;
+pub const SHUTDOWN_WIDTH: u32 = 400;
 pub const PROJECT_WIDTH: u32 = 340;
 
 /// What "Shut Down" can do, in the dialog's order.
@@ -251,11 +251,50 @@ impl Shell {
 
 // ---- views ---------------------------------------------------------------------
 
-/// The classic "Shut Down" dialog.
+static OS: std::sync::LazyLock<lapin_ux_core::system::OsInfo> = std::sync::LazyLock::new(lapin_ux_core::system::os_info);
+
+/// Height of the OS banner at the top of the Shut Down dialog.
+const BANNER_HEIGHT: f32 = 72.0;
+
+/// The OS's logo and name on a band, where Windows shows its own banner.
+fn os_banner() -> Element<'static, Message> {
+    let logo: Element<'static, Message> = match OS.logo.as_deref() {
+        Some(name) => icon::from_name(name).size(40).into(),
+        None => icon(icon::from_svg_bytes(crate::taskbar_view::START_ICON)).size(40).into(),
+    };
+    container(
+        row::with_children(vec![logo, text::title3(OS.pretty_name.as_str()).font(cosmic::font::default()).into()])
+            .spacing(14)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fixed(BANNER_HEIGHT))
+    .padding([0, 24])
+    .align_y(Alignment::Center)
+    .class(theme::Container::custom(|t| {
+        let c = t.cosmic();
+        let accent: Color = c.accent_color().into();
+        let deep = Color { r: accent.r * 0.35, g: accent.g * 0.35, b: accent.b * 0.45, a: 1.0 };
+        container::Style {
+            background: Some(Background::Gradient(
+                cosmic::iced::gradient::Linear::new(cosmic::iced::Radians(std::f32::consts::FRAC_PI_2))
+                    .add_stop(0.0, deep)
+                    .add_stop(1.0, Color { a: 1.0, ..accent })
+                    .into(),
+            )),
+            text_color: Some(Color::WHITE),
+            icon_color: Some(Color::WHITE),
+            ..Default::default()
+        }
+    }))
+    .into()
+}
+
+/// The classic "Shut Down" dialog: a fixed-size window.
 pub fn shutdown_view(choice: usize) -> Element<'static, Message> {
     let title = container(
         row::with_children(vec![
-            text::body("Shut Down Lapin UX").width(Length::Fill).into(),
+            text::body(format!("Shut Down {}", OS.name)).width(Length::Fill).into(),
             button::custom(icon::from_name("window-close-symbolic").size(16))
                 .padding(6)
                 .class(style::flat_button(false))
@@ -270,27 +309,29 @@ pub fn shutdown_view(choice: usize) -> Element<'static, Message> {
     let names: &'static [String] = Box::leak(names.into_boxed_slice());
     let pick = widget::dropdown(names, Some(choice), |i| Message::System(SystemMsg::ShutDownPick(i))).width(Length::Fill);
     let body = column::with_children(vec![
-        row::with_children(vec![
-            icon::from_name("system-shutdown-symbolic").size(40).into(),
-            text::title4("What do you want the computer to do?").width(Length::Fill).into(),
-        ])
-        .spacing(16)
-        .align_y(Alignment::Center)
-        .into(),
+        text::body("What do you want the computer to do?").into(),
         pick.into(),
-        text::caption(SHUTDOWN_CHOICES[choice.min(SHUTDOWN_CHOICES.len() - 1)].1).class(style::dim_text()).into(),
+        // Two lines reserved so the window doesn't change size between choices.
+        container(text::caption(SHUTDOWN_CHOICES[choice.min(SHUTDOWN_CHOICES.len() - 1)].1).class(style::dim_text()))
+            .height(Length::Fixed(36.0))
+            .into(),
+        widget::Space::new().height(Length::Fill).into(),
         row::with_children(vec![
             widget::Space::new().width(Length::Fill).into(),
-            button::suggested("OK").on_press(Message::System(SystemMsg::ShutDownOk)).into(),
-            button::standard("Cancel").on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
+            lapin_ux_ui::button::suggested("OK").width(Length::Fixed(88.0)).on_press(Message::System(SystemMsg::ShutDownOk)).into(),
+            lapin_ux_ui::button::standard("Cancel").width(Length::Fixed(88.0)).on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
         ])
         .spacing(8)
         .into(),
     ])
-    .spacing(14)
-    .padding(20);
-    column::with_children(vec![title.into(), body.into()]).into()
+    .spacing(10)
+    .padding([16, 24, 20, 24])
+    .height(Length::Fixed(SHUTDOWN_BODY_HEIGHT));
+    column::with_children(vec![title.into(), os_banner(), body.into()]).into()
 }
+
+/// Everything under the banner, so the dialog keeps one size.
+const SHUTDOWN_BODY_HEIGHT: f32 = 196.0;
 
 /// A tiny drawing of each Win+P choice: one or two screens.
 fn project_icon(p: Project) -> Element<'static, Message> {
@@ -343,7 +384,8 @@ pub fn project_view(p: &ProjectPanel) -> Element<'_, Message> {
 }
 
 fn security_link(label: &'static str, a: SecurityAction) -> Element<'static, Message> {
-    button::custom(text::title4(label))
+    // Regular weight, as on Windows.
+    button::custom(text::title4(label).font(cosmic::font::default()))
         .padding([8, 14])
         .class(style::flat_button(false))
         .on_press(Message::System(SystemMsg::SecurityDo(a)))
@@ -410,13 +452,13 @@ pub fn security_view(shell: &Shell, power: bool) -> Element<'_, Message> {
     } else {
         widget::Space::new().height(0).into()
     };
-    let cancel = button::standard("Cancel").on_press(Message::Panel(crate::panels::PanelMsg::Close));
-    let bottom = row::with_children(vec![
-        widget::Space::new().width(Length::Fill).into(),
-        cancel.into(),
-        widget::Space::new().width(Length::Fill).into(),
-        corner.into(),
-    ])
+    // Cancel sits right under the list, lined up with it.
+    links = links.push(widget::Space::new().height(18));
+    links = links.push(
+        container(lapin_ux_ui::button::standard("Cancel").width(Length::Fixed(120.0)).on_press(Message::Panel(crate::panels::PanelMsg::Close)))
+            .padding([0, 14]),
+    );
+    let bottom = row::with_children(vec![widget::Space::new().width(Length::Fill).into(), corner.into()])
     .align_y(Alignment::Center)
     .padding([0, 24, 24, 24]);
     let backdrop = theme::Container::custom(|_| container::Style {

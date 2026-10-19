@@ -144,3 +144,61 @@ mod tests {
         assert!(!is_protected_package("firefox"));
     }
 }
+
+/// The installed OS as `/etc/os-release` names it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OsInfo {
+    /// `NAME`, e.g. "Arch Linux".
+    pub name: String,
+    /// `PRETTY_NAME`, falling back to `NAME`.
+    pub pretty_name: String,
+    /// `LOGO`: an icon name such as "archlinux-logo", when the OS ships one.
+    pub logo: Option<String>,
+}
+
+pub fn parse_os_release(text: &str) -> OsInfo {
+    let mut info = OsInfo::default();
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
+        match k.trim() {
+            "NAME" => info.name = v,
+            "PRETTY_NAME" => info.pretty_name = v,
+            "LOGO" if !v.is_empty() => info.logo = Some(v),
+            _ => {}
+        }
+    }
+    if info.name.is_empty() {
+        info.name = "Linux".into();
+    }
+    if info.pretty_name.is_empty() {
+        info.pretty_name = info.name.clone();
+    }
+    info
+}
+
+/// Reads `/etc/os-release` (or `/usr/lib/os-release`).
+pub fn os_info() -> OsInfo {
+    let text = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .unwrap_or_default();
+    parse_os_release(&text)
+}
+
+#[cfg(test)]
+mod os_release_tests {
+    use super::*;
+
+    #[test]
+    fn arch() {
+        let i = parse_os_release("NAME=\"Arch Linux\"\nPRETTY_NAME=\"Arch Linux\"\nID=arch\nLOGO=archlinux-logo\n");
+        assert_eq!(i.name, "Arch Linux");
+        assert_eq!(i.logo.as_deref(), Some("archlinux-logo"));
+    }
+
+    #[test]
+    fn missing() {
+        let i = parse_os_release("");
+        assert_eq!((i.name.as_str(), i.pretty_name.as_str(), i.logo), ("Linux", "Linux", None));
+    }
+}

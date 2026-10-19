@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/lapin-ux-core",
+    "crates/lapin-ux-ui",
     "crates/lapin-ux-shell",
     "crates/lapin-ux-notifyd",
     "crates/lapin-ux-session",
@@ -20,6 +21,7 @@ repository = "https://github.com/CHANGE-ME/lapin-ux"
 
 [workspace.dependencies]
 lapin-ux-core = { path = "crates/lapin-ux-core" }
+lapin-ux-ui = { path = "crates/lapin-ux-ui" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
