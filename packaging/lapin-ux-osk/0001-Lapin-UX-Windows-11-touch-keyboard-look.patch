@@ -1,0 +1,160 @@
+From 467e87b3604ccdc1e01ad0343b2e378b4ff23361 Mon Sep 17 00:00:00 2001
+From: Lapin UX <arnz.lee16@gmail.com>
+Date: Mon, 19 Oct 2026 21:25:45 +0800
+Subject: [PATCH] Lapin UX: Windows 11 touch keyboard look
+
+Raised rounded key tiles (letters lighter than function keys, pressed in
+the accent colour), tighter gaps, and emoji and clipboard buttons that
+open Lapin UX's panels.
+---
+ src/lib.rs | 101 ++++++++++++++++++++++++++---------------------------
+ 1 file changed, 49 insertions(+), 52 deletions(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index d54d665..f9c9c60 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -244,6 +244,8 @@ pub enum Message {
+     Size(Size),
+     Ei(ei::Msg),
+     Gilrs(gilrs::Event),
++    /// Lapin UX: open the shell's emoji or clipboard panel.
++    Run(&'static str),
+ }
+ 
+ #[derive(Clone, Copy, Debug)]
+@@ -623,7 +625,7 @@ impl Application for App {
+             focus: None,
+             ime_timeout: None,
+             key_binds: HashMap::new(),
+-            key_padding: 4,
++            key_padding: 3,
+             key_size: 64,
+             layouts: None,
+             group: 0,
+@@ -821,6 +823,9 @@ impl Application for App {
+                 self.focus = Some(id.clone());
+                 return widget::button::focus(id);
+             }
++            Message::Run(what) => {
++                let _ = std::process::Command::new("lapin-ux-shell").arg(what).spawn();
++            }
+             Message::Hide => {
+                 return self.hide(true);
+             }
+@@ -1321,60 +1326,46 @@ impl Application for App {
+                         }
+                     }
+ 
+-                    //TODO: adjust to match design
++                    // Lapin UX: Windows 11 touch keyboard keys: raised rounded
++                    // tiles, letters lighter than the function keys, the
++                    // pressed key in the accent colour.
++                    let special = matches!(key_level.kind, layout::KeyKind::Mod { .. })
++                        || key_level.icon.is_some()
++                        || key_level.name.chars().count() > 1;
+                     let style = {
+-                        use widget::button::Catalog;
+-
+-                        fn adjust(
+-                            theme: &cosmic::Theme,
+-                            selected: bool,
+-                            mut style: widget::button::Style,
+-                        ) -> widget::button::Style {
+-                            let cosmic = theme.cosmic();
+-                            if selected {
+-                                style.overlay = Some(cosmic::iced::Background::Color(
+-                                    cosmic.button.selected_state_color().into(),
+-                                ));
+-                                style.text_color = Some(cosmic.accent_text_color().into());
+-                                style.icon_color = style.text_color;
++                        fn tile(theme: &cosmic::Theme, special: bool, selected: bool, hover: bool, down: bool) -> widget::button::Style {
++                            let c = theme.cosmic();
++                            let ink: cosmic::iced::Color = if c.is_dark { cosmic::iced::Color::WHITE } else { cosmic::iced::Color::BLACK };
++                            let accent: cosmic::iced::Color = c.accent_color().into();
++                            let mut alpha: f32 = if special { 0.05 } else { 0.11 };
++                            if !c.is_dark {
++                                alpha = if special { 0.06 } else { 0.0 };
++                            }
++                            if hover {
++                                alpha += 0.05;
++                            }
++                            let bg = if down || selected {
++                                accent
++                            } else if !c.is_dark && !special {
++                                cosmic::iced::Color::WHITE
++                            } else {
++                                cosmic::iced::Color { a: alpha, ..ink }
++                            };
++                            let fg: cosmic::iced::Color = if down || selected { c.accent_text_color().into() } else { c.on_bg_color().into() };
++                            widget::button::Style {
++                                background: Some(cosmic::iced::Background::Color(bg)),
++                                border_radius: 6.0.into(),
++                                border_width: 0.0,
++                                text_color: Some(if down || selected { cosmic::iced::Color::WHITE } else { fg }),
++                                icon_color: Some(if down || selected { cosmic::iced::Color::WHITE } else { fg }),
++                                ..Default::default()
+                             }
+-                            style.border_radius = cosmic.radius_s().into();
+-                            style
+                         }
+-
+                         theme::Button::Custom {
+-                            active: Box::new(move |focused, theme| {
+-                                adjust(
+-                                    theme,
+-                                    selected,
+-                                    if pressed {
+-                                        theme.pressed(focused, selected, &theme::Button::MenuItem)
+-                                    } else {
+-                                        theme.active(focused, selected, &theme::Button::MenuItem)
+-                                    },
+-                                )
+-                            }),
+-                            disabled: Box::new(move |theme| {
+-                                adjust(theme, selected, theme.disabled(&theme::Button::MenuItem))
+-                            }),
+-                            hovered: Box::new(move |focused, theme| {
+-                                adjust(
+-                                    theme,
+-                                    selected,
+-                                    if pressed {
+-                                        theme.pressed(focused, selected, &theme::Button::MenuItem)
+-                                    } else {
+-                                        theme.hovered(focused, selected, &theme::Button::MenuItem)
+-                                    },
+-                                )
+-                            }),
+-                            pressed: Box::new(move |focused, theme| {
+-                                adjust(
+-                                    theme,
+-                                    selected,
+-                                    theme.pressed(focused, selected, &theme::Button::MenuItem),
+-                                )
+-                            }),
++                            active: Box::new(move |_, theme| tile(theme, special, selected, false, pressed)),
++                            disabled: Box::new(move |theme| tile(theme, special, selected, false, false)),
++                            hovered: Box::new(move |_, theme| tile(theme, special, selected, true, pressed)),
++                            pressed: Box::new(move |_, theme| tile(theme, special, selected, false, true)),
+                         }
+                     };
+ 
+@@ -1454,8 +1445,14 @@ impl Application for App {
+ 
+         let mut column = widget::column::with_capacity(2);
+         column = column.push(widget::row::with_children(vec![
+-            menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
++            widget::button::icon(widget::icon::from_name("face-smile-symbolic"))
++                .on_press(Message::Run("emoji"))
++                .into(),
++            widget::button::icon(widget::icon::from_name("edit-paste-symbolic"))
++                .on_press(Message::Run("clipboard"))
++                .into(),
+             widget::space().width(Length::Fill).into(),
++            menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
+             if self.docked {
+                 widget::button::icon(
+                     widget::icon::from_svg_bytes(include_bytes!("../res/keyboard-undock.svg"))
+-- 
+2.43.0
+

@@ -217,6 +217,8 @@ pub enum Message {
     Extras(crate::comp_extras::ExtrasMsg),
     Snip(crate::snip::SnipMsg),
     Input(crate::input::InputMsg),
+    /// Show or hide the touch keyboard (cosmic-osk).
+    ToggleTouchKeyboard,
     Snap(crate::snap::SnapMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
@@ -1478,6 +1480,21 @@ impl Shell {
             Message::Extras(m) => return self.update_extras(m),
             Message::Snip(m) => return self.update_snip(m),
             Message::Input(m) => return self.update_input(m),
+            Message::ToggleTouchKeyboard => {
+                // cosmic-osk follows its always_shown state live.
+                use cosmic::cosmic_config::ConfigGet;
+                use cosmic::cosmic_config::ConfigSet;
+                if let Ok(cfg) = cosmic::cosmic_config::Config::new_state("com.system76.CosmicOSK", 1) {
+                    let shown: bool = cfg.get("always_shown").unwrap_or(false);
+                    let _ = cfg.set("always_shown", !shown);
+                }
+                // Start it if it isn't running yet.
+                if !std::path::Path::new("/proc").read_dir().is_ok_and(|mut d| {
+                    d.any(|e| e.ok().is_some_and(|e| std::fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.trim() == "cosmic-osk")))
+                }) {
+                    let _ = std::process::Command::new("cosmic-osk").spawn();
+                }
+            }
             Message::Snap(m) => return self.update_snap(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {

@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -31,9 +31,12 @@ makedepends=(
 _comp_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
 # The lock and sign-in screens: upstream cosmic-greeter plus our patches.
 _greeter_commit=5b912ba331af1f6c1cb0cb53fa9366c8f54662c1
+# The touch keyboard: upstream cosmic-osk plus our patches.
+_osk_commit=3a4800a10b03efac1684817238922db5d6746403
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}"
-        "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}")
-sha256sums=('SKIP' 'SKIP')
+        "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}"
+        "cosmic-osk::git+https://github.com/pop-os/cosmic-osk.git#commit=${_osk_commit}")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 options=('!lto')
 
 _src="$startdir/../.."
@@ -56,6 +59,12 @@ prepare() {
     git apply "$_src"/packaging/lapin-ux-greeter/*.patch
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
+
+    cd "$srcdir/cosmic-osk"
+    git reset -q --hard
+    git apply "$_src"/packaging/lapin-ux-osk/*.patch
+    rm -f rust-toolchain rust-toolchain.toml
+    cargo fetch --locked --target "$host"
 }
 
 build() {
@@ -68,6 +77,9 @@ build() {
     CARGO_TARGET_DIR="$srcdir/comp-target" cargo build --frozen --release
 
     cd "$srcdir/cosmic-greeter"
+    just build-release --frozen
+
+    cd "$srcdir/cosmic-osk"
     just build-release --frozen
 }
 
@@ -189,6 +201,18 @@ package_lapin-ux-greeter() {
     provides=('cosmic-greeter')
     conflicts=('cosmic-greeter')
     cd "$srcdir/cosmic-greeter"
+    just rootdir="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-ux-osk() {
+    pkgdesc="COSMIC on-screen keyboard with Lapin UX's Windows 11 touch keyboard look"
+    url="https://github.com/pop-os/cosmic-osk"
+    license=('GPL-3.0-only')
+    depends=('libxkbcommon' 'wayland' 'systemd-libs')
+    provides=('cosmic-osk')
+    conflicts=('cosmic-osk')
+    cd "$srcdir/cosmic-osk"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

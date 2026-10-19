@@ -185,6 +185,16 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         });
         status_slot.push(track(shell, rect_key(bar.id, "quick"), area));
     }
+    // Touch keyboard button (Windows shows it next to the input indicator).
+    if shell.config.touch_keyboard_button {
+        let btn = button::custom(container(icon::from_name("input-keyboard-symbolic").size(16)).center(Length::Fill))
+            .width(32)
+            .height(style::task_button())
+            .padding(0)
+            .class(style::flat_button(false))
+            .on_press(Message::ToggleTouchKeyboard);
+        status_slot.insert(0, btn.into());
+    }
     // Input indicator (several layouts or input methods), then status.
     if let Some(ind) = crate::input::indicator(shell, bar.id) {
         status_slot.insert(0, ind);
@@ -489,6 +499,13 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
         shell.config.show_desktop_corner,
         Message::TaskbarOption(O::ToggleDesktopButton),
     ));
+    if crate::account::which("cosmic-osk") {
+        items.push(menu_check(
+            "Show touch keyboard button",
+            shell.config.touch_keyboard_button,
+            Message::TaskbarOption(O::ToggleTouchKeyboard),
+        ));
+    }
     // Plain rows close any open submenu when hovered.
     items = items.into_iter().map(crate::submenu::leaf).collect();
     items.push(crate::submenu::leaf(menu_divider()));

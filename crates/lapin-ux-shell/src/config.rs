@@ -80,6 +80,8 @@ pub struct ShellConfig {
     pub base_wallpaper: String,
     /// First-run setup (lapin-ux-welcome) has been offered.
     pub welcomed: bool,
+    /// Taskbar button that shows / hides the touch keyboard.
+    pub touch_keyboard_button: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

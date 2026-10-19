@@ -25,6 +25,7 @@ pub enum TaskbarOption {
     Align(TaskbarAlignment),
     ToggleSearch,
     ToggleDesktopButton,
+    ToggleTouchKeyboard,
     ToggleAutoHide,
     /// Open the "Show taskbar apps on" submenu.
     DisplaysMenu,
@@ -197,6 +198,7 @@ impl Shell {
             TaskbarOption::Align(a) => self.config.alignment = a,
             TaskbarOption::ToggleSearch => self.config.show_search = !self.config.show_search,
             TaskbarOption::ToggleDesktopButton => self.config.show_desktop_corner = !self.config.show_desktop_corner,
+            TaskbarOption::ToggleTouchKeyboard => self.config.touch_keyboard_button = !self.config.touch_keyboard_button,
             TaskbarOption::DisplaysMenu => return self.open_submenu("tb-displays", PopupKind::TaskbarDisplays),
             TaskbarOption::MultiDisplay(m) => self.config.multi_display = m,
             TaskbarOption::CombineMenu => return self.open_submenu("tb-combine", PopupKind::TaskbarCombine),
