@@ -786,44 +786,52 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         body = body.push(media_card(shell, p));
     }
     body = body.push(grid);
+    // Brightness and volume rows share one layout: a 24 px icon cell, the
+    // slider, and a 28 px end cell (the sound-output arrow, or empty), so the
+    // two sliders start and end at the same place.
+    let slider_row = |lead: Element<'a, Message>, bar: Element<'a, Message>, end: Option<Element<'a, Message>>| -> Element<'a, Message> {
+        let end = end.unwrap_or_else(|| widget::Space::new().width(28).height(28).into());
+        container(
+            row::with_children(vec![container(lead).width(24).height(24).center(Length::Fixed(24.0)).into(), bar, end])
+                .spacing(10)
+                .align_y(Alignment::Center),
+        )
+        .padding([0, 4])
+        .into()
+    };
     if let Some((_, b)) = &q.backlight {
-        body = body.push(
-            row::with_children(vec![
-                sym("display-brightness-symbolic", &[]).into(),
-                slider(0.0..=1.0, b.fraction(), |v| Message::Quick(QuickMsg::Brightness(v)))
-                    .step(0.01f32)
-                    .on_release(Message::Quick(QuickMsg::BrightnessDone))
-                    .width(Length::Fill)
-                    .into(),
-            ])
-            .spacing(12)
-            .padding([0, 8])
-            .align_y(Alignment::Center),
-        );
+        body = body.push(slider_row(
+            sym("display-brightness-symbolic", &[]).into(),
+            slider(0.0..=1.0, b.fraction(), |v| Message::Quick(QuickMsg::Brightness(v)))
+                .step(0.01f32)
+                .on_release(Message::Quick(QuickMsg::BrightnessDone))
+                .width(Length::Fill)
+                .into(),
+            None,
+        ));
     }
     if q.volume.available {
-        let mut r = row::with_capacity(3).spacing(4).align_y(Alignment::Center);
-        r = r.push(
+        body = body.push(slider_row(
             button::custom(sym(model::volume_icon(&q.volume), &["audio-volume-high-symbolic"]))
                 .padding(4)
                 .class(style::flat_button(false))
-                .on_press(Message::Quick(QuickMsg::Mute)),
-        );
-        r = r.push(
+                .on_press(Message::Quick(QuickMsg::Mute))
+                .into(),
             slider(0.0..=1.0, q.volume.level.min(1.0), |v| Message::Quick(QuickMsg::Volume(v)))
                 .step(0.01f32)
                 .on_release(Message::Quick(QuickMsg::VolumeDone))
-                .width(Length::Fill),
-        );
-        {
-            r = r.push(
+                .width(Length::Fill)
+                .into(),
+            Some(
                 button::custom(sym("pan-end-symbolic", &["go-next-symbolic"]))
+                    .width(28)
+                    .height(28)
                     .padding(6)
                     .class(style::flat_button(false))
-                    .on_press(Message::Quick(QuickMsg::Page(Page::Sound))),
-            );
-        }
-        body = body.push(container(r).padding([0, 4]));
+                    .on_press(Message::Quick(QuickMsg::Page(Page::Sound)))
+                    .into(),
+            ),
+        ));
     }
     if let Some(e) = &q.error {
         body = body.push(text::caption(e.clone()).class(style::dim_text()));
