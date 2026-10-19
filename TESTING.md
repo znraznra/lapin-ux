@@ -76,6 +76,12 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] The thin strip at the far right hides all windows; clicking again brings them back
 - [ ] Drag a pinned icon left/right to reorder it; the order is kept after logging out
 - [ ] Right-click empty taskbar space: alignment, Search box and desktop button options work (and Task Manager if one is installed)
+- [ ] Right-click an app you've opened files with (e.g. a text editor): its recent files are listed at the top and open in that app
+- [ ] Right-click an open app → End task: it closes even if it's frozen
+- [ ] Apps with badges (Thunderbird, Telegram, Discord…) show a count; a download in Firefox shows a green progress bar
+- [ ] Drag a file from the file manager over a running app's button and wait: that app comes forward so you can drop it in
+- [ ] With two monitors: each taskbar shows its own windows per "Show taskbar apps on" in the taskbar's right-click menu
+- [ ] (with lapin-ux-comp) An app on another desktop that wants attention (e.g. a chat message) lights up its taskbar button instead of switching desktops
 - [ ] "Automatically hide the taskbar": it disappears and maximized windows grow to the bottom; pointer to the bottom edge shows it; it stays while you use it or Start is open; it hides again shortly after you move away
 
 ### System tray
@@ -96,6 +102,11 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Copy a `.desktop` file of an installed app to the desktop: it shows the app's icon and starts it
 - [ ] A downloaded `.desktop` file doesn't run until you choose "Allow launching"
 - [ ] Files added to ~/Desktop by other apps appear within a couple of seconds
+- [ ] Recycle Bin: delete a file, the bin looks full; Open shows it in the file manager; Empty Recycle Bin asks first, then empties it
+- [ ] Ctrl-click, Shift-click and dragging a box on empty space select several icons; dragging one of them moves them all
+- [ ] Ctrl+C a file, Ctrl+V: "name - Copy" appears where you last clicked; Ctrl+X then paste in the file manager moves it there; copying in the file manager and Paste on the desktop works too
+- [ ] Drag a desktop file into an app (e.g. an email or chat): it's attached; drag a file from the file manager onto the desktop: it's copied/moved there; drag a link from the browser: a shortcut appears
+- [ ] Drop files onto a desktop folder or the Recycle Bin
 
 ### Clipboard and emoji
 - [ ] Copy a few texts and a picture (e.g. a screenshot) in apps, press Super+V: they're listed, newest first
@@ -118,6 +129,13 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Scrolling over the taskbar icons changes the volume
 - [ ] Battery shows % and time remaining; the gear opens Settings
 - [ ] Opening Quick settings closes the notification centre and vice versa
+- [ ] Play music or a video: the media card shows it; previous / pause / next work
+- [ ] Volume arrow → Volume mixer: each app playing sound has its own slider and mute
+- [ ] Bluetooth → Add device: put a device in pairing mode; it appears; click it; confirm the PIN (or type it); it connects
+- [ ] Accessibility tile: Magnifier zooms in, Color filters turn the screen grey (and Screen reader with Orca installed)
+- [ ] Mobile hotspot: turn it on, connect a phone with the name and password shown
+- [ ] VPN tile (with a VPN set up in Settings) connects and disconnects
+- [ ] With two keyboard layouts set up, the Keyboard layout tile switches between them
 
 ### Start menu
 - [ ] Start button and Search box both open it; clicking outside it (desktop or a window) or Esc closes it
@@ -135,6 +153,10 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Install an app (e.g. `flatpak install` or from the store), open Start: it's listed
 - [ ] Your name (and photo, if set) appear at the bottom
 - [ ] Power menu: Lock, Sign out, Sleep, Restart, Shut down each do what they say
+- [ ] Drag a pinned app onto another: a folder appears; open it, rename it, right-click an app → Move out of folder
+- [ ] Drag pinned apps to reorder them; drop a file or a link from the browser onto the pinned grid to pin it
+- [ ] With LocalSearch installed, search for a word inside a document: the document is found
+- [ ] Click your name: Change account picture lets you pick a photo and it shows up; Switch user goes to the login screen (if your login screen supports it)
 
 ### Notifications
 - [ ] `notify-send "Hello" "Test"` shows a toast bottom-right that disappears after ~5 s
@@ -147,6 +169,9 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Do not disturb switch: new notifications no longer pop up (they still appear in the centre); the bell next to the clock is crossed out; it stays on after logging out and in
 - [ ] The arrow next to the date collapses/expands the calendar; the choice is remembered
 - [ ] Clicking anywhere outside the centre (or Esc) closes it
+- [ ] Events from your calendar (Evolution/GNOME Calendar local calendars, or an .ics link added in the centre's settings) show under the calendar for the selected day
+- [ ] Start a 5-minute Focus session: Do not disturb turns on, the timer counts down, and a notice appears when it ends
+- [ ] Settings (gear): a Do not disturb schedule covering now turns it on; turning an app's Notifications off stops its notifications; Show banners off keeps them in the centre only
 
 ### Look and feel
 - [ ] Interface text uses the Inter font
@@ -166,6 +191,9 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Alt+Tab: hold Alt, press Tab repeatedly: thumbnails of all windows, most recent first; releasing Alt switches to the highlighted one (and you can type in it right away)
 - [ ] A quick Alt+Tab tap flips between the last two windows; Alt+Shift+Tab goes backwards; Esc cancels
 - [ ] Ctrl+Alt+Del shows the sign-out/power dialog
+- [ ] Super+← / Super+→ snap a window to the left/right half; Super+Shift+← / → move it to the other monitor
+- [ ] Super+Tab (or the Task view button) shows Task view; click a window to switch; New desktop adds one; right-click a window → Move to Desktop 2; Ctrl+Super+← / → switch desktops
+- [ ] (with lapin-ux-comp) Super+Z: pick the left third of the thirds layout: the window goes there and Snap assist offers your other windows for the remaining spaces
 
 ### Session
 - [ ] Apps set to start at login (autostart) start

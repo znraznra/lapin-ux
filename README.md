@@ -28,8 +28,15 @@ COSMIC compositor. Arch Linux first.
 - All windows of an app share a button. Click: open / focus / minimize;
   several windows: a window picker. Middle-click: new instance.
 - Accent "pill" under the focused app, short dash for background apps.
-- Right-click: the app's own jump-list actions (e.g. *New Private Window*),
-  pin/unpin, close window(s).
+- Right-click: recent files that app opened (jump list), the app's own
+  actions (e.g. *New Private Window*), pin/unpin, **End task**, close window(s).
+- Count badges and progress bars from apps (Unity LauncherEntry: Firefox,
+  Thunderbird, Telegram, Discord, Steam…). A window that wants attention
+  makes its button flash and stay lit (with `lapin-ux-comp`).
+- Drag a file onto a running app's button to bring that app forward.
+- **Task view** button (Super+Tab). Several monitors: *Show taskbar apps on*
+  (all taskbars / main and where open / where open). Only the current
+  desktop's windows are shown.
 - System tray (StatusNotifierItem): left-click activates, right-click opens
   the app's menu with checkmarks, disabled items and submenus. Discord,
   Steam, Nextcloud, etc. show up here.
@@ -40,7 +47,9 @@ COSMIC compositor. Arch Linux first.
 - Type immediately to search. Ranking favours exact and prefix matches,
   initials (`vsc` → Visual Studio Code), generic names (`browser`), keywords
   and executables (`nautilus` → Files). Arrow keys + Enter work; Esc steps back.
-- Pinned grid (6 × 3), *All apps* with A–Z sections, *Recommended* from recently
+- Pinned grid (6 × 3): drag to reorder, drop one app on another to make a
+  **folder** (rename it, move apps out); pin files, folders and websites (drop
+  them on the grid, or *Pin to Start* on a file result). *All apps* with A–Z sections, *Recommended* from recently
   opened files (`recently-used.xbel`) or recently launched apps.
 - Search also finds **Settings pages** (Wi-Fi, Display, Dark mode…),
   **files and folders** in your Desktop, Documents, Downloads, Music, Pictures
@@ -48,12 +57,15 @@ COSMIC compositor. Arch Linux first.
   **Search the web** (DuckDuckGo by default; `web_search` setting, `{}` = query,
   `hide_web_search` to turn it off). Results are grouped Best match / Apps /
   Settings / Folders / Documents / Web with a details card; files have
-  *Open file location*.
+  *Open file location*. With LocalSearch installed, **document contents** are
+  searched too.
 - Right-click any app: pin/unpin to Start or taskbar, **Uninstall** (asks
   first; pacman packages through an admin prompt, Flatpaks directly; core
   desktop packages are refused). Newly installed or removed apps appear the
   next time Start opens.
-- Account name/avatar, and a power menu: Lock, Sign out, Sleep, Restart, Shut down.
+- Account button: Change account settings, **Change account picture**, Lock,
+  Sign out, **Switch user** (LightDM, SDDM, GDM). Power menu: Lock, Sign out,
+  Sleep, Restart, Shut down.
 
 **Notifications** (`lapin-ux-notifyd`)
 - Full `org.freedesktop.Notifications` server: actions, urgency, replace-id,
@@ -62,17 +74,25 @@ COSMIC compositor. Arch Linux first.
   hover pauses the timer. Raw `image-data` pictures (chat avatars, photos) shown.
 - **Notification centre** (click the clock or Super+N): notifications grouped
   by app with time, per-item and per-app dismiss, Clear all, Do not disturb,
-  and a collapsible calendar underneath. Clicking a notification opens its app.
+  and a collapsible calendar underneath with **today's agenda** (local
+  Evolution calendars, .ics files, calendar links; repeating events) and
+  **Focus sessions**. Clicking a notification opens its app.
+- Notification settings (gear): Do not disturb on a **schedule**, and per-app
+  *Notifications* / *Show banners* switches.
 - The clock shows a bell with the unread count, or a muted bell during
   Do not disturb. `lapin-ux-notifyd center` toggles the centre from scripts;
   `dev.lapinux.Notifications` on the session bus exposes `Unread`,
   `DoNotDisturb`, `ToggleCenter` and `ClearAll`.
 
 **Desktop icons** (the contents of ~/Desktop, on the main monitor)
-- Click selects, double-click / Enter opens, drag moves an icon to another
-  spot (remembered), F2 renames in place, Delete moves to the Trash
-  (restorable from the file manager), picture files show thumbnails.
-- Right-click an icon: Open, Copy as path, Rename, Delete. App launchers
+- **Recycle Bin** icon (Open, Empty Recycle Bin); drop files on it to delete.
+- Click selects; Ctrl-click, Shift-click and dragging a box select several.
+  Double-click / Enter opens, drag moves icons (remembered), F2 renames in
+  place, Delete moves to the Trash, picture files show thumbnails.
+- **Cut / Copy / Paste** (Ctrl+X/C/V, works with file managers), Ctrl+A.
+- **Drag and drop**: icons drag into apps as files; files and links from
+  apps drop onto the desktop (links become shortcuts) or onto folders.
+- Right-click an icon: Open, Cut, Copy, Copy as path, Rename, Delete. App launchers
   (`.desktop`) show the app's name and icon; one that isn't an installed app
   only runs after *Allow launching* (it could have come from a download).
 - Right-click the desktop: View (Large/Medium/Small icons, Show desktop
@@ -102,20 +122,30 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   (virtual keyboard), without touching your clipboard.
 
 **Quick settings** (network / volume / battery button left of the clock, or Super+A)
-- Tiles: Wi-Fi, Bluetooth, Airplane mode, Energy saver, Do not disturb. Each
-  appears only when its service exists (NetworkManager, BlueZ,
-  power-profiles-daemon, the notification daemon).
+- **Media controls** for what's playing (MPRIS).
+- Tiles: Wi-Fi, Bluetooth, Airplane mode, Energy saver, Accessibility
+  (magnifier, colour filters, screen reader), Mobile hotspot, Nearby sharing,
+  Cast, Keyboard layout, VPN, Do not disturb. Each appears only when what it
+  needs exists.
 - Wi-Fi page: nearby networks, connect to saved, open and password-protected
-  networks, disconnect. Bluetooth page: connect/disconnect paired devices.
+  networks, disconnect. Bluetooth page: connect/disconnect, and **Add device**
+  (pairing with PIN prompts; the shell is the Bluetooth agent).
 - Brightness slider (laptops; through logind, no root needed), volume slider
-  with mute, sound output picker. Scroll over the taskbar button to change volume.
+  with mute, sound output picker and **per-app volume mixer**. Scroll over the taskbar button to change volume.
 - Battery percentage and time remaining (UPower); the settings gear opens
   COSMIC Settings, and each page links to its settings page.
-- Pairing new Bluetooth devices and advanced network setup (VPN, static IP)
-  are in COSMIC Settings for now.
+- Night light and rotation lock aren't possible on cosmic-comp yet.
+
+**Task view and snapping**
+- Task view: windows of the current desktop as thumbnails, desktops below
+  (hover to preview, click to switch, × to remove), New desktop, right-click a
+  window to move it to another desktop.
+- **Snap layouts** (Super+Z): halves, 2/3 + 1/3, thirds, half + quarters,
+  quarters, 1/4-1/2-1/4 on wide screens; then **Snap assist** fills the other
+  spaces from your windows. Needs `lapin-ux-comp` (below).
 
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
-- Starts cosmic-comp in normal (not kiosk) mode using the same handshake as
+- Starts `lapin-ux-comp` if installed (else cosmic-comp) in normal (not kiosk) mode using the same handshake as
   cosmic-session, exports the display to systemd/D-Bus, then starts and
   supervises every component with exponential back-off restarts.
 - `dev.lapinux.Session.Exit` on the session bus for Sign out.
@@ -142,15 +172,20 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 | Super + 1…9 | Open / switch to the n-th taskbar app |
 | Super + L | Lock |
 | Super + ↑ / ↓ | Maximize / minimize |
+| Super + ← / → | Snap to the left / right half |
+| Super + Shift + ← / → | Move the window to the next monitor |
+| Super + Z | Snap layouts (needs `lapin-ux-comp`) |
+| Super + Tab | Task view |
+| Ctrl + Super + ← / → | Previous / next desktop |
+| Ctrl + Super + D | New desktop |
 | Super + Shift + S | Screenshot |
-| Alt + Tab | Switch windows |
 | Ctrl + Alt + Del | Sign-out / power dialog |
 
 ## Architecture
 
 ```
 display manager ──> start-lapin-ux ──> lapin-ux-session
-                                      ├─ cosmic-comp            compositor (reused, unmodified)
+                                      ├─ lapin-ux-comp / cosmic-comp  compositor (ours = upstream + 1 small patch)
                                       ├─ lapin-ux-shell           taskbar ×N, Start menu, tray   ← ours
                                       ├─ lapin-ux-notifyd         notification toasts + centre   ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
@@ -162,10 +197,15 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 
 | Crate | What it is | Depends on libcosmic |
 |---|---|---|
-| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files. 36 unit tests. | no |
+| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts. 73 unit tests. | no |
 | `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
 | `lapin-ux-notifyd` | Notification server and toasts | yes |
 | `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
+
+`lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
+pinned commit plus one patch adding `lapin_shell_v1` (`protocols/`): snap a
+window into a fraction of the work area, and tell the shell when a window
+asks for attention. Everything else works on stock cosmic-comp.
 
 Window tracking supports two backends: cosmic-comp's protocols (full
 control) and `wlr-foreign-toplevel-management` (sway, Hyprland, labwc,
@@ -174,7 +214,7 @@ niri…), so the shell also runs on wlroots compositors.
 All settings use cosmic-config and apply live:
 `~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
 `alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
-`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`, `auto_hide`).
+`show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`, `desktop_auto_arrange`, `auto_hide`, `multi_display`, `hotspot_password`).
 
 ## Install on Arch
 
@@ -184,6 +224,12 @@ sudo pacman -S --needed base-devel rust python-numpy python-pillow \
     cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font
 cd packaging/arch
 makepkg -si
+```
+
+Optional, for snap layouts and taskbar flashing:
+
+```sh
+cd packaging/lapin-ux-comp && makepkg -si
 ```
 
 Log out, pick **Lapin UX** in your display manager's session list, log in.
@@ -227,9 +273,10 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 
 - **Settings app** (display, network, Bluetooth, sound, power, users, default
   apps); COSMIC Settings fills in until then.
-- **Task view** (Super+Tab uses COSMIC's workspaces overview for now).
-- **Snap** halves/quarters on Super+←/→ and snap layouts (needs compositor work).
-- Taskbar badges/progress.
+- Widgets board and Copilot-style assistant button (left out on purpose).
+- Wallpaper slideshow and daily picture.
+- Snap groups, "peek" at the desktop, night light, rotation lock (need more
+  compositor work).
 - File manager, update center (pacman + Flatpak + fwupd), control panel.
 
 ## License
