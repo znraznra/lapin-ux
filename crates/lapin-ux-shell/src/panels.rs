@@ -39,6 +39,12 @@ pub enum PanelKind {
     AltTab(crate::previews::AltTab),
     TaskView(crate::taskview::TaskView),
     Snap(crate::snap::SnapPanel),
+    /// Alt+F4 on the desktop.
+    ShutDown { choice: usize },
+    /// Win+P.
+    Project(crate::system_ui::ProjectPanel),
+    /// Ctrl+Alt+Del. `power`: the power button's menu is open.
+    Security { power: bool },
 }
 
 pub struct Panel {
@@ -192,10 +198,18 @@ impl Shell {
                 IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
                 crate::quick::WIDTH,
             ),
+            PanelKind::ShutDown { .. } => (Anchor::empty(), IcedMargin::default(), crate::system_ui::SHUTDOWN_WIDTH),
+            PanelKind::Project(_) => (
+                Anchor::BOTTOM | Anchor::RIGHT,
+                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
+                crate::system_ui::PROJECT_WIDTH,
+            ),
+            // The whole screen, taskbar included.
+            PanelKind::Security { .. } => (Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, IcedMargin::default(), 0),
         };
         let focus_run = matches!(kind, PanelKind::Run { .. });
         // Task view covers the whole screen.
-        let full = matches!(kind, PanelKind::TaskView(_));
+        let full = matches!(kind, PanelKind::TaskView(_) | PanelKind::Security { .. });
         self.panel = Some(Panel { id, kind });
         let r = if full { 0 } else { style::PANEL_RADIUS as u32 };
         tasks.push(cosmic::surface::surface_task(app_layer_shell(
@@ -296,6 +310,11 @@ impl Shell {
 
     /// Arrow keys / Enter / Esc inside a panel.
     pub(crate) fn panel_key(&mut self, key: Named) -> Task<Message> {
+        if key != Named::Escape
+            && let Some(t) = self.system_key(key)
+        {
+            return t;
+        }
         let Some(panel) = &self.panel else { return Task::none() };
         match (&panel.kind, key) {
             (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
@@ -331,8 +350,13 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
     if let PanelKind::TaskView(t) = &panel.kind {
         return crate::taskview::view(shell, t, panel.id);
     }
+    if let PanelKind::Security { power } = &panel.kind {
+        return crate::system_ui::security_view(shell, *power);
+    }
     let content: Element<'_, Message> = match &panel.kind {
-        PanelKind::TaskView(_) => unreachable!(),
+        PanelKind::TaskView(_) | PanelKind::Security { .. } => unreachable!(),
+        PanelKind::ShutDown { choice } => crate::system_ui::shutdown_view(*choice),
+        PanelKind::Project(p) => crate::system_ui::project_view(p),
         PanelKind::Snap(s) => crate::snap::view(shell, s),
         PanelKind::WinX { power, selected } => {
             let mut col = column::with_capacity(20).spacing(1);
@@ -423,8 +447,10 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Quick(_) => crate::quick::WIDTH,
         PanelKind::Clip(_) => crate::clipboard::WIDTH,
         PanelKind::AltTab(a) => crate::previews::switcher_width(a.order.len()),
-        PanelKind::TaskView(_) => 0,
+        PanelKind::TaskView(_) | PanelKind::Security { .. } => 0,
         PanelKind::Snap(_) => crate::snap::WIDTH,
+        PanelKind::ShutDown { .. } => crate::system_ui::SHUTDOWN_WIDTH,
+        PanelKind::Project(_) => crate::system_ui::PROJECT_WIDTH,
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),

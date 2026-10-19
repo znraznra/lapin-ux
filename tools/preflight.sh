@@ -26,7 +26,7 @@ esac
 echo "Runtime packages (./install.sh installs any that are missing)"
 missing=""
 for p in cosmic-comp cosmic-settings-daemon cosmic-settings cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic xdg-desktop-portal-gtk \
+         cosmic-launcher cosmic-screenshot cosmic-randr cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic xdg-desktop-portal-gtk \
          fontconfig noto-fonts noto-fonts-cjk libxkbcommon wayland dbus systemd-libs xdg-utils glib2 \
          networkmanager upower wireplumber libpulse bluez bluez-utils power-profiles-daemon accountsservice localsearch gnome-keyring; do
     if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else fail "$p"; missing="$missing $p"; fi

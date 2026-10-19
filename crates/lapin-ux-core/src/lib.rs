@@ -11,6 +11,7 @@ pub mod badge;
 pub mod clip;
 pub mod clock;
 pub mod desktop;
+pub mod display;
 pub mod dnd;
 pub mod files;
 pub mod ics;

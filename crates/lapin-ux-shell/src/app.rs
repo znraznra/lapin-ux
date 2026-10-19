@@ -207,6 +207,8 @@ pub enum Message {
     /// Ctrl + a letter key.
     CtrlKey(window::Id, String),
     Account(crate::account::AccountMsg),
+    /// Alt+F4 dialog, Win+P, Ctrl+Alt+Del.
+    System(crate::system_ui::SystemMsg),
     /// Content-search hits for a query.
     ContentHits(String, Vec<std::path::PathBuf>),
     Pins(crate::start_pins::PinMsg),
@@ -283,6 +285,8 @@ pub struct Shell {
     /// Account picture chosen this session (AccountsService keeps it too).
     pub avatar: Option<std::path::PathBuf>,
     pub can_switch_user: bool,
+    /// The desktop has the keyboard (clicked since the last window was focused).
+    pub(crate) desktop_focused: bool,
     /// When windows asked for attention (their buttons flash for a while).
     pub attention: HashMap<Handle, Instant>,
     /// lapin-ux-comp is running: snap layouts work.
@@ -772,6 +776,7 @@ impl Application for Shell {
             drag_hover: None,
             avatar: None,
             can_switch_user: false,
+            desktop_focused: false,
             attention: HashMap::new(),
             snap_supported: false,
             desktops: Default::default(),
@@ -863,6 +868,9 @@ impl Application for Shell {
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 "emoji" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Emoji))),
                 "notifications" => self.update(Message::ToggleNotifications),
+                "close" => self.update(Message::System(crate::system_ui::SystemMsg::AltF4)),
+                "project" => self.update(Message::System(crate::system_ui::SystemMsg::Project)),
+                "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
                     None => Task::none(),
@@ -1051,6 +1059,13 @@ impl Shell {
             }
             Message::Layer(LayerEvent::Unfocused, id) if self.panel.as_ref().is_some_and(|p| p.id == id) => {
                 return self.close_panel();
+            }
+            // Alt+F4 on the desktop opens the Shut Down dialog instead of closing a window.
+            Message::Layer(LayerEvent::Focused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
+                self.desktop_focused = true;
+            }
+            Message::Layer(LayerEvent::Unfocused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
+                self.desktop_focused = false;
             }
             Message::Layer(..) => {}
             Message::PopupClosed(id) => {
@@ -1371,6 +1386,7 @@ impl Shell {
                 }
             }
             Message::Account(m) => return self.update_account(m),
+            Message::System(m) => return self.update_system(m),
             Message::ContentHits(q, hits) => {
                 if let Some(s) = &mut self.start
                     && s.query == q

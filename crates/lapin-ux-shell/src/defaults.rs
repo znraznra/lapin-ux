@@ -141,7 +141,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 10;
+pub const DEFAULTS_VERSION: u32 = 11;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -184,7 +184,12 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Super, Ctrl], key: "Right"): NextWorkspace,"#.to_string(),
         r#"(modifiers: [Super, Ctrl], key: "d"): LastWorkspace,"#.to_string(),
         r#"(modifiers: [Super, Shift], key: "s"): System(Screenshot),"#.to_string(),
-        r#"(modifiers: [Ctrl, Alt], key: "Delete"): System(LogOut),"#.to_string(),
+        // Security options screen (Lock, Switch user, Sign out, Task Manager…).
+        r#"(modifiers: [Ctrl, Alt], key: "Delete"): Spawn("lapin-ux-shell security"),"#.to_string(),
+        // Closes the window in front; on the desktop, the Shut Down dialog.
+        r#"(modifiers: [Alt], key: "F4"): Spawn("lapin-ux-shell close"),"#.to_string(),
+        // Project: PC screen only / Duplicate / Extend / Second screen only.
+        r#"(modifiers: [Super], key: "p"): Spawn("lapin-ux-shell project"),"#.to_string(),
     ];
     // Super+1…9 open the n-th taskbar app (these keys switch workspaces in COSMIC).
     for n in 1..=9 {

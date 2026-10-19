@@ -77,6 +77,7 @@ package_lapin-ux-desktop-git() {
         'cosmic-greeter'           # login and lock screen
         'cosmic-launcher'
         'cosmic-screenshot'        # Super+Shift+S
+        'cosmic-randr'             # Win+P display switching, auto-rotate
         'cosmic-icon-theme'        # fallback for icons neither icon set has
         'adwaita-icon-theme'
         'xdg-desktop-portal-cosmic'

@@ -37,6 +37,7 @@ mod submenu;
 mod start_view;
 mod taskbar_extras;
 mod taskbar_view;
+mod system_ui;
 mod taskview;
 mod tray;
 mod wayland;
