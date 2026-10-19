@@ -72,6 +72,12 @@ pub struct ShellConfig {
     pub rotation_lock: bool,
     /// Don't peek at the desktop when hovering the taskbar's far corner.
     pub no_desktop_peek: bool,
+    /// Virtual desktops by position: their names ("" = "Desktop n") and
+    /// backgrounds ("" = the usual wallpaper).
+    pub desktop_names: Vec<String>,
+    pub desktop_wallpapers: Vec<String>,
+    /// The usual wallpaper, remembered while a desktop shows its own.
+    pub base_wallpaper: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

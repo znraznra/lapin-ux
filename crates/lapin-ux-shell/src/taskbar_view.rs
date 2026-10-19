@@ -725,6 +725,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
         PopupKind::Account => crate::account::menu(shell),
         PopupKind::MoveToDesktop(w) => crate::taskview::move_menu(shell, *w),
+        PopupKind::DesktopTile(i) => crate::taskview::desktop_menu(shell, *i),
+        PopupKind::DesktopBackground(i) => crate::taskview::background_menu(shell, *i),
         PopupKind::ConfirmEmptyTrash => panel(
             column::with_children(vec![
                 text::heading("Delete multiple items").into(),

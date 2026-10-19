@@ -116,6 +116,32 @@ fn apply_wallpaper(dark: bool) -> Result<bool, cosmic_config::Error> {
     Ok(true)
 }
 
+/// The wallpaper cosmic-bg shows on every monitor now, if it's a picture.
+pub(crate) fn current_wallpaper() -> Option<PathBuf> {
+    let ron = std::fs::read_to_string(cfg_path("com.system76.CosmicBackground").join("all")).ok()?;
+    let start = ron.find("Path(\"")? + 6;
+    let end = start + ron[start..].find("\")")?;
+    Some(PathBuf::from(&ron[start..end]))
+}
+
+/// Show `file` on every monitor (cosmic-bg follows its config live).
+pub(crate) fn set_wallpaper(file: &Path) -> Result<(), cosmic_config::Error> {
+    let cfg = cosmic_config::Config::new("com.system76.CosmicBackground", 1)?;
+    cfg.set("same-on-all", true)?;
+    cfg.set(
+        "all",
+        BgEntry {
+            output: "all".into(),
+            source: BgSource::Path(file.to_path_buf()),
+            filter_by_theme: false,
+            rotation_frequency: 3600,
+            filter_method: BgFilter::Lanczos,
+            scaling_mode: BgScaling::Zoom,
+            sampling_method: BgSampling::Alphanumeric,
+        },
+    )
+}
+
 /// Point the Super key (and Super+A) at our Start menu. `lapin-ux-shell start`
 /// falls back to cosmic-launcher outside an Lapin UX session, so this is safe
 /// for people who also log into COSMIC.

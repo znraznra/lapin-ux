@@ -96,6 +96,10 @@ pub enum PopupKind {
     Account,
     /// Task view: move a window to another desktop.
     MoveToDesktop(crate::wayland::WindowId),
+    /// Task view: right-click on a desktop (by position), and its
+    /// "Choose background" picker.
+    DesktopTile(usize),
+    DesktopBackground(usize),
     /// "Permanently delete everything in the Recycle Bin?"
     ConfirmEmptyTrash,
     /// Right-click on a pinned file, site or folder in Start.
@@ -502,7 +506,9 @@ impl Shell {
         }
         let id = window::Id::unique();
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
-        let above = self.bars.iter().any(|b| b.id == parent);
+        // Menus over the taskbar, or the Task view's desktop row, open upwards.
+        let above = self.bars.iter().any(|b| b.id == parent)
+            || matches!(kind, PopupKind::DesktopTile(_) | PopupKind::DesktopBackground(_));
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         // Hover previews must not take the pointer or keyboard.
         let grab = !matches!(kind, PopupKind::Preview(_));
@@ -1042,6 +1048,7 @@ impl Shell {
                 WaylandUpdate::Workspaces(list, can_create) => {
                     self.desktops.list = list;
                     self.desktops.can_create = can_create;
+                    self.sync_desktop_wallpaper();
                 }
                 WaylandUpdate::Thumbnail { id, width, height, rgba } => {
                     return self.update_preview(crate::previews::PreviewMsg::Thumbnail(id, width, height, rgba));
