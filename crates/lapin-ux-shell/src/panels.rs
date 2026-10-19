@@ -43,6 +43,8 @@ pub enum PanelKind {
     ShutDown { choice: usize },
     /// Win+P.
     Project(crate::system_ui::ProjectPanel),
+    /// A file's Properties window.
+    Properties(Box<crate::properties::PropsPanel>),
     /// Ctrl+Alt+Del. `power`: the power button's menu is open.
     Security { power: bool },
 }
@@ -204,6 +206,7 @@ impl Shell {
                 crate::quick::WIDTH,
             ),
             PanelKind::ShutDown { .. } => (Anchor::empty(), IcedMargin::default(), crate::system_ui::SHUTDOWN_WIDTH),
+            PanelKind::Properties(_) => (Anchor::empty(), IcedMargin::default(), crate::properties::WIDTH),
             PanelKind::Project(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
                 IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
@@ -362,6 +365,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::TaskView(_) | PanelKind::Security { .. } => unreachable!(),
         PanelKind::ShutDown { choice } => crate::system_ui::shutdown_view(*choice),
         PanelKind::Project(p) => crate::system_ui::project_view(p),
+        PanelKind::Properties(p) => crate::properties::view(shell, p),
         PanelKind::Snap(s) => crate::snap::view(shell, s),
         PanelKind::WinX { power, selected } => {
             let mut col = column::with_capacity(20).spacing(1);
@@ -455,6 +459,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::TaskView(_) | PanelKind::Security { .. } => 0,
         PanelKind::Snap(_) => crate::snap::WIDTH,
         PanelKind::ShutDown { .. } => crate::system_ui::SHUTDOWN_WIDTH,
+        PanelKind::Properties(_) => crate::properties::WIDTH,
         PanelKind::Project(_) => crate::system_ui::PROJECT_WIDTH,
     } as f32;
     widget::autosize::autosize(

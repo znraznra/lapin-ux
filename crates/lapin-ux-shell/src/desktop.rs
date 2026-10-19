@@ -22,7 +22,7 @@ use cosmic::iced::platform_specific::shell::commands::layer_surface::{
 use cosmic::iced::clipboard::dnd::DndAction;
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Point, Rectangle, window};
 use cosmic::widget::{self, column, container, icon, mouse_area, row, text};
-use cosmic::{Element, theme};
+use cosmic::{Application, Element, theme};
 use lapin_ux_core::desktop::{self as model, Cell, DesktopItem, SortBy};
 use cosmic::cctk::wayland_client::protocol::wl_output::WlOutput;
 
@@ -36,8 +36,37 @@ const MARGIN: f32 = 8.0;
 /// The Recycle Bin's place in the icon list (never a real file name).
 const TRASH_NAME: &str = "::recycle-bin";
 
+/// The user's Documents folder (xdg-user-dirs, else ~/Documents).
+fn dirs_documents() -> PathBuf {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let cfg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    std::fs::read_to_string(cfg.join("user-dirs.dirs"))
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| l.strip_prefix("XDG_DOCUMENTS_DIR=").map(|v| v.trim_matches('"').replace("$HOME", &home.to_string_lossy())))
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("Documents"))
+}
+
 fn trash_path() -> PathBuf {
     PathBuf::from("trash:///")
+}
+
+fn trash_shown(full: bool) -> Shown {
+    Shown {
+        item: DesktopItem {
+            path: trash_path(),
+            file_name: TRASH_NAME.into(),
+            is_dir: true,
+            launcher: false,
+            modified: None,
+            size: 0,
+        },
+        label: "Recycle Bin".into(),
+        look: Look::Named(if full { "user-trash-full".into() } else { "user-trash".into() }),
+        launch: None,
+    }
 }
 
 fn data_home() -> PathBuf {
@@ -115,6 +144,12 @@ pub enum MenuPage {
     View,
     Sort,
     New,
+    /// An icon's "Open with" list.
+    OpenWith,
+    /// An icon's "Send to" list.
+    SendTo,
+    /// "Show more options": the classic, longer icon menu.
+    More,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +195,43 @@ pub enum DesktopMsg {
     Paste,
     Settings(&'static str),
     Terminal,
+    Properties,
+    Compress,
+    OpenWithApp(String),
+    CreateShortcut,
+    SendToDocuments,
+    ToggleSpecial(&'static str),
+}
+
+/// Extra desktop icons (Desktop icon settings), in Windows' order.
+pub const SPECIAL: [(&str, &str, &str); 4] = [
+    ("this-pc", "This PC", "computer"),
+    ("user", "", "user-home"),
+    ("network", "Network", "network-workgroup"),
+    ("control", "Control Panel", "preferences-system"),
+];
+
+fn special_path(id: &str) -> PathBuf {
+    PathBuf::from(format!("lapin-desktop:///{id}"))
+}
+
+fn special_id(path: &Path) -> Option<&str> {
+    path.to_str()?.strip_prefix("lapin-desktop:///")
+}
+
+/// Apps that can open `path` (its MIME type from the extension).
+pub fn open_with_apps(shell: &Shell, path: &Path) -> Vec<String> {
+    let mime = if path.is_dir() { "inode/directory".to_string() } else { mime_guess::from_path(path).first_raw().unwrap_or("text/plain").to_string() };
+    let mut ids: Vec<String> = shell
+        .catalog
+        .apps()
+        .iter()
+        .filter(|a| a.data.mime_types.iter().any(|m| m.essence_str() == mime))
+        .map(|a| a.data.id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 impl IconSize {
@@ -248,7 +320,7 @@ impl Shell {
         }
     }
 
-    fn reload_desktop(&mut self) {
+    pub(crate) fn reload_desktop(&mut self) {
         let sort = self.config.desktop_sort;
         let locales = cosmic::desktop::fde::get_languages_from_env();
         let Some(d) = &mut self.desktop else { return };
@@ -293,22 +365,32 @@ impl Shell {
         // The Recycle Bin comes first, like the benchmark's.
         d.trash_full = trash_count() > 0;
         d.trash_stamp = std::fs::metadata(data_home().join("Trash/files")).and_then(|m| m.modified()).ok();
-        d.items.insert(
-            0,
-            Shown {
-                item: DesktopItem {
-                    path: trash_path(),
-                    file_name: TRASH_NAME.into(),
-                    is_dir: true,
-                    launcher: false,
-                    modified: None,
-                    size: 0,
-                },
-                label: "Recycle Bin".into(),
-                look: Look::Named(if d.trash_full { "user-trash-full".into() } else { "user-trash".into() }),
-                launch: None,
-            },
-        );
+        // Desktop icon settings: This PC, the user's folder, Network, Recycle Bin, Control Panel.
+        let mut specials = Vec::new();
+        let user = std::env::var("USER").unwrap_or_else(|_| "User".into());
+        for (id, label, icon) in SPECIAL {
+            if id == "control" && !self.config.hide_recycle_bin {
+                specials.push(trash_shown(d.trash_full));
+            }
+            if self.config.desktop_special.iter().any(|s| s == id) {
+                specials.push(Shown {
+                    item: DesktopItem {
+                        path: special_path(id),
+                        file_name: format!("::{id}"),
+                        is_dir: true,
+                        launcher: false,
+                        modified: None,
+                        size: 0,
+                    },
+                    label: if id == "user" { user.clone() } else { label.to_string() },
+                    look: Look::Named(icon.into()),
+                    launch: None,
+                });
+            }
+        }
+        for (i, s) in specials.into_iter().enumerate() {
+            d.items.insert(i, s);
+        }
         let paths: HashSet<&PathBuf> = d.items.iter().map(|s| &s.item.path).collect();
         d.selected.retain(|p| paths.contains(p));
     }
@@ -344,6 +426,22 @@ impl Shell {
     fn open_item(&mut self, path: &Path) -> Task<Message> {
         if path == trash_path() {
             return open_trash();
+        }
+        if let Some(id) = special_id(path) {
+            let files = crate::config::find_app(&self.catalog, crate::config::Role::Files);
+            let open_in_files = |target: &str| match &files {
+                Some(app) => Message::OpenWith(app.clone(), PathBuf::from(target)),
+                None => Message::OpenWith(String::new(), PathBuf::from(target)),
+            };
+            return match id {
+                "this-pc" => self.update(open_in_files("/")),
+                "user" => self.update(open_in_files(&std::env::var("HOME").unwrap_or_else(|_| "/".into()))),
+                "network" => self.update(open_in_files("network:///")),
+                _ => match ["dev.lapinux.ControlPanel"].iter().find(|a| self.catalog.get(a).is_some()) {
+                    Some(app) => self.launch(app),
+                    None => self.open_settings(""),
+                },
+            };
         }
         let Some(shown) = self.desktop.as_ref().and_then(|d| d.items.iter().find(|s| s.item.path == path)).cloned() else {
             return Task::none();
@@ -765,13 +863,105 @@ impl Shell {
                 return self.open_popup(id, &key, PopupKind::DesktopMenu(on, MenuPage::Main));
             }
             DesktopMsg::Menu(page) => {
+                // The icon the open menu belongs to, if any.
+                let on = match self.popup.as_ref().map(|p| &p.kind) {
+                    Some(PopupKind::DesktopMenu(on, _)) => on.clone(),
+                    _ => None,
+                };
                 let key = match page {
                     MenuPage::Main => return self.close_submenu(),
                     MenuPage::View => "desk-view",
                     MenuPage::Sort => "desk-sort",
                     MenuPage::New => "desk-new",
+                    MenuPage::OpenWith => "desk-openwith",
+                    MenuPage::SendTo => "desk-sendto",
+                    MenuPage::More => {
+                        // Swap the open menu for the classic one in place.
+                        let close = self.close_submenu();
+                        if let Some(p) = self.popup.as_mut() {
+                            p.kind = PopupKind::DesktopMenu(on, MenuPage::More);
+                        }
+                        return close;
+                    }
                 };
-                return self.open_submenu(key, PopupKind::DesktopMenu(None, page));
+                let on = if matches!(page, MenuPage::OpenWith | MenuPage::SendTo) { on } else { None };
+                return self.open_submenu(key, PopupKind::DesktopMenu(on, page));
+            }
+            DesktopMsg::Properties => {
+                let target = self.selection().into_iter().next();
+                let close = self.close_popup();
+                return match target {
+                    Some(p) => Task::batch([close, self.update(Message::Props(crate::properties::PropsMsg::Open(p)))]),
+                    None => close,
+                };
+            }
+            DesktopMsg::OpenWithApp(app) => {
+                let Some(target) = self.selection().into_iter().next() else { return self.close_popup() };
+                let close = self.close_popup();
+                return Task::batch([close, self.update(Message::OpenWith(app, target))]);
+            }
+            DesktopMsg::Compress => {
+                let dir = d.dir.clone();
+                let files = self.selection();
+                let close = self.close_popup();
+                let Some(first) = files.first().cloned() else { return close };
+                let stem = first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into());
+                let name = model::unique_name(&dir, &stem, "zip");
+                let zip = async move {
+                    let mut c = tokio::process::Command::new("bsdtar");
+                    c.current_dir(&dir).arg("-a").arg("-cf").arg(&name);
+                    for f in &files {
+                        if let Some(n) = f.file_name() {
+                            c.arg(n);
+                        }
+                    }
+                    match c.status().await {
+                        Ok(s) if s.success() => {}
+                        _ => crate::start_search::notify("Couldn't compress", "bsdtar (libarchive) failed or isn't installed.").await,
+                    }
+                    cosmic::Action::App(Message::Desktop(DesktopMsg::Refresh))
+                };
+                return Task::batch([close, Task::future(zip)]);
+            }
+            DesktopMsg::CreateShortcut => {
+                let dir = d.dir.clone();
+                let close = self.close_popup();
+                for p in self.selection() {
+                    let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+                    let (stem, ext) = match name.rsplit_once('.') {
+                        Some((s, e)) if !s.is_empty() && !p.is_dir() => (s.to_string(), e.to_string()),
+                        _ => (name.clone(), String::new()),
+                    };
+                    let base = format!("{stem} - Shortcut");
+                    let link = dir.join(model::unique_name(&dir, &base, &ext));
+                    if let Err(e) = std::os::unix::fs::symlink(&p, &link) {
+                        tracing::warn!("shortcut {p:?}: {e}");
+                    }
+                }
+                self.reload_desktop();
+                return close;
+            }
+            DesktopMsg::SendToDocuments => {
+                let close = self.close_popup();
+                let docs = dirs_documents();
+                for p in self.selection() {
+                    if let Err(e) = model::paste_one(&p, &docs, false) {
+                        tracing::warn!("send to Documents {p:?}: {e}");
+                    }
+                }
+                return close;
+            }
+            DesktopMsg::ToggleSpecial(id) => {
+                if id == "recycle-bin" {
+                    self.config.hide_recycle_bin = !self.config.hide_recycle_bin;
+                } else if self.config.desktop_special.iter().any(|s| s == id) {
+                    self.config.desktop_special.retain(|s| s != id);
+                } else {
+                    self.config.desktop_special.push(id.to_string());
+                }
+                self.persist_config();
+                self.reload_desktop();
+                return self.close_popup();
             }
             DesktopMsg::ToggleAutoArrange => {
                 self.config.desktop_auto_arrange = !self.config.desktop_auto_arrange;
@@ -786,6 +976,8 @@ impl Shell {
                     }
                 }
                 Named::Enter if d.rename.is_some() => return self.update_desktop(DesktopMsg::RenameCommit),
+                // Alt+Enter: Properties.
+                Named::Enter if self.mods.alt() => return self.update_desktop(DesktopMsg::Properties),
                 Named::Enter => {
                     let sel = self.selection();
                     return Task::batch(sel.iter().map(|p| self.open_item(p)).collect::<Vec<_>>());
@@ -1129,24 +1321,69 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
                 m(DesktopMsg::EmptyTrashAsk),
             ),
         ],
+        (Some(path), _) if special_id(path).is_some() => vec![menu_item("folder-open-symbolic", "Open", m(DesktopMsg::Open(path.clone())))],
+        (Some(path), MenuPage::OpenWith) => {
+            let mut v: Vec<Element<'a, Message>> = open_with_apps(shell, path)
+                .into_iter()
+                .map(|id| {
+                    let name = crate::taskbar_view::app_name(shell, &id);
+                    crate::taskbar_view::menu_item_with(crate::taskbar_view::app_icon(shell, &id), name, m(DesktopMsg::OpenWithApp(id)))
+                })
+                .collect();
+            if v.is_empty() {
+                v.push(container(text::caption("No apps found").class(crate::style::dim_text())).padding([8, 12]).into());
+            }
+            v
+        }
+        (Some(_), MenuPage::SendTo) => vec![
+            menu_item("package-x-generic-symbolic", "Compressed (zipped) folder", m(DesktopMsg::Compress)),
+            menu_item("folder-documents-symbolic", "Documents", m(DesktopMsg::SendToDocuments)),
+        ],
+        // "Show more options": the classic menu.
+        (Some(path), MenuPage::More) => {
+            let pid = shell.popup.as_ref().map_or(window::Id::NONE, |p| p.id);
+            vec![
+                leaf(entry(Lead::None, "Open", None, Some(m(DesktopMsg::Open(path.clone()))))),
+                parent_entry(shell, pid, "desk-openwith", Lead::None, "Open with", m(DesktopMsg::Menu(MenuPage::OpenWith))),
+                leaf(menu_divider()),
+                parent_entry(shell, pid, "desk-sendto", Lead::None, "Send to", m(DesktopMsg::Menu(MenuPage::SendTo))),
+                leaf(menu_divider()),
+                leaf(entry(Lead::None, "Cut", None, Some(m(DesktopMsg::Cut)))),
+                leaf(entry(Lead::None, "Copy", None, Some(m(DesktopMsg::Copy)))),
+                leaf(menu_divider()),
+                leaf(entry(Lead::None, "Create shortcut", None, Some(m(DesktopMsg::CreateShortcut)))),
+                leaf(entry(Lead::None, "Delete", None, Some(m(DesktopMsg::Trash)))),
+                leaf(entry(Lead::None, "Rename", None, Some(m(DesktopMsg::RenameStart)))),
+                leaf(menu_divider()),
+                leaf(entry(Lead::None, "Properties", None, Some(m(DesktopMsg::Properties)))),
+            ]
+        }
         (Some(path), _) => {
+            let pid = shell.popup.as_ref().map_or(window::Id::NONE, |p| p.id);
             let launcher = shell
                 .desktop
                 .as_ref()
                 .and_then(|d| d.items.iter().find(|s| &s.item.path == path))
                 .and_then(|s| s.launch.as_ref());
-            let mut v = vec![menu_item("document-open-symbolic", "Open", m(DesktopMsg::Open(path.clone())))];
+            let mut v = vec![leaf(menu_item("document-open-symbolic", "Open", m(DesktopMsg::Open(path.clone()))))];
+            if launcher.is_none() {
+                v.push(parent_entry(shell, pid, "desk-openwith", Lead::Icon("document-open-symbolic"), "Open with", m(DesktopMsg::Menu(MenuPage::OpenWith))));
+            }
             if matches!(launcher, Some(Launch::Exec { trusted: false, .. })) {
-                v.push(menu_item("emblem-ok-symbolic", "Allow launching", m(DesktopMsg::AllowLaunching)));
+                v.push(leaf(menu_item("emblem-ok-symbolic", "Allow launching", m(DesktopMsg::AllowLaunching))));
             }
             v.extend([
-                menu_divider(),
-                menu_item("edit-cut-symbolic", "Cut", m(DesktopMsg::Cut)),
-                menu_item("edit-copy-symbolic", "Copy", m(DesktopMsg::Copy)),
-                menu_divider(),
-                menu_item("edit-copy-symbolic", "Copy as path", m(DesktopMsg::CopyPath)),
-                menu_item("edit-symbolic", "Rename", m(DesktopMsg::RenameStart)),
-                menu_item("user-trash-symbolic", "Delete", m(DesktopMsg::Trash)),
+                leaf(menu_divider()),
+                leaf(menu_item("edit-cut-symbolic", "Cut", m(DesktopMsg::Cut))),
+                leaf(menu_item("edit-copy-symbolic", "Copy", m(DesktopMsg::Copy))),
+                leaf(menu_divider()),
+                leaf(menu_item("package-x-generic-symbolic", "Compress to ZIP file", m(DesktopMsg::Compress))),
+                leaf(menu_item("edit-copy-symbolic", "Copy as path", m(DesktopMsg::CopyPath))),
+                leaf(menu_item("edit-symbolic", "Rename", m(DesktopMsg::RenameStart))),
+                leaf(menu_item("user-trash-symbolic", "Delete", m(DesktopMsg::Trash))),
+                leaf(menu_item("document-properties-symbolic", "Properties", m(DesktopMsg::Properties))),
+                leaf(menu_divider()),
+                leaf(menu_item("view-more-symbolic", "Show more options", m(DesktopMsg::Menu(MenuPage::More)))),
             ]);
             v
         }
@@ -1179,6 +1416,12 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
                 entry(tick(true), "Align icons to grid", None, None),
                 menu_divider(),
                 entry(tick(!shell.config.hide_desktop_icons), "Show desktop icons", None, Some(m(DesktopMsg::ToggleIcons))),
+                menu_divider(),
+                entry(tick(shell.config.desktop_special.iter().any(|s| s == "this-pc")), "This PC", None, Some(m(DesktopMsg::ToggleSpecial("this-pc")))),
+                entry(tick(shell.config.desktop_special.iter().any(|s| s == "user")), "User's files", None, Some(m(DesktopMsg::ToggleSpecial("user")))),
+                entry(tick(shell.config.desktop_special.iter().any(|s| s == "network")), "Network", None, Some(m(DesktopMsg::ToggleSpecial("network")))),
+                entry(tick(!shell.config.hide_recycle_bin), "Recycle Bin", None, Some(m(DesktopMsg::ToggleSpecial("recycle-bin")))),
+                entry(tick(shell.config.desktop_special.iter().any(|s| s == "control")), "Control Panel", None, Some(m(DesktopMsg::ToggleSpecial("control")))),
             ]
         }
         (None, MenuPage::Sort) => {
@@ -1190,6 +1433,7 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
                 entry(pick(s == SortBy::Modified), "Date modified", None, Some(m(DesktopMsg::Sort(SortBy::Modified)))),
             ]
         }
+        (None, MenuPage::OpenWith | MenuPage::SendTo | MenuPage::More) => Vec::new(),
         (None, MenuPage::New) => vec![
             entry(Lead::Icon("folder-new-symbolic"), "Folder", None, Some(m(DesktopMsg::NewFolder))),
             menu_divider(),

@@ -161,7 +161,7 @@ pub enum Message {
     ToggleStart,
     CloseStart,
     /// A named key pressed in one of our surfaces.
-    KeyNamed(window::Id, Named),
+    KeyNamed(window::Id, Named, bool),
     /// Open Start on a given page (Win+X "Installed apps", "Search").
     OpenStartAt(StartPage),
     Panel(crate::panels::PanelMsg),
@@ -215,6 +215,7 @@ pub enum Message {
     /// Ctrl + a letter key.
     CtrlKey(window::Id, String),
     Account(crate::account::AccountMsg),
+    Props(crate::properties::PropsMsg),
     /// Alt+F4 dialog, Win+P, Ctrl+Alt+Del.
     System(crate::system_ui::SystemMsg),
     /// Content-search hits for a query.
@@ -967,8 +968,8 @@ impl Application for Shell {
                         .to_lowercase();
                     Some(Message::CtrlKey(window, if modifiers.control() { format!("^{k}") } else { k }))
                 }
-                cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), .. }) => {
-                    Some(Message::KeyNamed(window, named))
+                cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), modifiers, .. }) => {
+                    Some(Message::KeyNamed(window, named, modifiers.alt()))
                 }
                 // The pointer reaching the hidden taskbar strip (it's too thin
                 // for a widget to see any motion inside it).
@@ -1120,7 +1121,11 @@ impl Shell {
                     self.taskbar.set_pinned(cfg.pinned_taskbar.clone());
                 }
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
+                let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
                 self.config = cfg;
+                if icons_changed {
+                    self.reload_desktop();
+                }
                 if auto_hide_changed {
                     return self.auto_hide_changed();
                 }
@@ -1150,7 +1155,7 @@ impl Shell {
                 let close = Task::batch([self.close_popup(), self.close_panel()]);
                 return Task::batch([close, self.open_start()]);
             }
-            Message::KeyNamed(id, named) => {
+            Message::KeyNamed(id, named, alt) => {
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
                     let msg = match named {
                         Named::Escape if self.start.as_ref().is_some_and(|s| s.folder.is_some()) => {
@@ -1169,7 +1174,14 @@ impl Shell {
                     return self.panel_key(named);
                 }
                 if self.desktop.as_ref().is_some_and(|d| d.id == id || d.rename_surface == Some(id)) {
-                    return self.update_desktop(crate::desktop::DesktopMsg::Key(named));
+                    // The event's own Alt counts too (the tracked state can lag).
+                    let saved = self.mods;
+                    if alt {
+                        self.mods.insert(keyboard::Modifiers::ALT);
+                    }
+                    let task = self.update_desktop(crate::desktop::DesktopMsg::Key(named));
+                    self.mods = saved;
+                    return task;
                 }
             }
             Message::OpenStartAt(page) => {
@@ -1432,6 +1444,7 @@ impl Shell {
             }
             Message::Account(m) => return self.update_account(m),
             Message::System(m) => return self.update_system(m),
+            Message::Props(m) => return self.update_props(m),
             Message::ContentHits(q, hits) => {
                 if let Some(s) = &mut self.start
                     && s.query == q

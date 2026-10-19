@@ -10,6 +10,7 @@ name = "lapin-ux-shell"
 path = "src/main.rs"
 
 [dependencies]
+mime_guess = "2.0.5"
 lapin-ux-core.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

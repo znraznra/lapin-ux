@@ -2986,6 +2986,7 @@ dependencies = [
  "lapin-ux-core",
  "libc",
  "libcosmic",
+ "mime_guess",
  "serde",
  "tokio",
  "tracing",

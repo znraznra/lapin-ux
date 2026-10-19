@@ -18,6 +18,7 @@ pub mod ics;
 pub mod notify;
 pub mod pins;
 pub mod procs;
+pub mod props;
 pub mod quick;
 pub mod recent;
 pub mod search;

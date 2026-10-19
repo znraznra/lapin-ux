@@ -29,6 +29,7 @@ mod launcher_entry;
 mod notify_client;
 mod panels;
 mod previews;
+mod properties;
 mod quick;
 mod snap;
 mod start_pins;

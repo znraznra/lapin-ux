@@ -58,6 +58,10 @@ pub struct ShellConfig {
     /// Quick settings tiles as the user arranged them, and the ones removed.
     pub quick_tiles_order: Vec<String>,
     pub quick_tiles_hidden: Vec<String>,
+    /// Extra desktop icons: "this-pc", "user", "network", "control".
+    pub desktop_special: Vec<String>,
+    /// Desktop icon settings: Recycle Bin unchecked.
+    pub hide_recycle_bin: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
