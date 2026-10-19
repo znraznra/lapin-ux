@@ -213,6 +213,7 @@ pub enum Message {
     PinStart(String),
     TaskView(crate::taskview::TaskViewMsg),
     Extras(crate::comp_extras::ExtrasMsg),
+    Snip(crate::snip::SnipMsg),
     Snap(crate::snap::SnapMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
@@ -309,6 +310,8 @@ pub struct Shell {
     /// lapin-ux-comp is running: snap layouts work.
     pub snap_supported: bool,
     pub extras: crate::comp_extras::Extras,
+    /// A screenshot for the snipping overlay is on its way.
+    pub snip_pending: bool,
     /// Virtual desktops.
     pub desktops: crate::taskview::Desktops,
     pub mods: keyboard::Modifiers,
@@ -831,6 +834,7 @@ impl Application for Shell {
             attention: HashMap::new(),
             snap_supported: false,
             extras: Default::default(),
+            snip_pending: false,
             desktops: Default::default(),
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
@@ -923,6 +927,7 @@ impl Application for Shell {
                 "notifications" => self.update(Message::ToggleNotifications),
                 "close" => self.update(Message::System(crate::system_ui::SystemMsg::AltF4)),
                 "project" => self.update(Message::System(crate::system_ui::SystemMsg::Project)),
+                "snip" => self.update(Message::Snip(crate::snip::SnipMsg::Open)),
                 "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
@@ -1052,6 +1057,9 @@ impl Shell {
                 WaylandUpdate::SnapSupported(on, version) => {
                     self.snap_supported = on;
                     self.extras_connected(version);
+                }
+                WaylandUpdate::Shot { window, width, height, rgba } => {
+                    return self.update_snip(crate::snip::SnipMsg::Shot(window, width, height, rgba));
                 }
                 WaylandUpdate::Gesture(fingers, dir) => {
                     return self.update_extras(crate::comp_extras::ExtrasMsg::Gesture(fingers, dir));
@@ -1460,6 +1468,7 @@ impl Shell {
             Message::Pins(m) => return self.update_pins(m),
             Message::TaskView(m) => return self.update_taskview(m),
             Message::Extras(m) => return self.update_extras(m),
+            Message::Snip(m) => return self.update_snip(m),
             Message::Snap(m) => return self.update_snap(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {

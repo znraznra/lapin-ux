@@ -69,9 +69,52 @@ pub fn shrink(frame: Frame<'_>, max_w: u32, max_h: u32) -> Option<(u32, u32, Vec
     Some((tw, th, out))
 }
 
+/// Turn a captured RGBA picture upright, given the wl_output transform
+/// the compositor reported for the frame (0 normal, 1 90°, 2 180°,
+/// 3 270°, 4 flipped, 5–7 flipped and rotated). Returns (pixels, w, h).
+pub fn upright(rgba: Vec<u8>, w: u32, h: u32, transform: u32) -> (Vec<u8>, u32, u32) {
+    if transform == 0 || transform > 7 {
+        return (rgba, w, h);
+    }
+    let flip = transform >= 4;
+    let rot = transform % 4;
+    let (dw, dh) = if rot % 2 == 1 { (h, w) } else { (w, h) };
+    let mut out = vec![0u8; rgba.len()];
+    for y in 0..dh {
+        for x in 0..dw {
+            // Undo the rotation, then the mirror.
+            let (mut sx, sy) = match rot {
+                1 => (y, h - 1 - x),
+                2 => (w - 1 - x, h - 1 - y),
+                3 => (w - 1 - y, x),
+                _ => (x, y),
+            };
+            if flip {
+                sx = w - 1 - sx;
+            }
+            let (s, d) = (((sy * w + sx) * 4) as usize, ((y * dw + x) * 4) as usize);
+            out[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+        }
+    }
+    // A vertical mirror (flipped + 180°) is the common one: GL read-backs.
+    (out, dw, dh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upright_flips() {
+        // 1x2 picture, top red, bottom blue; flipped-180 = upside down.
+        let px = vec![255, 0, 0, 255, 0, 0, 255, 255];
+        let (out, w, h) = upright(px.clone(), 1, 2, 6);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(&out[..4], &[0, 0, 255, 255]);
+        assert_eq!(upright(px.clone(), 1, 2, 0).0, px);
+        let (_, w, h) = upright(px, 1, 2, 1);
+        assert_eq!((w, h), (2, 1));
+    }
 
     #[test]
     fn shrinks_and_converts() {

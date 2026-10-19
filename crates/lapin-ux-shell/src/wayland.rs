@@ -114,6 +114,8 @@ pub enum WaylandUpdate {
     /// A touchpad swipe for the shell: fingers, direction (0 up, 1 down,
     /// 2 left, 3 right).
     Gesture(u32, u32),
+    /// A full-size screenshot of a monitor (`window` None) or a window (RGBA).
+    Shot { window: Option<WindowId>, width: u32, height: u32, rgba: std::sync::Arc<Vec<u8>> },
 }
 
 /// What the compositor reports about its accessibility features.
@@ -153,6 +155,8 @@ pub enum WaylandRequest {
     Peek(bool),
     /// Night light temperature in kelvin, 0 = off.
     NightLight(u32),
+    /// Take a screenshot of a monitor (by name) or of a window.
+    Shot(Option<String>, Option<WindowId>),
 }
 
 /// Thumbnails are captured at most this size.
@@ -184,7 +188,12 @@ struct Capture {
     buffer: Option<Buffer>,
     format: Option<wl_shm::Format>,
     size: (u32, u32),
+    /// Full size, for a screenshot (else a small thumbnail).
+    full: bool,
 }
+
+/// Captures of whole monitors use ids no window has.
+const SCREEN_SHOT: WindowId = WindowId(u64::MAX);
 
 static WAYLAND_RX: LazyLock<Mutex<Option<UnboundedReceiver<WaylandUpdate>>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -374,6 +383,7 @@ impl AppData {
                 None => {}
             },
             WaylandRequest::Capture(id) => self.start_capture(id),
+            WaylandRequest::Shot(output, window) => self.start_shot(output, window),
             WaylandRequest::TokenRequest { app_id, exec, terminal } => match &self.activation_state {
                 Some(state) => state.request_token_with_data(
                     &self.queue_handle,
@@ -394,6 +404,36 @@ impl AppData {
         }
     }
 
+    /// A full-size picture of a monitor (by name; the first one if unknown),
+    /// or of one window, for a screenshot.
+    fn start_shot(&mut self, output: Option<String>, window: Option<WindowId>) {
+        let Some(sc) = &self.screencopy else { return };
+        let (key, source) = match window {
+            Some(id) => {
+                let Some(Toplevel::Cosmic(ext)) = self.objects.get(&id).cloned() else { return };
+                (id, CaptureSource::Toplevel(ext))
+            }
+            None => {
+                let outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
+                let pick = outputs
+                    .iter()
+                    .find(|o| output.is_some() && self.output_state.info(o).and_then(|i| i.name) == output)
+                    .or_else(|| outputs.first())
+                    .cloned();
+                let Some(o) = pick else { return };
+                (SCREEN_SHOT, CaptureSource::Output(o))
+            }
+        };
+        self.captures.remove(&key);
+        let data = SessionData { window: key, inner: Default::default() };
+        match sc.capturer().create_session(&source, CaptureOptions::empty(), &self.queue_handle, data) {
+            Ok(session) => {
+                self.captures.insert(key, Capture { session, pool: None, buffer: None, format: None, size: (0, 0), full: true });
+            }
+            Err(e) => tracing::warn!("screenshot: {e}"),
+        }
+    }
+
     fn start_capture(&mut self, id: WindowId) {
         if self.captures.contains_key(&id) {
             return;
@@ -402,7 +442,7 @@ impl AppData {
         let data = SessionData { window: id, inner: Default::default() };
         match sc.capturer().create_session(&CaptureSource::Toplevel(ext), CaptureOptions::empty(), &self.queue_handle, data) {
             Ok(session) => {
-                self.captures.insert(id, Capture { session, pool: None, buffer: None, format: None, size: (0, 0) });
+                self.captures.insert(id, Capture { session, pool: None, buffer: None, format: None, size: (0, 0), full: false });
             }
             Err(e) => tracing::debug!("capture: {e}"),
         }
@@ -825,7 +865,7 @@ impl ScreencopyHandler for AppData {
         }
     }
 
-    fn ready(&mut self, _: &Connection, _: &QueueHandle<Self>, frame: &CaptureFrame, _: Frame) {
+    fn ready(&mut self, _: &Connection, _: &QueueHandle<Self>, frame: &CaptureFrame, info: Frame) {
         let Some(id) = frame.data::<FrameData>().map(|d| d.window) else { return };
         // One frame is enough; dropping the capture ends the session.
         let Some(mut c) = self.captures.remove(&id) else { return };
@@ -839,6 +879,18 @@ impl ScreencopyHandler for AppData {
             _ => (PixelOrder::Bgra, true),
         };
         let (w, h) = c.size;
+        if c.full {
+            if let Some((width, height, rgba)) = shrink(Pixels { data: canvas, width: w, height: h, stride: w * 4, order, opaque }, w, h) {
+                let transform = match info.transform {
+                    WEnum::Value(t) => t as u32,
+                    WEnum::Unknown(t) => t,
+                };
+                let (rgba, width, height) = lapin_ux_core::thumb::upright(rgba, width, height, transform);
+                let window = (id != SCREEN_SHOT).then_some(id);
+                let _ = self.tx.unbounded_send(WaylandUpdate::Shot { window, width, height, rgba: std::sync::Arc::new(rgba) });
+            }
+            return;
+        }
         if let Some((width, height, rgba)) = shrink(Pixels { data: canvas, width: w, height: h, stride: w * 4, order, opaque }, THUMB_MAX.0, THUMB_MAX.1) {
             let _ = self.tx.unbounded_send(WaylandUpdate::Thumbnail { id, width, height, rgba: std::sync::Arc::new(rgba) });
         }

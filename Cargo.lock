@@ -2996,6 +2996,7 @@ dependencies = [
  "libc",
  "libcosmic",
  "mime_guess",
+ "png 0.17.16",
  "serde",
  "tokio",
  "tracing",

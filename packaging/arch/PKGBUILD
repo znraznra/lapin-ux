@@ -108,6 +108,7 @@ package_lapin-ux-desktop-git() {
         'wireplumber'              # volume (wpctl)
         'pipewire-audio'           # system sounds (pw-play)
         'pacman-contrib'           # checkupdates, for Update
+        'wl-clipboard'             # snips go on the clipboard (wl-copy)
         'iio-sensor-proxy'         # auto-rotate on tablets and convertibles
         'python-pillow'            # lapin-ux-cursors (optional pointer pack)
         'libpulse'                 # sound output and per-app volume (pactl)

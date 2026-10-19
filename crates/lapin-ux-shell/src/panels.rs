@@ -47,6 +47,8 @@ pub enum PanelKind {
     Properties(Box<crate::properties::PropsPanel>),
     /// Ctrl+Alt+Del. `power`: the power button's menu is open.
     Security { power: bool },
+    /// Win+Shift+S snipping overlay (whole screen).
+    Snip(Box<crate::snip::SnipPanel>),
 }
 
 pub struct Panel {
@@ -213,11 +215,11 @@ impl Shell {
                 crate::system_ui::PROJECT_WIDTH,
             ),
             // The whole screen, taskbar included.
-            PanelKind::Security { .. } => (Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, IcedMargin::default(), 0),
+            PanelKind::Security { .. } | PanelKind::Snip(_) => (Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, IcedMargin::default(), 0),
         };
         let focus_run = matches!(kind, PanelKind::Run { .. });
         // Task view covers the whole screen.
-        let full = matches!(kind, PanelKind::TaskView(_) | PanelKind::Security { .. });
+        let full = matches!(kind, PanelKind::TaskView(_) | PanelKind::Security { .. } | PanelKind::Snip(_));
         self.panel = Some(Panel { id, kind });
         let r = if full { 0 } else { style::PANEL_RADIUS as u32 };
         tasks.push(cosmic::surface::surface_task(app_layer_shell(
@@ -361,8 +363,11 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
     if let PanelKind::Security { power } = &panel.kind {
         return crate::system_ui::security_view(shell, *power);
     }
+    if let PanelKind::Snip(s) = &panel.kind {
+        return crate::snip::view(shell, s);
+    }
     let content: Element<'_, Message> = match &panel.kind {
-        PanelKind::TaskView(_) | PanelKind::Security { .. } => unreachable!(),
+        PanelKind::TaskView(_) | PanelKind::Security { .. } | PanelKind::Snip(_) => unreachable!(),
         PanelKind::ShutDown { choice } => crate::system_ui::shutdown_view(*choice),
         PanelKind::Project(p) => crate::system_ui::project_view(p),
         PanelKind::Properties(p) => crate::properties::view(shell, p),
@@ -456,7 +461,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Quick(_) => crate::quick::WIDTH,
         PanelKind::Clip(_) => crate::clipboard::WIDTH,
         PanelKind::AltTab(a) => crate::previews::switcher_width(a.order.len()),
-        PanelKind::TaskView(_) | PanelKind::Security { .. } => 0,
+        PanelKind::TaskView(_) | PanelKind::Security { .. } | PanelKind::Snip(_) => 0,
         PanelKind::Snap(_) => crate::snap::WIDTH,
         PanelKind::ShutDown { .. } => crate::system_ui::SHUTDOWN_WIDTH,
         PanelKind::Properties(_) => crate::properties::WIDTH,

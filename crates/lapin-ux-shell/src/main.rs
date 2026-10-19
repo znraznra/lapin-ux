@@ -33,6 +33,7 @@ mod previews;
 mod properties;
 mod quick;
 mod snap;
+mod snip;
 mod start_pins;
 mod start_search;
 mod style;
