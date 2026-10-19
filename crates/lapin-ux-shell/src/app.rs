@@ -937,6 +937,16 @@ impl Application for Shell {
                 "project" => self.update(Message::System(crate::system_ui::SystemMsg::Project)),
                 "snip" => self.update(Message::Snip(crate::snip::SnipMsg::Open)),
                 "input-next" => self.update(Message::Input(crate::input::InputMsg::Next)),
+                // Ctrl+Win+Enter: Narrator (Orca) on / off.
+                "narrator" => {
+                    let on = !crate::quick::orca_running();
+                    self.update(Message::Quick(crate::quick::QuickMsg::ScreenReader(on)))
+                }
+                // Left Alt+Left Shift+Print Screen: contrast themes on / off.
+                "contrast" => {
+                    let on = !crate::defaults::high_contrast();
+                    self.update(Message::Quick(crate::quick::QuickMsg::HighContrast(on)))
+                }
                 "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),

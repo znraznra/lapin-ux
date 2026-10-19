@@ -116,6 +116,34 @@ fn apply_wallpaper(dark: bool) -> Result<bool, cosmic_config::Error> {
     Ok(true)
 }
 
+/// Contrast themes (Windows' high contrast): COSMIC's high-contrast
+/// palettes for both light and dark.
+pub(crate) fn set_high_contrast(enabled: bool) -> Result<(), cosmic_config::Error> {
+    use cosmic::cosmic_theme::CosmicPalette;
+    for dark in [true, false] {
+        let (builder_cfg, theme_cfg) = if dark {
+            (ThemeBuilder::dark_config()?, Theme::dark_config()?)
+        } else {
+            (ThemeBuilder::light_config()?, Theme::light_config()?)
+        };
+        let mut b = ThemeBuilder::get_entry(&builder_cfg).unwrap_or_else(|(_, b)| b);
+        let inner = b.palette.inner();
+        b.palette = match (dark, enabled) {
+            (true, true) => CosmicPalette::HighContrastDark(inner),
+            (true, false) => CosmicPalette::Dark(inner),
+            (false, true) => CosmicPalette::HighContrastLight(inner),
+            (false, false) => CosmicPalette::Light(inner),
+        };
+        b.write_entry(&builder_cfg)?;
+        b.build().write_entry(&theme_cfg)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn high_contrast() -> bool {
+    Theme::dark_config().ok().and_then(|c| Theme::get_entry(&c).ok()).is_some_and(|t| t.is_high_contrast)
+}
+
 /// The wallpaper cosmic-bg shows on every monitor now, if it's a picture.
 pub(crate) fn current_wallpaper() -> Option<PathBuf> {
     let ron = std::fs::read_to_string(cfg_path("com.system76.CosmicBackground").join("all")).ok()?;
@@ -221,6 +249,9 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Ctrl, Shift], key: "Escape"): Spawn("lapin-ux-taskmgr"),"#.to_string(),
         // Next keyboard layout / input method.
         r#"(modifiers: [Super], key: "space"): Spawn("lapin-ux-shell input-next"),"#.to_string(),
+        // Accessibility: Narrator, contrast themes.
+        r#"(modifiers: [Ctrl, Super], key: "Return"): Spawn("lapin-ux-shell narrator"),"#.to_string(),
+        r#"(modifiers: [Alt, Shift], key: "Print"): Spawn("lapin-ux-shell contrast"),"#.to_string(),
     ];
     // Super+1…9 open the n-th taskbar app (these keys switch workspaces in COSMIC).
     for n in 1..=9 {

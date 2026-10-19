@@ -35,6 +35,7 @@ pub struct QuickState {
     /// Configured keyboard layouts: (code, description).
     pub layouts: Vec<(String, String)>,
     pub screen_reader: bool,
+    pub high_contrast: bool,
     /// A question from the Bluetooth pairing agent.
     pub bt_prompt: Option<bt_agent::Prompt>,
     pub bt_pin: String,
@@ -132,6 +133,7 @@ pub enum QuickMsg {
     Magnifier(bool),
     ColorFilter(bool),
     ScreenReader(bool),
+    HighContrast(bool),
     Agent(bt_agent::AgentEvent),
     BtPair(String),
     /// Pairing finished: device path, error message if it failed.
@@ -169,7 +171,7 @@ pub(crate) fn keyboard_layouts() -> Vec<(String, String)> {
 }
 
 /// Is Orca (the screen reader) running?
-fn orca_running() -> bool {
+pub(crate) fn orca_running() -> bool {
     std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
         std::fs::read(e.path().join("cmdline")).is_ok_and(|c| c.split(|b| *b == 0).take(2).any(|a| a.ends_with(b"/orca") || a == b"orca"))
     })
@@ -274,6 +276,7 @@ impl Shell {
                 self.quick.error = None;
                 self.quick.layouts = keyboard_layouts();
                 self.quick.screen_reader = orca_running();
+                self.quick.high_contrast = crate::defaults::high_contrast();
                 let close_centre = Task::future(async {
                     crate::notify_client::close_center().await;
                     cosmic::Action::App(Message::Noop)
@@ -565,6 +568,18 @@ impl Shell {
             QuickMsg::ColorFilter(on) => {
                 q.a11y.filter_on = on;
                 self.request(crate::wayland::WaylandRequest::SetColorFilter(on));
+            }
+            QuickMsg::HighContrast(on) => {
+                q.high_contrast = on;
+                return Task::future(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = crate::defaults::set_high_contrast(on) {
+                            tracing::warn!("contrast themes: {e}");
+                        }
+                    })
+                    .await;
+                    cosmic::Action::App(Message::Noop)
+                });
             }
             QuickMsg::ScreenReader(on) => {
                 q.screen_reader = on;
@@ -1371,8 +1386,9 @@ fn accessibility_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         list = list.push(switch_row("color-select-symbolic", "Color filters", q.a11y.filter_on, |on| Message::Quick(QuickMsg::ColorFilter(on))));
     }
     if crate::account::which("orca") {
-        list = list.push(switch_row("audio-speakers-symbolic", "Screen reader", q.screen_reader, |on| Message::Quick(QuickMsg::ScreenReader(on))));
+        list = list.push(switch_row("audio-speakers-symbolic", "Narrator", q.screen_reader, |on| Message::Quick(QuickMsg::ScreenReader(on))));
     }
+    list = list.push(switch_row("preferences-desktop-theme-symbolic", "Contrast themes", q.high_contrast, |on| Message::Quick(QuickMsg::HighContrast(on))));
     page("Accessibility", list, Some(("More accessibility settings", "accessibility")))
 }
 

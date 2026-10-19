@@ -149,6 +149,7 @@ MAP = {
     "bluetooth-paired": ("status", "bluetooth_connected", "regular"),
     "display-brightness": ("status", "brightness_high", "regular"),
     "night-light": ("status", "weather_moon", "regular"),
+    "preferences-desktop-theme": ("categories", "dark_theme", "regular"),
     "rotation-allowed": ("status", "orientation", "regular"),
     "rotation-locked": ("status", "phone_lock", "regular"),
     "weather-clear-night": ("status", "weather_moon", "regular"),
