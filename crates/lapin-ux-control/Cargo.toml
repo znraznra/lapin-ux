@@ -1,0 +1,10 @@
+[package]
+name = "lapin-ux-control"
+description = "Lapin UX Control Panel: the classic category view of settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lapin-ux-core.workspace = true
+libcosmic.workspace = true

@@ -2936,6 +2936,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapin-ux-control"
+version = "0.1.0"
+dependencies = [
+ "lapin-ux-core",
+ "libcosmic",
+]
+
+[[package]]
 name = "lapin-ux-core"
 version = "0.1.0"
 dependencies = [

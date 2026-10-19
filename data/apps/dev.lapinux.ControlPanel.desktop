@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Control Panel
+Comment=Adjust your computer's settings
+Exec=lapin-ux-control
+Icon=preferences-system
+Categories=Settings;System;
+Keywords=control;settings;system;programs;uninstall;network;sound;
+StartupNotify=true
+StartupWMClass=dev.lapinux.ControlPanel
