@@ -29,6 +29,11 @@ pub enum TaskbarOption {
     /// Open the "Show taskbar apps on" submenu.
     DisplaysMenu,
     MultiDisplay(lapin_ux_core::taskbar::MultiDisplay),
+    /// Open the "Combine taskbar buttons" / "Smaller buttons" submenus.
+    CombineMenu,
+    SmallMenu,
+    Combine(lapin_ux_core::taskbar::Combine),
+    Small(lapin_ux_core::taskbar::SmallButtons),
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +192,10 @@ impl Shell {
             TaskbarOption::ToggleDesktopButton => self.config.show_desktop_corner = !self.config.show_desktop_corner,
             TaskbarOption::DisplaysMenu => return self.open_submenu("tb-displays", PopupKind::TaskbarDisplays),
             TaskbarOption::MultiDisplay(m) => self.config.multi_display = m,
+            TaskbarOption::CombineMenu => return self.open_submenu("tb-combine", PopupKind::TaskbarCombine),
+            TaskbarOption::SmallMenu => return self.open_submenu("tb-small", PopupKind::TaskbarSmall),
+            TaskbarOption::Combine(c) => self.config.combine_buttons = c,
+            TaskbarOption::Small(s) => self.config.small_buttons = s,
             TaskbarOption::ToggleAutoHide => {
                 self.config.auto_hide = !self.config.auto_hide;
                 self.persist_config();

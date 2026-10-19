@@ -42,11 +42,11 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     }
     let start_open = shell.start.is_some();
     let start_btn = button::custom(
-        container(icon(icon::from_svg_bytes(START_ICON)).size(style::TASK_ICON))
+        container(icon(icon::from_svg_bytes(START_ICON)).size(style::task_icon()))
             .center(Length::Fill),
     )
-    .width(style::TASK_BUTTON)
-    .height(style::TASK_BUTTON)
+    .width(style::task_button())
+    .height(style::task_button())
     .padding(0)
     .class(style::flat_button(start_open))
     .on_press(Message::ToggleStart);
@@ -81,9 +81,9 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     // Task view, like the benchmark's button after Search.
     let tv_open = matches!(shell.panel.as_ref().map(|p| &p.kind), Some(crate::panels::PanelKind::TaskView(_)));
     center = center.push(
-        button::custom(container(icon(icon::from_svg_bytes(TASK_VIEW_ICON)).size(style::TASK_ICON)).center(Length::Fill))
-            .width(style::TASK_BUTTON)
-            .height(style::TASK_BUTTON)
+        button::custom(container(icon(icon::from_svg_bytes(TASK_VIEW_ICON)).size(style::task_icon())).center(Length::Fill))
+            .width(style::task_button())
+            .height(style::task_button())
             .padding(0)
             .class(style::flat_button(tv_open))
             .on_press(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
@@ -110,13 +110,37 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             })
             .collect();
     }
-    let tasks: Vec<Element<'_, Message>> = buttons.into_iter().map(|b| task_button(shell, bar, b)).collect();
+    // "Combine buttons: never" (or when the taskbar has room): a labelled
+    // button per window; apps without windows keep their icon-only button.
+    let tasks: Vec<Element<'_, Message>> = if shell.fit.labels {
+        buttons
+            .into_iter()
+            .flat_map(|b| {
+                if b.windows.is_empty() {
+                    return vec![task_button(shell, bar, b, None)];
+                }
+                let Button { app, pinned, windows } = b;
+                let first = windows.first().map(|w| w.handle);
+                windows
+                    .into_iter()
+                    .map(|w| {
+                        let label = (w.handle, if w.title.is_empty() { app_name(shell, &app) } else { w.title.clone() }, Some(w.handle) == first);
+                        task_button(shell, bar, Button { app: app.clone(), pinned, windows: vec![w] }, Some(label))
+                    })
+                    .collect()
+            })
+            .collect()
+    } else {
+        buttons.into_iter().map(|b| task_button(shell, bar, b, None)).collect()
+    };
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
     let clock_style = shell.clock_style();
+    // Smaller buttons: a slightly smaller clock so both lines fit the 40 px bar.
+    let clock_size = if style::small_taskbar() { 11.0 } else { 12.0 };
     let time = column::with_children(vec![
-        text::caption(clock_style.time(&shell.now)).into(),
-        text::caption(clock_style.date(&shell.now)).into(),
+        text::caption(clock_style.time(&shell.now)).size(clock_size).into(),
+        text::caption(clock_style.date(&shell.now)).size(clock_size).into(),
     ])
     .align_x(Alignment::End);
     let mut clock_content = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(time);
@@ -124,7 +148,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         clock_content = clock_content.push(notify_badge(shell.notify));
     }
     let clock = button::custom(clock_content)
-    .padding([4, 10])
+    .padding(if style::small_taskbar() { [0, 10] } else { [4, 10] })
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
     .on_press(Message::ClockClick(bar.id));
 
@@ -134,7 +158,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         let open = matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::TrayOverflow));
         let btn = button::custom(container(icon::from_name("pan-up-symbolic").size(16)).center(Length::Fill))
             .width(28)
-            .height(style::TASK_BUTTON)
+            .height(style::task_button())
             .padding(0)
             .class(style::flat_button(open))
             .on_press(Message::TrayOverflow(bar.id));
@@ -147,7 +171,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     let mut status_slot: Vec<Element<'_, Message>> = Vec::with_capacity(1);
     if !status.is_empty() {
         let btn = button::custom(container(row::with_children(status).spacing(8).align_y(Alignment::Center)).center_y(Length::Fill))
-            .height(style::TASK_BUTTON)
+            .height(style::task_button())
             .padding([0, 10])
             .class(style::flat_button(shell.quick_open()))
             .on_press(Message::Quick(crate::quick::QuickMsg::Toggle));
@@ -201,7 +225,8 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     mouse_area(bar_body).on_right_press(Message::TaskbarContext(bar.id)).into()
 }
 
-fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element<'a, Message> {
+/// `label`: one window's button with its title (window, title, first of its app).
+fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>, label: Option<(Handle, String, bool)>) -> Element<'a, Message> {
     let active = b.active();
     let badge = shell.badge_for(&b.app).copied().unwrap_or_default();
     let indicator: Element<'_, Message> = if let Some(p) = badge.progress() {
@@ -225,8 +250,27 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
     // and the other taskbar buttons); the running line is laid over the
     // bottom margin instead of pushing the icon up.
     let centred = |el: Element<'a, Message>| -> Element<'a, Message> { container(el).center(Length::Fill).into() };
-    let app_icon_el: Element<'_, Message> = icon(app_icon(shell, &b.app)).size(style::TASK_ICON).into();
-    let mut layers: Vec<Element<'_, Message>> = vec![centred(app_icon_el)];
+    let app_icon_el: Element<'_, Message> = icon(app_icon(shell, &b.app)).size(style::task_icon()).into();
+    let main_layer: Element<'_, Message> = match &label {
+        Some((_, title, _)) => container(
+            row::with_children(vec![
+                app_icon_el,
+                text::caption(title.clone()).wrapping(cosmic::iced::widget::text::Wrapping::None).width(Length::Fill).into(),
+            ])
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([0, 8])
+        .center_y(Length::Fill)
+        .clip(true)
+        .into(),
+        None => {
+            // Lifted while the app starts (padding below a centred box moves it up).
+            let lift = shell.launch_lift(&b.app);
+            centred(container(app_icon_el).padding(cosmic::iced::Padding { top: 0.0, right: 0.0, bottom: 2.0 * lift, left: 0.0 }).into())
+        }
+    };
+    let mut layers: Vec<Element<'_, Message>> = vec![main_layer];
     if let Some(label) = badge.label() {
         // Count badge at the icon's top-right corner.
         layers.push(
@@ -264,12 +308,15 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
     } else {
         style::flat_button(active || dragging)
     };
-    let btn = button::custom(content)
-        .width(style::TASK_BUTTON)
-        .height(style::TASK_BUTTON)
-        .padding(0)
-        .class(class)
-        .on_press(Message::TaskClick(bar.id, b.app.clone()));
+    let width = match &label {
+        Some(_) => lapin_ux_core::taskbar::button_width(true, style::small_taskbar()) - 4.0,
+        None => style::task_button(),
+    };
+    let press = match &label {
+        Some((h, _, _)) => Message::TaskWindowClick(*h),
+        None => Message::TaskClick(bar.id, b.app.clone()),
+    };
+    let btn = button::custom(content).width(width).height(style::task_button()).padding(0).class(class).on_press(press);
 
     let area = mouse_area(btn)
         .on_right_press(Message::TaskContext(bar.id, b.app.clone()))
@@ -286,7 +333,12 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
             .on_enter(move |_, _, _| Message::DragHover(enter.clone(), true))
             .on_leave(move || Message::DragHover(leave.clone(), false))
             .into();
-    track(shell, rect_key(bar.id, &b.app), area)
+    // Previews and menus open over the app's (first) button.
+    let key = match &label {
+        Some((h, _, false)) => rect_key(bar.id, &format!("{}#{h:?}", b.app)),
+        _ => rect_key(bar.id, &b.app),
+    };
+    track(shell, key, area)
 }
 
 fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry) -> Element<'a, Message> {
@@ -298,7 +350,7 @@ fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry)
     let open = matches!(&shell.popup, Some(Popup { kind: PopupKind::TrayMenu(n), .. }) if *n == name);
     let btn = button::custom(container(content).center(Length::Fill))
         .width(32)
-        .height(style::TASK_BUTTON)
+        .height(style::task_button())
         .padding(0)
         .class(style::flat_button(open))
         .on_press(Message::TrayClick(bar.id, name.clone()));
@@ -395,7 +447,7 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
             items.push(menu_item("view-pin-symbolic", "Show on taskbar", Message::TrayPin(id, true)));
         }
     }
-    panel(column::with_children(items).spacing(2), 260.0)
+    panel(column::with_children(items).spacing(2), 320.0)
 }
 
 /// A menu row with a check mark when `on`.
@@ -432,10 +484,27 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
         shell.config.show_desktop_corner,
         Message::TaskbarOption(O::ToggleDesktopButton),
     ));
+    // Plain rows close any open submenu when hovered.
+    items = items.into_iter().map(crate::submenu::leaf).collect();
+    items.push(crate::submenu::leaf(menu_divider()));
+    items.push(crate::submenu::parent_entry(
+        shell,
+        popup,
+        "tb-combine",
+        crate::submenu::Lead::Blank,
+        "Combine buttons and hide labels",
+        Message::TaskbarOption(O::CombineMenu),
+    ));
+    items.push(crate::submenu::parent_entry(
+        shell,
+        popup,
+        "tb-small",
+        crate::submenu::Lead::Blank,
+        "Show smaller taskbar buttons",
+        Message::TaskbarOption(O::SmallMenu),
+    ));
     if shell.bars.len() > 1 {
-        // Plain rows close the submenu when hovered.
-        items = items.into_iter().map(crate::submenu::leaf).collect();
-        items.push(menu_divider());
+        items.push(crate::submenu::leaf(menu_divider()));
         items.push(crate::submenu::parent_entry(
             shell,
             popup,
@@ -445,7 +514,37 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
             Message::TaskbarOption(O::DisplaysMenu),
         ));
     }
-    panel(column::with_children(items).spacing(2), 260.0)
+    panel(column::with_children(items).spacing(2), 320.0)
+}
+
+/// "Always / When taskbar is full / Never" choices.
+fn three_way<'a, T: Copy + PartialEq + 'static>(current: T, opts: [(T, &'static str); 3], msg: fn(T) -> Message) -> Element<'a, Message> {
+    use crate::submenu::{Lead, entry};
+    let items = opts
+        .into_iter()
+        .map(|(v, label)| entry(if current == v { Lead::Mark("\u{2022}") } else { Lead::Blank }, label, None, Some(msg(v))))
+        .collect::<Vec<_>>();
+    panel(column::with_children(items).spacing(2), 0.0)
+}
+
+fn taskbar_combine(shell: &Shell) -> Element<'_, Message> {
+    use crate::taskbar_extras::TaskbarOption as O;
+    use lapin_ux_core::taskbar::Combine as C;
+    three_way(
+        shell.config.combine_buttons,
+        [(C::Always, "Always"), (C::WhenFull, "When taskbar is full"), (C::Never, "Never")],
+        |c| Message::TaskbarOption(O::Combine(c)),
+    )
+}
+
+fn taskbar_small(shell: &Shell) -> Element<'_, Message> {
+    use crate::taskbar_extras::TaskbarOption as O;
+    use lapin_ux_core::taskbar::SmallButtons as S;
+    three_way(
+        shell.config.small_buttons,
+        [(S::Always, "Always"), (S::WhenFull, "When taskbar is full"), (S::Never, "Never")],
+        |s| Message::TaskbarOption(O::Small(s)),
+    )
 }
 
 fn taskbar_displays(shell: &Shell) -> Element<'_, Message> {
@@ -643,6 +742,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         ),
         PopupKind::PinContext(i) => crate::start_pins::context(shell, *i),
         PopupKind::TaskbarDisplays => taskbar_displays(shell),
+        PopupKind::TaskbarCombine => taskbar_combine(shell),
+        PopupKind::TaskbarSmall => taskbar_small(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),
         PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),
         PopupKind::Power => panel(

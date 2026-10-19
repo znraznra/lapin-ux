@@ -8,9 +8,29 @@ use cosmic::iced::{Background, Border, Color, Shadow, Vector};
 use cosmic::theme;
 use cosmic::widget::{button, container};
 
-pub const TASKBAR_HEIGHT: u32 = 48;
-pub const TASK_BUTTON: f32 = 40.0;
-pub const TASK_ICON: u16 = 24;
+/// "Show smaller taskbar buttons" in effect (set by the shell as it lays
+/// the taskbar out; see `Shell::sync_taskbar_fit`).
+static SMALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_small_taskbar(on: bool) {
+    SMALL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn small_taskbar() -> bool {
+    SMALL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn taskbar_height() -> u32 {
+    if small_taskbar() { 40 } else { 48 }
+}
+
+pub fn task_button() -> f32 {
+    if small_taskbar() { 32.0 } else { 40.0 }
+}
+
+pub fn task_icon() -> u16 {
+    if small_taskbar() { 18 } else { 24 }
+}
 pub const START_WIDTH: u32 = 640;
 pub const START_HEIGHT: u32 = 720;
 pub const PANEL_RADIUS: f32 = 8.0;

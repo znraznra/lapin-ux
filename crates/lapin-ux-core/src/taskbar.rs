@@ -10,6 +10,63 @@
 //! a plain integer in tests).
 
 /// One window known to the taskbar.
+/// "Combine taskbar buttons and hide labels".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Combine {
+    #[default]
+    Always,
+    WhenFull,
+    Never,
+}
+
+/// "Show smaller taskbar buttons".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SmallButtons {
+    Always,
+    #[default]
+    WhenFull,
+    Never,
+}
+
+/// How the taskbar's buttons are drawn right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Fit {
+    /// One button per window, with its title.
+    pub labels: bool,
+    pub small: bool,
+}
+
+/// Width one button takes (button + gap), in logical pixels.
+pub fn button_width(labels: bool, small: bool) -> f32 {
+    match (labels, small) {
+        (true, false) => 168.0,
+        (true, true) => 144.0,
+        (false, false) => 44.0,
+        (false, true) => 36.0,
+    }
+}
+
+/// Decide labels and size for `space` pixels of room, `combined` buttons
+/// when grouped by app and `split` when every window gets its own.
+pub fn fit(space: f32, combined: usize, split: usize, combine: Combine, small: SmallButtons) -> Fit {
+    let fits = |labels: bool, small: bool| {
+        let n = if labels { split } else { combined };
+        n as f32 * button_width(labels, small) <= space
+    };
+    let labels = match combine {
+        Combine::Always => false,
+        Combine::Never => true,
+        // Labels while they fit (at either size the user allows).
+        Combine::WhenFull => fits(true, false) || (small != SmallButtons::Never && fits(true, true)),
+    };
+    let small = match small {
+        SmallButtons::Always => true,
+        SmallButtons::Never => false,
+        SmallButtons::WhenFull => !fits(labels, false),
+    };
+    Fit { labels, small }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Window<W> {
     pub handle: W,
@@ -182,6 +239,25 @@ impl<W: Clone + PartialEq> Taskbar<W> {
             [only] => ClickAction::Activate(only.handle.clone()),
             _ => ClickAction::ShowPicker,
         }
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn when_full_drops_labels_then_shrinks() {
+        // Room for 3 labelled buttons (504 px).
+        let f = fit(510.0, 3, 3, Combine::WhenFull, SmallButtons::Never);
+        assert_eq!(f, Fit { labels: true, small: false });
+        let f = fit(510.0, 4, 6, Combine::WhenFull, SmallButtons::Never);
+        assert_eq!(f, Fit { labels: false, small: false });
+        // 12 icons need 528 px normal, 432 px small.
+        let f = fit(500.0, 12, 12, Combine::Always, SmallButtons::WhenFull);
+        assert_eq!(f, Fit { labels: false, small: true });
+        let f = fit(500.0, 12, 12, Combine::Always, SmallButtons::Never);
+        assert!(!f.small);
     }
 }
 

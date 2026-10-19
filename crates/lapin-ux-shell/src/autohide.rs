@@ -19,7 +19,7 @@ impl Shell {
     /// Bottom margin for Start and panels: above the bar even when the bar
     /// doesn't reserve space.
     pub(crate) fn above_bar(&self) -> i32 {
-        12 + if self.config.auto_hide { style::TASKBAR_HEIGHT as i32 } else { 0 }
+        12 + if self.config.auto_hide { style::taskbar_height() as i32 } else { 0 }
     }
 
     fn bar_needed(&self, id: window::Id) -> bool {
@@ -36,14 +36,18 @@ impl Shell {
     /// takes the pointer along the bottom edge, so windows underneath get
     /// every other click.
     fn resize_bar(&self, id: window::Id, revealed: bool) -> Task<Message> {
-        let zone = if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 };
-        let h = style::TASKBAR_HEIGHT as f32;
+        let zone = if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 };
+        let h = style::taskbar_height() as f32;
         let input = if revealed || !self.config.auto_hide {
             cosmic::iced::Rectangle { x: 0.0, y: 0.0, width: 100_000.0, height: h }
         } else {
             cosmic::iced::Rectangle { x: 0.0, y: h - STRIP as f32, width: 100_000.0, height: STRIP as f32 }
         };
         Task::batch([set_exclusive_zone(id, zone), set_input_zone(id, Some(vec![input]))])
+    }
+
+    pub(crate) fn resize_bar_pub(&self, id: window::Id, revealed: bool) -> Task<Message> {
+        self.resize_bar(id, revealed)
     }
 
     /// Hidden bars draw nothing (and get no blur behind them).

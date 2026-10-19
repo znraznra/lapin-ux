@@ -51,6 +51,10 @@ pub struct ShellConfig {
     pub hotspot_password: String,
     /// With several monitors: which taskbars show which windows.
     pub multi_display: lapin_ux_core::taskbar::MultiDisplay,
+    /// "Combine taskbar buttons and hide labels".
+    pub combine_buttons: lapin_ux_core::taskbar::Combine,
+    /// "Show smaller taskbar buttons".
+    pub small_buttons: lapin_ux_core::taskbar::SmallButtons,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

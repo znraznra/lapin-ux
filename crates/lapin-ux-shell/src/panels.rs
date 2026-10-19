@@ -189,7 +189,7 @@ impl Shell {
             // Everything above the taskbar, which stays usable.
             PanelKind::TaskView(_) => (
                 Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 0, bottom: if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 }, left: 0 },
+                IcedMargin { top: 0, right: 0, bottom: if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 }, left: 0 },
                 0,
             ),
             PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: above, left: 0 }, crate::clipboard::WIDTH),

@@ -200,7 +200,7 @@ impl Shell {
             output: output.clone(),
             width: size.0 as f32,
             // The taskbar reserves its height; the surface gets the rest.
-            height: size.1.saturating_sub(crate::style::TASKBAR_HEIGHT) as f32,
+            height: size.1.saturating_sub(crate::style::taskbar_height()) as f32,
             dir,
             items: Vec::new(),
             stamp: None,
@@ -244,7 +244,7 @@ impl Shell {
             && &d.output == output
         {
             d.width = size.0 as f32;
-            d.height = size.1.saturating_sub(crate::style::TASKBAR_HEIGHT) as f32;
+            d.height = size.1.saturating_sub(crate::style::taskbar_height()) as f32;
         }
     }
 

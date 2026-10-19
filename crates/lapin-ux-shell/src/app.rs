@@ -47,6 +47,8 @@ pub struct Bar {
     pub output: WlOutput,
     /// Logical output height, used to size the Start menu.
     pub output_height: Option<u32>,
+    /// Logical output width, to tell when the taskbar is full.
+    pub output_width: Option<u32>,
     /// Monitor name (e.g. "eDP-1"), for per-monitor taskbar buttons.
     pub output_name: Option<String>,
     /// Auto-hide: shown at full height right now.
@@ -102,6 +104,8 @@ pub enum PopupKind {
     TaskbarMenu,
     /// Its "Show taskbar apps on" submenu (several monitors).
     TaskbarDisplays,
+    TaskbarCombine,
+    TaskbarSmall,
     /// Window thumbnails shown while hovering a taskbar button.
     Preview(String),
     /// "This app and its related info will be uninstalled."
@@ -195,6 +199,10 @@ pub enum Message {
     StartContext(String),
     ActivateWindow(Handle),
     CloseWindow(Handle),
+    /// A frame while something animates.
+    AnimTick,
+    /// A labelled (one-window) taskbar button: switch to it, or minimize it if in front.
+    TaskWindowClick(Handle),
     CloseApp(String),
     Pin(String),
     Unpin(String),
@@ -287,6 +295,9 @@ pub struct Shell {
     pub can_switch_user: bool,
     /// The desktop has the keyboard (clicked since the last window was focused).
     pub(crate) desktop_focused: bool,
+    /// Taskbar labels / smaller buttons in effect.
+    pub fit: lapin_ux_core::taskbar::Fit,
+    pub(crate) anims: crate::anim::Anims,
     /// When windows asked for attention (their buttons flash for a while).
     pub attention: HashMap<Handle, Instant>,
     /// lapin-ux-comp is running: snap layouts work.
@@ -360,12 +371,21 @@ impl Shell {
         c
     }
 
-    fn create_bar(&mut self, output: WlOutput, output_height: Option<u32>, output_name: Option<String>) -> Task<Message> {
+    fn create_bar(&mut self, output: WlOutput, size: Option<(u32, u32)>, output_name: Option<String>) -> Task<Message> {
         let id = window::Id::unique();
-        self.bars.push(Bar { id, output: output.clone(), output_name, output_height, revealed: !self.config.auto_hide, hovered: false, hide_pending: false });
-        let zone = if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 };
+        self.bars.push(Bar {
+            id,
+            output: output.clone(),
+            output_name,
+            output_height: size.map(|s| s.1),
+            output_width: size.map(|s| s.0),
+            revealed: !self.config.auto_hide,
+            hovered: false,
+            hide_pending: false,
+        });
+        let zone = if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 };
         let hidden_input = self.config.auto_hide.then(|| {
-            let h = style::TASKBAR_HEIGHT as f32;
+            let h = style::taskbar_height() as f32;
             vec![Rectangle { x: 0.0, y: h - crate::autohide::STRIP as f32, width: 100_000.0, height: crate::autohide::STRIP as f32 }]
         });
         let task = cosmic::surface::surface_task(app_layer_shell(
@@ -377,10 +397,10 @@ impl Shell {
                 anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
                 output: IcedOutput::Output(output.clone()),
                 namespace: "lapin-ux-taskbar".into(),
-                size: Some((None, Some(style::TASKBAR_HEIGHT))),
+                size: Some((None, Some(style::taskbar_height()))),
                 exclusive_zone: zone,
                 input_zone: hidden_input.clone(),
-                size_limits: Limits::NONE.min_height(style::TASKBAR_HEIGHT as f32).max_height(style::TASKBAR_HEIGHT as f32),
+                size_limits: Limits::NONE.min_height(40.0).max_height(48.0),
                 ..Default::default()
             },
             None,
@@ -398,7 +418,7 @@ impl Shell {
             .iter()
             .filter_map(|b| b.output_height)
             .min()
-            .map(|h| h.saturating_sub(style::TASKBAR_HEIGHT + 24).min(style::START_HEIGHT))
+            .map(|h| h.saturating_sub(style::taskbar_height() + 24).min(style::START_HEIGHT))
             .unwrap_or(style::START_HEIGHT)
             .max(360);
         if self.catalog.changed_on_disk() {
@@ -418,6 +438,7 @@ impl Shell {
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
         let r = style::PANEL_RADIUS as u32;
+        self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
                 move |_: &Shell| LiveSettings {
@@ -432,7 +453,8 @@ impl Shell {
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    margin: IcedMargin { top: 0, right: 0, bottom: above, left: if left { 12 } else { 0 } },
+                    // Starts a little low and slides up (anim.rs).
+                    margin: IcedMargin { top: 0, right: 0, bottom: above - 48, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
@@ -539,6 +561,7 @@ impl Shell {
         self.state.record_launch(&data.id);
         self.persist_state();
         let mut tasks = vec![self.close_start()];
+        self.anim_launched(&data.id);
         if self.wayland_tx.is_some() {
             self.request(WaylandRequest::TokenRequest { app_id: data.id.clone(), exec, terminal: data.terminal });
         } else {
@@ -777,6 +800,8 @@ impl Application for Shell {
             avatar: None,
             can_switch_user: false,
             desktop_focused: false,
+            fit: Default::default(),
+            anims: Default::default(),
             attention: HashMap::new(),
             snap_supported: false,
             desktops: Default::default(),
@@ -892,7 +917,13 @@ impl Application for Shell {
                 t.item.layout_subscription().with(name).map(|(n, l)| Message::TrayLayout(n, l)),
             ]
         });
+        let frames = if self.anims.active() {
+            cosmic::iced::window::frames().map(|_| Message::AnimTick)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(tray_subs.chain([
+            frames,
             crate::tray::subscription().map(Message::Tray),
             crate::notify_client::subscription().map(Message::NotifyState),
             crate::launcher_entry::subscription().map(Message::Badge),
@@ -962,7 +993,7 @@ impl Application for Shell {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
-        Task::batch([task, self.sync_catcher(), self.sync_autohide()])
+        Task::batch([task, self.sync_catcher(), self.sync_autohide(), self.sync_taskbar_fit()])
     }
 }
 
@@ -1003,7 +1034,7 @@ impl Shell {
                     if !self.bars.iter().any(|b| b.output == output) {
                         let size = info.as_ref().and_then(|i| i.logical_size).map(|(w, h)| (w.max(0) as u32, h.max(0) as u32));
                         let name = info.as_ref().and_then(|i| i.name.clone());
-                        let bar = self.create_bar(output.clone(), size.map(|s| s.1), name);
+                        let bar = self.create_bar(output.clone(), size, name);
                         // Desktop icons live on the first monitor, like the benchmark's main display.
                         let desk = self.create_desktop(output, size.unwrap_or((1280, 720)));
                         return Task::batch([bar, desk]);
@@ -1012,6 +1043,7 @@ impl Shell {
                 OutputEvent::InfoUpdate(info) => {
                     if let Some(bar) = self.bars.iter_mut().find(|b| b.output == output) {
                         bar.output_height = info.logical_size.map(|(_, h)| h.max(0) as u32);
+                        bar.output_width = info.logical_size.map(|(w, _)| w.max(0) as u32);
                         if info.name.is_some() {
                             bar.output_name = info.name.clone();
                         }
@@ -1287,6 +1319,16 @@ impl Shell {
                     cosmic::Action::App(Message::Noop)
                 });
                 return Task::batch([close, open]);
+            }
+            Message::AnimTick => return self.anim_tick(),
+            Message::TaskWindowClick(h) => {
+                if self.click_suppressed() {
+                    return Task::none();
+                }
+                let close = Task::batch([self.close_preview(), self.close_popup()]);
+                let active = self.taskbar.windows().iter().any(|w| w.handle == h && w.active && !w.minimized);
+                self.request(if active { WaylandRequest::Minimize(h) } else { WaylandRequest::Activate(h) });
+                return close;
             }
             Message::TaskClick(bar, app) => {
                 if self.click_suppressed() {
