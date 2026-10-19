@@ -1,93 +1,108 @@
 # Maintainer: CHANGE ME <you@example.com>
 #
-# Builds Lapin UX from this source tree:
+# Builds and installs everything Lapin UX needs in one go:
 #
+#   ./install.sh                      (from the repository root), or
 #   cd packaging/arch && makepkg -si
 #
-# To build from a published repository instead, replace the `source`
-# array with: source=("lapin::git+https://github.com/CHANGE-ME/lapin-ux.git")
-# and point `_src` at "$srcdir/lapin-ux".
+# makepkg -s installs every dependency below from the Arch repositories
+# automatically; the font and both icon sets ship inside this repository,
+# and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
-pkgname=lapin-ux-desktop-git
+pkgbase=lapin-ux-desktop-git
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
 arch=('x86_64' 'aarch64')
-# Our code: GPL-3.0. Bundled third-party assets keep their own licenses:
+url="https://github.com/znraznra/lapin-ux"
+# Our code: GPL-3.0. Bundled third-party assets keep their own licences:
 # Selawik (OFL-1.1, Microsoft), Fluent UI System Icons (MIT, Microsoft),
-# Win11 icon theme (GPL-3.0, yeyushengfan258).
+# Win11 icon theme (GPL-3.0, yeyushengfan258). See README "Third-party assets".
 license=('GPL-3.0-only' 'OFL-1.1' 'MIT')
-depends=(
-    # Compositor and reused, unbranded COSMIC services
-    'cosmic-comp'
-    'cosmic-settings-daemon'
-    'cosmic-bg'
-    'cosmic-osd'
-    'cosmic-idle'
-    'cosmic-greeter'           # lock screen
-    'cosmic-launcher'          # Alt+Tab window switcher (until Lapin UX has its own)
-    'cosmic-screenshot'        # Super+Shift+S
-    'cosmic-icon-theme'
-    'adwaita-icon-theme'       # battery and power-mode icons missing from cosmic-icon-theme
-    'xdg-desktop-portal-cosmic'
-    'inter-font'               # fallback interface font (Selawik is bundled)
-    'noto-fonts-emoji'         # colour emoji in the emoji panel and apps
-    'fontconfig'
-    # Runtime libraries
-    'libxkbcommon'
-    'wayland'
-    'dbus'
-    'systemd-libs'
-    'xdg-utils'
-    # Quick settings
-    'networkmanager'           # Wi-Fi and network status
-    'upower'                   # battery
-    'wireplumber'              # volume (wpctl)
+makedepends=(
+    'cargo' 'git' 'clang' 'python' 'python-numpy' 'python-pillow' 'gtk-update-icon-cache'
+    # lapin-ux-comp (COSMIC compositor) build
+    'libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayland' 'libdisplay-info' 'fontconfig'
 )
-optdepends=(
-    'bluez: Bluetooth in quick settings'
-    'power-profiles-daemon: Energy saver in quick settings'
-    'libpulse: choosing the sound output in quick settings (pactl)'
-    'gnome-keyring: saved passwords and SSH keys'
-    'papirus-icon-theme: broader app icon coverage'
-    'xdg-desktop-portal-gtk: file pickers for GTK apps'
-    'lapin-ux-comp: snap layouts (Super+Z) and taskbar flashing (packaging/lapin-ux-comp)'
-    'localsearch: search inside documents from Start'
-    'accountsservice: changing the account picture'
-)
-makedepends=('cargo' 'git' 'python' 'python-numpy' 'python-pillow' 'gtk-update-icon-cache')
-# Default app icons: Win11 icon theme by yeyushengfan258 (GPL-3.0), pinned.
-_win11_commit=a5b460a407da143b32f19a503d7fcebb3edf2371
-source=("win11-icon-theme::git+https://github.com/yeyushengfan258/Win11-icon-theme.git#commit=${_win11_commit}")
+# Lapin UX's compositor: upstream cosmic-comp at a pinned commit plus our patch.
+_comp_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
+source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}")
 sha256sums=('SKIP')
-provides=('lapin-ux-desktop')
-conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git')
 options=('!lto')
 
 _src="$startdir/../.."
 
 prepare() {
-    cd "$_src"
     export RUSTUP_TOOLCHAIN=stable
-    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+    local host
+    host="$(rustc -vV | sed -n 's/host: //p')"
+    cd "$_src"
+    cargo fetch --locked --target "$host"
+
+    cd "$srcdir/cosmic-comp"
+    git reset -q --hard
+    git apply "$_src"/packaging/lapin-ux-comp/*.patch
+    rm -f rust-toolchain rust-toolchain.toml   # build with the system's stable toolchain
+    cargo fetch --locked --target "$host"
 }
 
 build() {
-    cd "$_src"
     export RUSTUP_TOOLCHAIN=stable
-    export CARGO_TARGET_DIR="$srcdir/target"
-    cargo build --frozen --release --workspace
+    cd "$_src"
+    CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release --workspace
     [ -f data/wallpapers/lapin-ux-dark.jpg ] || python tools/make-wallpaper.py data/wallpapers
+
+    cd "$srcdir/cosmic-comp"
+    CARGO_TARGET_DIR="$srcdir/comp-target" cargo build --frozen --release
 }
 
 check() {
-    cd "$_src"
     export RUSTUP_TOOLCHAIN=stable
-    export CARGO_TARGET_DIR="$srcdir/target"
-    cargo test --frozen --release -p lapin-ux-core -p lapin-ux-session
+    cd "$_src"
+    CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release -p lapin-ux-core -p lapin-ux-session
 }
 
-package() {
+package_lapin-ux-desktop-git() {
+    # lapin-ux-comp is built by this PKGBUILD and installed with it by
+    # `makepkg -i` (it can't be listed as a dependency of its own build).
+    depends=(
+        # Reused, unbranded COSMIC services
+        'cosmic-comp'              # fallback compositor
+        'cosmic-settings-daemon'
+        'cosmic-settings'          # settings app (until Lapin UX has its own)
+        'cosmic-bg'
+        'cosmic-osd'
+        'cosmic-idle'
+        'cosmic-greeter'           # login and lock screen
+        'cosmic-launcher'
+        'cosmic-screenshot'        # Super+Shift+S
+        'cosmic-icon-theme'        # fallback for icons neither icon set has
+        'adwaita-icon-theme'
+        'xdg-desktop-portal-cosmic'
+        'xdg-desktop-portal-gtk'   # file pickers for GTK apps
+        # Fonts: Selawik is bundled; these only supply characters it lacks
+        'fontconfig'
+        'noto-fonts'               # Greek, Cyrillic and other scripts
+        'noto-fonts-cjk'           # Chinese, Japanese, Korean
+        'noto-fonts-emoji'         # colour emoji
+        # Runtime libraries and tools
+        'libxkbcommon' 'wayland' 'dbus' 'systemd-libs' 'xdg-utils' 'glib2'
+        # Quick settings, Start and account
+        'networkmanager'           # Wi-Fi, VPN, hotspot
+        'upower'                   # battery
+        'wireplumber'              # volume (wpctl)
+        'libpulse'                 # sound output and per-app volume (pactl)
+        'bluez' 'bluez-utils'      # Bluetooth
+        'power-profiles-daemon'    # Energy saver
+        'accountsservice'          # account picture
+        'localsearch'              # search inside documents from Start
+        'gnome-keyring'            # saved passwords and SSH keys
+    )
+    provides=('lapin-ux-desktop')
+    conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git')
+    install=lapin-ux.install
+
     cd "$_src"
     local bin
     for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd; do
@@ -102,9 +117,13 @@ package() {
     install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
     install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
-    # Interface font: Selawik (OFL-1.1, Microsoft), unmodified.
+    # The one system font: Selawik (OFL-1.1, Microsoft), unmodified, plus the
+    # fontconfig rule that makes it the font for sans-serif/serif/system-ui.
     install -Dm644 -t "$pkgdir/usr/share/fonts/lapin-ux-selawik" data/fonts/selawik/*.ttf
     install -Dm644 data/fonts/selawik/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/Selawik-OFL.txt"
+    install -Dm644 data/fontconfig/50-lapin-ux-selawik.conf "$pkgdir/usr/share/fontconfig/conf.avail/50-lapin-ux-selawik.conf"
+    install -dm755 "$pkgdir/usr/share/fontconfig/conf.default"
+    ln -s ../conf.avail/50-lapin-ux-selawik.conf "$pkgdir/usr/share/fontconfig/conf.default/50-lapin-ux-selawik.conf"
 
     # Symbolic icons: Fluent UI System Icons (MIT, Microsoft), see tools/make-fluent-icons.py.
     mkdir -p "$pkgdir/usr/share/icons"
@@ -112,8 +131,21 @@ package() {
     install -Dm644 data/icons/Lapin-UX/LICENSE-fluentui-system-icons \
         "$pkgdir/usr/share/licenses/$pkgname/Fluent-UI-System-Icons-MIT.txt"
 
-    # App icons: Win11 icon theme (GPL-3.0, yeyushengfan258), its own installer.
-    (cd "$srcdir/win11-icon-theme" && ./install.sh -d "$pkgdir/usr/share/icons" >/dev/null)
+    # App, folder and file icons: Win11 icon theme (GPL-3.0, yeyushengfan258),
+    # shipped in third_party/ and installed with its own installer.
+    local win11="$srcdir/win11-icon-theme"
+    rm -rf "$win11" && cp -a third_party/win11-icon-theme "$win11"
+    (cd "$win11" && ./install.sh -d "$pkgdir/usr/share/icons" >/dev/null)
     rm -f "$pkgdir"/usr/share/icons/Win11*/icon-theme.cache
-    install -Dm644 "$srcdir/win11-icon-theme/COPYING" "$pkgdir/usr/share/licenses/$pkgname/Win11-icon-theme-GPL-3.0.txt"
+    install -Dm644 third_party/win11-icon-theme/COPYING "$pkgdir/usr/share/licenses/$pkgname/Win11-icon-theme-GPL-3.0.txt"
+    install -Dm644 third_party/win11-icon-theme/AUTHORS "$pkgdir/usr/share/licenses/$pkgname/Win11-icon-theme-AUTHORS"
+}
+
+package_lapin-ux-comp() {
+    pkgdesc="COSMIC compositor with Lapin UX's snap layouts and taskbar attention support"
+    url="https://github.com/pop-os/cosmic-comp"
+    license=('GPL-3.0-only')
+    depends=('libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayland' 'libdisplay-info' 'fontconfig')
+    install -Dm755 "$srcdir/comp-target/release/cosmic-comp" "$pkgdir/usr/bin/lapin-ux-comp"
+    install -Dm644 "$srcdir/cosmic-comp/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

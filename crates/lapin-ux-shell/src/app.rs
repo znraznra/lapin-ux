@@ -150,6 +150,8 @@ pub enum Message {
     Layer(LayerEvent, window::Id),
     PopupClosed(window::Id),
     Config(ShellConfig),
+    /// COSMIC's toolkit settings (font, icon theme) changed.
+    Toolkit(Box<cosmic::config::CosmicTk>),
     Tick,
     Rect(RectangleUpdate<String>),
     ToggleStart,
@@ -733,6 +735,7 @@ impl Application for Shell {
             }
         }
         crate::defaults::sync_icon_variant();
+        crate::defaults::enforce_font_at_start();
         // The toolkit read the icon theme before the defaults above could set it.
         cosmic::icon_theme::set_default(crate::defaults::configured_icon_theme());
         let state_handle = config::shell_state();
@@ -890,7 +893,21 @@ impl Application for Shell {
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
             wl::subscription().map(Message::Wayland),
-            self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
+            // Watch the files directly: works even when COSMIC's settings
+            // daemon (which relays config changes over D-Bus) isn't running.
+            cosmic_config::config_subscription::<_, ShellConfig>(
+                std::any::TypeId::of::<ShellConfig>(),
+                std::borrow::Cow::Borrowed(lapin_ux_core::ids::SHELL_APP_ID),
+                crate::config::VERSION,
+            )
+            .map(|u| Message::Config(u.config)),
+            // Keep the one system font (see defaults::enforce_font).
+            cosmic_config::config_subscription::<_, cosmic::config::CosmicTk>(
+                std::any::TypeId::of::<cosmic::config::CosmicTk>(),
+                std::borrow::Cow::Borrowed("com.system76.CosmicTk"),
+                cosmic::config::CosmicTk::VERSION,
+            )
+            .map(|u| Message::Toolkit(Box::new(u.config))),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),
             cosmic::iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick),
             listen_raw(|event, _status, window| {
@@ -1042,6 +1059,13 @@ impl Shell {
                 }
                 if self.sub.as_ref().is_some_and(|p| p.id == id) {
                     self.sub = None;
+                }
+            }
+            Message::Toolkit(tk) => {
+                crate::defaults::toolkit_changed(&tk);
+                // Follow the icon theme even without COSMIC's settings daemon.
+                if cosmic::icon_theme::default() != tk.icon_theme {
+                    cosmic::icon_theme::set_default(tk.icon_theme.clone());
                 }
             }
             Message::Config(cfg) => {

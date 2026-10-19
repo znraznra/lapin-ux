@@ -3,7 +3,7 @@
 //! along the right edge of the screen, opened from the taskbar clock.
 
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Shadow, Vector};
-use cosmic::widget::{self, button, column, container, icon, mouse_area, row, scrollable, text, toggler};
+use cosmic::widget::{self, button, column, container, icon, mouse_area, row, text, toggler};
 use cosmic::{Element, theme};
 use lapin_ux_core::notify::Notification;
 
@@ -145,11 +145,21 @@ fn notifications(app: &App) -> Element<'_, Message> {
         }
         list = list.push(g);
     }
-    col = col.push(scrollable(list).height(Length::Fill));
+    // The card takes the height the calendar leaves; its header and Do not
+    // disturb row always show and only the list scrolls.
+    col = col.push(
+        cosmic::iced::widget::scrollable(list)
+            .direction(cosmic::iced::widget::scrollable::Direction::Vertical(
+                cosmic::iced::widget::scrollable::Scrollbar::new().width(6.0).scroller_width(6.0).spacing(4.0),
+            ))
+            .height(Length::Fill),
+    );
     card(col).height(Length::Fill).into()
 }
 
-fn calendar(app: &App) -> Element<'_, Message> {
+/// `compact` leaves out the month grid (the screen is too short for it next
+/// to the notifications); the agenda and focus controls stay.
+fn calendar(app: &App, compact: bool) -> Element<'_, Message> {
     let now = chrono::Local::now();
     let collapsed = app.calendar_collapsed;
     let header = row::with_children(vec![
@@ -163,6 +173,18 @@ fn calendar(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center);
     if collapsed {
         return card(column::with_children(vec![header.into(), crate::quiet::focus_row(app)]).spacing(10)).into();
+    }
+    if compact {
+        return card(
+            column::with_children(vec![
+                header.into(),
+                crate::quiet::agenda(app),
+                widget::divider::horizontal::default().into(),
+                crate::quiet::focus_row(app),
+            ])
+            .spacing(10),
+        )
+        .into();
     }
     let cal = widget::calendar(
         &app.calendar,
@@ -188,17 +210,39 @@ fn calendar(app: &App) -> Element<'_, Message> {
     .into()
 }
 
+/// Heights used to decide whether the month grid fits (logical pixels).
+const CAL_GRID: f32 = 360.0;
+const CAL_REST: f32 = 150.0;
+const NOTES_EMPTY: f32 = 170.0;
+const NOTES_MIN: f32 = 240.0;
+const GAP: f32 = 12.0;
+
 pub fn view(app: &App) -> Element<'_, Message> {
-    let empty = app.queue.history().next().is_none() && !app.quiet.settings_open;
-    let mut col = column::with_capacity(3).spacing(12).width(Length::Fill).height(Length::Fill);
-    if empty {
-        // Transparent space above the cards; clicking it closes the centre.
-        col = col.push(mouse_area(widget::Space::new().width(Length::Fill).height(Length::Fill)).on_press(Message::CloseCenter));
-    }
-    col = col.push(notifications(app));
     // Settings get the whole height.
-    if !app.quiet.settings_open {
-        col = col.push(calendar(app));
+    if app.quiet.settings_open {
+        return notifications(app);
     }
-    col.into()
+    let empty = app.queue.history().next().is_none();
+    // Lay out for the height there is: the notifications card always keeps
+    // room for its header and some notifications, the calendar keeps its
+    // agenda and focus controls, and the month grid is left out when there
+    // isn't room for it. Nothing gets cut off.
+    cosmic::iced::widget::responsive(move |size| {
+        let calendar_full = CAL_GRID + CAL_REST + crate::quiet::agenda_height(app);
+        let notes = if empty { NOTES_EMPTY } else { NOTES_MIN };
+        let compact = !app.calendar_collapsed && size.height < notes + GAP + calendar_full;
+        let cards = column::with_capacity(2).spacing(GAP).width(Length::Fill);
+        if empty {
+            // Cards sit at the bottom; the space above closes the centre.
+            let cards = cards.push(notifications(app)).push(calendar(app, compact));
+            return column::with_capacity(2)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .push(mouse_area(container(widget::Space::new()).width(Length::Fill).height(Length::Fill)).on_press(Message::CloseCenter))
+                .push(cards)
+                .into();
+        }
+        cards.height(Length::Fill).push(notifications(app)).push(calendar(app, compact)).into()
+    })
+    .into()
 }

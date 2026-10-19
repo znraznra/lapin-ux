@@ -270,10 +270,9 @@ fn pin_icon(shell: &Shell, pin: &Pin, size: u16) -> Element<'static, Message> {
     match pin {
         Pin::App(a) => icon(app_icon(shell, a)).size(size).into(),
         Pin::Path(p) => {
-            let name = if p.is_dir() { "folder" } else { crate::start_view::mime_icon(&pin.label()) };
-            icon::from_name(name).size(size).into()
+            icon(crate::icons::for_file(&pin.label(), p.is_dir())).size(size).into()
         }
-        Pin::Site { .. } => icon::from_name("web-browser").size(size).into(),
+        Pin::Site { .. } => icon(crate::icons::full("web-browser")).size(size).into(),
         Pin::Folder { apps, .. } => {
             // Up to four app icons, 2×2.
             let mini: Vec<Element<'static, Message>> =

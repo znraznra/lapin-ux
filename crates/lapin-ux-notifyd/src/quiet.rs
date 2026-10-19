@@ -221,13 +221,21 @@ impl App {
 }
 
 fn dim<'a>(s: impl Into<String>) -> Element<'a, Message> {
+    dim_text(s).into()
+}
+
+/// One line of dimmed text that never wraps.
+fn dim_line<'a>(s: impl Into<String>) -> Element<'a, Message> {
+    dim_text(s).wrapping(cosmic::iced::widget::text::Wrapping::None).into()
+}
+
+fn dim_text<'a>(s: impl Into<String>) -> cosmic::widget::Text<'a, cosmic::Theme> {
     text::caption(s.into())
         .class(theme::Text::Custom(|t| {
             let mut c: cosmic::iced::Color = t.cosmic().on_bg_color().into();
             c.a = 0.7;
             cosmic::iced::widget::text::Style { color: Some(c), ..Default::default() }
         }))
-        .into()
 }
 
 fn stepper<'a>(value: String, minus: Message, plus: Message) -> Element<'a, Message> {
@@ -238,6 +246,19 @@ fn stepper<'a>(value: String, minus: Message, plus: Message) -> Element<'a, Mess
     ])
     .align_y(Alignment::Center)
     .into()
+}
+
+/// Height of one event in the agenda (title + time lines).
+const AGENDA_ROW: f32 = 40.0;
+
+/// Height the agenda block takes (title and its rows).
+pub fn agenda_height(app: &App) -> f32 {
+    let d = app.calendar.selected;
+    let n = chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
+        .map_or(0, |day| ics::agenda(&app.quiet.events, day).len());
+    let rows = n.clamp(1, 3) as f32;
+    let row = if n == 0 { 18.0 } else { AGENDA_ROW };
+    26.0 + rows * row + (rows - 1.0) * 6.0
 }
 
 /// The agenda under the calendar: events on the selected day.
@@ -260,13 +281,13 @@ pub fn agenda(app: &App) -> Element<'_, Message> {
             (Some(s), None) => s.format("%-I:%M %p").to_string(),
             _ => "All day".into(),
         };
-        let mut info = column::with_capacity(3).push(text::body(o.summary)).push(dim(time));
-        if !o.location.is_empty() {
-            info = info.push(dim(o.location));
-        }
+        let when = if o.location.is_empty() { time } else { format!("{time} · {}", o.location) };
+        let info = column::with_capacity(2)
+            .push(text::body(o.summary).wrapping(cosmic::iced::widget::text::Wrapping::None))
+            .push(dim_line(when));
         list = list.push(
             row::with_children(vec![
-                container(widget::Space::new().width(3).height(32)).class(theme::Container::custom(|t| cosmic::widget::container::Style {
+                container(widget::Space::new().width(3).height(Length::Fill)).class(theme::Container::custom(|t| cosmic::widget::container::Style {
                     background: Some(cosmic::iced::Background::Color(t.cosmic().accent_color().into())),
                     border: cosmic::iced::Border { radius: 2.0.into(), ..Default::default() },
                     ..Default::default()
@@ -274,11 +295,24 @@ pub fn agenda(app: &App) -> Element<'_, Message> {
                 .into(),
                 info.into(),
             ])
-            .spacing(10),
+            .spacing(10)
+            .height(Length::Fixed(AGENDA_ROW)),
         );
     }
-    // Two events fit; more scroll, so the notifications keep their room.
-    let list: Element<'_, Message> = if n > 2 { scrollable(list).width(Length::Fill).height(Length::Fixed(96.0)).into() } else { list.into() };
+    // Up to three events show in full; more scroll in a box exactly three
+    // rows tall, so no event is ever shown cut in half.
+    let list: Element<'_, Message> = if n > 3 {
+        let h = 3.0 * AGENDA_ROW + 2.0 * 6.0;
+        cosmic::iced::widget::scrollable(list)
+            .direction(cosmic::iced::widget::scrollable::Direction::Vertical(
+                cosmic::iced::widget::scrollable::Scrollbar::new().width(6.0).scroller_width(6.0).spacing(4.0),
+            ))
+            .width(Length::Fill)
+            .height(Length::Fixed(h))
+            .into()
+    } else {
+        list.into()
+    };
     column::with_children(vec![text::heading(title).into(), list]).spacing(6).into()
 }
 

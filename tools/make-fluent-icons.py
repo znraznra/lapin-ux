@@ -60,6 +60,8 @@ MAP = {
     "open-menu": ("actions", "navigation", "regular"),
     "view-app-grid": ("actions", "apps", "regular"),
     "view-grid": ("actions", "grid", "regular"),
+    "view-sort-ascending": ("actions", "arrow_sort", "regular"),
+    "view-sort-descending": ("actions", "arrow_sort", "regular"),
     "view-list": ("actions", "text_bullet_list_ltr", "regular"),
     "view-paged": ("actions", "window_multiple", "regular"),
     "view-pin": ("actions", "pin", "regular"),

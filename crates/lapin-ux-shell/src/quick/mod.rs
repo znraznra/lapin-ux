@@ -1023,7 +1023,7 @@ fn sound_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         let handle = if shell.catalog.get(&id).is_some() || s.icon.is_empty() {
             crate::taskbar_view::app_icon(shell, &id)
         } else {
-            icon::from_name(s.icon.clone()).handle()
+            crate::icons::full(&s.icon)
         };
         let (index, muted) = (s.index, s.muted);
         mixer = mixer.push(

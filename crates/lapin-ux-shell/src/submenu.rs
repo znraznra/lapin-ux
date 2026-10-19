@@ -73,7 +73,11 @@ impl Shell {
 /// What sits in a menu row's left column.
 #[derive(Clone, Copy)]
 pub enum Lead<'a> {
+    /// No icon: the label starts at the left edge (no empty gap).
+    #[allow(dead_code)]
     None,
+    /// An empty mark column (an unticked choice next to ticked ones).
+    Blank,
     Icon(&'a str),
     /// `✓` for a toggle, `•` for the chosen option.
     Mark(&'static str),
@@ -82,12 +86,17 @@ pub enum Lead<'a> {
 /// A menu row in the benchmark's classic style: a fixed left column (icon,
 /// check mark or bullet), the label, and `›` at the far right for a submenu.
 pub fn entry<'a>(lead: Lead<'a>, label: impl Into<String>, trailing: Option<&'static str>, msg: Option<Message>) -> Element<'a, Message> {
+    let lead_kind = lead;
     let lead: Element<'a, Message> = match lead {
         Lead::Icon(n) => icon::from_name(n).size(16).into(),
         Lead::Mark(m) => container(text::body(m)).width(16).align_x(Alignment::Center).into(),
-        Lead::None => widget::Space::new().width(16).height(16).into(),
+        // A blank in a list of choices keeps the column for the mark.
+        Lead::Blank => widget::Space::new().width(16).height(16).into(),
+        // No icon: the label starts at the edge, no empty gap.
+        Lead::None => widget::Space::new().width(0).height(16).into(),
     };
-    let mut r = row::with_capacity(3).spacing(12).align_y(Alignment::Center).push(lead).push(text::body(label.into()).width(Length::Fill));
+    let gap = if matches!(lead_kind, Lead::None) { 0 } else { 12 };
+    let mut r = row::with_capacity(3).spacing(gap).align_y(Alignment::Center).push(lead).push(text::body(label.into()).width(Length::Fill));
     if let Some(t) = trailing {
         r = r.push(container(text::body(t)).width(16).align_x(Alignment::Center));
     }
@@ -101,8 +110,8 @@ pub fn entry<'a>(lead: Lead<'a>, label: impl Into<String>, trailing: Option<&'st
 
 /// A row that opens a submenu on hover (and on click), tracked so the
 /// submenu can be placed beside it.
-pub fn parent_entry<'a>(shell: &'a Shell, popup: window::Id, key: &'static str, label: &'static str, open: Message) -> Element<'a, Message> {
-    let row = mouse_area(entry(Lead::None, label, Some("\u{203A}"), Some(open.clone()))).on_enter(open);
+pub fn parent_entry<'a>(shell: &'a Shell, popup: window::Id, key: &'static str, lead: Lead<'a>, label: &'static str, open: Message) -> Element<'a, Message> {
+    let row = mouse_area(entry(lead, label, Some("\u{203A}"), Some(open.clone()))).on_enter(open);
     crate::taskbar_view::track(shell, rect_key(popup, key), row)
 }
 

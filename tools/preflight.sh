@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
 # Checks an Arch Linux machine is ready to build and run Lapin UX.
-# Read-only: it installs nothing and changes nothing.
+# Read-only: it installs nothing and changes nothing. ./install.sh installs
+# everything listed here automatically; this only tells you what's there.
 #
 #   sh tools/preflight.sh
 
@@ -22,17 +23,13 @@ case "${XDG_SESSION_TYPE:-}" in
     *) note "no graphical session detected (XDG_SESSION_TYPE unset)" ;;
 esac
 
-echo "Runtime packages"
+echo "Runtime packages (./install.sh installs any that are missing)"
 missing=""
-for p in cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic inter-font gtk-update-icon-cache noto-fonts-emoji \
-         fontconfig libxkbcommon wayland dbus xdg-utils networkmanager upower wireplumber; do
+for p in cosmic-comp cosmic-settings-daemon cosmic-settings cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
+         cosmic-launcher cosmic-screenshot cosmic-icon-theme adwaita-icon-theme xdg-desktop-portal-cosmic xdg-desktop-portal-gtk \
+         fontconfig noto-fonts noto-fonts-cjk noto-fonts-emoji libxkbcommon wayland dbus systemd-libs xdg-utils glib2 \
+         networkmanager upower wireplumber libpulse bluez bluez-utils power-profiles-daemon accountsservice localsearch gnome-keyring; do
     if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else fail "$p"; missing="$missing $p"; fi
-done
-
-echo "Optional (quick settings)"
-for p in bluez power-profiles-daemon libpulse; do
-    if pacman -Qq "$p" >/dev/null 2>&1; then pass "$p"; else note "$p not installed (its quick settings tile/page is hidden)"; fi
 done
 systemctl is-active -q NetworkManager 2>/dev/null && pass "NetworkManager is running" || note "NetworkManager is not running: Wi-Fi won't appear in quick settings (sudo systemctl enable --now NetworkManager)"
 
@@ -61,7 +58,7 @@ done
 echo
 echo "$ok OK, $warn warnings, $bad missing"
 if [ -n "$missing" ]; then
-    echo "Install the missing packages with:"
+    echo "./install.sh installs these for you. To install them by hand:"
     echo "  sudo pacman -S --needed$missing"
     exit 1
 fi

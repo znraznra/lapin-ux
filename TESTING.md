@@ -42,9 +42,11 @@ Everything renders a little slower in a window; that is expected.
 ## Stage B: as your desktop
 
 ```sh
-cd packaging/arch
-makepkg -si
+./install.sh
 ```
+
+It installs everything (build tools, every dependency, Lapin UX and its
+compositor build); nothing needs installing by hand.
 
 Log out, choose **Lapin UX** in the session list on the login screen, log in.
 
@@ -82,7 +84,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Apps with badges (Thunderbird, Telegram, Discord…) show a count; a download in Firefox shows a green progress bar
 - [ ] Drag a file from the file manager over a running app's button and wait: that app comes forward so you can drop it in
 - [ ] With two monitors: each taskbar shows its own windows per "Show taskbar apps on" in the taskbar's right-click menu
-- [ ] (with lapin-ux-comp) An app on another desktop that wants attention (e.g. a chat message) lights up its taskbar button instead of switching desktops
+- [ ] An app on another desktop that wants attention (e.g. a chat message) lights up its taskbar button instead of switching desktops
 - [ ] "Automatically hide the taskbar": it disappears and maximized windows grow to the bottom; pointer to the bottom edge shows it; it stays while you use it or Start is open; it hides again shortly after you move away
 
 ### System tray
@@ -175,8 +177,9 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Settings (gear): a Do not disturb schedule covering now turns it on; turning an app's Notifications off stops its notifications; Show banners off keeps them in the centre only
 
 ### Look and feel
-- [ ] Interface text uses the Selawik font (Inter if Selawik isn't installed)
-- [ ] Apps, folders and files use the Win11-style icons; tray, quick settings and menu glyphs are Fluent outline icons
+- [ ] Interface text uses the Selawik font everywhere (shell, COSMIC Settings, GTK apps; `fc-match sans-serif` says Selawik)
+- [ ] Pick another interface font in COSMIC Settings: it switches straight back to Selawik
+- [ ] Apps, folders, files, shortcuts and desktop items use the full-colour Win11 icons (also in Start's Recommended list, search results and jump lists); tray, quick settings and menu glyphs are Fluent outline icons
 - [ ] Switching light/dark switches the icon theme between Lapin-UX and Lapin-UX-dark
 - [ ] An icon theme you picked yourself in COSMIC Settings is kept
 - [ ] Blue accent, rounded corners, Lapin UX wallpaper (first login only)
@@ -197,7 +200,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Ctrl+Alt+Del shows the sign-out/power dialog
 - [ ] Super+← / Super+→ snap a window to the left/right half; Super+Shift+← / → move it to the other monitor
 - [ ] Super+Tab (or the Task view button) shows Task view; click a window to switch; New desktop adds one; right-click a window → Move to Desktop 2; Ctrl+Super+← / → switch desktops
-- [ ] (with lapin-ux-comp) Super+Z: pick the left third of the thirds layout: the window goes there and Snap assist offers your other windows for the remaining spaces
+- [ ] Super+Z: pick the left third of the thirds layout: the window goes there and Snap assist offers your other windows for the remaining spaces
 
 ### Session
 - [ ] Apps set to start at login (autostart) start

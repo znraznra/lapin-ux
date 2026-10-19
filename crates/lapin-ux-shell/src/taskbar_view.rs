@@ -24,9 +24,7 @@ pub(crate) fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Elemen
 pub fn app_icon(shell: &Shell, app: &str) -> icon::Handle {
     match shell.catalog.data_for(app) {
         Some(d) => d.icon.as_cosmic_icon(),
-        None => icon::from_name(app.to_string())
-            .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])))
-            .handle(),
+        None => crate::icons::full(app),
     }
 }
 
@@ -223,31 +221,38 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
         widget::Space::new().width(6).height(3).into()
     };
 
-    let app_icon_el: Element<'_, Message> = match badge.label() {
-        Some(label) => cosmic::iced::widget::stack![
-            container(icon(app_icon(shell, &b.app)).size(style::TASK_ICON)).padding([4, 6, 0, 6]),
+    // The icon sits dead centre (equal space on all four sides, like Start
+    // and the other taskbar buttons); the running line is laid over the
+    // bottom margin instead of pushing the icon up.
+    let centred = |el: Element<'a, Message>| -> Element<'a, Message> { container(el).center(Length::Fill).into() };
+    let app_icon_el: Element<'_, Message> = icon(app_icon(shell, &b.app)).size(style::TASK_ICON).into();
+    let mut layers: Vec<Element<'_, Message>> = vec![centred(app_icon_el)];
+    if let Some(label) = badge.label() {
+        // Count badge at the icon's top-right corner.
+        layers.push(
             container(
                 container(text::caption(label).size(10))
                     .padding([0, 4])
                     .height(16)
                     .align_y(Alignment::Center)
-                    .class(style::badge())
+                    .class(style::badge()),
             )
             .width(Length::Fill)
-            .align_x(Alignment::End),
-        ]
-        .into(),
-        None => container(icon(app_icon(shell, &b.app)).size(style::TASK_ICON)).padding([4, 6, 0, 6]).into(),
-    };
-    let content = column::with_children(vec![
-        app_icon_el,
-        widget::Space::new().height(Length::Fill).into(),
-        indicator,
-        widget::Space::new().height(1).into(),
-    ])
-    .align_x(Alignment::Center)
-    .width(Length::Fill)
-    .height(Length::Fill);
+            .align_x(Alignment::End)
+            .padding([2, 2, 0, 0])
+            .into(),
+        );
+    }
+    layers.push(
+        container(indicator)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::End)
+            .padding([0, 0, 1, 0])
+            .into(),
+    );
+    let content = cosmic::iced::widget::Stack::with_children(layers).width(Length::Fill).height(Length::Fill);
 
     let dragging = shell.drag.as_ref().is_some_and(|d| d.active && d.app == b.app);
     // Asking for attention: the button flashes a few times, then stays lit.
@@ -311,6 +316,8 @@ pub fn tray_icon(update: crate::tray::IconUpdate) -> icon::Handle {
         }
         let mut b = icon::from_name(name.to_string())
             .prefer_svg(true)
+            // App icons in full colour; symbolic status icons stay symbolic.
+            .size(if name.ends_with("-symbolic") { 16 } else { 128 })
             .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])));
         if let Some(p) = update.theme_path {
             b = b.with_extra_paths(vec![p]);
@@ -359,9 +366,11 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
             (Some(true), _) => icon::from_name("object-select-symbolic").size(16).into(),
             (Some(false), _) => widget::Space::new().width(16).height(16).into(),
             (None, Some(n)) => icon::from_name(n.to_string()).size(16).into(),
-            (None, None) => widget::Space::new().width(16).height(16).into(),
+            // No icon: no empty space either.
+            (None, None) => widget::Space::new().width(0).height(16).into(),
         };
-        let mut r = row::with_capacity(3).spacing(12).align_y(Alignment::Center).push(lead);
+        let gap = if child.toggled().is_none() && child.icon_name().is_none() { 0 } else { 12 };
+        let mut r = row::with_capacity(3).spacing(gap).align_y(Alignment::Center).push(lead);
         let label = text::body(child.label()).width(Length::Fill);
         r = r.push(if child.enabled() { label } else { label.class(style::dim_text()) });
         if child.is_submenu() {
@@ -431,6 +440,7 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
             shell,
             popup,
             "tb-displays",
+            crate::submenu::Lead::Blank,
             "Show taskbar apps on",
             Message::TaskbarOption(O::DisplaysMenu),
         ));
@@ -449,7 +459,7 @@ fn taskbar_displays(shell: &Shell) -> Element<'_, Message> {
     ]
     .into_iter()
     .map(|(m, label)| {
-        let lead = if shell.config.multi_display == m { Lead::Mark("\u{2022}") } else { Lead::None };
+        let lead = if shell.config.multi_display == m { Lead::Mark("\u{2022}") } else { Lead::Blank };
         entry(lead, label, None, Some(Message::TaskbarOption(O::MultiDisplay(m))))
     })
     .collect::<Vec<_>>();
@@ -482,9 +492,14 @@ fn tray_overflow(shell: &Shell, bar: cosmic::iced::window::Id) -> Element<'_, Me
 
 /// One row in a popup menu.
 pub fn menu_item<'a>(icon_name: &'a str, label: impl Into<String>, msg: Message) -> Element<'a, Message> {
+    menu_item_with(icon::from_name(icon_name.to_string()).handle(), label, msg)
+}
+
+/// A menu row with a ready-made icon (e.g. a full-colour file icon).
+pub fn menu_item_with<'a>(handle: icon::Handle, label: impl Into<String>, msg: Message) -> Element<'a, Message> {
     button::custom(
         row::with_children(vec![
-            icon::from_name(icon_name.to_string()).size(16).into(),
+            icon(handle).size(16).into(),
             text::body(label.into()).into(),
         ])
         .spacing(12)
@@ -516,8 +531,8 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
             if !shell.jump.is_empty() {
                 items.push(container(text::caption("Recent").class(style::dim_text())).padding([6, 12, 2, 12]).into());
                 for f in &shell.jump {
-                    items.push(menu_item(
-                        crate::start_view::mime_icon(&f.name),
+                    items.push(menu_item_with(
+                        crate::icons::for_file(&f.name, false),
                         f.name.clone(),
                         Message::OpenWith(app.clone(), f.path.clone()),
                     ));

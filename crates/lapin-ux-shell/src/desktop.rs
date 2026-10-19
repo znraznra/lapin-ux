@@ -21,7 +21,7 @@ use cosmic::iced::platform_specific::shell::commands::layer_surface::{
 };
 use cosmic::iced::clipboard::dnd::DndAction;
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Point, Rectangle, window};
-use cosmic::widget::{self, column, container, icon, mouse_area, row, text, text_input};
+use cosmic::widget::{self, column, container, icon, mouse_area, row, text};
 use cosmic::{Element, theme};
 use lapin_ux_core::desktop::{self as model, Cell, DesktopItem, SortBy};
 use cosmic::cctk::wayland_client::protocol::wl_output::WlOutput;
@@ -491,7 +491,10 @@ impl Shell {
 
     pub(crate) fn rename_focused(&self) -> Task<Message> {
         // Select the name without the extension, like the benchmark.
-        Task::batch([text_input::focus(RENAME_ID.clone()), text_input::select_all(RENAME_ID.clone())])
+        Task::batch([
+            cosmic::iced::runtime::widget::operation::focus(RENAME_ID.clone()),
+            cosmic::iced::runtime::widget::operation::select_all(RENAME_ID.clone()),
+        ])
     }
 
     fn create_new(&mut self, folder: bool) -> Task<Message> {
@@ -997,11 +1000,7 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
                             .height(isz as f32)
                             .content_fit(cosmic::iced::ContentFit::Contain)
                             .into(),
-                        Look::Named(n) => icon(
-                            icon::from_name(n.clone())
-                                .fallback(Some(icon::IconFallback::Names(vec!["text-x-generic".into()])))
-                                .handle(),
-                        )
+                        Look::Named(n) => icon(crate::icons::full(n))
                         .size(isz)
                         .into(),
                     };
@@ -1041,7 +1040,7 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
                             .drag_icon(move |offset| {
                                 let handle = match &look {
                                     Look::Image(p) => icon::from_path(p.clone()),
-                                    Look::Named(n) => icon::from_name(n.clone()).handle(),
+                                    Look::Named(n) => crate::icons::full(n),
                                 };
                                 let el: Element<'static, ()> = icon(handle).size(isz).into();
                                 (el, cosmic::iced::advanced::widget::tree::State::None, offset)
@@ -1099,11 +1098,15 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
 /// The rename box (its own surface, see `start_rename`).
 pub fn rename_view(shell: &Shell) -> Element<'_, Message> {
     let Some((_, name)) = shell.desktop.as_ref().and_then(|d| d.rename.as_ref()) else { return widget::Space::new().into() };
+    // Centred under the icon, like the label it replaces.
     container(
-        text_input::text_input("", name)
+        cosmic::iced::widget::text_input("", name)
             .id(RENAME_ID.clone())
             .on_input(|v| Message::Desktop(DesktopMsg::RenameInput(v)))
-            .on_submit(|_| Message::Desktop(DesktopMsg::RenameCommit))
+            .on_submit(Message::Desktop(DesktopMsg::RenameCommit))
+            .align_x(cosmic::iced::alignment::Horizontal::Center)
+            .padding([3, 4])
+            .size(14)
             .width(Length::Fill),
     )
     .padding(1)
@@ -1114,8 +1117,8 @@ pub fn rename_view(shell: &Shell) -> Element<'_, Message> {
 pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> Element<'a, Message> {
     use crate::submenu::{Lead, entry, leaf, parent_entry};
     let m = |x: DesktopMsg| Message::Desktop(x);
-    let pick = |on: bool| if on { Lead::Mark("\u{2022}") } else { Lead::None };
-    let tick = |on: bool| if on { Lead::Mark("\u{2713}") } else { Lead::None };
+    let pick = |on: bool| if on { Lead::Mark("\u{2022}") } else { Lead::Blank };
+    let tick = |on: bool| if on { Lead::Mark("\u{2713}") } else { Lead::Blank };
     let items: Vec<Element<'a, Message>> = match (on, page) {
         (Some(path), _) if *path == trash_path() => vec![
             menu_item("folder-open-symbolic", "Open", m(DesktopMsg::Open(path.clone()))),
@@ -1152,13 +1155,13 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
         (None, MenuPage::Main) => {
             let pid = shell.popup.as_ref().map_or(window::Id::NONE, |p| p.id);
             vec![
-                parent_entry(shell, pid, "desk-view", "View", m(DesktopMsg::Menu(MenuPage::View))),
-                parent_entry(shell, pid, "desk-sort", "Sort by", m(DesktopMsg::Menu(MenuPage::Sort))),
-                leaf(entry(Lead::None, "Refresh", None, Some(m(DesktopMsg::Refresh)))),
+                parent_entry(shell, pid, "desk-view", Lead::Icon("view-grid-symbolic"), "View", m(DesktopMsg::Menu(MenuPage::View))),
+                parent_entry(shell, pid, "desk-sort", Lead::Icon("view-sort-ascending-symbolic"), "Sort by", m(DesktopMsg::Menu(MenuPage::Sort))),
+                leaf(entry(Lead::Icon("view-refresh-symbolic"), "Refresh", None, Some(m(DesktopMsg::Refresh)))),
                 leaf(menu_divider()),
-                leaf(entry(Lead::None, "Paste", None, shell.can_paste_files().then(|| m(DesktopMsg::Paste)))),
+                leaf(entry(Lead::Icon("edit-paste-symbolic"), "Paste", None, shell.can_paste_files().then(|| m(DesktopMsg::Paste)))),
                 leaf(menu_divider()),
-                parent_entry(shell, pid, "desk-new", "New", m(DesktopMsg::Menu(MenuPage::New))),
+                parent_entry(shell, pid, "desk-new", Lead::Icon("list-add-symbolic"), "New", m(DesktopMsg::Menu(MenuPage::New))),
                 leaf(menu_divider()),
                 leaf(entry(Lead::Icon("preferences-desktop-display-symbolic"), "Display settings", None, Some(m(DesktopMsg::Settings("displays"))))),
                 leaf(entry(Lead::Icon("preferences-desktop-wallpaper-symbolic"), "Personalize", None, Some(m(DesktopMsg::Settings("wallpaper"))))),

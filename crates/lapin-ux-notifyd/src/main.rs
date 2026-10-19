@@ -35,6 +35,8 @@ static AUTOSIZE: LazyLock<cosmic::widget::Id> = LazyLock::new(|| cosmic::widget:
 #[derive(Debug, Clone)]
 pub enum Message {
     Dbus(dbus::Event),
+    /// COSMIC's toolkit settings changed (icon theme).
+    Toolkit(Box<cosmic::config::CosmicTk>),
     Tick,
     Hover(bool),
     Dismiss(u32),
@@ -172,17 +174,6 @@ impl App {
         let catcher = window::Id::unique();
         self.catcher = Some(catcher);
         Task::batch([
-            get_layer_surface(SctkLayerSurfaceSettings {
-                id: catcher,
-                layer: Layer::Top,
-                keyboard_interactivity: KeyboardInteractivity::None,
-                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                output: IcedOutput::Active,
-                namespace: "lapin-ux-dismiss".into(),
-                size: Some((None, None)),
-                exclusive_zone: 0,
-                ..Default::default()
-            }),
             cosmic::surface::surface_task(app_layer_shell(
                 move |_: &App| LiveSettings {
                     blur: Some(true),
@@ -204,6 +195,17 @@ impl App {
                 },
                 None,
             )),
+            get_layer_surface(SctkLayerSurfaceSettings {
+                id: catcher,
+                layer: Layer::Top,
+                keyboard_interactivity: KeyboardInteractivity::None,
+                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                output: IcedOutput::Active,
+                namespace: "lapin-ux-dismiss".into(),
+                size: Some((None, None)),
+                exclusive_zone: 0,
+                ..Default::default()
+            }),
             self.publish(),
             quiet::load_events(self.quiet.calendars.clone()),
         ])
@@ -252,6 +254,12 @@ impl Application for App {
     }
 
     fn init(core: Core, _: ()) -> (Self, Task<Message>) {
+        // The icon theme as configured now (Lapin UX's shell may have just set it).
+        if let Ok(cfg) = cosmic::config::CosmicTk::config() {
+            use cosmic::cosmic_config::CosmicConfigEntry;
+            let tk = cosmic::config::CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
+            cosmic::icon_theme::set_default(tk.icon_theme);
+        }
         let settings = cosmic::cosmic_config::Config::new(lapin_ux_core::ids::NOTIFYD_APP_ID, 1)
             .inspect_err(|e| tracing::warn!("notification settings unavailable: {e}"))
             .ok();
@@ -318,6 +326,14 @@ impl Application for App {
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             dbus::subscription().map(Message::Dbus),
+            // Follow icon theme changes by watching the file directly (works
+            // without COSMIC's settings daemon too).
+            cosmic::cosmic_config::config_subscription::<_, cosmic::config::CosmicTk>(
+                std::any::TypeId::of::<cosmic::config::CosmicTk>(),
+                std::borrow::Cow::Borrowed("com.system76.CosmicTk"),
+                <cosmic::config::CosmicTk as cosmic::cosmic_config::CosmicConfigEntry>::VERSION,
+            )
+            .map(|u| Message::Toolkit(Box::new(u.config))),
             cosmic::iced::event::listen_raw(|e, _, window| match e {
                 // The pointer can leave the surface without crossing a widget
                 // edge (e.g. the toast under it closes); treat that as un-hover.
@@ -341,6 +357,11 @@ impl Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         let now = Instant::now();
         match message {
+            Message::Toolkit(tk) => {
+                if cosmic::icon_theme::default() != tk.icon_theme {
+                    cosmic::icon_theme::set_default(tk.icon_theme.clone());
+                }
+            }
             Message::Dbus(ev) => match ev {
                 dbus::Event::Ready(conn) => {
                     self.conn = Some(conn);

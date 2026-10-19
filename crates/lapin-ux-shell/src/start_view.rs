@@ -175,10 +175,9 @@ fn home<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
         .recent_files
         .iter()
         .map(|f| {
-            let icon_name = mime_icon(&f.name);
             button::custom(
                 row::with_children(vec![
-                    icon::from_name(icon_name).size(28).into(),
+                    icon(crate::icons::for_file(&f.name, false)).size(28).into(),
                     column::with_children(vec![
                         text::body(f.name.clone()).into(),
                         text::caption(lapin_ux_core::recent::relative(&f.modified, now)).class(style::dim_text()).into(),
@@ -289,17 +288,13 @@ fn result_row<'a>(icon_handle: icon::Handle, title: String, sub: String, selecte
     .into()
 }
 
+/// A symbolic (Fluent) icon by name.
 fn named(name: &str) -> icon::Handle {
-    icon::from_name(name.to_string())
-        .fallback(Some(icon::IconFallback::Names(vec!["text-x-generic".into(), "application-x-executable".into()])))
-        .handle()
+    icon::from_name(name.to_string()).handle()
 }
 
 fn file_icon(path: &std::path::Path, is_dir: bool) -> icon::Handle {
-    if is_dir {
-        return named("folder");
-    }
-    named(mime_icon(&file_name(path)))
+    crate::icons::for_file(&file_name(path), is_dir)
 }
 
 /// Folder shown under a file name, with home abbreviated to ~.

@@ -232,11 +232,6 @@ fn apply_activation_policy() -> Result<bool, cosmic_config::Error> {
 pub fn apply_upgrade(from: u32) {
     tracing::info!(from, to = DEFAULTS_VERSION, "upgrading defaults");
     if from < 10 {
-        match apply_font() {
-            Ok(true) => tracing::info!("interface font is now {UI_FONT}"),
-            Ok(false) => {}
-            Err(e) => tracing::warn!("could not update the interface font: {e}"),
-        }
         match apply_icon_theme(ensure_mode()) {
             Ok(true) => tracing::info!("icon theme is now Lapin UX's"),
             Ok(false) => {}
@@ -276,34 +271,58 @@ fn font_installed(family: &str) -> bool {
         .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
 }
 
-/// Switch the interface font to Selawik (or Inter if it's missing), unless
-/// the user already picked a font of their own. An earlier Lapin UX default
-/// (Inter) counts as ours and is replaced.
-fn apply_font() -> Result<bool, cosmic_config::Error> {
+/// Lapin UX uses one interface font everywhere: Selawik (Inter only if
+/// Selawik is somehow missing). Run at every start and whenever the toolkit
+/// settings change, so a font switched by COSMIC Settings, another desktop or
+/// an update is put straight back. GTK/GNOME apps get the same font through
+/// gsettings, and everything else through the fontconfig rule Lapin UX
+/// installs (`data/fontconfig/50-lapin-ux-selawik.conf`).
+pub fn enforce_font() -> Result<bool, cosmic_config::Error> {
     use cosmic::config::CosmicTk;
     let family = if font_installed(UI_FONT) {
         UI_FONT
     } else if font_installed(FALLBACK_UI_FONT) {
         FALLBACK_UI_FONT
     } else {
-        tracing::info!("neither {UI_FONT} nor {FALLBACK_UI_FONT} is installed; keeping the default interface font");
+        tracing::warn!("neither {UI_FONT} nor {FALLBACK_UI_FONT} is installed; keeping the current interface font");
         return Ok(false);
     };
     let cfg = CosmicTk::config()?;
     let mut tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
-    let current = tk.interface_font.family.clone();
-    let ours = current == CosmicTk::default().interface_font.family || current == FALLBACK_UI_FONT || current == UI_FONT;
-    if !ours {
-        tracing::info!(family = %current, "user chose an interface font; leaving it");
+    if tk.interface_font.family == family {
         return Ok(false);
     }
-    if current == family {
-        return Ok(false);
-    }
+    tracing::info!(from = %tk.interface_font.family, to = family, "interface font reset to Lapin UX's");
     tk.interface_font.family = family.to_string();
     cfg.set("interface_font", tk.interface_font)?;
-    gsettings("font-name", &format!("{family} 10"));
+    gsettings_fonts(family);
     Ok(true)
+}
+
+/// GTK/GNOME apps' interface and document fonts.
+fn gsettings_fonts(family: &str) {
+    gsettings("font-name", &format!("{family} 10"));
+    gsettings("document-font-name", &format!("{family} 11"));
+}
+
+/// Called with every toolkit-settings change.
+pub fn toolkit_changed(tk: &cosmic::config::CosmicTk) {
+    if tk.interface_font.family != UI_FONT
+        && let Err(e) = enforce_font()
+    {
+        tracing::warn!("could not reset the interface font: {e}");
+    }
+}
+
+/// At start-up: the font is always ours, in COSMIC and GTK alike.
+pub fn enforce_font_at_start() {
+    match enforce_font() {
+        Ok(_) => {}
+        Err(e) => tracing::warn!("could not set the interface font: {e}"),
+    }
+    if font_installed(UI_FONT) {
+        gsettings_fonts(UI_FONT);
+    }
 }
 
 fn icon_theme_installed(name: &str) -> bool {
@@ -400,7 +419,7 @@ pub fn apply_first_run() {
         ("dark theme", apply_theme_variant(true)),
         ("light theme", apply_theme_variant(false)),
         ("wallpaper", apply_wallpaper(dark)),
-        ("interface font", apply_font()),
+        ("interface font", enforce_font()),
         ("icon theme", apply_icon_theme(dark)),
         ("Super key", apply_shortcuts()),
         ("keyboard shortcuts", apply_keybindings()),

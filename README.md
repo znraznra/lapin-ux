@@ -145,7 +145,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   window to move it to another desktop.
 - **Snap layouts** (Super+Z): halves, 2/3 + 1/3, thirds, half + quarters,
   quarters, 1/4-1/2-1/4 on wide screens; then **Snap assist** fills the other
-  spaces from your windows. Needs `lapin-ux-comp` (below).
+  spaces from your windows. Uses `lapin-ux-comp`, which the installer builds.
 
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
 - Starts `lapin-ux-comp` if installed (else cosmic-comp) in normal (not kiosk) mode using the same handshake as
@@ -156,12 +156,18 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
-- Font: Selawik for the whole interface (Inter if Selawik isn't installed;
-  only if you haven't already picked a font).
-- Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode):
-  Fluent UI System Icons for symbolic icons (status, actions, places), with
-  app, folder and file icons from the Win11 icon theme. Only replaces COSMIC's
-  default icon theme, never one you picked.
+- Font: Selawik is the one system font. COSMIC and GTK apps are set to it at
+  every login and put straight back if anything changes it, and a
+  fontconfig rule makes it the font for `sans-serif`, `serif`, `system-ui`
+  and the interface fonts other desktops default to (Inter, Cantarell, Noto
+  Sans, DejaVu Sans…). Monospace (terminals, code) keeps a fixed-width font;
+  characters Selawik doesn't have (Japanese, Chinese, Korean, emoji, other
+  scripts) come from the Noto fonts.
+- Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
+  Apps, files, folders, shortcuts and desktop items use the full-colour
+  Win11 icon theme; everything else (menus, tray, quick settings, buttons)
+  uses Fluent UI System Icons. Only replaces COSMIC's default icon theme,
+  never one you picked.
 - Wallpaper: original light/dark artwork.
 - Keyboard: Super opens Start, plus
 
@@ -182,7 +188,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 | Super + ↑ / ↓ | Maximize / minimize |
 | Super + ← / → | Snap to the left / right half |
 | Super + Shift + ← / → | Move the window to the next monitor |
-| Super + Z | Snap layouts (needs `lapin-ux-comp`) |
+| Super + Z | Snap layouts |
 | Super + Tab | Task view |
 | Ctrl + Super + ← / → | Previous / next desktop |
 | Ctrl + Super + D | New desktop |
@@ -227,23 +233,22 @@ All settings use cosmic-config and apply live:
 ## Install on Arch
 
 ```sh
-sudo pacman -S --needed base-devel rust python-numpy python-pillow \
-    cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-    cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font gtk-update-icon-cache
-cd packaging/arch
-makepkg -si
+git clone https://github.com/znraznra/lapin-ux.git
+cd lapin-ux
+./install.sh
 ```
 
-Optional, for snap layouts and taskbar flashing:
+That's all: the script installs the build tools, builds Lapin UX and its
+compositor build (`lapin-ux-comp`, for snap layouts and taskbar flashing),
+and pacman installs every other dependency automatically (COSMIC services,
+NetworkManager, Bluetooth, sound, search, fonts for other scripts and emoji).
+Nothing to install by hand. The Selawik font, the Fluent UI icons and the
+Win11 icon theme all ship inside this repository (`data/` and
+`third_party/`), so the build downloads nothing but Rust crates and the
+pinned cosmic-comp source. The package replaces any separately installed
+`win11-icon-theme`.
 
-```sh
-cd packaging/lapin-ux-comp && makepkg -si
-```
-
-The package bundles Selawik and the Lapin-UX icon themes, and fetches the
-Win11 icon theme from its upstream repository at build time (pinned commit)
-and installs it unmodified. It replaces any separately installed
-`win11-icon-theme` package.
+`sh tools/preflight.sh` shows what's already installed (optional).
 
 Log out, pick **Lapin UX** in your display manager's session list, log in.
 Uninstall with `sudo pacman -R lapin-ux-desktop-git`.
@@ -312,8 +317,8 @@ those terms.
 |---|---|---|---|---|
 | Selawik 1.01, © Microsoft Corporation | Interface font | SIL Open Font License 1.1 | `data/fonts/selawik/` (unmodified, licence in `OFL.txt`) | [microsoft/Selawik](https://github.com/microsoft/Selawik) |
 | Fluent UI System Icons, © Microsoft Corporation | Symbolic icons in `Lapin-UX` / `Lapin-UX-dark` | MIT | `data/icons/Lapin-UX/symbolic/` (renamed to freedesktop names and recoloured by `tools/make-fluent-icons.py`; licence in `LICENSE-fluentui-system-icons`) | [microsoft/fluentui-system-icons](https://github.com/microsoft/fluentui-system-icons) |
-| Win11 icon theme by yeyushengfan258 (based on Ubuntu's Yaru) | App, folder and file icons | GPL-3.0 | Not in this repository; fetched from upstream at package build time and installed unmodified | [yeyushengfan258/Win11-icon-theme](https://github.com/yeyushengfan258/Win11-icon-theme) |
-| Inter (optional fallback) | Interface font if Selawik is missing | SIL Open Font License 1.1 | Arch `inter-font` package | [rsms/inter](https://github.com/rsms/inter) |
+| Win11 icon theme by yeyushengfan258 (based on Ubuntu's Yaru) | App, folder, file, shortcut and desktop icons | GPL-3.0 | `third_party/win11-icon-theme/` (unmodified, pinned commit in `UPSTREAM.md`; licence in `COPYING`) | [yeyushengfan258/Win11-icon-theme](https://github.com/yeyushengfan258/Win11-icon-theme) |
+| Noto fonts (Arch packages) | Only characters Selawik lacks (CJK, emoji, other scripts) | SIL Open Font License 1.1 | installed as dependencies | [notofonts](https://github.com/notofonts) |
 
 Installed packages put every licence in `/usr/share/licenses/lapin-ux-desktop-git/`.
 

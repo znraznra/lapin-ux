@@ -5,6 +5,9 @@
 # layouts and taskbar attention). Installed next to cosmic-comp as
 # `lapin-ux-comp`; the Lapin UX session uses it when it's there.
 #
+# packaging/arch builds and installs this automatically together with Lapin
+# UX; this PKGBUILD is only for building the compositor on its own:
+#
 #   cd packaging/lapin-ux-comp && makepkg -si
 
 pkgname=lapin-ux-comp
