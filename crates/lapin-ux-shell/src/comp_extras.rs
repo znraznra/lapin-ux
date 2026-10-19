@@ -39,6 +39,7 @@ pub struct Extras {
     /// Background update check (`lapin-ux-update --check`) and when next.
     update_check: Option<std::process::Child>,
     next_check: Option<std::time::Instant>,
+    ticks: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +154,12 @@ impl Shell {
     /// Once a second: follow the night light schedule.
     pub(crate) fn extras_tick(&mut self) {
         self.update_tick();
+        // Keyboard layouts can change in Settings: re-read now and then.
+        let n = self.extras.ticks;
+        self.extras.ticks = n.wrapping_add(1);
+        if n % 5 == 0 {
+            self.quick.layouts = crate::quick::keyboard_layouts();
+        }
         let now = chrono::Local::now();
         let minute = (now.hour() * 60 + now.minute()) as u16;
         let prev = self.extras.last_minute.replace(minute);

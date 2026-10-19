@@ -25,6 +25,7 @@ mod defaults;
 mod desktop;
 mod dnd;
 mod icons;
+mod input;
 mod lapin_proto;
 mod launcher_entry;
 mod notify_client;

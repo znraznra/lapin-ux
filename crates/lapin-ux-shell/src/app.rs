@@ -99,6 +99,8 @@ pub enum PopupKind {
     /// Task view: right-click on a desktop (by position), and its
     /// "Choose background" picker.
     DesktopTile(usize),
+    /// The taskbar's input indicator menu.
+    InputMenu,
     DesktopBackground(usize),
     /// "Permanently delete everything in the Recycle Bin?"
     ConfirmEmptyTrash,
@@ -214,6 +216,7 @@ pub enum Message {
     TaskView(crate::taskview::TaskViewMsg),
     Extras(crate::comp_extras::ExtrasMsg),
     Snip(crate::snip::SnipMsg),
+    Input(crate::input::InputMsg),
     Snap(crate::snap::SnapMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
@@ -312,6 +315,8 @@ pub struct Shell {
     pub extras: crate::comp_extras::Extras,
     /// A screenshot for the snipping overlay is on its way.
     pub snip_pending: bool,
+    /// fcitx5's input methods, when it runs.
+    pub fcitx: Option<crate::input::Fcitx>,
     /// Virtual desktops.
     pub desktops: crate::taskview::Desktops,
     pub mods: keyboard::Modifiers,
@@ -835,6 +840,7 @@ impl Application for Shell {
             snap_supported: false,
             extras: Default::default(),
             snip_pending: false,
+            fcitx: None,
             desktops: Default::default(),
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
@@ -928,6 +934,7 @@ impl Application for Shell {
                 "close" => self.update(Message::System(crate::system_ui::SystemMsg::AltF4)),
                 "project" => self.update(Message::System(crate::system_ui::SystemMsg::Project)),
                 "snip" => self.update(Message::Snip(crate::snip::SnipMsg::Open)),
+                "input-next" => self.update(Message::Input(crate::input::InputMsg::Next)),
                 "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
@@ -964,6 +971,7 @@ impl Application for Shell {
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
+            crate::input::subscription().map(Message::Input),
             crate::comp_extras::sensor_subscription().map(|s| Message::Extras(crate::comp_extras::ExtrasMsg::Sensor(s))),
             wl::subscription().map(Message::Wayland),
             // Watch the files directly: works even when COSMIC's settings
@@ -1469,6 +1477,7 @@ impl Shell {
             Message::TaskView(m) => return self.update_taskview(m),
             Message::Extras(m) => return self.update_extras(m),
             Message::Snip(m) => return self.update_snip(m),
+            Message::Input(m) => return self.update_input(m),
             Message::Snap(m) => return self.update_snap(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {

@@ -185,6 +185,10 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         });
         status_slot.push(track(shell, rect_key(bar.id, "quick"), area));
     }
+    // Input indicator (several layouts or input methods), then status.
+    if let Some(ind) = crate::input::indicator(shell, bar.id) {
+        status_slot.insert(0, ind);
+    }
     // Own row so the widget tree keeps its shape when the icons come and go.
     right = right.push(row::with_children(status_slot));
     right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
@@ -726,6 +730,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::Account => crate::account::menu(shell),
         PopupKind::MoveToDesktop(w) => crate::taskview::move_menu(shell, *w),
         PopupKind::DesktopTile(i) => crate::taskview::desktop_menu(shell, *i),
+        PopupKind::InputMenu => crate::input::menu(shell),
         PopupKind::DesktopBackground(i) => crate::taskview::background_menu(shell, *i),
         PopupKind::ConfirmEmptyTrash => panel(
             column::with_children(vec![

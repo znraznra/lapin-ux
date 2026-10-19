@@ -412,6 +412,45 @@ pub fn move_tile(shown: &[String], from: usize, to: usize) -> Vec<String> {
     v
 }
 
+/// The taskbar's input indicator for a layout, Windows style: a
+/// three-letter language and the layout ("ENG" / "US").
+pub fn input_indicator(code: &str, description: &str) -> (String, String) {
+    let lang = description.split(|c: char| c == ' ' || c == '(').next().unwrap_or_default();
+    let three = match lang {
+        "English" => "ENG",
+        "German" => "DEU",
+        "French" => "FRA",
+        "Spanish" => "ESP",
+        "Italian" => "ITA",
+        "Portuguese" => "POR",
+        "Dutch" => "NLD",
+        "Swedish" => "SWE",
+        "Norwegian" => "NOR",
+        "Danish" => "DAN",
+        "Finnish" => "FIN",
+        "Polish" => "POL",
+        "Czech" => "CES",
+        "Russian" => "RUS",
+        "Ukrainian" => "UKR",
+        "Greek" => "ELL",
+        "Turkish" => "TRK",
+        "Japanese" => "JPN",
+        "Korean" => "KOR",
+        "Chinese" => "CHS",
+        "Arabic" => "ARA",
+        "Hebrew" => "HEB",
+        "Hindi" => "HIN",
+        "Vietnamese" => "VIE",
+        "Thai" => "THA",
+        "Hungarian" => "HUN",
+        "Romanian" => "ROM",
+        _ => "",
+    };
+    let three = if three.is_empty() { lang.chars().take(3).collect::<String>().to_uppercase() } else { three.to_string() };
+    let layout = code.split('+').next().unwrap_or(code).to_uppercase();
+    (if three.is_empty() { layout.clone() } else { three }, layout)
+}
+
 #[cfg(test)]
 mod tile_tests {
     use super::*;
@@ -430,6 +469,13 @@ mod tile_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indicators() {
+        assert_eq!(input_indicator("us", "English (US)"), ("ENG".into(), "US".into()));
+        assert_eq!(input_indicator("de", "German"), ("DEU".into(), "DE".into()));
+        assert_eq!(input_indicator("xx", "Klingon"), ("KLI".into(), "XX".into()));
+    }
 
     #[test]
     fn keyboard_layouts() {

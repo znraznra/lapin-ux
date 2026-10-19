@@ -152,7 +152,7 @@ fn first_installed(list: &'static [&'static str]) -> Option<&'static str> {
 }
 
 /// Configured keyboard layouts with readable names.
-fn keyboard_layouts() -> Vec<(String, String)> {
+pub(crate) fn keyboard_layouts() -> Vec<(String, String)> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".config"));
     let ron = std::fs::read_to_string(config.join("cosmic/com.system76.CosmicComp/v1/xkb_config"))

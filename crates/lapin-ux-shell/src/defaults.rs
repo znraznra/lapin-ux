@@ -219,6 +219,8 @@ pub fn windows_style_shortcuts() -> String {
         // Project: PC screen only / Duplicate / Extend / Second screen only.
         r#"(modifiers: [Super], key: "p"): Spawn("lapin-ux-shell project"),"#.to_string(),
         r#"(modifiers: [Ctrl, Shift], key: "Escape"): Spawn("lapin-ux-taskmgr"),"#.to_string(),
+        // Next keyboard layout / input method.
+        r#"(modifiers: [Super], key: "space"): Spawn("lapin-ux-shell input-next"),"#.to_string(),
     ];
     // Super+1…9 open the n-th taskbar app (these keys switch workspaces in COSMIC).
     for n in 1..=9 {
