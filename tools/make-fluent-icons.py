@@ -65,6 +65,7 @@ MAP = {
     "view-list": ("actions", "text_bullet_list_ltr", "regular"),
     "view-paged": ("actions", "window_multiple", "regular"),
     "view-pin": ("actions", "pin", "regular"),
+    "view-unpin": ("actions", "pin_off", "regular"),
     "pin": ("actions", "pin", "regular"),
     "view-reveal": ("actions", "eye", "regular"),
     "view-conceal": ("actions", "eye_off", "regular"),

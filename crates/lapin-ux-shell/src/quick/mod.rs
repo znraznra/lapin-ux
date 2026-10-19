@@ -70,14 +70,36 @@ pub enum Page {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct QuickPanel {
     pub page: Page,
+    /// "Edit quick settings": remove, add and drag tiles.
+    pub editing: bool,
+    /// The "Add" list is open (while editing).
+    pub adding: bool,
+    pub tile_drag: Option<TileDrag>,
     /// Wi-Fi network whose row is expanded (Connect / password).
     pub selected: Option<String>,
     pub password: String,
 }
 
+/// A tile being dragged while editing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileDrag {
+    pub id: String,
+    pub from: usize,
+    origin: cosmic::iced::Point,
+    pub active: bool,
+    /// Index among the shown tiles it would land at.
+    pub target: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub enum QuickMsg {
     Toggle,
+    /// Enter / leave tile editing.
+    Edit(bool),
+    /// Show / hide the "Add" list.
+    AddList(bool),
+    UnpinTile(String),
+    PinTile(String),
     Event(backend::Event),
     Page(Page),
     Wifi(bool),
@@ -181,6 +203,55 @@ fn done(r: zbus::Result<()>, what: &'static str) -> cosmic::Action<Message> {
 }
 
 impl Shell {
+    /// Pointer on the quick settings panel: drag tiles while editing.
+    pub(crate) fn quick_pointer(&mut self, ev: crate::taskbar_extras::Pointer) -> Task<Message> {
+        use crate::taskbar_extras::Pointer;
+        let pid = self.panel_id();
+        let avail = available_tiles(self);
+        let shown = lapin_ux_core::quick::tiles_shown(&avail, &self.config.quick_tiles_order, &self.config.quick_tiles_hidden);
+        let hit = |shell: &Shell, p: cosmic::iced::Point| {
+            shown.iter().position(|id| shell.rects.get(&crate::app::rect_key(pid, &format!("qt:{id}"))).is_some_and(|r| r.contains(p)))
+        };
+        match ev {
+            Pointer::Move(p) => {
+                self.pointer = Some((pid, p));
+                let target = hit(self, p);
+                if let Some(q) = self.quick_panel()
+                    && let Some(d) = &mut q.tile_drag
+                {
+                    if !d.active && (p.x - d.origin.x).hypot(p.y - d.origin.y) > 6.0 {
+                        d.active = true;
+                    }
+                    if d.active && target.is_some() {
+                        d.target = target;
+                    }
+                }
+            }
+            Pointer::Down => {
+                let Some((s, p)) = self.pointer else { return Task::none() };
+                let editing = self.quick_panel().is_some_and(|q| q.editing && !q.adding);
+                if s != pid || !editing {
+                    return Task::none();
+                }
+                let from = hit(self, p);
+                if let Some(q) = self.quick_panel() {
+                    q.tile_drag = from.map(|i| TileDrag { id: shown[i].clone(), from: i, origin: p, active: false, target: None });
+                }
+            }
+            Pointer::Up => {
+                let drag = self.quick_panel().and_then(|q| q.tile_drag.take());
+                if let Some(d) = drag
+                    && d.active
+                    && let Some(to) = d.target
+                {
+                    self.config.quick_tiles_order = lapin_ux_core::quick::move_tile(&shown, d.from, to);
+                    self.persist_config();
+                }
+            }
+        }
+        Task::none()
+    }
+
     fn quick_panel(&mut self) -> Option<&mut QuickPanel> {
         match &mut self.panel {
             Some(crate::panels::Panel { kind: PanelKind::Quick(q), .. }) => Some(q),
@@ -208,6 +279,37 @@ impl Shell {
                     cosmic::Action::App(Message::Noop)
                 });
                 return Task::batch([close_centre, self.open_panel(PanelKind::Quick(QuickPanel::default()))]);
+            }
+            QuickMsg::Edit(on) => {
+                if let Some(p) = self.quick_panel() {
+                    p.editing = on;
+                    p.adding = false;
+                    p.tile_drag = None;
+                }
+            }
+            QuickMsg::AddList(on) => {
+                if let Some(p) = self.quick_panel() {
+                    p.adding = on;
+                }
+            }
+            QuickMsg::UnpinTile(id) => {
+                if !self.config.quick_tiles_hidden.contains(&id) {
+                    self.config.quick_tiles_hidden.push(id);
+                }
+                self.persist_config();
+            }
+            QuickMsg::PinTile(id) => {
+                self.config.quick_tiles_hidden.retain(|h| h != &id);
+                // Added tiles go to the end.
+                let avail = available_tiles(self);
+                let mut order = lapin_ux_core::quick::tiles_shown(&avail, &self.config.quick_tiles_order, &self.config.quick_tiles_hidden);
+                order.retain(|o| o != &id);
+                order.push(id);
+                self.config.quick_tiles_order = order;
+                self.persist_config();
+                if let Some(p) = self.quick_panel() {
+                    p.adding = false;
+                }
             }
             QuickMsg::Event(ev) => match ev {
                 backend::Event::Network(n) => q.network = n,
@@ -678,9 +780,123 @@ fn list_row<'a>(content: impl Into<Element<'a, Message>>, selected: bool, msg: M
     button::custom(content).width(Length::Fill).padding([8, 10]).class(style::flat_button(selected)).on_press(msg).into()
 }
 
-fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
+/// One quick settings tile, before it's drawn.
+struct TileSpec {
+    id: &'static str,
+    icon: &'static str,
+    label: String,
+    on: bool,
+    toggle: Option<Message>,
+    more: Option<Message>,
+}
+
+impl TileSpec {
+    fn new(id: &'static str, icon: &'static str, label: impl Into<String>, on: bool, toggle: Option<Message>, more: Option<Message>) -> Self {
+        Self { id, icon, label: label.into(), on, toggle, more }
+    }
+}
+
+/// Human name of a tile, for the Add list.
+fn tile_title(id: &str) -> &'static str {
+    match id {
+        "wifi" => "Wi-Fi",
+        "bluetooth" => "Bluetooth",
+        "airplane" => "Airplane mode",
+        "energy" => "Energy saver",
+        "accessibility" => "Accessibility",
+        "hotspot" => "Mobile hotspot",
+        "nearby" => "Nearby sharing",
+        "cast" => "Cast",
+        "keyboard" => "Keyboard layout",
+        "vpn" => "VPN",
+        "dnd" => "Do not disturb",
+        "nightlight" => "Night light",
+        "rotation" => "Rotation lock",
+        _ => "Tile",
+    }
+}
+
+/// A tile while editing: not clickable, with an unpin badge.
+fn edit_tile<'a>(t: &TileSpec, lifted: bool) -> Element<'a, Message> {
+    let face = container(sym(t.icon, &[]))
+        .center_x(Length::Fill)
+        .center_y(Length::Fixed(TILE_H as f32))
+        .class(cosmic::theme::Container::custom(move |th| {
+            let c = th.cosmic();
+            let fg: cosmic::iced::Color = c.on_bg_color().into();
+            container::Style {
+                background: Some(cosmic::iced::Background::Color(cosmic::iced::Color { a: if lifted { 0.22 } else { 0.10 }, ..fg })),
+                border: cosmic::iced::Border { color: cosmic::iced::Color { a: 0.35, ..fg }, width: 1.0, radius: 4.0.into() },
+                ..Default::default()
+            }
+        }));
+    let badge = container(
+        button::custom(sym("view-unpin-symbolic", &["view-pin-symbolic"]))
+            .padding(3)
+            .class(style::flat_button(true))
+            .on_press(Message::Quick(QuickMsg::UnpinTile(t.id.to_string()))),
+    )
+    .width(Length::Fill)
+    .align_x(Alignment::End);
+    let top = cosmic::iced::widget::Stack::with_children(vec![face.into(), badge.into()]);
+    column::with_children(vec![top.into(), container(text::caption(t.label.clone())).center_x(Length::Fill).into()])
+        .spacing(6)
+        .width(TILE_W)
+        .into()
+}
+
+/// Where a dragged tile will land.
+fn drop_marker<'a>() -> Element<'a, Message> {
+    container(widget::Space::new().width(3).height(TILE_H))
+        .class(cosmic::theme::Container::custom(|th| container::Style {
+            background: Some(cosmic::iced::Background::Color(th.cosmic().accent_color().into())),
+            border: cosmic::iced::Border { radius: 2.0.into(), ..Default::default() },
+            ..Default::default()
+        }))
+        .into()
+}
+
+/// The "Add" tile at the end while editing.
+fn add_tile<'a>(any: bool) -> Element<'a, Message> {
+    column::with_children(vec![
+        button::custom(container(sym("list-add-symbolic", &[])).center(Length::Fill))
+            .height(TILE_H)
+            .width(Length::Fill)
+            .padding(0)
+            .class(tile_style(false))
+            .on_press_maybe(any.then_some(Message::Quick(QuickMsg::AddList(true))))
+            .into(),
+        container(text::caption("Add")).center_x(Length::Fill).into(),
+    ])
+    .spacing(6)
+    .width(TILE_W)
+    .into()
+}
+
+/// The list of removed tiles to add back.
+fn add_list<'a>(shell: &'a Shell, available: &[&'static str]) -> Element<'a, Message> {
+    let hidden = lapin_ux_core::quick::tiles_hidden(available, &shell.config.quick_tiles_hidden);
+    let mut col = column::with_capacity(hidden.len() + 1).spacing(2).push(
+        row::with_children(vec![
+            button::custom(sym("go-previous-symbolic", &[]))
+                .padding(8)
+                .class(style::flat_button(false))
+                .on_press(Message::Quick(QuickMsg::AddList(false)))
+                .into(),
+            text::title4("Add").into(),
+        ])
+        .spacing(8)
+        .align_y(Alignment::Center),
+    );
+    for id in hidden {
+        col = col.push(list_row(text::body(tile_title(&id)), false, Message::Quick(QuickMsg::PinTile(id.clone()))));
+    }
+    container(col).padding([20, 20, 12, 20]).into()
+}
+
+fn tile_specs(shell: &Shell) -> Vec<TileSpec> {
     let q = &shell.quick;
-    let mut tiles: Vec<Element<'a, Message>> = Vec::new();
+    let mut specs: Vec<TileSpec> = Vec::new();
     if q.network.wifi_present {
         let label = match (&q.network.link, q.network.wifi_enabled) {
             (model::Link::Wifi { .. }, _) => q.network.link_name.clone(),
@@ -688,7 +904,7 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
             (_, false) => "Wi-Fi".into(),
         };
         let icon = if q.network.wifi_enabled { "network-wireless-signal-excellent-symbolic" } else { "network-wireless-offline-symbolic" };
-        tiles.push(tile(
+        specs.push(TileSpec::new("wifi", 
             icon,
             label,
             q.network.wifi_enabled,
@@ -699,7 +915,7 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     if q.bluetooth.available {
         let on = q.bluetooth.powered;
         let label = q.bluetooth.devices.iter().find(|d| d.connected && on).map_or("Bluetooth".to_string(), |d| d.name.clone());
-        tiles.push(tile(
+        specs.push(TileSpec::new("bluetooth", 
             if on { "bluetooth-active-symbolic" } else { "bluetooth-disabled-symbolic" },
             label,
             on,
@@ -709,11 +925,11 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     }
     if q.network.wifi_present || q.bluetooth.available {
         let airplane = !q.network.wifi_enabled && (!q.bluetooth.available || !q.bluetooth.powered);
-        tiles.push(tile("airplane-mode-symbolic", "Airplane mode", airplane, Some(Message::Quick(QuickMsg::Airplane(!airplane))), None));
+        specs.push(TileSpec::new("airplane", "airplane-mode-symbolic", "Airplane mode", airplane, Some(Message::Quick(QuickMsg::Airplane(!airplane))), None));
     }
     if let Some(p) = &q.power.profile {
         let on = p == "power-saver";
-        tiles.push(tile(
+        specs.push(TileSpec::new("energy", 
             "power-profile-power-saver-symbolic",
             "Energy saver",
             on,
@@ -723,7 +939,7 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     }
     if q.a11y.available || crate::account::which("orca") {
         let on = q.a11y.magnifier || q.a11y.filter_on || q.screen_reader;
-        tiles.push(tile(
+        specs.push(TileSpec::new("accessibility", 
             "preferences-desktop-accessibility-symbolic",
             "Accessibility",
             on,
@@ -733,7 +949,7 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     }
     if q.network.wifi_present {
         let on = q.network.hotspot;
-        tiles.push(tile(
+        specs.push(TileSpec::new("hotspot", 
             "network-wireless-hotspot-symbolic",
             "Mobile hotspot",
             on,
@@ -742,15 +958,15 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         ));
     }
     if let Some(bin) = first_installed(NEARBY_APPS) {
-        tiles.push(tile("send-to-symbolic", "Nearby sharing", false, Some(Message::Quick(QuickMsg::Run(bin))), None));
+        specs.push(TileSpec::new("nearby", "send-to-symbolic", "Nearby sharing", false, Some(Message::Quick(QuickMsg::Run(bin))), None));
     }
     if let Some(bin) = first_installed(CAST_APPS) {
-        tiles.push(tile("video-display-symbolic", "Cast", false, Some(Message::Quick(QuickMsg::Run(bin))), None));
+        specs.push(TileSpec::new("cast", "video-display-symbolic", "Cast", false, Some(Message::Quick(QuickMsg::Run(bin))), None));
     }
     if q.layouts.len() > 1 {
         let current = q.layouts.get(q.kb_group as usize).map_or("Keyboard".to_string(), |(c, _)| c.clone());
         let next = (q.kb_group + 1) % q.layouts.len() as u32;
-        tiles.push(tile(
+        specs.push(TileSpec::new("keyboard", 
             "input-keyboard-symbolic",
             current,
             false,
@@ -761,7 +977,7 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     if !q.network.vpns.is_empty() {
         let up = q.network.vpns.iter().find(|v| v.active.is_some());
         let label = up.map_or("VPN".to_string(), |v| v.name.clone());
-        tiles.push(tile(
+        specs.push(TileSpec::new("vpn", 
             "network-vpn-symbolic",
             label,
             up.is_some(),
@@ -771,7 +987,37 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     }
     if shell.notify.available {
         let on = shell.notify.dnd;
-        tiles.push(tile("notification-disabled-symbolic", "Do not disturb", on, Some(Message::Quick(QuickMsg::DoNotDisturb(!on))), None));
+        specs.push(TileSpec::new("dnd", "notification-disabled-symbolic", "Do not disturb", on, Some(Message::Quick(QuickMsg::DoNotDisturb(!on))), None));
+    }
+    specs
+}
+
+/// Ids of the tiles this system can show, in default order.
+pub(crate) fn available_tiles(shell: &Shell) -> Vec<&'static str> {
+    tile_specs(shell).into_iter().map(|t| t.id).collect()
+}
+
+fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
+    let q = &shell.quick;
+    let specs = tile_specs(shell);
+    // The user's arrangement (Edit quick settings).
+    let ids: Vec<&str> = specs.iter().map(|t| t.id).collect();
+    let shown = lapin_ux_core::quick::tiles_shown(&ids, &shell.config.quick_tiles_order, &shell.config.quick_tiles_hidden);
+    let drag = p.tile_drag.as_ref().filter(|d| d.active);
+    let mut tiles: Vec<Element<'a, Message>> = Vec::new();
+    for (i, id) in shown.iter().enumerate() {
+        let Some(t) = specs.iter().find(|t| t.id == id) else { continue };
+        let lifted = drag.is_some_and(|d| d.id == *id);
+        let el = if p.editing { edit_tile(t, lifted) } else { tile(t.icon, t.label.clone(), t.on, t.toggle.clone(), t.more.clone()) };
+        // A gap where a dragged tile would land.
+        if drag.is_some_and(|d| d.target == Some(i) && d.id != *id) {
+            tiles.push(drop_marker());
+        }
+        tiles.push(crate::taskbar_view::track(shell, crate::app::rect_key(shell.panel_id(), &format!("qt:{id}")), el));
+    }
+    if p.editing {
+        let hidden = lapin_ux_core::quick::tiles_hidden(&ids, &shell.config.quick_tiles_hidden);
+        tiles.push(add_tile(!hidden.is_empty()));
     }
 
     let mut grid = column::with_capacity(3).spacing(14);
@@ -846,19 +1092,31 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
             .into(),
         None => widget::Space::new().into(),
     };
-    let footer = container(
-        row::with_children(vec![
-            container(battery).width(Length::Fill).into(),
+    // Battery on the left; Edit (pencil) and Settings on the right, or Done while editing.
+    let right: Vec<Element<'a, Message>> = if p.editing {
+        vec![button::suggested("Done").on_press(Message::Quick(QuickMsg::Edit(false))).into()]
+    } else {
+        vec![
+            button::custom(sym("document-edit-symbolic", &["edit-symbolic"]))
+                .padding(8)
+                .class(style::flat_button(false))
+                .on_press(Message::Quick(QuickMsg::Edit(true)))
+                .into(),
             button::custom(sym("emblem-system-symbolic", &["preferences-system-symbolic"]))
                 .padding(8)
                 .class(style::flat_button(false))
                 .on_press(Message::Quick(QuickMsg::Settings("")))
                 .into(),
-        ])
-        .align_y(Alignment::Center),
-    )
-    .padding([6, 12, 6, 20])
-    .class(style::panel_footer());
+        ]
+    };
+    let mut footer_row = row::with_capacity(3).align_y(Alignment::Center).push(container(battery).width(Length::Fill));
+    for r in right {
+        footer_row = footer_row.push(r);
+    }
+    let footer = container(footer_row.spacing(2)).padding([6, 12, 6, 20]).class(style::panel_footer());
+    if p.adding {
+        return column::with_children(vec![add_list(shell, &ids), footer.into()]).into();
+    }
     column::with_children(vec![body.into(), footer.into()]).into()
 }
 
@@ -1247,7 +1505,7 @@ pub fn view<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
         Page::Hotspot => hotspot_page(shell),
         Page::Keyboard => keyboard_page(shell),
         Page::Accessibility => accessibility_page(shell),
-        Page::Main => main_page(shell),
+        Page::Main => main_page(shell, p),
         Page::Wifi => wifi_page(shell, p),
         Page::Bluetooth => bluetooth_page(shell),
         Page::Sound => sound_page(shell),

@@ -148,6 +148,11 @@ pub fn run_command(input: &str) -> std::process::Command {
 }
 
 impl Shell {
+    /// The open panel's surface (or a placeholder id).
+    pub(crate) fn panel_id(&self) -> window::Id {
+        self.panel.as_ref().map_or(window::Id::NONE, |p| p.id)
+    }
+
     pub(crate) fn close_panel(&mut self) -> Task<Message> {
         match self.panel.take() {
             Some(p) => {

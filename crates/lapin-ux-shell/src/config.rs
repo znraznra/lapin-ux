@@ -55,6 +55,9 @@ pub struct ShellConfig {
     pub combine_buttons: lapin_ux_core::taskbar::Combine,
     /// "Show smaller taskbar buttons".
     pub small_buttons: lapin_ux_core::taskbar::SmallButtons,
+    /// Quick settings tiles as the user arranged them, and the ones removed.
+    pub quick_tiles_order: Vec<String>,
+    pub quick_tiles_hidden: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

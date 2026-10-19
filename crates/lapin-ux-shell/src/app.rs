@@ -1190,6 +1190,9 @@ impl Shell {
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
                     return self.start_pointer(ev);
                 }
+                if self.panel.as_ref().is_some_and(|p| p.id == id && matches!(p.kind, crate::panels::PanelKind::Quick(_))) {
+                    return self.quick_pointer(ev);
+                }
                 // The desktop's pointer comes from here too: icons capture
                 // motion over themselves, which a box selection still needs.
                 if self.desktop.as_ref().is_some_and(|d| d.id == id) {

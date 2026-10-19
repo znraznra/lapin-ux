@@ -380,6 +380,53 @@ pub fn network_label(n: &Network) -> String {
     }
 }
 
+/// Quick settings tiles in the user's order: `order` lists tile ids as the
+/// user arranged them, `hidden` the ones they removed. Tiles not mentioned
+/// keep their default place after the arranged ones.
+pub fn tiles_shown(available: &[&str], order: &[String], hidden: &[String]) -> Vec<String> {
+    let mut shown: Vec<String> = order
+        .iter()
+        .filter(|id| available.contains(&id.as_str()) && !hidden.contains(id))
+        .cloned()
+        .collect();
+    for id in available {
+        if !shown.iter().any(|s| s == id) && !hidden.iter().any(|h| h == id) {
+            shown.push(id.to_string());
+        }
+    }
+    shown
+}
+
+/// Tiles that can be added back.
+pub fn tiles_hidden(available: &[&str], hidden: &[String]) -> Vec<String> {
+    available.iter().filter(|id| hidden.iter().any(|h| h == *id)).map(|s| s.to_string()).collect()
+}
+
+/// Move the shown tile at `from` to `to`; returns the new order.
+pub fn move_tile(shown: &[String], from: usize, to: usize) -> Vec<String> {
+    let mut v = shown.to_vec();
+    if from < v.len() {
+        let t = v.remove(from);
+        v.insert(to.min(v.len()), t);
+    }
+    v
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::*;
+
+    #[test]
+    fn order_hide_and_new_tiles() {
+        let avail = ["wifi", "bt", "dnd", "vpn"];
+        let order = vec!["dnd".to_string(), "wifi".into()];
+        let hidden = vec!["bt".to_string()];
+        assert_eq!(tiles_shown(&avail, &order, &hidden), vec!["dnd", "wifi", "vpn"]);
+        assert_eq!(tiles_hidden(&avail, &hidden), vec!["bt"]);
+        assert_eq!(move_tile(&["a".into(), "b".into(), "c".into()], 0, 2), vec!["b", "c", "a"]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
