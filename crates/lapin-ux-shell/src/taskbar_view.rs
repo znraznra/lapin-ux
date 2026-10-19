@@ -447,7 +447,7 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
             items.push(menu_item("view-pin-symbolic", "Show on taskbar", Message::TrayPin(id, true)));
         }
     }
-    panel(column::with_children(items).spacing(2), 320.0)
+    panel(column::with_children(items).spacing(2), 260.0)
 }
 
 /// A menu row with a check mark when `on`.
