@@ -141,7 +141,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 6;
+pub const DEFAULTS_VERSION: u32 = 7;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -172,6 +172,16 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Alt, Shift], key: "Tab"): Spawn("lapin-ux-shell alttab prev"),"#.to_string(),
         r#"(modifiers: [Super], key: "Up"): Maximize,"#.to_string(),
         r#"(modifiers: [Super], key: "Down"): Minimize,"#.to_string(),
+        // Snap to the left / right half (and on to the next monitor).
+        r#"(modifiers: [Super], key: "Left"): Move(Left),"#.to_string(),
+        r#"(modifiers: [Super], key: "Right"): Move(Right),"#.to_string(),
+        r#"(modifiers: [Super, Shift], key: "Left"): MoveToOutput(Left),"#.to_string(),
+        r#"(modifiers: [Super, Shift], key: "Right"): MoveToOutput(Right),"#.to_string(),
+        // Task view and virtual desktops.
+        r#"(modifiers: [Super], key: "Tab"): Spawn("lapin-ux-shell taskview"),"#.to_string(),
+        r#"(modifiers: [Super, Ctrl], key: "Left"): PreviousWorkspace,"#.to_string(),
+        r#"(modifiers: [Super, Ctrl], key: "Right"): NextWorkspace,"#.to_string(),
+        r#"(modifiers: [Super, Ctrl], key: "d"): LastWorkspace,"#.to_string(),
         r#"(modifiers: [Super, Shift], key: "s"): System(Screenshot),"#.to_string(),
         r#"(modifiers: [Ctrl, Alt], key: "Delete"): System(LogOut),"#.to_string(),
     ];

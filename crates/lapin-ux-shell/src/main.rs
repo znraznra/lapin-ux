@@ -34,6 +34,7 @@ mod submenu;
 mod start_view;
 mod taskbar_extras;
 mod taskbar_view;
+mod taskview;
 mod tray;
 mod wayland;
 
@@ -74,7 +75,7 @@ fn main() -> cosmic::iced::Result {
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskbar-item N]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskview | taskbar-item N]");
         return Ok(());
     }
 

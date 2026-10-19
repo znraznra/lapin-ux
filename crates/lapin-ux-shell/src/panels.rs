@@ -37,6 +37,7 @@ pub enum PanelKind {
     Quick(crate::quick::QuickPanel),
     Clip(crate::clipboard::ClipPanel),
     AltTab(crate::previews::AltTab),
+    TaskView(crate::taskview::TaskView),
 }
 
 pub struct Panel {
@@ -176,6 +177,12 @@ impl Shell {
             }
             PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above, left: 12 }, RUN_WIDTH),
             PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
+            // Everything above the taskbar, which stays usable.
+            PanelKind::TaskView(_) => (
+                Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                IcedMargin { top: 0, right: 0, bottom: if self.config.auto_hide { 0 } else { style::TASKBAR_HEIGHT as i32 }, left: 0 },
+                0,
+            ),
             PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: above, left: 0 }, crate::clipboard::WIDTH),
             PanelKind::Quick(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
@@ -184,8 +191,10 @@ impl Shell {
             ),
         };
         let focus_run = matches!(kind, PanelKind::Run { .. });
+        // Task view covers the whole screen.
+        let full = matches!(kind, PanelKind::TaskView(_));
         self.panel = Some(Panel { id, kind });
-        let r = style::PANEL_RADIUS as u32;
+        let r = if full { 0 } else { style::PANEL_RADIUS as u32 };
         tasks.push(cosmic::surface::surface_task(app_layer_shell(
             move |_: &Shell| LiveSettings {
                 blur: Some(true),
@@ -200,9 +209,13 @@ impl Shell {
                 output: IcedOutput::Active,
                 namespace: "lapin-ux-panel".into(),
                 margin,
-                size: Some((Some(width), Some(1))),
-                exclusive_zone: 0,
-                size_limits: Limits::NONE.min_width(width as f32).max_width(width as f32).min_height(1.0).max_height(900.0),
+                size: if full { Some((None, None)) } else { Some((Some(width), Some(1))) },
+                exclusive_zone: if full { -1 } else { 0 },
+                size_limits: if full {
+                    Limits::NONE
+                } else {
+                    Limits::NONE.min_width(width as f32).max_width(width as f32).min_height(1.0).max_height(900.0)
+                },
                 ..Default::default()
             },
             None,
@@ -312,7 +325,11 @@ impl Shell {
 }
 
 pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
+    if let PanelKind::TaskView(t) = &panel.kind {
+        return crate::taskview::view(shell, t, panel.id);
+    }
     let content: Element<'_, Message> = match &panel.kind {
+        PanelKind::TaskView(_) => unreachable!(),
         PanelKind::WinX { power, selected } => {
             let mut col = column::with_capacity(20).spacing(1);
             let mut idx = 0usize;
@@ -402,6 +419,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Quick(_) => crate::quick::WIDTH,
         PanelKind::Clip(_) => crate::clipboard::WIDTH,
         PanelKind::AltTab(a) => crate::previews::switcher_width(a.order.len()),
+        PanelKind::TaskView(_) => 0,
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),

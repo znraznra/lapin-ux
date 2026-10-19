@@ -266,6 +266,10 @@ fn activate_after_close(id: WindowId) -> Task<Message> {
     })
 }
 
+pub(crate) fn picture_pub<'a>(shell: &'a Shell, id: WindowId, app: &str, max_w: f32, max_h: f32) -> Element<'a, Message> {
+    picture(shell, id, app, max_w, max_h)
+}
+
 /// The picture for a window: its thumbnail, or its app icon until one arrives.
 fn picture<'a>(shell: &'a Shell, id: WindowId, app: &str, max_w: f32, max_h: f32) -> Element<'a, Message> {
     match shell.thumbs.get(&id) {

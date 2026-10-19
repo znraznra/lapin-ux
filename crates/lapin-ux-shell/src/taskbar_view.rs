@@ -30,6 +30,9 @@ pub fn app_icon(shell: &Shell, app: &str) -> icon::Handle {
     }
 }
 
+/// Two overlapping window frames (our own drawing).
+const TASK_VIEW_ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="13" height="11" rx="2" fill="#8f9bb3" stroke="#e8ecf4" stroke-width="1.2"/><rect x="8.5" y="3.5" width="13" height="11" rx="2" fill="#3d8fe0" stroke="#e8ecf4" stroke-width="1.2"/></svg>"##;
+
 pub fn app_name(shell: &Shell, app: &str) -> String {
     shell.catalog.data_for(app).map(|d| d.name.clone()).unwrap_or_else(|| app.to_string())
 }
@@ -77,10 +80,37 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         );
     }
 
+    // Task view, like the benchmark's button after Search.
+    let tv_open = matches!(shell.panel.as_ref().map(|p| &p.kind), Some(crate::panels::PanelKind::TaskView(_)));
+    center = center.push(
+        button::custom(container(icon(icon::from_svg_bytes(TASK_VIEW_ICON)).size(style::TASK_ICON)).center(Length::Fill))
+            .width(style::TASK_BUTTON)
+            .height(style::TASK_BUTTON)
+            .padding(0)
+            .class(style::flat_button(tv_open))
+            .on_press(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
+    );
+
     // Task buttons get their own row so the widget tree keeps a stable
     // shape when the search box is toggled or buttons come and go.
     let main = shell.bars.first().is_some_and(|b| b.id == bar.id);
-    let buttons = shell.taskbar.buttons_for(bar.output_name.as_deref(), main, shell.config.multi_display);
+    let mut buttons = shell.taskbar.buttons_for(bar.output_name.as_deref(), main, shell.config.multi_display);
+    // Only windows on the desktop in view, like the benchmark's default.
+    let here = shell
+        .desktops
+        .list
+        .iter()
+        .find(|d| d.active && bar.output_name.as_ref().is_none_or(|o| d.outputs.is_empty() || d.outputs.contains(o)))
+        .map(|d| d.id);
+    if let Some(ws) = here {
+        buttons = buttons
+            .into_iter()
+            .filter_map(|mut b| {
+                b.windows.retain(|w| shell.desktops.of_window.get(&w.handle).is_none_or(|l| l.contains(&ws)));
+                (b.pinned || !b.windows.is_empty()).then_some(b)
+            })
+            .collect();
+    }
     let tasks: Vec<Element<'_, Message>> = buttons.into_iter().map(|b| task_button(shell, bar, b)).collect();
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
@@ -570,6 +600,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
         PopupKind::Account => crate::account::menu(shell),
+        PopupKind::MoveToDesktop(w) => crate::taskview::move_menu(shell, *w),
         PopupKind::ConfirmEmptyTrash => panel(
             column::with_children(vec![
                 text::heading("Delete multiple items").into(),

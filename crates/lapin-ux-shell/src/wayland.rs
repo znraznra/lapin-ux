@@ -41,6 +41,8 @@ use cosmic::cctk::{
         ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
     },
     toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
+    workspace::{WorkspaceHandler, WorkspaceState},
+    wayland_protocols::ext::workspace::v1::client::{ext_workspace_group_handle_v1, ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1}},
     toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
     wayland_client::{
         Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
@@ -70,6 +72,22 @@ pub struct WindowInfo {
     pub minimized: bool,
     /// Monitor names (e.g. "eDP-1") the window is on.
     pub outputs: Vec<String>,
+    /// Virtual desktops the window is on.
+    pub workspaces: Vec<WorkspaceId>,
+}
+
+/// Opaque id of a virtual desktop (workspace).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorkspaceId(u64);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceInfo {
+    pub id: WorkspaceId,
+    pub name: String,
+    pub active: bool,
+    /// Monitors it belongs to.
+    pub outputs: Vec<String>,
+    pub can_remove: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +103,8 @@ pub enum WaylandUpdate {
     A11y(A11yState),
     /// The active keyboard layout (index into the configured list).
     KeyboardGroup(u32),
+    /// Virtual desktops in order, and whether new ones can be made.
+    Workspaces(Vec<WorkspaceInfo>, bool),
 }
 
 /// What the compositor reports about its accessibility features.
@@ -112,6 +132,12 @@ pub enum WaylandRequest {
     SetColorFilter(bool),
     /// Switch to keyboard layout `n` of the configured list.
     SetKeyboardGroup(u32),
+    ActivateWorkspace(WorkspaceId),
+    /// "New desktop".
+    NewWorkspace,
+    RemoveWorkspace(WorkspaceId),
+    /// Move a window to another desktop.
+    MoveToWorkspace(WindowId, WorkspaceId),
 }
 
 /// Thumbnails are captured at most this size.
@@ -214,6 +240,9 @@ struct AppData {
     a11y_state: A11yState,
     layout_manager: Option<ZcosmicKeyboardLayoutManagerV1>,
     keyboard_layout: Option<ZcosmicKeyboardLayoutV1>,
+    workspace_state: WorkspaceState,
+    ws_ids: HashMap<ObjectId, WorkspaceId>,
+    ws_objects: HashMap<WorkspaceId, ExtWorkspaceHandleV1>,
 }
 
 impl AppData {
@@ -252,11 +281,21 @@ impl AppData {
                 }
                 return;
             }
+            WaylandRequest::ActivateWorkspace(_)
+            | WaylandRequest::NewWorkspace
+            | WaylandRequest::RemoveWorkspace(_)
+            | WaylandRequest::MoveToWorkspace(..) => return self.workspace_request(req),
             _ => {}
         }
         let target = |id: &WindowId| self.objects.get(id).cloned();
         match req {
-            WaylandRequest::SetMagnifier(_) | WaylandRequest::SetColorFilter(_) | WaylandRequest::SetKeyboardGroup(_) => {}
+            WaylandRequest::SetMagnifier(_)
+            | WaylandRequest::SetColorFilter(_)
+            | WaylandRequest::SetKeyboardGroup(_)
+            | WaylandRequest::ActivateWorkspace(_)
+            | WaylandRequest::NewWorkspace
+            | WaylandRequest::RemoveWorkspace(_)
+            | WaylandRequest::MoveToWorkspace(..) => {}
             WaylandRequest::Activate(id) => match target(&id) {
                 Some(Toplevel::Cosmic(ext)) => {
                     if let (Some(Backend::Cosmic { manager: Some(m), .. }), Some(t), Some(seat)) =
@@ -333,6 +372,7 @@ impl AppData {
         let Some(Backend::Cosmic { info, .. }) = &self.backend else { return };
         let Some(info) = info.info(ext).cloned() else { return };
         let outputs = self.output_names(&info.output);
+        let workspaces = info.workspace.iter().map(|w| self.ws_id(w)).collect();
         let id = self.id_for(ext.id(), Toplevel::Cosmic(ext.clone()));
         let _ = self.tx.unbounded_send(WaylandUpdate::Window(WindowInfo {
             id,
@@ -341,7 +381,95 @@ impl AppData {
             activated: info.state.contains(&zcosmic_toplevel_handle_v1::State::Activated),
             minimized: info.state.contains(&zcosmic_toplevel_handle_v1::State::Minimized),
             outputs,
+            workspaces,
         }));
+    }
+
+    fn ws_id(&mut self, h: &ExtWorkspaceHandleV1) -> WorkspaceId {
+        if let Some(id) = self.ws_ids.get(&h.id()) {
+            return *id;
+        }
+        self.next_id += 1;
+        let id = WorkspaceId(self.next_id);
+        self.ws_ids.insert(h.id(), id);
+        self.ws_objects.insert(id, h.clone());
+        id
+    }
+
+    fn workspace_request(&mut self, req: WaylandRequest) {
+        let Ok(manager) = self.workspace_state.workspace_manager().get().cloned() else { return };
+        match req {
+            WaylandRequest::ActivateWorkspace(id) => {
+                if let Some(h) = self.ws_objects.get(&id) {
+                    h.activate();
+                }
+            }
+            WaylandRequest::RemoveWorkspace(id) => {
+                if let Some(h) = self.ws_objects.get(&id) {
+                    h.remove();
+                }
+            }
+            WaylandRequest::NewWorkspace => {
+                let group = self
+                    .workspace_state
+                    .workspace_groups()
+                    .find(|g| g.capabilities.contains(ext_workspace_group_handle_v1::GroupCapabilities::CreateWorkspace))
+                    .map(|g| g.handle.clone());
+                match group {
+                    Some(g) => g.create_workspace(String::new()),
+                    // COSMIC keeps an empty desktop at the end: go there.
+                    None => {
+                        let mut all: Vec<_> = self.workspace_state.workspaces().cloned().collect();
+                        all.sort_by(|a, b| a.coordinates.cmp(&b.coordinates));
+                        if let Some(last) = all.last() {
+                            last.handle.activate();
+                        }
+                    }
+                }
+            }
+            WaylandRequest::MoveToWorkspace(win, ws) => {
+                if let (Some(Toplevel::Cosmic(ext)), Some(wh)) = (self.objects.get(&win).cloned(), self.ws_objects.get(&ws).cloned())
+                    && let (Some(Backend::Cosmic { manager: Some(m), info }), Some(t)) = (&self.backend, self.cosmic_handle(&ext))
+                    && let Some(output) = info.info(&ext).and_then(|i| i.output.iter().next().cloned())
+                    && m.manager.version() >= 4
+                {
+                    m.manager.move_to_ext_workspace(&t, &wh, &output);
+                }
+            }
+            _ => return,
+        }
+        manager.commit();
+    }
+}
+
+impl WorkspaceHandler for AppData {
+    fn workspace_state(&mut self) -> &mut WorkspaceState {
+        &mut self.workspace_state
+    }
+
+    fn done(&mut self) {
+        let groups: Vec<_> = self.workspace_state.workspace_groups().cloned().collect();
+        let can_create = groups.iter().any(|g| g.capabilities.contains(ext_workspace_group_handle_v1::GroupCapabilities::CreateWorkspace));
+        let mut all: Vec<_> = self.workspace_state.workspaces().cloned().collect();
+        all.sort_by(|a, b| a.coordinates.cmp(&b.coordinates));
+        let list: Vec<WorkspaceInfo> = all
+            .iter()
+            .map(|w| {
+                let outputs = groups
+                    .iter()
+                    .filter(|g| g.workspaces.contains(&w.handle))
+                    .flat_map(|g| self.output_names(&g.outputs))
+                    .collect();
+                WorkspaceInfo {
+                    id: self.ws_id(&w.handle),
+                    name: w.name.clone(),
+                    active: w.state.contains(ext_workspace_handle_v1::State::Active),
+                    outputs,
+                    can_remove: w.capabilities.contains(ext_workspace_handle_v1::WorkspaceCapabilities::Remove),
+                }
+            })
+            .collect();
+        let _ = self.tx.unbounded_send(WaylandUpdate::Workspaces(list, can_create));
     }
 }
 
@@ -388,6 +516,7 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
     }
 
     let registry_state = RegistryState::new(&globals);
+    let registry_state_for_ws = RegistryState::new(&globals);
     let backend = pick_backend(&globals, &registry_state, &qh);
     if backend.is_none() {
         tracing::warn!("compositor offers no window-list protocol; running windows will not be shown");
@@ -413,6 +542,9 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         a11y_state: A11yState::default(),
         layout_manager: globals.bind::<ZcosmicKeyboardLayoutManagerV1, _, _>(&qh, 1..=1, ()).ok(),
         keyboard_layout: None,
+        workspace_state: WorkspaceState::new(&registry_state_for_ws, &qh),
+        ws_ids: HashMap::new(),
+        ws_objects: HashMap::new(),
     };
     if data.a11y.is_some() {
         data.a11y_state.available = true;
@@ -482,6 +614,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for AppData {
                         activated: p.activated,
                         minimized: p.minimized,
                         outputs,
+                        workspaces: Vec::new(),
                     }));
                 }
             }
@@ -732,6 +865,7 @@ impl AppData {
 }
 
 sctk::delegate_shm!(AppData);
+cctk::delegate_workspace!(AppData);
 cctk::delegate_screencopy!(AppData);
 sctk::delegate_seat!(AppData);
 sctk::delegate_registry!(AppData);

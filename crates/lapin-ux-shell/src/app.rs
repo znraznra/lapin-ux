@@ -92,6 +92,8 @@ pub enum PopupKind {
     TrayOverflow,
     /// The account button's menu in Start.
     Account,
+    /// Task view: move a window to another desktop.
+    MoveToDesktop(crate::wayland::WindowId),
     /// "Permanently delete everything in the Recycle Bin?"
     ConfirmEmptyTrash,
     /// Right-click on a pinned file, site or folder in Start.
@@ -195,6 +197,7 @@ pub enum Message {
     Pin(String),
     Unpin(String),
     PinStart(String),
+    TaskView(crate::taskview::TaskViewMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
     Modifiers(window::Id, keyboard::Modifiers),
@@ -277,6 +280,8 @@ pub struct Shell {
     /// Account picture chosen this session (AccountsService keeps it too).
     pub avatar: Option<std::path::PathBuf>,
     pub can_switch_user: bool,
+    /// Virtual desktops.
+    pub desktops: crate::taskview::Desktops,
     pub mods: keyboard::Modifiers,
     ctrl_released: Instant,
     /// A file being dragged over a taskbar button: (app, serial).
@@ -555,12 +560,16 @@ impl Shell {
             urgent: false,
             outputs: info.outputs,
         });
+        if !info.workspaces.is_empty() {
+            self.desktops.of_window.insert(info.id, info.workspaces);
+        }
     }
 
     fn window_closed(&mut self, id: Handle) {
         self.forget_window(id);
         self.taskbar.remove(&id);
         self.desktop_shown.retain(|h| h != &id);
+        self.desktops.of_window.remove(&id);
     }
 
     /// Ordered list of what the Start menu currently shows, for keyboard nav.
@@ -747,6 +756,7 @@ impl Application for Shell {
             drag_hover: None,
             avatar: None,
             can_switch_user: false,
+            desktops: Default::default(),
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
             drag_serial: 0,
@@ -822,6 +832,7 @@ impl Application for Shell {
                 "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
                 "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
+                "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
                 "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 "emoji" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Emoji))),
@@ -923,6 +934,10 @@ impl Shell {
                 }
                 WaylandUpdate::A11y(a) => self.quick.a11y = a,
                 WaylandUpdate::KeyboardGroup(g) => self.quick.kb_group = g,
+                WaylandUpdate::Workspaces(list, can_create) => {
+                    self.desktops.list = list;
+                    self.desktops.can_create = can_create;
+                }
                 WaylandUpdate::Thumbnail { id, width, height, rgba } => {
                     return self.update_preview(crate::previews::PreviewMsg::Thumbnail(id, width, height, rgba));
                 }
@@ -1279,6 +1294,7 @@ impl Shell {
                 return self.close_popup();
             }
             Message::Pins(m) => return self.update_pins(m),
+            Message::TaskView(m) => return self.update_taskview(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {
                 if self.mods.control() && !m.control() {
