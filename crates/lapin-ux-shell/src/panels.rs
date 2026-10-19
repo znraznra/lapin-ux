@@ -49,6 +49,8 @@ pub enum PanelKind {
     Security { power: bool },
     /// Win+Shift+S snipping overlay (whole screen).
     Snip(Box<crate::snip::SnipPanel>),
+    /// "How do you want to open this file?"
+    OpenWith(Box<crate::open_with::OpenWithPanel>),
 }
 
 pub struct Panel {
@@ -209,6 +211,7 @@ impl Shell {
             ),
             PanelKind::ShutDown { .. } => (Anchor::empty(), IcedMargin::default(), crate::system_ui::SHUTDOWN_WIDTH),
             PanelKind::Properties(_) => (Anchor::empty(), IcedMargin::default(), crate::properties::WIDTH),
+            PanelKind::OpenWith(_) => (Anchor::empty(), IcedMargin::default(), crate::open_with::WIDTH),
             PanelKind::Project(_) => (
                 Anchor::BOTTOM | Anchor::RIGHT,
                 IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
@@ -371,6 +374,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::ShutDown { choice } => crate::system_ui::shutdown_view(*choice),
         PanelKind::Project(p) => crate::system_ui::project_view(p),
         PanelKind::Properties(p) => crate::properties::view(shell, p),
+        PanelKind::OpenWith(p) => crate::open_with::view(shell, p),
         PanelKind::Snap(s) => crate::snap::view(shell, s),
         PanelKind::WinX { power, selected } => {
             let mut col = column::with_capacity(20).spacing(1);
@@ -465,6 +469,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Snap(_) => crate::snap::WIDTH,
         PanelKind::ShutDown { .. } => crate::system_ui::SHUTDOWN_WIDTH,
         PanelKind::Properties(_) => crate::properties::WIDTH,
+        PanelKind::OpenWith(_) => crate::open_with::WIDTH,
         PanelKind::Project(_) => crate::system_ui::PROJECT_WIDTH,
     } as f32;
     widget::autosize::autosize(

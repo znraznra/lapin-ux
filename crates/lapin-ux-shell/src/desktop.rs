@@ -1334,6 +1334,12 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
             if v.is_empty() {
                 v.push(container(text::caption("No apps found").class(crate::style::dim_text())).padding([8, 12]).into());
             }
+            v.push(crate::taskbar_view::menu_divider());
+            v.push(menu_item(
+                "application-x-executable-symbolic",
+                "Choose another app",
+                Message::OpenWithPick(crate::open_with::OpenWithMsg::Open(path.clone())),
+            ));
             v
         }
         (Some(_), MenuPage::SendTo) => vec![

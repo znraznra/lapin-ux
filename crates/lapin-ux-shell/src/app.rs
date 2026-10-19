@@ -217,6 +217,7 @@ pub enum Message {
     Extras(crate::comp_extras::ExtrasMsg),
     Snip(crate::snip::SnipMsg),
     Input(crate::input::InputMsg),
+    OpenWithPick(crate::open_with::OpenWithMsg),
     /// Show or hide the touch keyboard (cosmic-osk).
     ToggleTouchKeyboard,
     Snap(crate::snap::SnapMsg),
@@ -1490,6 +1491,7 @@ impl Shell {
             Message::Extras(m) => return self.update_extras(m),
             Message::Snip(m) => return self.update_snip(m),
             Message::Input(m) => return self.update_input(m),
+            Message::OpenWithPick(m) => return self.update_open_with(m),
             Message::ToggleTouchKeyboard => {
                 // cosmic-osk follows its always_shown state live.
                 use cosmic::cosmic_config::ConfigGet;

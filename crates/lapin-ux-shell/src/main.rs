@@ -29,6 +29,7 @@ mod input;
 mod lapin_proto;
 mod launcher_entry;
 mod notify_client;
+mod open_with;
 mod panels;
 mod previews;
 mod properties;
