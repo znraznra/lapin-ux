@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+GenericName=System Monitor
+Comment=See and end running apps and processes, check performance and choose startup apps
+Exec=lapin-ux-taskmgr
+Icon=utilities-system-monitor
+Categories=System;Monitor;
+Keywords=processes;performance;cpu;memory;end task;kill;startup;
+StartupNotify=true
+StartupWMClass=dev.lapinux.TaskManager

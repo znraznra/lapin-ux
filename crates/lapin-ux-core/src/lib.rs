@@ -25,6 +25,7 @@ pub mod recent;
 pub mod search;
 pub mod snap;
 pub mod sound;
+pub mod sysmon;
 pub mod system;
 pub mod taskbar;
 pub mod thumb;

@@ -108,7 +108,7 @@ package_lapin-ux-desktop-git() {
 
     cd "$_src"
     local bin
-    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd; do
+    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-taskmgr; do
         install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
     done
     install -Dm755 data/session/start-lapin-ux        "$pkgdir/usr/bin/start-lapin-ux"
@@ -120,6 +120,7 @@ package_lapin-ux-desktop-git() {
     install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
     install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm755 tools/lapin-ux-cursors           "$pkgdir/usr/bin/lapin-ux-cursors"
+    install -Dm644 -t "$pkgdir/usr/share/applications" data/apps/*.desktop
 
     # System sounds: Borealis by Ivica Ico Bukvic (Artistic; see its COPYING).
     mkdir -p "$pkgdir/usr/share/sounds"

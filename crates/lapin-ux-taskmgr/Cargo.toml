@@ -1,0 +1,13 @@
+[package]
+name = "lapin-ux-taskmgr"
+description = "Lapin UX Task Manager: processes, performance, startup apps and details"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lapin-ux-core.workspace = true
+libcosmic.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

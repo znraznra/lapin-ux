@@ -150,7 +150,7 @@ const OFFICE: &[&str] = &["libreoffice-writer", "onlyoffice-desktopeditors"];
 const MAIL: &[&str] = &["org.mozilla.Thunderbird", "thunderbird", "org.gnome.Evolution", "org.gnome.Geary"];
 const CALENDAR: &[&str] = &["org.gnome.Calendar", "org.kde.merkuro.calendar"];
 pub const TASK_MANAGER: &[&str] = &[
-    "io.missioncenter.MissionCenter", "net.nokyan.Resources", "org.gnome.SystemMonitor",
+    "dev.lapinux.TaskManager", "io.missioncenter.MissionCenter", "net.nokyan.Resources", "org.gnome.SystemMonitor",
     "gnome-system-monitor", "org.kde.plasma-systemmonitor", "com.system76.CosmicMonitor",
 ];
 pub const DISKS: &[&str] = &["org.gnome.DiskUtility", "gnome-disks", "org.kde.partitionmanager", "gparted"];
