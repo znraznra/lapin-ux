@@ -189,7 +189,8 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 ### Keyboard (Stage B only)
 - [ ] Super opens/closes Start
 - [ ] Super+E file manager · Super+D show desktop · Super+L lock
-- [ ] Super+↑ maximise · Super+↓ minimise · Super+Shift+S screenshot
+- [ ] Super+↑ maximise · Super+↓ minimise
+- [ ] Super+Shift+S or Print Screen: the screen dims with a toolbar; drag a rectangle → a notification says it was copied; paste it in an app; the file is in Pictures/Screenshots. Window and Full screen work too
 - [ ] Super+X opens the power-user menu above Start; arrow keys + Enter work; "Shut down or sign out" shows the power options
 - [ ] Super+N opens/closes the notification centre
 - [ ] Super+A opens/closes Quick settings
@@ -198,15 +199,39 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Super+1, Super+2… open or switch to the taskbar apps in order; pressing again on an app with several windows cycles them
 - [ ] Alt+Tab: hold Alt, press Tab repeatedly: thumbnails of all windows, most recent first; releasing Alt switches to the highlighted one (and you can type in it right away)
 - [ ] A quick Alt+Tab tap flips between the last two windows; Alt+Shift+Tab goes backwards; Esc cancels
-- [ ] Ctrl+Alt+Del shows the sign-out/power dialog
+- [ ] Ctrl+Alt+Del shows the security screen (Lock, Switch user, Sign out, Change a password, Task Manager; power at the bottom right)
+- [ ] Ctrl+Shift+Esc opens Task Manager: End task closes an app; Performance graphs move; Startup apps can be disabled
+- [ ] Alt+F4 closes the window in front; on the desktop it opens Shut Down Windows
+- [ ] Super+P shows Project (with a second monitor: Duplicate / Extend / Second screen only work)
+- [ ] With two keyboard layouts: the taskbar shows ENG / US; click to switch; Super+Space switches
+- [ ] Ctrl+Super+Enter starts / stops Narrator (Orca); Left Alt+Left Shift+Print Screen toggles contrast themes
 - [ ] Super+← / Super+→ snap a window to the left/right half; Super+Shift+← / → move it to the other monitor
 - [ ] Super+Tab (or the Task view button) shows Task view; click a window to switch; New desktop adds one; right-click a window → Move to Desktop 2; Ctrl+Super+← / → switch desktops
 - [ ] Super+Z: pick the left third of the thirds layout: the window goes there and Snap assist offers your other windows for the remaining spaces
 
+### Multitasking and compositor (lapin-ux-comp)
+- [ ] Rest the pointer on the far right of the taskbar: the windows disappear until you move away
+- [ ] Night light tile in Quick settings warms the screen; turning it off restores colours
+- [ ] Snap two windows with Super+Z; hover one's taskbar button: a Group card brings both back
+- [ ] Task view: right-click a desktop → Rename, Choose background (switching desktops changes the wallpaper)
+- [ ] Touchpad: 3 fingers up → Task view, down → desktop, sideways → switch app; 4 fingers sideways → desktops
+- [ ] New windows fade in
+- [ ] Tablet/convertible: rotating turns the screen; Rotation lock stops it
+
+### Apps
+- [ ] Control Panel opens Settings pages from its links
+- [ ] Update lists pending updates and installs them (asks for your password); Update history shows past updates
+- [ ] A file's right-click → Open with → Choose another app: pick an app, tick Always, OK
+- [ ] Open/Save dialogs in apps show File name with the type beside it, then Open/Save and Cancel
+- [ ] Touch keyboard: taskbar right-click → Show touch keyboard button; the button shows / hides the keyboard
+
 ### Session
+- [ ] First sign-in: Get Started asks for Wi-Fi, light or dark, and pointers
+- [ ] The sign-in sound plays; sign out plays the sign-out sound
 - [ ] Apps set to start at login (autostart) start
 - [ ] Sign out returns to the login screen cleanly
-- [ ] Laptop: closing the lid / idle locks the screen; the lock screen accepts your password
+- [ ] Laptop: closing the lid / idle locks the screen: big clock; click or type to get the password box; it accepts your password
+- [ ] Login screen: same clock face, then the sign-in panel with the user list bottom left
 
 ## Reporting a problem
 

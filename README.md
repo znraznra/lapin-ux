@@ -137,7 +137,14 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   with mute, sound output picker and **per-app volume mixer**. Scroll over the taskbar button to change volume.
 - Battery percentage and time remaining (UPower); the settings gear opens
   COSMIC Settings, and each page links to its settings page.
-- Night light and rotation lock aren't possible on cosmic-comp yet.
+- **Night light** tile (warm screen filter in `lapin-ux-comp`; optional
+  on/off schedule in the `night_light_schedule` setting) and **Rotation lock**
+  (tablets and convertibles: the screen follows the accelerometer through
+  iio-sensor-proxy unless locked).
+- **Edit quick settings** (pencil): unpin tiles, drag them into a new order,
+  add them back from the Add list.
+- Notifications show **progress bars** and an **inline reply** box (KDE's
+  inline-reply extension).
 
 **Task view and snapping**
 - Task view: windows of the current desktop as thumbnails, desktops below
@@ -146,6 +153,66 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 - **Snap layouts** (Super+Z): halves, 2/3 + 1/3, thirds, half + quarters,
   quarters, 1/4-1/2-1/4 on wide screens; then **Snap assist** fills the other
   spaces from your windows. Uses `lapin-ux-comp`, which the installer builds.
+
+- **Snap groups**: windows placed together with a snap layout show up as a
+  Group card when you hover their taskbar button; clicking it brings them all back.
+- Task view: right-click a desktop to **Rename** it or **Choose background**
+  (each desktop can have its own wallpaper).
+- **Desktop peek**: rest the pointer on the far right of the taskbar and the
+  windows disappear until you move away (`lapin-ux-comp`).
+- **Touchpad**: three fingers up for Task view, down to show the desktop,
+  sideways to switch apps; four fingers sideways to switch desktops.
+- New windows fade in as they open; minimize and restore animate to the taskbar.
+
+**Snipping** (Win+Shift+S or Print Screen)
+- The screen freezes and dims; pick Rectangle (drag), Window or Full screen
+  from the toolbar. The snip is copied to the clipboard, saved in
+  Pictures/Screenshots, and a notification shows it.
+
+**System tools**
+- **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Win+X): Processes (apps with
+  their child processes, background processes, CPU/memory/disk, End task, Run
+  new task), Performance graphs, Startup apps (turn them on or off), Details.
+- **Control Panel**: the classic category view and Large icons, opening the
+  matching Settings page or tool.
+- **Update**: checks pacman and Flatpak updates, installs them with one
+  button (polkit), shows progress and history, and offers a restart when the
+  kernel changed. A background check notifies you when updates are waiting.
+- **Get Started**: on the first sign-in, connect to Wi-Fi, choose light or
+  dark mode, and optionally get the Windows 11-style pointers.
+- Desktop icons: **Properties** (Alt+Enter), *This PC*, user folder, *Network*
+  and *Control Panel* icons, *Open with ›* with **Choose another app** ("How do
+  you want to open this file?"), *Compress to ZIP file*, *Show more options*.
+- Win+P (*Project*), Ctrl+Alt+Del security screen, Alt+F4 on the desktop opens
+  *Shut Down Windows*.
+
+**Lock screen and sign-in** (`lapin-ux-greeter`, a patch on COSMIC's greeter)
+- Lock screen: big clock and date over the wallpaper; click or type to get the
+  sign-in panel (round picture, name, password; network, battery,
+  accessibility and power bottom right). The login screen adds the user list
+  bottom left. Fingerprint sign-in works through fprintd (optional).
+
+**Typing**
+- With several keyboard layouts or fcitx5 input methods, the taskbar shows
+  the current one (**ENG / US**, or あ, 拼…); click to pick, **Win+Space** for the next.
+- **Touch keyboard** (`lapin-ux-osk`, a patch on COSMIC's on-screen keyboard)
+  in Windows 11's style, with emoji and clipboard buttons; right-click the
+  taskbar → *Show touch keyboard button*.
+
+**Accessibility**
+- Quick settings → Accessibility: Magnifier, Colour filters, **Narrator**
+  (Orca; Ctrl+Win+Enter) and **Contrast themes** (Left Alt+Left Shift+Print Screen).
+
+**Sounds and pointers**
+- System sounds from the bundled **Borealis** theme: sign-in, sign-out,
+  notifications (apps can ask for silence or their own sound), alarms, volume
+  changes, emptying the Recycle Bin.
+- Windows 11-style pointers by JepriCreations, installed on request
+  (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
+
+**File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
+- Every app's Open/Save dialog ends like Windows': *File name* with the file
+  type beside it (*Save as type* when saving), then Open/Save and Cancel.
 
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
 - Starts `lapin-ux-comp` if installed (else cosmic-comp) in normal (not kiosk) mode using the same handshake as
@@ -203,27 +270,37 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 
 ```
 display manager ──> start-lapin-ux ──> lapin-ux-session
-                                      ├─ lapin-ux-comp / cosmic-comp  compositor (ours = upstream + 1 small patch)
+                                      ├─ lapin-ux-comp / cosmic-comp  compositor (ours = upstream + 2 small patches)
                                       ├─ lapin-ux-shell           taskbar ×N, Start menu, tray   ← ours
                                       ├─ lapin-ux-notifyd         notification toasts + centre   ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
                                       ├─ cosmic-bg              wallpaper                      (reused)
                                       ├─ cosmic-osd             volume OSD, polkit dialogs     (reused)
                                       ├─ cosmic-idle            screen blanking                (reused)
-                                      └─ cosmic-greeter         lock screen                    (reused)
+                                      └─ lapin-ux-greeter       lock screen (COSMIC's + patch)
 ```
 
 | Crate | What it is | Depends on libcosmic |
 |---|---|---|
-| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts. 73 unit tests. | no |
+| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts, displays, night light, process and system monitoring, updates, sounds. 91 unit tests. | no |
 | `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
 | `lapin-ux-notifyd` | Notification server and toasts | yes |
 | `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
+| `lapin-ux-taskmgr` | Task Manager | yes |
+| `lapin-ux-control` | Control Panel | yes |
+| `lapin-ux-update` | Update (pacman + Flatpak) | yes |
+| `lapin-ux-welcome` | First-run setup | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
-pinned commit plus one patch adding `lapin_shell_v1` (`protocols/`): snap a
-window into a fraction of the work area, and tell the shell when a window
-asks for attention. Everything else works on stock cosmic-comp.
+pinned commit plus two patches adding `lapin_shell_v1` (`protocols/`): snap a
+window into a fraction of the work area, tell the shell when a window asks
+for attention, desktop peek, night light, touchpad swipes for the shell, and
+a window-open animation. Everything else works on stock cosmic-comp.
+
+Three more COSMIC programs are built with small patches, each as its own
+package that replaces the original: `lapin-ux-greeter` (lock and sign-in
+screens), `lapin-ux-osk` (touch keyboard) and `lapin-ux-portal` (file
+dialogs; COSMIC's portal built against a patched COSMIC Files).
 
 Window tracking supports two backends: cosmic-comp's protocols (full
 control) and `wlr-foreign-toplevel-management` (sway, Hyprland, labwc,
@@ -302,9 +379,11 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
   apps); COSMIC Settings fills in until then.
 - Widgets board and Copilot-style assistant button (left out on purpose).
 - Wallpaper slideshow and daily picture.
-- Snap groups, "peek" at the desktop, night light, rotation lock (need more
-  compositor work).
-- File manager, update center (pacman + Flatpak + fwupd), control panel.
+- File Explorer in Windows 11's layout (COSMIC Files is used), the file
+  dialogs' navigation pane, and a Snipping Tool markup editor.
+- Window close animation; Mica/acrylic on app windows (parked).
+- Task Manager's Users and Services tabs; firmware updates in Update.
+- Live captions and Win+H voice typing (parked).
 
 ## License
 
