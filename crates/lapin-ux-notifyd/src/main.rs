@@ -41,6 +41,9 @@ pub enum Message {
     Hover(bool),
     Dismiss(u32),
     Invoke(u32, String),
+    /// Typing in a notification's reply box, and sending it.
+    ReplyInput(u32, String),
+    ReplySend(u32),
     /// Click on a card in the notification centre.
     CenterOpen(u32),
     /// Remove from the notification centre (×).
@@ -79,6 +82,8 @@ pub struct App {
     pub quiet: quiet::Quiet,
     /// Ids for notices the daemon itself shows (focus session over…).
     local_id: u32,
+    /// Replies being typed, by notification.
+    pub replies: std::collections::HashMap<u32, String>,
 }
 
 impl App {
@@ -91,7 +96,7 @@ impl App {
                 get_layer_surface(SctkLayerSurfaceSettings {
                     id,
                     layer: Layer::Overlay,
-                    keyboard_interactivity: KeyboardInteractivity::None,
+                    keyboard_interactivity: KeyboardInteractivity::OnDemand,
                     anchor: Anchor::BOTTOM | Anchor::RIGHT,
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-notifications".into(),
@@ -152,6 +157,8 @@ impl App {
             desktop_entry: None,
             received: std::time::SystemTime::now(),
             image: None,
+            progress: None,
+            reply: None,
         };
         self.queue.push(n, Instant::now());
         Task::batch([self.sync_surface(), self.publish()])
@@ -284,6 +291,7 @@ impl Application for App {
                 settings,
                 quiet,
                 local_id: 0,
+                replies: Default::default(),
             },
             quiet::load_events(sources),
         )
@@ -303,7 +311,7 @@ impl Application for App {
                 .on_right_press(Message::CloseCenter)
                 .into();
         }
-        let cards: Vec<Element<'_, Message>> = self.queue.visible().iter().map(toast).collect();
+        let cards: Vec<Element<'_, Message>> = self.queue.visible().iter().map(|t| toast(self, t)).collect();
         let list = column::with_children(cards).spacing(8).width(Length::Fixed(WIDTH as f32));
         let area = mouse_area(list).on_enter(Message::Hover(true)).on_exit(Message::Hover(false));
         autosize::autosize(area, AUTOSIZE.clone())
@@ -407,7 +415,7 @@ impl Application for App {
                 dbus::Event::ClearAll => return self.update(Message::ClearAll),
             },
             Message::Tick => {
-                if self.hovered {
+                if self.hovered || self.replies.values().any(|r| !r.is_empty()) {
                     self.queue.hold(now);
                     return Task::none();
                 }
@@ -429,6 +437,26 @@ impl Application for App {
                 return Task::batch([signal, self.sync_surface()]);
             }
             Message::Invoke(id, key) => return self.invoke(id, key),
+            Message::ReplyInput(id, text) => {
+                self.replies.insert(id, text);
+            }
+            Message::ReplySend(id) => {
+                let text = self.replies.remove(&id).unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Task::none();
+                }
+                self.queue.close(id, now);
+                self.queue.forget(id);
+                let mut tasks = vec![self.sync_surface(), self.publish()];
+                if let Some(conn) = self.conn.clone() {
+                    tasks.push(Task::future(async move {
+                        dbus::emit_reply(conn.clone(), id, text).await;
+                        dbus::emit_closed(conn, id, CloseReason::Dismissed).await;
+                        cosmic::Action::App(Message::Noop)
+                    }));
+                }
+                return Task::batch(tasks);
+            }
             Message::CenterOpen(id) => {
                 let default = self
                     .queue
@@ -525,7 +553,41 @@ fn card_style(critical: bool) -> theme::Container<'static> {
     })
 }
 
-fn toast(t: &Toast) -> Element<'_, Message> {
+/// Progress bar and reply box, shared by toasts and the notification centre.
+pub fn extras<'a>(app: &'a App, n: &'a Notification) -> Vec<Element<'a, Message>> {
+    let mut out = Vec::new();
+    if let Some(p) = n.progress {
+        out.push(
+            row::with_children(vec![
+                cosmic::widget::progress_bar::determinate_linear(p as f32 / 100.0).girth(4).width(Length::Fill).into(),
+                text::caption(format!("{p}%")).into(),
+            ])
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+        );
+    }
+    if let Some(r) = &n.reply {
+        let draft = app.replies.get(&n.id).map(String::as_str).unwrap_or("");
+        let id = n.id;
+        out.push(
+            row::with_children(vec![
+                cosmic::widget::text_input::text_input(r.placeholder.clone(), draft)
+                    .on_input(move |s| Message::ReplyInput(id, s))
+                    .on_submit(move |_| Message::ReplySend(id))
+                    .width(Length::Fill)
+                    .into(),
+                button::suggested(r.submit.clone()).on_press_maybe((!draft.trim().is_empty()).then_some(Message::ReplySend(id))).into(),
+            ])
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+        );
+    }
+    out
+}
+
+fn toast<'a>(app: &'a App, t: &'a Toast) -> Element<'a, Message> {
     let n = &t.notification;
     let header = row::with_children(vec![
         text::caption(if n.app_name.is_empty() { "Notification".to_string() } else { n.app_name.clone() })
@@ -556,11 +618,14 @@ fn toast(t: &Toast) -> Element<'_, Message> {
         None => main.into(),
     };
 
-    let mut body = column::with_capacity(4).spacing(8).push(header).push(main);
+    let mut body = column::with_capacity(6).spacing(8).push(header).push(main);
+    for e in extras(app, n) {
+        body = body.push(e);
+    }
     let buttons: Vec<Element<'_, Message>> = n
         .actions
         .iter()
-        .filter(|a| a.key != "default")
+        .filter(|a| a.key != "default" && a.key != lapin_ux_core::notify::INLINE_REPLY)
         .take(3)
         .map(|a| {
             button::standard(a.label.clone())

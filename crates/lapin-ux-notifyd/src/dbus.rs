@@ -41,7 +41,7 @@ struct Server {
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Server {
     fn get_capabilities(&self) -> Vec<&'static str> {
-        vec!["actions", "body", "icon-static", "persistence"]
+        vec!["actions", "body", "icon-static", "persistence", "inline-reply", "x-kde-display-appname"]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -75,19 +75,32 @@ impl Server {
             .find_map(|k| hints.get(*k).and_then(|v| String::try_from(v.clone()).ok()))
             .filter(|s| !s.is_empty());
         let picture = ["image-data", "image_data", "icon_data"].iter().find_map(|k| hints.get(*k).and_then(parse_image));
+        // Progress: the common `value` hint (0–100).
+        let progress = hints
+            .get("value")
+            .and_then(|v| i32::try_from(v).ok().or_else(|| u32::try_from(v).ok().map(|u| u as i32)))
+            .map(|v| v.clamp(0, 100) as u8);
+        let text_hint = |k: &str| hints.get(k).and_then(|v| String::try_from(v.clone()).ok()).filter(|s| !s.is_empty());
+        let actions = Notification::parse_actions(&actions);
+        let reply = actions.iter().find(|a| a.key == lapin_ux_core::notify::INLINE_REPLY).map(|a| lapin_ux_core::notify::Reply {
+            placeholder: text_hint("x-kde-reply-placeholder-text").unwrap_or_else(|| "Type a reply".into()),
+            submit: text_hint("x-kde-reply-submit-button-text").unwrap_or_else(|| if a.label.is_empty() { "Send".into() } else { a.label.clone() }),
+        });
         let n = Notification {
             id,
             app_name,
             app_icon: image.unwrap_or(app_icon),
             summary: strip_markup(&summary),
             body: strip_markup(&body),
-            actions: Notification::parse_actions(&actions),
+            actions,
             urgency,
             expire_timeout,
             transient,
             desktop_entry,
             received: std::time::SystemTime::now(),
             image: picture,
+            progress,
+            reply,
         };
         let _ = self.tx.send(Event::Notify(Box::new(n)));
         id
@@ -106,6 +119,10 @@ impl Server {
 
     #[zbus(signal)]
     pub async fn action_invoked(emitter: &SignalEmitter<'_>, id: u32, action_key: &str) -> zbus::Result<()>;
+
+    /// KDE's inline-reply extension.
+    #[zbus(signal)]
+    pub async fn notification_replied(emitter: &SignalEmitter<'_>, id: u32, text: &str) -> zbus::Result<()>;
 
     #[zbus(signal)]
     pub async fn activation_token(emitter: &SignalEmitter<'_>, id: u32, activation_token: &str) -> zbus::Result<()>;
@@ -216,6 +233,13 @@ pub async fn emit_closed(conn: zbus::Connection, id: u32, reason: CloseReason) {
         && let Err(err) = Server::notification_closed(&e, id, reason as u32).await
     {
         tracing::warn!("NotificationClosed: {err}");
+    }
+}
+
+pub async fn emit_reply(conn: zbus::Connection, id: u32, text: String) {
+    let Ok(e) = emitter(&conn).await else { return };
+    if let Err(err) = Server::notification_replied(&e, id, &text).await {
+        tracing::warn!("NotificationReplied: {err}");
     }
 }
 

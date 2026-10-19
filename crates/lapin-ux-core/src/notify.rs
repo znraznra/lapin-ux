@@ -54,7 +54,21 @@ pub struct Notification {
     pub received: SystemTime,
     /// Picture sent with the notification (e.g. a contact photo).
     pub image: Option<Image>,
+    /// Progress in percent (the `value` hint), e.g. a download.
+    pub progress: Option<u8>,
+    /// The app accepts a typed reply (KDE's `inline-reply` action).
+    pub reply: Option<Reply>,
 }
+
+/// Inline reply box texts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reply {
+    pub placeholder: String,
+    pub submit: String,
+}
+
+/// Action key apps use to offer an inline reply.
+pub const INLINE_REPLY: &str = "inline-reply";
 
 /// RGBA pixels, shared cheaply between the toast and the history.
 #[derive(Debug, Clone, PartialEq)]
@@ -382,6 +396,8 @@ mod tests {
             desktop_entry: None,
             received: SystemTime::UNIX_EPOCH,
             image: None,
+            progress: None,
+            reply: None,
         }
     }
 

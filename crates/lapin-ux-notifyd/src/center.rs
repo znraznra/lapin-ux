@@ -53,7 +53,7 @@ fn when(n: &Notification) -> String {
     lapin_ux_core::recent::relative(&t.to_rfc3339(), chrono::Utc::now())
 }
 
-fn entry(n: &Notification) -> Element<'_, Message> {
+fn entry<'a>(app: &'a App, n: &'a Notification) -> Element<'a, Message> {
     let mut texts = column::with_capacity(3).spacing(2).width(Length::Fill);
     if !n.summary.is_empty() {
         texts = texts.push(text::heading(n.summary.clone()));
@@ -74,11 +74,14 @@ fn entry(n: &Notification) -> Element<'_, Message> {
     .spacing(10)
     .align_y(Alignment::Start);
 
-    let mut body = column::with_capacity(2).spacing(8).push(line);
+    let mut body = column::with_capacity(4).spacing(8).push(line);
+    for e in crate::extras(app, n) {
+        body = body.push(e);
+    }
     let buttons: Vec<Element<'_, Message>> = n
         .actions
         .iter()
-        .filter(|a| a.key != "default")
+        .filter(|a| a.key != "default" && a.key != lapin_ux_core::notify::INLINE_REPLY)
         .take(3)
         .map(|a| button::standard(a.label.clone()).width(Length::Fill).on_press(Message::Invoke(n.id, a.key.clone())).into())
         .collect();
@@ -141,7 +144,7 @@ fn notifications(app: &App) -> Element<'_, Message> {
         .align_y(Alignment::Center);
         let mut g = column::with_capacity(items.len() + 1).spacing(6).push(title);
         for n in items {
-            g = g.push(entry(n));
+            g = g.push(entry(app, n));
         }
         list = list.push(g);
     }
