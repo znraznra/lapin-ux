@@ -141,7 +141,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 9;
+pub const DEFAULTS_VERSION: u32 = 10;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -231,6 +231,18 @@ fn apply_activation_policy() -> Result<bool, cosmic_config::Error> {
 /// Defaults that newer releases add for people who already ran an older one.
 pub fn apply_upgrade(from: u32) {
     tracing::info!(from, to = DEFAULTS_VERSION, "upgrading defaults");
+    if from < 10 {
+        match apply_font() {
+            Ok(true) => tracing::info!("interface font is now {UI_FONT}"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("could not update the interface font: {e}"),
+        }
+        match apply_icon_theme(ensure_mode()) {
+            Ok(true) => tracing::info!("icon theme is now Lapin UX's"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("could not update the icon theme: {e}"),
+        }
+    }
     if from < 9 {
         match apply_activation_policy() {
             Ok(true) => tracing::info!("apps on other desktops now ask for attention"),
@@ -245,8 +257,16 @@ pub fn apply_upgrade(from: u32) {
     }
 }
 
-/// Interface font for every libcosmic app (shell, settings, files…).
-pub const UI_FONT: &str = "Inter";
+/// Interface font for every libcosmic app (shell, settings, files…):
+/// Selawik (Microsoft's open-source font, OFL-1.1), bundled with Lapin UX.
+pub const UI_FONT: &str = "Selawik";
+/// Used when Selawik isn't installed (it only covers Latin scripts anyway;
+/// other scripts fall back automatically).
+const FALLBACK_UI_FONT: &str = "Inter";
+/// Icon themes: Fluent UI System Icons for symbolic icons on top of the
+/// Win11 icon theme for apps (see data/icons and the README).
+pub const ICON_THEME_LIGHT: &str = "Lapin-UX";
+pub const ICON_THEME_DARK: &str = "Lapin-UX-dark";
 
 fn font_installed(family: &str) -> bool {
     std::process::Command::new("fc-list")
@@ -256,23 +276,99 @@ fn font_installed(family: &str) -> bool {
         .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
 }
 
-/// Switch the interface font to Inter, unless it isn't installed or the
-/// user already picked a font of their own.
+/// Switch the interface font to Selawik (or Inter if it's missing), unless
+/// the user already picked a font of their own. An earlier Lapin UX default
+/// (Inter) counts as ours and is replaced.
 fn apply_font() -> Result<bool, cosmic_config::Error> {
     use cosmic::config::CosmicTk;
-    if !font_installed(UI_FONT) {
-        tracing::info!("{UI_FONT} is not installed; keeping the default interface font");
+    let family = if font_installed(UI_FONT) {
+        UI_FONT
+    } else if font_installed(FALLBACK_UI_FONT) {
+        FALLBACK_UI_FONT
+    } else {
+        tracing::info!("neither {UI_FONT} nor {FALLBACK_UI_FONT} is installed; keeping the default interface font");
+        return Ok(false);
+    };
+    let cfg = CosmicTk::config()?;
+    let mut tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
+    let current = tk.interface_font.family.clone();
+    let ours = current == CosmicTk::default().interface_font.family || current == FALLBACK_UI_FONT || current == UI_FONT;
+    if !ours {
+        tracing::info!(family = %current, "user chose an interface font; leaving it");
+        return Ok(false);
+    }
+    if current == family {
+        return Ok(false);
+    }
+    tk.interface_font.family = family.to_string();
+    cfg.set("interface_font", tk.interface_font)?;
+    gsettings("font-name", &format!("{family} 10"));
+    Ok(true)
+}
+
+fn icon_theme_installed(name: &str) -> bool {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("XDG_DATA_DIRS")
+        .map(|d| std::env::split_paths(&d).collect())
+        .unwrap_or_else(|| vec![PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")]);
+    if let Some(h) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))) {
+        dirs.insert(0, h);
+    }
+    dirs.iter().any(|d| d.join("icons").join(name).join("index.theme").exists())
+}
+
+/// Use Lapin UX's icon theme (light or dark to match the mode) unless the
+/// user picked another one.
+fn apply_icon_theme(dark: bool) -> Result<bool, cosmic_config::Error> {
+    use cosmic::config::CosmicTk;
+    let want = if dark { ICON_THEME_DARK } else { ICON_THEME_LIGHT };
+    if !icon_theme_installed(want) {
+        tracing::info!("{want} icon theme is not installed; keeping the default icons");
         return Ok(false);
     }
     let cfg = CosmicTk::config()?;
-    let mut tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
-    if tk.interface_font.family != CosmicTk::default().interface_font.family {
-        tracing::info!(family = %tk.interface_font.family, "user chose an interface font; leaving it");
+    let tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
+    let current = tk.icon_theme.clone();
+    let ours = current == CosmicTk::default().icon_theme || current == ICON_THEME_LIGHT || current == ICON_THEME_DARK;
+    if !ours || current == want {
         return Ok(false);
     }
-    tk.interface_font.family = UI_FONT.to_string();
-    cfg.set("interface_font", tk.interface_font)?;
+    cfg.set("icon_theme", want.to_string())?;
+    gsettings("icon-theme", want);
     Ok(true)
+}
+
+/// Keep our icon theme's light/dark variant in step with the theme mode
+/// (called at every start; only touches our own themes).
+/// The icon theme as configured now (the toolkit's copy is read once at start).
+pub fn configured_icon_theme() -> String {
+    use cosmic::config::CosmicTk;
+    match CosmicTk::config() {
+        Ok(cfg) => CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk).icon_theme,
+        Err(_) => cosmic::config::icon_theme(),
+    }
+}
+
+pub fn sync_icon_variant() {
+    use cosmic::config::CosmicTk;
+    let Ok(cfg) = CosmicTk::config() else { return };
+    let tk = CosmicTk::get_entry(&cfg).unwrap_or_else(|(_, tk)| tk);
+    // Someone who picked another theme (even COSMIC's own) keeps it.
+    if tk.icon_theme != ICON_THEME_LIGHT && tk.icon_theme != ICON_THEME_DARK {
+        return;
+    }
+    let dark = ensure_mode();
+    if let Err(e) = apply_icon_theme(dark) {
+        tracing::warn!("could not set the icon theme: {e}");
+    }
+}
+
+/// GTK apps read these from GSettings (best effort; no-op without gsettings).
+fn gsettings(key: &str, value: &str) {
+    let _ = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", key, value])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 fn cfg_path(id: &str) -> PathBuf {
@@ -305,6 +401,7 @@ pub fn apply_first_run() {
         ("light theme", apply_theme_variant(false)),
         ("wallpaper", apply_wallpaper(dark)),
         ("interface font", apply_font()),
+        ("icon theme", apply_icon_theme(dark)),
         ("Super key", apply_shortcuts()),
         ("keyboard shortcuts", apply_keybindings()),
         ("focus requests", apply_activation_policy()),

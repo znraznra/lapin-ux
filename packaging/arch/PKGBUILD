@@ -13,7 +13,10 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
 arch=('x86_64' 'aarch64')
-license=('GPL-3.0-only')
+# Our code: GPL-3.0. Bundled third-party assets keep their own licenses:
+# Selawik (OFL-1.1, Microsoft), Fluent UI System Icons (MIT, Microsoft),
+# Win11 icon theme (GPL-3.0, yeyushengfan258).
+license=('GPL-3.0-only' 'OFL-1.1' 'MIT')
 depends=(
     # Compositor and reused, unbranded COSMIC services
     'cosmic-comp'
@@ -27,7 +30,7 @@ depends=(
     'cosmic-icon-theme'
     'adwaita-icon-theme'       # battery and power-mode icons missing from cosmic-icon-theme
     'xdg-desktop-portal-cosmic'
-    'inter-font'               # interface font
+    'inter-font'               # fallback interface font (Selawik is bundled)
     'noto-fonts-emoji'         # colour emoji in the emoji panel and apps
     'fontconfig'
     # Runtime libraries
@@ -52,9 +55,13 @@ optdepends=(
     'localsearch: search inside documents from Start'
     'accountsservice: changing the account picture'
 )
-makedepends=('cargo' 'git' 'python' 'python-numpy' 'python-pillow')
+makedepends=('cargo' 'git' 'python' 'python-numpy' 'python-pillow' 'gtk-update-icon-cache')
+# Default app icons: Win11 icon theme by yeyushengfan258 (GPL-3.0), pinned.
+_win11_commit=a5b460a407da143b32f19a503d7fcebb3edf2371
+source=("win11-icon-theme::git+https://github.com/yeyushengfan258/Win11-icon-theme.git#commit=${_win11_commit}")
+sha256sums=('SKIP')
 provides=('lapin-ux-desktop')
-conflicts=('lapin-ux-desktop')
+conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git')
 options=('!lto')
 
 _src="$startdir/../.."
@@ -94,4 +101,19 @@ package() {
     install -Dm644 data/wallpapers/lapin-ux-light.jpg "$pkgdir/usr/share/backgrounds/lapin-ux/lapin-ux-light.jpg"
     install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
     install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+    # Interface font: Selawik (OFL-1.1, Microsoft), unmodified.
+    install -Dm644 -t "$pkgdir/usr/share/fonts/lapin-ux-selawik" data/fonts/selawik/*.ttf
+    install -Dm644 data/fonts/selawik/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/Selawik-OFL.txt"
+
+    # Symbolic icons: Fluent UI System Icons (MIT, Microsoft), see tools/make-fluent-icons.py.
+    mkdir -p "$pkgdir/usr/share/icons"
+    cp -a data/icons/Lapin-UX data/icons/Lapin-UX-dark "$pkgdir/usr/share/icons/"
+    install -Dm644 data/icons/Lapin-UX/LICENSE-fluentui-system-icons \
+        "$pkgdir/usr/share/licenses/$pkgname/Fluent-UI-System-Icons-MIT.txt"
+
+    # App icons: Win11 icon theme (GPL-3.0, yeyushengfan258), its own installer.
+    (cd "$srcdir/win11-icon-theme" && ./install.sh -d "$pkgdir/usr/share/icons" >/dev/null)
+    rm -f "$pkgdir"/usr/share/icons/Win11*/icon-theme.cache
+    install -Dm644 "$srcdir/win11-icon-theme/COPYING" "$pkgdir/usr/share/licenses/$pkgname/Win11-icon-theme-GPL-3.0.txt"
 }

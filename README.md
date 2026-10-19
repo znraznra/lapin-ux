@@ -9,9 +9,12 @@ toasts in the bottom-right corner, a system tray, and the keyboard shortcuts
 people already know. Written in Rust with [libcosmic]/iced, running on the
 COSMIC compositor. Arch Linux first.
 
-> Lapin UX matches *behaviour, layout and feel*. It contains no Microsoft
-> artwork, fonts, names or logos; the Start mark, wallpapers and icons in
-> `data/` are original.
+> Lapin UX matches *behaviour, layout and feel*. Everything it ships is open
+> source: its own code is GPL-3.0, and the third-party font and icons it uses
+> by default (Selawik, Fluent UI System Icons, the Win11 icon theme) are used
+> under their own open-source licences, with all trademarks belonging to their
+> owners. Lapin UX is an independent project, not affiliated with or endorsed
+> by Microsoft. See [Third-party assets and trademarks](#third-party-assets-and-trademarks).
 
 | | |
 |---|---|
@@ -153,7 +156,12 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
-- Font: Inter for the whole interface (if you haven't already picked a font).
+- Font: Selawik for the whole interface (Inter if Selawik isn't installed;
+  only if you haven't already picked a font).
+- Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode):
+  Fluent UI System Icons for symbolic icons (status, actions, places), with
+  app, folder and file icons from the Win11 icon theme. Only replaces COSMIC's
+  default icon theme, never one you picked.
 - Wallpaper: original light/dark artwork.
 - Keyboard: Super opens Start, plus
 
@@ -221,7 +229,7 @@ All settings use cosmic-config and apply live:
 ```sh
 sudo pacman -S --needed base-devel rust python-numpy python-pillow \
     cosmic-comp cosmic-settings-daemon cosmic-bg cosmic-osd cosmic-idle cosmic-greeter \
-    cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font
+    cosmic-launcher cosmic-screenshot cosmic-icon-theme xdg-desktop-portal-cosmic inter-font gtk-update-icon-cache
 cd packaging/arch
 makepkg -si
 ```
@@ -231,6 +239,11 @@ Optional, for snap layouts and taskbar flashing:
 ```sh
 cd packaging/lapin-ux-comp && makepkg -si
 ```
+
+The package bundles Selawik and the Lapin-UX icon themes, and fetches the
+Win11 icon theme from its upstream repository at build time (pinned commit)
+and installs it unmodified. It replaces any separately installed
+`win11-icon-theme` package.
 
 Log out, pick **Lapin UX** in your display manager's session list, log in.
 Uninstall with `sudo pacman -R lapin-ux-desktop-git`.
@@ -246,6 +259,9 @@ XDG_CONFIG_HOME="$(mktemp -d)" PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTO
   dbus-run-session -- target/debug/lapin-ux-session
 ```
 
+To see the default font and icons in this mode, install them into your
+home first with `tools/install-user-assets.sh` (undo with `--remove`).
+
 cosmic-comp detects the parent session and opens as a window containing a
 full Lapin UX desktop. Close the window (or `pkill lapin-ux-session`) to stop.
 
@@ -259,6 +275,7 @@ cargo clippy --workspace   # clean at the time of writing
 RUST_LOG=lapin_ux_shell=debug target/debug/lapin-ux-shell   # run the shell alone in a session
 target/debug/lapin-ux-shell start                          # toggle Start in the running shell
 python3 tools/make-wallpaper.py                          # re-render wallpapers
+python3 tools/make-fluent-icons.py <fluentui-system-icons checkout>   # regenerate data/icons/Lapin-UX*
 ```
 
 `lapin-ux-core` holds anything that can be tested without a display; put new
@@ -281,7 +298,38 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 
 ## License
 
+Lapin UX's own code and original artwork (Start mark, wallpapers) are
 GPL-3.0-only. Window tracking, the tray watcher/menus and the session start
 script are adapted from System76's GPL-3.0 COSMIC projects; see file headers.
+
+## Third-party assets and trademarks
+
+Lapin UX uses the following open-source assets by default. Each is used under
+its own licence, which is shipped with it; nothing here changes or adds to
+those terms.
+
+| Asset | Used for | Licence | Where | Source |
+|---|---|---|---|---|
+| Selawik 1.01, © Microsoft Corporation | Interface font | SIL Open Font License 1.1 | `data/fonts/selawik/` (unmodified, licence in `OFL.txt`) | [microsoft/Selawik](https://github.com/microsoft/Selawik) |
+| Fluent UI System Icons, © Microsoft Corporation | Symbolic icons in `Lapin-UX` / `Lapin-UX-dark` | MIT | `data/icons/Lapin-UX/symbolic/` (renamed to freedesktop names and recoloured by `tools/make-fluent-icons.py`; licence in `LICENSE-fluentui-system-icons`) | [microsoft/fluentui-system-icons](https://github.com/microsoft/fluentui-system-icons) |
+| Win11 icon theme by yeyushengfan258 (based on Ubuntu's Yaru) | App, folder and file icons | GPL-3.0 | Not in this repository; fetched from upstream at package build time and installed unmodified | [yeyushengfan258/Win11-icon-theme](https://github.com/yeyushengfan258/Win11-icon-theme) |
+| Inter (optional fallback) | Interface font if Selawik is missing | SIL Open Font License 1.1 | Arch `inter-font` package | [rsms/inter](https://github.com/rsms/inter) |
+
+Installed packages put every licence in `/usr/share/licenses/lapin-ux-desktop-git/`.
+
+**Trademarks.** Microsoft, Windows, Windows 11, Fluent and Selawik are
+trademarks of Microsoft Corporation. "Selawik" is a Reserved Font Name under
+the OFL, so the font is shipped unmodified under its own name; a modified
+version would have to be renamed. Ubuntu and Yaru are trademarks of
+Canonical Ltd. COSMIC is a trademark of System76, Inc. Other product names and
+app icons in the Win11 theme belong to their respective owners. These names
+are used only to identify the assets and what Lapin UX is compatible with or
+inspired by; Lapin UX is an independent open-source project and is not
+affiliated with, sponsored or endorsed by Microsoft, Canonical, System76 or
+any other trademark owner. Lapin UX ships no Microsoft logos, Windows
+artwork or proprietary fonts.
+
+Don't want these defaults? Pick any other font or icon theme in COSMIC
+Settings; Lapin UX never overwrites your choice.
 
 [libcosmic]: https://github.com/pop-os/libcosmic

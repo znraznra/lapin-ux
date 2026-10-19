@@ -19,6 +19,7 @@ It only reads your system. If it lists missing packages it prints the
 
 ```sh
 cargo build                     # first build takes 10–20 minutes
+tools/install-user-assets.sh    # optional: Selawik + Lapin UX/Win11 icons in ~/.local/share (undo: --remove)
 export LAPIN_TEST="$(mktemp -d)"
 XDG_CONFIG_HOME="$LAPIN_TEST/config" XDG_STATE_HOME="$LAPIN_TEST/state" \
 XDG_CURRENT_DESKTOP=LapinUX:COSMIC PATH="$PWD/target/debug:$PATH" \
@@ -174,7 +175,10 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] Settings (gear): a Do not disturb schedule covering now turns it on; turning an app's Notifications off stops its notifications; Show banners off keeps them in the centre only
 
 ### Look and feel
-- [ ] Interface text uses the Inter font
+- [ ] Interface text uses the Selawik font (Inter if Selawik isn't installed)
+- [ ] Apps, folders and files use the Win11-style icons; tray, quick settings and menu glyphs are Fluent outline icons
+- [ ] Switching light/dark switches the icon theme between Lapin-UX and Lapin-UX-dark
+- [ ] An icon theme you picked yourself in COSMIC Settings is kept
 - [ ] Blue accent, rounded corners, Lapin UX wallpaper (first login only)
 - [ ] Light/dark switching (if you change it) updates the taskbar and Start
 

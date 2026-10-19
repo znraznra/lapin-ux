@@ -732,6 +732,9 @@ impl Application for Shell {
                 let _ = cfg.set_defaults_version(h, cfg.defaults_version);
             }
         }
+        crate::defaults::sync_icon_variant();
+        // The toolkit read the icon theme before the defaults above could set it.
+        cosmic::icon_theme::set_default(crate::defaults::configured_icon_theme());
         let state_handle = config::shell_state();
         let state: ShellState = config::load(state_handle.as_ref());
         let shell = Shell {
@@ -787,6 +790,13 @@ impl Application for Shell {
             item_context_at: Instant::now() - Duration::from_secs(10),
         };
         (shell, crate::account::check_switch_user())
+    }
+
+    fn system_theme_mode_update(&mut self, _keys: &[&'static str], _mode: &cosmic::cosmic_theme::ThemeMode) -> Task<Message> {
+        // Light/dark switched: switch between Lapin-UX and Lapin-UX-dark (if one of ours is in use).
+        tracing::debug!(dark = _mode.is_dark, "theme mode changed");
+        crate::defaults::sync_icon_variant();
+        Task::none()
     }
 
     fn view(&self) -> Element<'_, Message> {

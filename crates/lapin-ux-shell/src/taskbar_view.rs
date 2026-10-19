@@ -273,15 +273,14 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
         .on_exit(Message::Preview(crate::previews::PreviewMsg::ButtonHover(bar.id, b.app.clone(), false)));
 
     // A file dragged onto a running app's button brings that app forward.
-    let area: Element<'_, Message> = if b.running() {
-        let (enter, leave) = (b.app.clone(), b.app.clone());
+    // Every button gets the drop target, so the widget tree keeps the same
+    // shape when an app starts or quits (iced can't swap it in place).
+    let (enter, leave) = (b.app.clone(), b.app.clone());
+    let area: Element<'_, Message> =
         cosmic::widget::dnd_destination::dnd_destination(area, vec!["text/uri-list".into(), "text/plain".into()])
             .on_enter(move |_, _, _| Message::DragHover(enter.clone(), true))
             .on_leave(move || Message::DragHover(leave.clone(), false))
-            .into()
-    } else {
-        area.into()
-    };
+            .into();
     track(shell, rect_key(bar.id, &b.app), area)
 }
 
