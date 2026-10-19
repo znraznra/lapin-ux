@@ -58,6 +58,9 @@ pub struct Notification {
     pub progress: Option<u8>,
     /// The app accepts a typed reply (KDE's `inline-reply` action).
     pub reply: Option<Reply>,
+    /// Sound to play when it pops up (a sound theme name, or a file path);
+    /// `None` when the app asked for silence.
+    pub sound: Option<String>,
 }
 
 /// Inline reply box texts.
@@ -398,6 +401,7 @@ mod tests {
             image: None,
             progress: None,
             reply: None,
+            sound: None,
         }
     }
 

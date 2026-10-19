@@ -411,6 +411,7 @@ impl Shell {
                 });
             }
             QuickMsg::VolumeDone => {
+                lapin_ux_core::sound::play("audio-volume-change");
                 let v = q.volume.level;
                 return Task::future(async move {
                     backend::set_volume(v).await;

@@ -24,6 +24,7 @@ pub mod quick;
 pub mod recent;
 pub mod search;
 pub mod snap;
+pub mod sound;
 pub mod system;
 pub mod taskbar;
 pub mod thumb;

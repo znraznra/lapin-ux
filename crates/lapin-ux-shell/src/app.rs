@@ -722,6 +722,9 @@ async fn power_action(action: PowerAction) -> anyhow::Result<()> {
         return Ok(());
     }
     if action == PowerAction::SignOut {
+        // Let the sign-out sound play before the session ends.
+        lapin_ux_core::sound::play("desktop-logout");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         let conn = zbus::Connection::session().await?;
         conn.call_method(Some("dev.lapinux.Session"), "/dev/lapinux/Session", Some("dev.lapinux.Session"), "Exit", &())
             .await?;

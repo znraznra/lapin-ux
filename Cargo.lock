@@ -2965,6 +2965,7 @@ name = "lapin-ux-session"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lapin-ux-core",
  "rustix 1.1.5",
  "serde",
  "serde_json",

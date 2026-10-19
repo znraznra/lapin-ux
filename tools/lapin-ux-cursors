@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
+"""Install the "Cursor Concept W11 Tail HDPi" mouse pointers for this user.
+
+    lapin-ux-cursors [--dark] [--variant NAME] [--from DIR]
+
+Cursor design by JepriCreations — https://www.deviantart.com/jepricreations
+and https://jepricreations.com. Its author doesn't allow the cursor files to
+be redistributed, so Lapin UX doesn't ship them: this downloads the pack on
+your computer (from the copy at github.com/SullensCR/Windows-11-Hdpi-Tail-
+Cursor-Concept-by-jepriCreations, or a folder you give with --from),
+converts the Windows .cur/.ani files to an X cursor theme for your own use,
+installs it under ~/.local/share/icons and makes it your pointer.
+
+The pack keeps its author's name; it is not renamed or claimed as Lapin UX's.
+Needs Python's Pillow (python-pillow).
+"""
+import argparse
+import io
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import zipfile
+import urllib.request
+
+REPO_ZIP = "https://github.com/SullensCR/Windows-11-Hdpi-Tail-Cursor-Concept-by-jepriCreations/archive/refs/heads/main.zip"
+THEME_DIR = "Cursor-Concept-W11-Tail-HDPi-by-JepriCreations"
+THEME_NAME = "Cursor Concept W11 Tail HDPi (by JepriCreations)"
+
+# Windows role -> X cursor names (CSS names first, then legacy aliases).
+NAMES = {
+    "arrow": ["default", "left_ptr", "arrow", "top_left_arrow", "context-menu", "copy", "alias",
+              "dnd-copy", "dnd-link", "dnd-ask", "zoom-in", "zoom-out", "right_ptr"],
+    "help": ["help", "question_arrow", "whats_this", "left_ptr_help",
+             "5c6cd98b3f3ebcb1f9c7f1c204630408", "d9ce0ab605698f320427677b458ad60b"],
+    "appstarting": ["progress", "left_ptr_watch", "half-busy",
+                    "08e8e1c95fe2fc01f976f1e063a24ccd", "3ecb610c1bf2410f44200f48c40d3599"],
+    "wait": ["wait", "watch", "0426c94ea35c87780ff01dc239897213"],
+    "crosshair": ["crosshair", "cross", "tcross", "cell", "plus", "cross_reverse", "diamond_cross"],
+    "ibeam": ["text", "xterm", "ibeam", "vertical-text"],
+    "nwpen": ["pencil", "draft"],
+    "no": ["not-allowed", "no-drop", "dnd-no-drop", "forbidden", "crossed_circle", "circle",
+           "03b6e0fcb3499374a867c041f52298f0"],
+    "sizens": ["ns-resize", "n-resize", "s-resize", "row-resize", "size_ver", "sb_v_double_arrow",
+               "v_double_arrow", "top_side", "bottom_side", "split_v", "00008160000006810000408080010102"],
+    "sizewe": ["ew-resize", "e-resize", "w-resize", "col-resize", "size_hor", "sb_h_double_arrow",
+               "h_double_arrow", "left_side", "right_side", "split_h", "028006030e0e7ebffc7f7070c0600140"],
+    "sizenwse": ["nwse-resize", "nw-resize", "se-resize", "size_fdiag", "bd_double_arrow",
+                 "top_left_corner", "bottom_right_corner", "c7088f0f3e6c8088236ef8e1e3e70000"],
+    "sizenesw": ["nesw-resize", "ne-resize", "sw-resize", "size_bdiag", "fd_double_arrow",
+                 "top_right_corner", "bottom_left_corner", "fcf1c3c7cd4491d801f1e1c78f100000"],
+    "sizeall": ["move", "all-scroll", "fleur", "size_all", "dnd-move",
+                "4498f0e0c1937ffe01fd06f973665830", "9081237383d90e509aa00f00170e968f"],
+    "uparrow": ["up-arrow", "center_ptr", "sb_up_arrow"],
+    "hand": ["pointer", "hand", "hand1", "hand2", "pointing_hand", "grab", "grabbing", "openhand",
+             "closedhand", "e29285e634086352946a0e7090d73106", "9d800788f1b08800ae810202380a0822"],
+}
+
+
+def cur_images(data):
+    """Frames of a .cur file: (PIL image RGBA, hotspot x, hotspot y)."""
+    from PIL import Image
+    _, kind, count = struct.unpack_from("<HHH", data, 0)
+    out = []
+    for i in range(count):
+        w, h, _, _, hx, hy, size, offset = struct.unpack_from("<BBBBHHII", data, 6 + 16 * i)
+        blob = data[offset:offset + size]
+        if blob[:8] == b"\x89PNG\r\n\x1a\n":
+            img = Image.open(io.BytesIO(blob))
+        else:
+            # Wrap the single bitmap as a one-image .ico so Pillow decodes it.
+            ico = struct.pack("<HHH", 0, 1, 1) + struct.pack("<BBBBHHII", w, h, 0, 0, 1, 32, size, 22) + blob
+            img = Image.open(io.BytesIO(ico))
+        img = img.convert("RGBA")
+        out.append((img, hx, hy))
+    return out
+
+
+def ani_frames(data):
+    """Frames of an .ani file: list of (images of one frame, delay ms)."""
+    assert data[:4] == b"RIFF" and data[8:12] == b"ACON"
+    pos, icons, rates, seq, jif = 12, [], None, None, 6
+    def chunks(start, end):
+        p = start
+        while p + 8 <= end:
+            cid, size = data[p:p + 4], struct.unpack_from("<I", data, p + 4)[0]
+            yield cid, p + 8, size
+            p += 8 + size + (size & 1)
+    for cid, at, size in chunks(12, len(data)):
+        if cid == b"anih":
+            jif = struct.unpack_from("<I", data, at + 28)[0] or 6
+        elif cid == b"rate":
+            rates = list(struct.unpack_from("<%dI" % (size // 4), data, at))
+        elif cid == b"seq ":
+            seq = list(struct.unpack_from("<%dI" % (size // 4), data, at))
+        elif cid == b"LIST" and data[at:at + 4] == b"fram":
+            for c2, a2, s2 in chunks(at + 4, at + size):
+                if c2 == b"icon":
+                    icons.append(cur_images(data[a2:a2 + s2]))
+    order = seq or list(range(len(icons)))
+    frames = []
+    for n, idx in enumerate(order):
+        j = rates[n] if rates and n < len(rates) else jif
+        frames.append((icons[idx], max(1, round(j * 1000 / 60))))
+    return frames
+
+
+def xcursor(frames):
+    """Build an Xcursor file. frames: list of (images, delay)."""
+    chunks = []
+    for images, delay in frames:
+        for img, hx, hy in images:
+            w, h = img.size
+            nominal = max(1, round(w * 3 / 4))  # a 32 px Windows cursor is X size 24
+            raw = img.tobytes()
+            px = bytearray(len(raw))
+            for i in range(0, len(raw), 4):
+                r, g, b, a = raw[i], raw[i + 1], raw[i + 2], raw[i + 3]
+                px[i:i + 4] = (b * a // 255, g * a // 255, r * a // 255, a)
+            head = struct.pack("<IIIIIIIII", 36, 0xFFFD0002, nominal, 1, w, h, hx, hy, delay)
+            chunks.append((nominal, head + bytes(px)))
+    chunks.sort(key=lambda c: c[0])
+    ntoc = len(chunks)
+    out = bytearray(struct.pack("<4sIII", b"Xcur", 16, 0x10000, ntoc))
+    pos = 16 + 12 * ntoc
+    for nominal, body in chunks:
+        out += struct.pack("<III", 0xFFFD0002, nominal, pos)
+        pos += len(body)
+    for _, body in chunks:
+        out += body
+    return bytes(out)
+
+
+def fetch(dest):
+    print("Downloading the cursor pack…")
+    with urllib.request.urlopen(REPO_ZIP) as r:
+        zipfile.ZipFile(io.BytesIO(r.read())).extractall(dest)
+    for root, dirs, _ in os.walk(dest):
+        if "assets" in dirs:
+            return os.path.join(root, "assets")
+    sys.exit("The download doesn't contain the cursor files.")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dark", action="store_true", help="the dark (black) pointers instead of the light ones")
+    ap.add_argument("--variant", default="default", help="busy animation colour (default, classic, green, …)")
+    ap.add_argument("--from", dest="src", help="a folder that already holds the pack")
+    ap.add_argument("--no-default", action="store_true", help="install, but don't make it your pointer")
+    args = ap.parse_args()
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        sys.exit("Pillow is needed: sudo pacman -S python-pillow")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        assets = args.src
+        if assets and os.path.isdir(os.path.join(assets, "cursor", "assets")):
+            assets = os.path.join(assets, "cursor", "assets")
+        elif assets and os.path.isdir(os.path.join(assets, "assets")):
+            assets = os.path.join(assets, "assets")
+        if not assets:
+            assets = fetch(tmp)
+        theme = os.path.join(assets, "dark" if args.dark else "light")
+        variant = os.path.join(theme, "variants", args.variant)
+        if not os.path.isdir(variant):
+            variant = os.path.join(theme, "variants", "default")
+
+        data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        out = os.path.join(data_home, "icons", THEME_DIR)
+        cursors = os.path.join(out, "cursors")
+        os.makedirs(cursors, exist_ok=True)
+        for role, names in NAMES.items():
+            if role in ("wait", "appstarting"):
+                path = os.path.join(variant, role + ".ani")
+                with open(path, "rb") as f:
+                    blob = xcursor(ani_frames(f.read()))
+            else:
+                path = os.path.join(theme, role + ".cur")
+                with open(path, "rb") as f:
+                    blob = xcursor([(cur_images(f.read()), 0)])
+            with open(os.path.join(cursors, names[0]), "wb") as f:
+                f.write(blob)
+            for alias in names[1:]:
+                link = os.path.join(cursors, alias)
+                if os.path.lexists(link):
+                    os.remove(link)
+                os.symlink(names[0], link)
+        with open(os.path.join(out, "index.theme"), "w") as f:
+            f.write("[Icon Theme]\n"
+                    f"Name={THEME_NAME}\n"
+                    "Comment=Cursor design by JepriCreations (https://www.deviantart.com/jepricreations, "
+                    "https://jepricreations.com). Converted for personal use; not for redistribution.\n"
+                    "Inherits=Adwaita\n")
+        with open(os.path.join(out, "CREDITS"), "w") as f:
+            f.write("Cursor Concept W11 Tail HDPi — cursor design by JepriCreations.\n"
+                    "https://www.deviantart.com/jepricreations\nhttps://jepricreations.com\n"
+                    "The author doesn't allow the pack to be redistributed; this copy was made on this\n"
+                    "computer for its user's own use by lapin-ux-cursors.\n")
+        print(f"Installed {THEME_NAME} in {out}")
+
+    if args.no_default:
+        return
+    # The "default" cursor theme is what apps use when nothing else is set.
+    default = os.path.join(data_home, "icons", "default")
+    os.makedirs(default, exist_ok=True)
+    with open(os.path.join(default, "index.theme"), "w") as f:
+        f.write(f"[Icon Theme]\nName=Default\nInherits={THEME_DIR}\n")
+    subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", THEME_DIR],
+                   stderr=subprocess.DEVNULL, check=False)
+    print("It's now your mouse pointer (log out and back in for every app to pick it up).")
+
+
+if __name__ == "__main__":
+    main()

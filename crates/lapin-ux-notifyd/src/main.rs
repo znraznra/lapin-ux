@@ -159,7 +159,11 @@ impl App {
             image: None,
             progress: None,
             reply: None,
+            sound: Some("alarm-clock-elapsed".into()),
         };
+        if let Some(sound) = &n.sound {
+            play_sound(sound);
+        }
         self.queue.push(n, Instant::now());
         Task::batch([self.sync_surface(), self.publish()])
     }
@@ -394,6 +398,9 @@ impl Application for App {
                         // Shown directly in the open centre; no toast.
                         self.queue.push_silent(*n);
                         return Task::none();
+                    }
+                    if let Some(sound) = &n.sound {
+                        play_sound(sound);
                     }
                     self.queue.push(*n, now);
                     return Task::batch([self.sync_surface(), self.publish()]);
@@ -676,4 +683,16 @@ fn main() -> cosmic::iced::Result {
         Settings::default().antialiasing(true).client_decorations(true).no_main_window(true).exit_on_close(false),
         (),
     )
+}
+
+/// A theme sound name, or a file an app named with `sound-file`.
+fn play_sound(sound: &str) {
+    if sound.starts_with('/') {
+        let file = sound.to_string();
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("pw-play").arg(file).status();
+        });
+    } else {
+        lapin_ux_core::sound::play(sound);
+    }
 }

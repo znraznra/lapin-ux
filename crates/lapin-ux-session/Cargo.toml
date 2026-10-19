@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+lapin-ux-core.workspace = true
 anyhow.workspace = true
 rustix = { version = "1", features = ["fs", "process"] }
 serde.workspace = true

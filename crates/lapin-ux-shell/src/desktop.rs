@@ -821,6 +821,7 @@ impl Shell {
                 return self.open_popup(id, &key, PopupKind::ConfirmEmptyTrash);
             }
             DesktopMsg::EmptyTrash => {
+                lapin_ux_core::sound::play("trash-empty");
                 let close = self.close_popup();
                 let trash = data_home().join("Trash");
                 return Task::batch([

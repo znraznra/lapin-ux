@@ -30,5 +30,19 @@ echo "Building Lapin UX (the first build takes a while)…"
 cd packaging/arch
 makepkg -si --noconfirm --needed
 
+# Optional Windows 11-style pointers. Their author (JepriCreations) doesn't
+# allow the files to be redistributed, so they're downloaded and converted
+# on this computer, for this user, only if you say yes.
+echo
+echo "Optional: \"Cursor Concept W11 Tail HDPi\" mouse pointers, designed by JepriCreations"
+echo "(https://www.deviantart.com/jepricreations). They're downloaded and converted for your"
+echo "own use; Lapin UX can't ship them. You can also do this later with: lapin-ux-cursors"
+if [[ -t 0 ]]; then
+    read -r -p "Install them now? [y/N] " answer
+    if [[ $answer == [yY]* ]]; then
+        lapin-ux-cursors || echo "Couldn't install the pointers; try again later with lapin-ux-cursors."
+    fi
+fi
+
 echo
 echo "Done. Log out, choose \"Lapin UX\" in the session list and log in."

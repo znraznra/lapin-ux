@@ -1,0 +1,8 @@
+Borealis sound theme 0.9a by Ivica Ico Bukvic (2004), Artistic License with
+the author's note in COPYING (free to use and redistribute; commercial use
+only together with GPL/LGPL software — Lapin UX is GPL-3.0).
+
+Standard version: http://ico.bukvic.net/Linux/Borealis_soundtheme/
+These files are taken unchanged from Ubuntu's borealis-sound-theme
+0.9a-0ubuntu1 package, which adds freedesktop sound-naming links
+(desktop-login.oga -> Startup1_1.ogg, …).

@@ -82,6 +82,13 @@ impl Server {
             .map(|v| v.clamp(0, 100) as u8);
         let text_hint = |k: &str| hints.get(k).and_then(|v| String::try_from(v.clone()).ok()).filter(|s| !s.is_empty());
         let actions = Notification::parse_actions(&actions);
+        // Sound: none if asked; else the app's own, else the theme's.
+        let suppress = hints.get("suppress-sound").and_then(|v| bool::try_from(v).ok()).unwrap_or(false);
+        let sound = (!suppress).then(|| {
+            text_hint("sound-file").or_else(|| text_hint("sound-name")).unwrap_or_else(|| {
+                if urgency == Urgency::Critical { "dialog-warning".into() } else { "message-new-instant".into() }
+            })
+        });
         let reply = actions.iter().find(|a| a.key == lapin_ux_core::notify::INLINE_REPLY).map(|a| lapin_ux_core::notify::Reply {
             placeholder: text_hint("x-kde-reply-placeholder-text").unwrap_or_else(|| "Type a reply".into()),
             submit: text_hint("x-kde-reply-submit-button-text").unwrap_or_else(|| if a.label.is_empty() { "Send".into() } else { a.label.clone() }),
@@ -101,6 +108,7 @@ impl Server {
             image: picture,
             progress,
             reply,
+            sound,
         };
         let _ = self.tx.send(Event::Notify(Box::new(n)));
         id

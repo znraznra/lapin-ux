@@ -87,6 +87,11 @@ async fn main() -> Result<()> {
     if !nested {
         export_environment(&env).await;
         systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
+        // The sign-in sound, once the audio server has had a moment.
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            lapin_ux_core::sound::play("desktop-login");
+        });
     }
 
     let (stop_tx, stop_rx) = watch::channel(false);
