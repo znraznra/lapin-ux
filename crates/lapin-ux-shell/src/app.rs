@@ -779,6 +779,14 @@ impl Application for Shell {
                 let _ = cfg.set_defaults_version(h, cfg.defaults_version);
             }
         }
+        // First sign-in: the short setup (network, light or dark, pointers).
+        if !cfg.welcomed && std::env::var_os("LAPIN_UX_NO_WELCOME").is_none() && crate::account::which("lapin-ux-welcome") {
+            cfg.welcomed = true;
+            if let Some(h) = &config_handle {
+                let _ = cfg.set_welcomed(h, true);
+            }
+            let _ = std::process::Command::new("lapin-ux-welcome").spawn();
+        }
         crate::defaults::sync_icon_variant();
         crate::defaults::enforce_font_at_start();
         // The toolkit read the icon theme before the defaults above could set it.

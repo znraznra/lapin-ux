@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Get Started
+Comment=Set up network, light or dark mode and pointers
+Exec=lapin-ux-welcome
+Icon=dev.lapinux.Shell
+Categories=System;
+StartupNotify=true
+StartupWMClass=dev.lapinux.Welcome

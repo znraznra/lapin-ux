@@ -1,0 +1,10 @@
+[package]
+name = "lapin-ux-welcome"
+description = "Lapin UX first-run setup: network, light or dark, pointers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libcosmic.workspace = true
+tokio.workspace = true

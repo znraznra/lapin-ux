@@ -78,6 +78,8 @@ pub struct ShellConfig {
     pub desktop_wallpapers: Vec<String>,
     /// The usual wallpaper, remembered while a desktop shows its own.
     pub base_wallpaper: String,
+    /// First-run setup (lapin-ux-welcome) has been offered.
+    pub welcomed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -117,13 +117,14 @@ package_lapin-ux-desktop-git() {
         'localsearch'              # search inside documents from Start
         'gnome-keyring'            # saved passwords and SSH keys
     )
+    optdepends=('fprintd: fingerprint sign-in (enrol with fprintd-enroll; the sign-in panel shows its prompts)')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install
 
     cd "$_src"
     local bin
-    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-taskmgr lapin-ux-control lapin-ux-update; do
+    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-taskmgr lapin-ux-control lapin-ux-update lapin-ux-welcome; do
         install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
     done
     install -Dm755 data/session/start-lapin-ux        "$pkgdir/usr/bin/start-lapin-ux"
