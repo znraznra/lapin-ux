@@ -238,3 +238,152 @@ mod tests {
         std::fs::remove_dir_all(d).unwrap();
     }
 }
+
+/// Files on the clipboard: cut (move) or copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileClip {
+    pub cut: bool,
+    pub paths: Vec<PathBuf>,
+}
+
+/// `x-special/gnome-copied-files`: "copy" or "cut", then one URI per line.
+pub fn gnome_copied_files(clip: &FileClip) -> String {
+    let mut s = String::from(if clip.cut { "cut" } else { "copy" });
+    for p in &clip.paths {
+        s.push('\n');
+        s.push_str(&file_uri(p));
+    }
+    s
+}
+
+/// `text/uri-list`, CRLF-separated as the spec says.
+pub fn uri_list(paths: &[PathBuf]) -> String {
+    paths.iter().map(|p| file_uri(p) + "\r\n").collect()
+}
+
+pub fn file_uri(p: &Path) -> String {
+    let mut s = String::from("file://");
+    for b in p.to_string_lossy().bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => s.push(b as char),
+            _ => s.push_str(&format!("%{b:02X}")),
+        }
+    }
+    s
+}
+
+/// Read a clipboard offer of files (gnome-copied-files or a uri-list of
+/// local files). None if it isn't files.
+pub fn parse_file_clip(mime: &str, text: &str) -> Option<FileClip> {
+    let mut lines = text.lines().map(|l| l.trim_matches(['\r', '\0', ' '])).filter(|l| !l.is_empty() && !l.starts_with('#'));
+    let cut = if mime == "x-special/gnome-copied-files" {
+        match lines.next()? {
+            "cut" => true,
+            "copy" => false,
+            _ => return None,
+        }
+    } else {
+        false
+    };
+    let paths: Option<Vec<PathBuf>> = lines.map(crate::recent::file_uri_to_path).collect();
+    let paths = paths?;
+    (!paths.is_empty()).then_some(FileClip { cut, paths })
+}
+
+/// Where a pasted `name` goes in `dir`: the same name if free, else
+/// "name - Copy.ext", "name - Copy (2).ext"…
+pub fn paste_name(dir: &Path, name: &str, is_dir: bool) -> String {
+    if !dir.join(name).exists() {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !is_dir && !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| if n == 1 { format!("{stem} - Copy{ext}") } else { format!("{stem} - Copy ({n}){ext}") })
+        .find(|c| !dir.join(c).exists())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Copy a file or folder (recursively, symlinks as links).
+pub fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(from)?;
+        return std::os::unix::fs::symlink(target, to);
+    }
+    if meta.is_dir() {
+        std::fs::create_dir(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            copy_tree(&e.path(), &to.join(e.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(from, to).map(|_| ())
+}
+
+/// Put `src` into `dir` (copy, or move when `cut`). Moving within the same
+/// folder does nothing; copying there makes "… - Copy". Returns the new path.
+pub fn paste_one(src: &Path, dir: &Path, cut: bool) -> std::io::Result<PathBuf> {
+    let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+    if cut && src.parent() == Some(dir) {
+        return Ok(src.to_path_buf());
+    }
+    // Never paste a folder into itself.
+    if src.is_dir() && dir.starts_with(src) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "can't put a folder inside itself"));
+    }
+    let target = dir.join(paste_name(dir, &name, src.is_dir()));
+    if cut {
+        match std::fs::rename(src, &target) {
+            Ok(()) => return Ok(target),
+            // Another filesystem: copy, then remove the original.
+            Err(e) if e.raw_os_error() == Some(18) => {
+                copy_tree(src, &target)?;
+                if src.is_dir() { std::fs::remove_dir_all(src)? } else { std::fs::remove_file(src)? }
+                return Ok(target);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    copy_tree(src, &target)?;
+    Ok(target)
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn file_clipboard() {
+        let c = FileClip { cut: true, paths: vec!["/home/u/My File.txt".into(), "/home/u/b".into()] };
+        let s = gnome_copied_files(&c);
+        assert_eq!(s, "cut\nfile:///home/u/My%20File.txt\nfile:///home/u/b");
+        assert_eq!(parse_file_clip("x-special/gnome-copied-files", &s), Some(c.clone()));
+        assert_eq!(parse_file_clip("text/uri-list", &uri_list(&c.paths)), Some(FileClip { cut: false, paths: c.paths.clone() }));
+        assert_eq!(parse_file_clip("text/uri-list", "https://example.org/\r\n"), None);
+    }
+
+    #[test]
+    fn pasting() {
+        let d = std::env::temp_dir().join(format!("lapin-paste-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (a, b) = (d.join("a"), d.join("b"));
+        std::fs::create_dir_all(a.join("sub")).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("notes.txt"), b"hi").unwrap();
+        std::fs::write(a.join("sub/x"), b"x").unwrap();
+        // Copy into the same folder → "- Copy".
+        assert_eq!(paste_one(&a.join("notes.txt"), &a, false).unwrap(), a.join("notes - Copy.txt"));
+        assert_eq!(paste_one(&a.join("notes.txt"), &a, false).unwrap(), a.join("notes - Copy (2).txt"));
+        // Folder copy is recursive; folder into itself is refused.
+        assert!(paste_one(&a.join("sub"), &b, false).unwrap().join("x").exists());
+        assert!(paste_one(&a, &a.join("sub"), false).is_err());
+        // Cut moves.
+        let moved = paste_one(&a.join("notes.txt"), &b, true).unwrap();
+        assert!(moved.exists() && !a.join("notes.txt").exists());
+        std::fs::remove_dir_all(d).unwrap();
+    }
+}

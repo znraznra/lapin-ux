@@ -92,6 +92,8 @@ pub enum PopupKind {
     TrayOverflow,
     /// The account button's menu in Start.
     Account,
+    /// "Permanently delete everything in the Recycle Bin?"
+    ConfirmEmptyTrash,
     /// Right-click on a pinned file, site or folder in Start.
     PinContext(usize),
     /// Right-click on empty taskbar space.
@@ -193,6 +195,11 @@ pub enum Message {
     Pin(String),
     Unpin(String),
     PinStart(String),
+    ClosePopup,
+    /// Modifier keys changed (on whichever surface has the keyboard).
+    Modifiers(window::Id, keyboard::Modifiers),
+    /// Ctrl + a letter key.
+    CtrlKey(window::Id, String),
     Account(crate::account::AccountMsg),
     /// Content-search hits for a query.
     ContentHits(String, Vec<std::path::PathBuf>),
@@ -270,6 +277,8 @@ pub struct Shell {
     /// Account picture chosen this session (AccountsService keeps it too).
     pub avatar: Option<std::path::PathBuf>,
     pub can_switch_user: bool,
+    pub mods: keyboard::Modifiers,
+    ctrl_released: Instant,
     /// A file being dragged over a taskbar button: (app, serial).
     pub drag_hover: Option<(String, u64)>,
     pub drag_serial: u64,
@@ -738,6 +747,8 @@ impl Application for Shell {
             drag_hover: None,
             avatar: None,
             can_switch_user: false,
+            mods: keyboard::Modifiers::empty(),
+            ctrl_released: Instant::now() - Duration::from_secs(10),
             drag_serial: 0,
             hover: None,
             hover_gen: 0,
@@ -856,6 +867,16 @@ impl Application for Shell {
                     wayland::Event::Popup(PopupEvent::Done, _, id) => Some(Message::PopupClosed(id)),
                     _ => None,
                 },
+                // Letter keys; whether Ctrl is held comes from the tracked modifier
+                // state (some compositors leave the event's own modifiers empty).
+                cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Character(c), modifiers, .. }) => {
+                    let k: String = c
+                        .chars()
+                        .map(|ch| if (ch as u32) < 0x20 { char::from(ch as u8 + 0x60) } else { ch })
+                        .collect::<String>()
+                        .to_lowercase();
+                    Some(Message::CtrlKey(window, if modifiers.control() { format!("^{k}") } else { k }))
+                }
                 cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(named), .. }) => {
                     Some(Message::KeyNamed(window, named))
                 }
@@ -865,9 +886,7 @@ impl Application for Shell {
                 cosmic::iced::Event::Mouse(mouse::Event::CursorLeft) => {
                     Some(Message::Preview(crate::previews::PreviewMsg::SurfaceLeft(window)))
                 }
-                cosmic::iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => {
-                    Some(Message::Preview(crate::previews::PreviewMsg::Alt(window, m.alt())))
-                }
+                cosmic::iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => Some(Message::Modifiers(window, m)),
                 cosmic::iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
                     Some(Message::BarPointer(window, Pointer::Move(position)))
                 }
@@ -1053,6 +1072,15 @@ impl Shell {
             Message::BarPointer(id, ev) => {
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
                     return self.start_pointer(ev);
+                }
+                // The desktop's pointer comes from here too: icons capture
+                // motion over themselves, which a box selection still needs.
+                if self.desktop.as_ref().is_some_and(|d| d.id == id) {
+                    return match ev {
+                        Pointer::Move(p) => self.update_desktop(crate::desktop::DesktopMsg::Move(p)),
+                        Pointer::Up => self.update_desktop(crate::desktop::DesktopMsg::Release),
+                        Pointer::Down => Task::none(),
+                    };
                 }
                 return self.bar_pointer(id, ev);
             }
@@ -1251,6 +1279,25 @@ impl Shell {
                 return self.close_popup();
             }
             Message::Pins(m) => return self.update_pins(m),
+            Message::ClosePopup => return self.close_popup(),
+            Message::Modifiers(w, m) => {
+                if self.mods.control() && !m.control() {
+                    self.ctrl_released = Instant::now();
+                }
+                self.mods = m;
+                return self.update(Message::Preview(crate::previews::PreviewMsg::Alt(w, m.alt())));
+            }
+            Message::CtrlKey(w, k) => {
+                let (forced, k) = match k.strip_prefix('^') {
+                    Some(k) => (true, k.to_string()),
+                    None => (false, k),
+                };
+                // The letter can be reported just after Ctrl goes up.
+                let ctrl = forced || self.mods.control() || self.ctrl_released.elapsed() < Duration::from_millis(120);
+                if ctrl && self.desktop.as_ref().is_some_and(|d| d.id == w) {
+                    return self.update_desktop(crate::desktop::DesktopMsg::Ctrl(k));
+                }
+            }
             Message::Account(m) => return self.update_account(m),
             Message::ContentHits(q, hits) => {
                 if let Some(s) = &mut self.start

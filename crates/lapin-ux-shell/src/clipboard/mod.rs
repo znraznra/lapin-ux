@@ -46,6 +46,8 @@ pub struct ClipState {
     handle: Option<Arc<wl::Handle>>,
     pub unavailable: Option<String>,
     restored: bool,
+    /// Files on the clipboard (copied or cut here or in a file manager).
+    pub files: Option<lapin_ux_core::desktop::FileClip>,
 }
 
 impl std::fmt::Debug for ClipState {
@@ -141,6 +143,14 @@ impl Shell {
         }
     }
 
+    /// Put files on the clipboard (desktop Cut / Copy).
+    pub(crate) fn set_clipboard_files(&mut self, clip: lapin_ux_core::desktop::FileClip) {
+        self.clip.files = Some(clip.clone());
+        if let Some(h) = &self.clip.handle {
+            h.send(wl::Command::SetFiles(clip));
+        }
+    }
+
     pub(crate) fn update_clip(&mut self, msg: ClipMsg) -> Task<Message> {
         tracing::debug!(?msg, "clipboard panel");
         match msg {
@@ -155,6 +165,7 @@ impl Shell {
             ClipMsg::Event(wl::Event::Copied(data)) => {
                 self.clip.history.push(data, SystemTime::now());
             }
+            ClipMsg::Event(wl::Event::Files(f)) => self.clip.files = f,
             ClipMsg::Event(wl::Event::Unavailable(e)) => {
                 self.clip.unavailable = Some(e);
             }

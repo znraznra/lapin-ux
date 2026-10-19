@@ -4,6 +4,9 @@
 //! moves an icon to another grid cell, right-click opens a menu, F2 renames,
 //! Delete moves to the trash. Right-click on empty space offers view and
 //! sort options, New folder / text document, and settings shortcuts.
+//! Ctrl/Shift-click and dragging a box select several icons; Ctrl+X/C/V
+//! cut, copy and paste files; icons drag out into apps (and files drag in),
+//! onto folders, and onto the Recycle Bin.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,6 +19,7 @@ use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargi
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
 };
+use cosmic::iced::clipboard::dnd::DndAction;
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Point, Rectangle, window};
 use cosmic::widget::{self, column, container, icon, mouse_area, row, text, text_input};
 use cosmic::{Element, theme};
@@ -29,7 +33,22 @@ use crate::taskbar_view::{menu_divider, menu_item, panel};
 static RENAME_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("lapin-ux-desktop-rename"));
 
 const MARGIN: f32 = 8.0;
-const DRAG_THRESHOLD: f32 = 6.0;
+/// The Recycle Bin's place in the icon list (never a real file name).
+const TRASH_NAME: &str = "::recycle-bin";
+
+fn trash_path() -> PathBuf {
+    PathBuf::from("trash:///")
+}
+
+fn data_home() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join(".local/share"))
+}
+
+fn trash_count() -> usize {
+    std::fs::read_dir(data_home().join("Trash/files")).map(|d| d.count()).unwrap_or(0)
+}
 
 /// How an icon is drawn.
 #[derive(Debug, Clone)]
@@ -65,6 +84,17 @@ pub struct DesktopView {
     rename: Option<(PathBuf, String)>,
     drag: Option<Drag>,
     pointer: Point,
+    /// Box selection: where the drag started.
+    band: Option<Point>,
+    /// Shift-click selects from here.
+    anchor: Option<PathBuf>,
+    /// A click on an icon that's part of a multi-selection: it becomes the
+    /// only selected icon on release, unless the click turned into a drag.
+    press_keep: Option<PathBuf>,
+    /// Where a drag is hovering over the desktop.
+    drop_at: Option<Point>,
+    trash_full: bool,
+    trash_stamp: Option<SystemTime>,
     /// The small text box shown over an icon's label while renaming.
     pub rename_surface: Option<window::Id>,
     rename_cell: Cell,
@@ -73,10 +103,10 @@ pub struct DesktopView {
     item_context_at: std::time::Instant,
 }
 
+/// One of our icons being dragged (drag-and-drop).
 struct Drag {
     path: PathBuf,
-    origin: Point,
-    active: bool,
+    from: Cell,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +127,20 @@ pub enum DesktopMsg {
     Empty,
     Move(Point),
     Release,
+    /// Drag-and-drop from an icon started / ended.
+    DragStart(PathBuf),
+    DragEnd,
+    DropMotion(Point),
+    DropLeave,
+    Dropped(Option<crate::dnd::Uris>, DndAction),
+    /// Ctrl + a letter.
+    Ctrl(String),
+    Cut,
+    Copy,
+    /// Paste finished: new files, and where to put them.
+    Pasted(Vec<PathBuf>, Option<Cell>),
+    EmptyTrashAsk,
+    EmptyTrash,
     Key(Named),
     RenameStart,
     /// Open the rename box (delayed until a menu has closed).
@@ -164,6 +208,12 @@ impl Shell {
             rename: None,
             drag: None,
             pointer: Point::ORIGIN,
+            band: None,
+            anchor: None,
+            press_keep: None,
+            drop_at: None,
+            trash_full: false,
+            trash_stamp: None,
             rename_surface: None,
             rename_cell: (0, 0),
             item_context_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -240,6 +290,25 @@ impl Shell {
                 Shown { label: item.file_name.clone(), look, launch: None, item }
             })
             .collect();
+        // The Recycle Bin comes first, like the benchmark's.
+        d.trash_full = trash_count() > 0;
+        d.trash_stamp = std::fs::metadata(data_home().join("Trash/files")).and_then(|m| m.modified()).ok();
+        d.items.insert(
+            0,
+            Shown {
+                item: DesktopItem {
+                    path: trash_path(),
+                    file_name: TRASH_NAME.into(),
+                    is_dir: true,
+                    launcher: false,
+                    modified: None,
+                    size: 0,
+                },
+                label: "Recycle Bin".into(),
+                look: Look::Named(if d.trash_full { "user-trash-full".into() } else { "user-trash".into() }),
+                launch: None,
+            },
+        );
         let paths: HashSet<&PathBuf> = d.items.iter().map(|s| &s.item.path).collect();
         d.selected.retain(|p| paths.contains(p));
     }
@@ -250,7 +319,8 @@ impl Shell {
         if d.drag.is_some() || d.rename.is_some() {
             return;
         }
-        if std::fs::metadata(&d.dir).and_then(|m| m.modified()).ok() != d.stamp {
+        let trash = std::fs::metadata(data_home().join("Trash/files")).and_then(|m| m.modified()).ok();
+        if std::fs::metadata(&d.dir).and_then(|m| m.modified()).ok() != d.stamp || trash != d.trash_stamp {
             self.reload_desktop();
         }
     }
@@ -272,6 +342,9 @@ impl Shell {
     }
 
     fn open_item(&mut self, path: &Path) -> Task<Message> {
+        if path == trash_path() {
+            return open_trash();
+        }
         let Some(shown) = self.desktop.as_ref().and_then(|d| d.items.iter().find(|s| s.item.path == path)).cloned() else {
             return Task::none();
         };
@@ -301,8 +374,55 @@ impl Shell {
         }
     }
 
+    /// Selected files (the Recycle Bin isn't a file).
     fn selection(&self) -> Vec<PathBuf> {
-        self.desktop.as_ref().map(|d| d.selected.iter().cloned().collect()).unwrap_or_default()
+        let mut v: Vec<PathBuf> =
+            self.desktop.as_ref().map(|d| d.selected.iter().filter(|p| **p != trash_path()).cloned().collect()).unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    /// Icons in grid order (down each column, then across) with their cells.
+    fn placed(&self) -> Vec<(PathBuf, Cell)> {
+        let Some(d) = &self.desktop else { return Vec::new() };
+        let items: Vec<DesktopItem> = d.items.iter().map(|s| s.item.clone()).collect();
+        let (cols, rows) = self.grid();
+        let mut v: Vec<(PathBuf, Cell)> =
+            model::arrange(&items, &self.saved_cells(), cols, rows).into_iter().map(|(i, c)| (items[i].path.clone(), c)).collect();
+        v.sort_by_key(|(_, (c, r))| (*c, *r));
+        v
+    }
+
+    fn item_at_cell(&self, cell: Cell) -> Option<PathBuf> {
+        self.placed().into_iter().find(|(_, c)| *c == cell).map(|(p, _)| p)
+    }
+
+    /// Pin every icon where it is now, so moving one doesn't reshuffle the rest.
+    fn pin_cells(&mut self) {
+        let Some(d) = &self.desktop else { return };
+        let names: HashMap<PathBuf, String> = d.items.iter().map(|s| (s.item.path.clone(), s.item.file_name.clone())).collect();
+        self.state.desktop_cells =
+            self.placed().into_iter().filter_map(|(p, (c, r))| Some(DesktopSlot { name: names.get(&p)?.clone(), col: c, row: r })).collect();
+    }
+
+    /// Paste files into the desktop (copy, or move when cut), starting at `cell`.
+    fn paste_into_desktop(&mut self, paths: Vec<PathBuf>, cut: bool, cell: Option<Cell>) -> Task<Message> {
+        let Some(dir) = self.desktop.as_ref().map(|d| d.dir.clone()) else { return Task::none() };
+        Task::future(async move {
+            let done = tokio::task::spawn_blocking(move || {
+                let mut out = Vec::new();
+                for p in paths {
+                    match model::paste_one(&p, &dir, cut) {
+                        Ok(t) => out.push(t),
+                        Err(e) => tracing::warn!("paste {p:?}: {e}"),
+                    }
+                }
+                out
+            })
+            .await
+            .unwrap_or_default();
+            cosmic::Action::App(Message::Desktop(DesktopMsg::Pasted(done, cell)))
+        })
     }
 
     /// Rename in a small Top-layer box over the icon's label. The desktop
@@ -311,6 +431,9 @@ impl Shell {
     /// on-demand keyboard gets focus at once, and clicking anywhere else
     /// unfocuses it, which commits the new name (like the benchmark).
     fn start_rename(&mut self, path: PathBuf, after_menu: bool) -> Task<Message> {
+        if path == trash_path() {
+            return Task::none();
+        }
         let items: Vec<DesktopItem> = self.desktop.as_ref().map(|d| d.items.iter().map(|s| s.item.clone()).collect()).unwrap_or_default();
         let (cols, rows) = self.grid();
         let saved = self.saved_cells();
@@ -419,51 +542,201 @@ impl Shell {
                 } else {
                     Task::none()
                 };
+                let (ctrl, shift) = (self.mods.control(), self.mods.shift());
+                let order: Vec<PathBuf> = if shift { self.placed().into_iter().map(|(p, _)| p).collect() } else { Vec::new() };
                 let Some(d) = &mut self.desktop else { return commit };
-                d.selected = HashSet::from([path.clone()]);
-                d.drag = Some(Drag { path, origin: d.pointer, active: false });
+                d.press_keep = None;
+                if ctrl {
+                    // Ctrl-click adds or removes one icon.
+                    if !d.selected.remove(&path) {
+                        d.selected.insert(path.clone());
+                    }
+                    d.anchor = Some(path);
+                } else if shift && d.anchor.is_some() {
+                    // Shift-click selects everything from the last click.
+                    let anchor = d.anchor.clone().unwrap_or_default();
+                    let (i, j) = (order.iter().position(|p| *p == anchor), order.iter().position(|p| *p == path));
+                    if let (Some(i), Some(j)) = (i, j) {
+                        d.selected = order[i.min(j)..=i.max(j)].iter().cloned().collect();
+                    }
+                } else if d.selected.contains(&path) && d.selected.len() > 1 {
+                    // Keep the group for dragging; a plain click narrows it on release.
+                    d.press_keep = Some(path.clone());
+                    d.anchor = Some(path);
+                } else {
+                    d.selected = HashSet::from([path.clone()]);
+                    d.anchor = Some(path);
+                }
                 return Task::batch([commit, self.close_popup()]);
             }
             DesktopMsg::Empty => {
                 let commit = if d.rename.is_some() { self.update_desktop(DesktopMsg::RenameCommit) } else { Task::none() };
+                let ctrl = self.mods.control();
                 if let Some(d) = &mut self.desktop {
-                    d.selected.clear();
+                    if !ctrl {
+                        d.selected.clear();
+                    }
+                    // Dragging from empty space draws a selection box.
+                    d.band = Some(d.pointer);
                 }
                 return Task::batch([commit, self.close_popup()]);
             }
             DesktopMsg::ShowRenameBox => return self.show_rename_box(),
             DesktopMsg::Move(p) => {
                 d.pointer = p;
-                if let Some(drag) = &mut d.drag
-                    && !drag.active
-                    && (p.x - drag.origin.x).hypot(p.y - drag.origin.y) > DRAG_THRESHOLD
-                {
-                    drag.active = true;
+                if let Some(o) = d.band {
+                    // Live box selection.
+                    let rect = band_rect(o, p);
+                    let (cw, ch, _) = self.config.desktop_icon_size.metrics();
+                    let hits: Vec<PathBuf> = self
+                        .placed()
+                        .into_iter()
+                        .filter(|(_, (c, r))| {
+                            let cell = Rectangle { x: MARGIN + *c as f32 * cw + 2.0, y: MARGIN + *r as f32 * ch + 2.0, width: cw - 4.0, height: ch - 4.0 };
+                            cell.intersects(&rect)
+                        })
+                        .map(|(p, _)| p)
+                        .collect();
+                    if (rect.width > 3.0 || rect.height > 3.0)
+                        && let Some(d) = &mut self.desktop
+                    {
+                        d.selected = hits.into_iter().collect();
+                    }
                 }
             }
             DesktopMsg::Release => {
-                let Some(drag) = d.drag.take() else { return Task::none() };
-                if drag.active {
-                    let cell = self.cell_at(self.desktop.as_ref().map_or(Point::ORIGIN, |d| d.pointer));
-                    let name = drag.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    // Dropping on another icon swaps places.
-                    let items: Vec<DesktopItem> = self.desktop.as_ref().map(|d| d.items.iter().map(|s| s.item.clone()).collect()).unwrap_or_default();
-                    let (cols, rows) = self.grid();
-                    let placed = model::arrange(&items, &self.saved_cells(), cols, rows);
-                    let from = placed.iter().find(|(i, _)| items[*i].path == drag.path).map(|(_, c)| *c);
-                    let other = placed.iter().find(|(_, c)| *c == cell).map(|(i, _)| items[*i].file_name.clone());
-                    // Pin every icon's current cell so the move doesn't reshuffle the rest.
-                    self.state.desktop_cells = placed
-                        .iter()
-                        .map(|(i, (c, r))| DesktopSlot { name: items[*i].file_name.clone(), col: *c, row: *r })
-                        .collect();
-                    if let (Some(other), Some(from)) = (other, from)
-                        && other != name
-                    {
-                        self.remember_cell(&other, from);
-                    }
-                    self.remember_cell(&name, cell);
+                d.band = None;
+                if let Some(p) = d.press_keep.take()
+                    && d.drag.is_none()
+                {
+                    d.selected = HashSet::from([p]);
                 }
+            }
+            DesktopMsg::DragStart(path) => {
+                d.press_keep = None;
+                let from = self.placed().into_iter().find(|(p, _)| *p == path).map_or((0, 0), |(_, c)| c);
+                if let Some(d) = &mut self.desktop {
+                    if !d.selected.contains(&path) {
+                        d.selected = HashSet::from([path.clone()]);
+                    }
+                    d.drag = Some(Drag { path, from });
+                }
+            }
+            DesktopMsg::DragEnd => {
+                d.drag = None;
+                d.drop_at = None;
+            }
+            DesktopMsg::DropMotion(p) => {
+                d.drop_at = Some(p);
+                d.pointer = p;
+            }
+            DesktopMsg::DropLeave => d.drop_at = None,
+            DesktopMsg::Dropped(uris, action) => {
+                let at = d.drop_at.take().unwrap_or(d.pointer);
+                let ours = d.drag.take();
+                let dir = d.dir.clone();
+                let cell = self.cell_at(at);
+                let uris = uris.map(|u| u.0).unwrap_or_default();
+                let paths: Vec<PathBuf> = uris.iter().filter_map(|u| lapin_ux_core::recent::file_uri_to_path(u)).collect();
+                let links: Vec<String> = uris.iter().filter(|u| u.starts_with("http://") || u.starts_with("https://")).cloned().collect();
+                let target = self.item_at_cell(cell).filter(|t| !paths.contains(t));
+                // Onto the Recycle Bin: delete.
+                if target.as_deref() == Some(trash_path().as_path()) {
+                    if let Some(d) = &mut self.desktop {
+                        d.selected = paths.iter().cloned().collect();
+                    }
+                    return self.update_desktop(DesktopMsg::Trash);
+                }
+                // Onto a folder: move (or copy) into it.
+                if let Some(folder) = target.filter(|t| t.is_dir()) {
+                    let cut = action != DndAction::Copy;
+                    return Task::future(async move {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            for p in paths {
+                                if let Err(e) = model::paste_one(&p, &folder, cut) {
+                                    tracing::warn!("drop into folder: {e}");
+                                }
+                            }
+                        })
+                        .await;
+                        cosmic::Action::App(Message::Desktop(DesktopMsg::Refresh))
+                    });
+                }
+                // Our own icons: move them on the grid, keeping their layout.
+                if let Some(drag) = ours
+                    && paths.iter().all(|p| p.parent() == Some(dir.as_path()))
+                {
+                    self.move_icons(&paths, drag, cell);
+                    return Task::none();
+                }
+                // Links from a browser become shortcuts.
+                for url in links {
+                    if let Some(lapin_ux_core::pins::Pin::Site { name, url }) = lapin_ux_core::pins::site(&url) {
+                        let file = dir.join(model::unique_name(&dir, &name, "desktop"));
+                        let _ = std::fs::write(&file, format!("[Desktop Entry]\nType=Link\nName={name}\nURL={url}\nIcon=web-browser\n"));
+                        self.remember_cell(&file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), cell);
+                    }
+                }
+                // Files from another app: copy here, or move if that's what was asked.
+                let outside: Vec<PathBuf> = paths.into_iter().filter(|p| p.parent() != Some(dir.as_path())).collect();
+                if outside.is_empty() {
+                    self.reload_desktop();
+                    return Task::none();
+                }
+                return self.paste_into_desktop(outside, action == DndAction::Move, Some(cell));
+            }
+            DesktopMsg::Pasted(paths, cell) => {
+                if let Some(cell) = cell {
+                    self.pin_cells();
+                    let (cols, rows) = self.grid();
+                    for (n, p) in paths.iter().enumerate() {
+                        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let c = step_cell(cell, n as u32, rows, cols);
+                        self.remember_cell(&name, c);
+                    }
+                }
+                self.reload_desktop();
+                if let Some(d) = &mut self.desktop {
+                    d.selected = paths.into_iter().collect();
+                }
+            }
+            DesktopMsg::Ctrl(k) => match k.as_str() {
+                "a" => d.selected = d.items.iter().map(|s| s.item.path.clone()).collect(),
+                "c" => return self.update_desktop(DesktopMsg::Copy),
+                "x" => return self.update_desktop(DesktopMsg::Cut),
+                "v" => return self.update_desktop(DesktopMsg::Paste),
+                _ => {}
+            },
+            DesktopMsg::Cut | DesktopMsg::Copy => {
+                let paths = self.selection();
+                if !paths.is_empty() {
+                    self.set_clipboard_files(model::FileClip { cut: matches!(msg, DesktopMsg::Cut), paths });
+                }
+                return self.close_popup();
+            }
+            DesktopMsg::EmptyTrashAsk => {
+                let Some(id) = self.desktop.as_ref().map(|d| d.id) else { return Task::none() };
+                let key = rect_key(id, "pointer");
+                return self.open_popup(id, &key, PopupKind::ConfirmEmptyTrash);
+            }
+            DesktopMsg::EmptyTrash => {
+                let close = self.close_popup();
+                let trash = data_home().join("Trash");
+                return Task::batch([
+                    close,
+                    Task::future(async move {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            for sub in ["files", "info", "expunged"] {
+                                for e in std::fs::read_dir(trash.join(sub)).into_iter().flatten().flatten() {
+                                    let p = e.path();
+                                    let _ = if p.is_dir() && !p.is_symlink() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+                                }
+                            }
+                        })
+                        .await;
+                        cosmic::Action::App(Message::Desktop(DesktopMsg::Refresh))
+                    }),
+                ]);
             }
             DesktopMsg::Open(path) => {
                 d.drag = None;
@@ -707,8 +980,8 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
             by_cell.entry(cell).or_insert(i);
         }
     }
-    let dragging = d.drag.as_ref().filter(|g| g.active);
-    let target = dragging.map(|_| shell.cell_at(d.pointer));
+    let dragging = d.drag.as_ref();
+    let target = d.drop_at.map(|p| shell.cell_at(p));
 
     let mut grid = row::with_capacity(cols as usize);
     for c in 0..cols {
@@ -748,11 +1021,36 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
                         .align_x(Alignment::Center)
                         .class(cell_style(selected && !dim, is_target));
                     let path = s.item.path.clone();
-                    mouse_area(boxed)
+                    let area = mouse_area(boxed)
                         .on_press(Message::Desktop(DesktopMsg::Press(path.clone())))
                         .on_double_click(Message::Desktop(DesktopMsg::Open(path.clone())))
-                        .on_right_press(Message::Desktop(DesktopMsg::Context(Some(path))))
-                        .into()
+                        .on_right_press(Message::Desktop(DesktopMsg::Context(Some(path.clone()))));
+                    if path == trash_path() {
+                        area.into()
+                    } else {
+                        // Drag out: the whole selection goes, as files.
+                        let files: Vec<PathBuf> = if d.selected.contains(&path) {
+                            d.selected.iter().filter(|p| **p != trash_path()).cloned().collect()
+                        } else {
+                            vec![path.clone()]
+                        };
+                        let look = s.look.clone();
+                        cosmic::widget::dnd_source::<Message, crate::dnd::FileDrag>(area)
+                            .drag_threshold(6.0)
+                            .drag_content(move || crate::dnd::FileDrag(files.clone()))
+                            .drag_icon(move |offset| {
+                                let handle = match &look {
+                                    Look::Image(p) => icon::from_path(p.clone()),
+                                    Look::Named(n) => icon::from_name(n.clone()).handle(),
+                                };
+                                let el: Element<'static, ()> = icon(handle).size(isz).into();
+                                (el, cosmic::iced::advanced::widget::tree::State::None, offset)
+                            })
+                            .on_start(Some(Message::Desktop(DesktopMsg::DragStart(path))))
+                            .on_cancel(Some(Message::Desktop(DesktopMsg::DragEnd)))
+                            .on_finish(Some(Message::Desktop(DesktopMsg::DragEnd)))
+                            .into()
+                    }
                 }
                 None => container(widget::Space::new())
                     .width(cw - 4.0)
@@ -764,12 +1062,38 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
         }
         grid = grid.push(col);
     }
-    let area = mouse_area(container(grid).padding(MARGIN as u16).width(Length::Fill).height(Length::Fill))
+    let mut layers: Vec<Element<'_, Message>> = vec![container(grid).padding(MARGIN as u16).width(Length::Fill).height(Length::Fill).into()];
+    // The selection box.
+    if let Some(o) = d.band {
+        let r = band_rect(o, d.pointer);
+        if r.width > 3.0 || r.height > 3.0 {
+            layers.push(
+                container(
+                    container(widget::Space::new().width(r.width).height(r.height)).class(theme::Container::custom(|t| {
+                        let a: Color = t.cosmic().accent_color().into();
+                        container::Style {
+                            background: Some(Background::Color(Color { a: 0.25, ..a })),
+                            border: Border { color: Color { a: 0.9, ..a }, width: 1.0, radius: 0.0.into() },
+                            ..Default::default()
+                        }
+                    })),
+                )
+                .padding(cosmic::iced::Padding { top: r.y, left: r.x, right: 0.0, bottom: 0.0 })
+                .into(),
+            );
+        }
+    }
+    let area = mouse_area(cosmic::iced::widget::Stack::with_children(layers).width(Length::Fill).height(Length::Fill))
         .on_press(Message::Desktop(DesktopMsg::Empty))
-        .on_right_press(Message::Desktop(DesktopMsg::Context(None)))
-        .on_release(Message::Desktop(DesktopMsg::Release))
-        .on_move(|p| Message::Desktop(DesktopMsg::Move(p)));
-    area.into()
+        .on_right_press(Message::Desktop(DesktopMsg::Context(None)));
+    // Files dropped here (from apps or our own icons).
+    cosmic::widget::dnd_destination::dnd_destination_for_data::<crate::dnd::Uris, Message>(area, |uris, action| {
+        Message::Desktop(DesktopMsg::Dropped(uris, action))
+    })
+    .on_motion(|x, y| Message::Desktop(DesktopMsg::DropMotion(Point::new(x as f32, y as f32))))
+    .on_enter(|x, y, _| Message::Desktop(DesktopMsg::DropMotion(Point::new(x as f32, y as f32))))
+    .on_leave(|| Message::Desktop(DesktopMsg::DropLeave))
+    .into()
 }
 
 /// The rename box (its own surface, see `start_rename`).
@@ -793,6 +1117,15 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
     let pick = |on: bool| if on { Lead::Mark("\u{2022}") } else { Lead::None };
     let tick = |on: bool| if on { Lead::Mark("\u{2713}") } else { Lead::None };
     let items: Vec<Element<'a, Message>> = match (on, page) {
+        (Some(path), _) if *path == trash_path() => vec![
+            menu_item("folder-open-symbolic", "Open", m(DesktopMsg::Open(path.clone()))),
+            menu_divider(),
+            menu_item(
+                "user-trash-full-symbolic",
+                "Empty Recycle Bin",
+                m(DesktopMsg::EmptyTrashAsk),
+            ),
+        ],
         (Some(path), _) => {
             let launcher = shell
                 .desktop
@@ -804,6 +1137,9 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
                 v.push(menu_item("emblem-ok-symbolic", "Allow launching", m(DesktopMsg::AllowLaunching)));
             }
             v.extend([
+                menu_divider(),
+                menu_item("edit-cut-symbolic", "Cut", m(DesktopMsg::Cut)),
+                menu_item("edit-copy-symbolic", "Copy", m(DesktopMsg::Copy)),
                 menu_divider(),
                 menu_item("edit-copy-symbolic", "Copy as path", m(DesktopMsg::CopyPath)),
                 menu_item("edit-symbolic", "Rename", m(DesktopMsg::RenameStart)),
@@ -864,10 +1200,74 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
 impl Shell {
     /// Files are on the clipboard (copied or cut in a file manager or here).
     pub(crate) fn can_paste_files(&self) -> bool {
-        false
+        self.clip.files.is_some()
     }
 
     pub(crate) fn paste_files(&mut self) -> Task<Message> {
-        self.close_popup()
+        let close = self.close_popup();
+        let Some(clip) = self.clip.files.clone() else { return close };
+        let cell = self.desktop.as_ref().map(|d| d.pointer).map(|p| self.cell_at(p));
+        // A cut is used up by pasting it.
+        if clip.cut {
+            self.clip.files = None;
+        }
+        Task::batch([close, self.paste_into_desktop(clip.paths, clip.cut, cell)])
     }
+
+    /// Move dragged icons so the one grabbed lands on `to`; the others keep
+    /// their places relative to it.
+    fn move_icons(&mut self, paths: &[PathBuf], drag: Drag, to: Cell) {
+        let (cols, rows) = self.grid();
+        let (dc, dr) = (to.0 as i64 - drag.from.0 as i64, to.1 as i64 - drag.from.1 as i64);
+        if (dc, dr) == (0, 0) {
+            return;
+        }
+        let placed = self.placed();
+        self.pin_cells();
+        let names: HashMap<PathBuf, String> =
+            self.desktop.as_ref().map(|d| d.items.iter().map(|s| (s.item.path.clone(), s.item.file_name.clone())).collect()).unwrap_or_default();
+        // A single icon dropped on another swaps with it.
+        if paths.len() == 1
+            && let Some(other) = placed.iter().find(|(p, c)| *c == to && *p != paths[0]).map(|(p, _)| p.clone())
+            && let Some(n) = names.get(&other)
+        {
+            self.remember_cell(n, drag.from);
+        }
+        for p in paths.iter().chain(std::iter::once(&drag.path)) {
+            let Some((_, (c, r))) = placed.iter().find(|(q, _)| q == p) else { continue };
+            let nc = (*c as i64 + dc).clamp(0, cols as i64 - 1) as u32;
+            let nr = (*r as i64 + dr).clamp(0, rows as i64 - 1) as u32;
+            if let Some(n) = names.get(p) {
+                self.remember_cell(n, (nc, nr));
+            }
+        }
+    }
+}
+
+fn band_rect(a: Point, b: Point) -> Rectangle {
+    Rectangle { x: a.x.min(b.x), y: a.y.min(b.y), width: (a.x - b.x).abs(), height: (a.y - b.y).abs() }
+}
+
+/// The n-th cell after `start`, down the column then across.
+fn step_cell(start: Cell, n: u32, rows: u32, cols: u32) -> Cell {
+    let idx = start.0 * rows + start.1 + n;
+    ((idx / rows).min(cols.saturating_sub(1)), idx % rows)
+}
+
+/// Open the trash in the file manager.
+fn open_trash() -> Task<Message> {
+    Task::future(async {
+        // Most file managers take trash:///; COSMIC Files too.
+        let mut ok = false;
+        for (cmd, args) in [("cosmic-files", vec!["trash:///"]), ("gio", vec!["open", "trash:///"]), ("xdg-open", vec!["trash:///"])] {
+            if tokio::process::Command::new(cmd).args(&args).spawn().is_ok() {
+                ok = true;
+                break;
+            }
+        }
+        if !ok {
+            tracing::warn!("no file manager to open the Recycle Bin");
+        }
+        cosmic::Action::App(Message::Noop)
+    })
 }

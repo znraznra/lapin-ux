@@ -570,6 +570,22 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::TrayMenu(name) => tray_menu(shell, name),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
         PopupKind::Account => crate::account::menu(shell),
+        PopupKind::ConfirmEmptyTrash => panel(
+            column::with_children(vec![
+                text::heading("Delete multiple items").into(),
+                text::body("Are you sure you want to permanently delete everything in the Recycle Bin?").into(),
+                row::with_children(vec![
+                    widget::Space::new().width(Length::Fill).into(),
+                    button::standard("No").on_press(Message::ClosePopup).into(),
+                    button::destructive("Yes").on_press(Message::Desktop(crate::desktop::DesktopMsg::EmptyTrash)).into(),
+                ])
+                .spacing(8)
+                .into(),
+            ])
+            .spacing(12)
+            .padding(16),
+            320.0,
+        ),
         PopupKind::PinContext(i) => crate::start_pins::context(shell, *i),
         PopupKind::TaskbarDisplays => taskbar_displays(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),

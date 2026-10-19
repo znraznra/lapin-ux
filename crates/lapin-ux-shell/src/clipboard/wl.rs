@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use lapin_ux_core::desktop::FileClip;
 use lapin_ux_core::clip::{ClipData, MAX_IMAGE, MAX_TEXT, control_code, typing_keymap};
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{wl_registry, wl_seat};
@@ -35,6 +36,8 @@ pub enum Command {
     SetAndPaste(ClipData),
     /// Type text into the focused app (emoji, symbols).
     Type(String),
+    /// Put files on the clipboard (desktop Cut / Copy).
+    SetFiles(FileClip),
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +45,33 @@ pub enum Event {
     /// Clipboard history isn't possible (protocol missing).
     Unavailable(String),
     Copied(ClipData),
+    /// Files on the clipboard now (None: something else is).
+    Files(Option<FileClip>),
+}
+
+const FILE_MIMES: &[&str] = &["x-special/gnome-copied-files", "text/uri-list"];
+
+/// What one of our clipboard sources serves.
+enum Served {
+    Clip(Arc<ClipData>),
+    Files(FileClip),
+}
+
+impl Served {
+    fn bytes(&self, mime: &str) -> Vec<u8> {
+        match self {
+            Served::Clip(c) => match &**c {
+                ClipData::Text(t) => t.as_bytes().to_vec(),
+                ClipData::Image { png, .. } => png.as_ref().clone(),
+            },
+            Served::Files(f) => match mime {
+                "x-special/gnome-copied-files" => lapin_ux_core::desktop::gnome_copied_files(f).into_bytes(),
+                "text/uri-list" => lapin_ux_core::desktop::uri_list(&f.paths).into_bytes(),
+                "application/x-kde-cutselection" => if f.cut { b"1".to_vec() } else { b"0".to_vec() },
+                _ => f.paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n").into_bytes(),
+            },
+        }
+    }
 }
 
 const TEXT_MIMES: &[&str] = &["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT"];
@@ -101,7 +131,7 @@ struct State {
     /// Mime types announced for each offer.
     offers: HashMap<ObjectId, Vec<String>>,
     /// What our own sources serve.
-    sources: HashMap<ObjectId, Arc<ClipData>>,
+    sources: HashMap<ObjectId, Arc<Served>>,
     out: Out,
     started: Instant,
 }
@@ -168,6 +198,18 @@ fn handle(st: &mut State, conn: &Connection, qh: &QueueHandle<State>, device: &E
             type_text(st, conn, &t);
             return;
         }
+        Command::SetFiles(f) => {
+            if let Some(manager) = st.manager.clone() {
+                let source = manager.create_data_source(qh, ());
+                for m in FILE_MIMES.iter().chain(["application/x-kde-cutselection", "text/plain;charset=utf-8", "text/plain"].iter()) {
+                    source.offer(m.to_string());
+                }
+                st.sources.insert(source.id(), Arc::new(Served::Files(f)));
+                device.set_selection(Some(&source));
+                let _ = conn.flush();
+            }
+            return;
+        }
     };
     if let (Some(data), Some(manager)) = (data, st.manager.clone()) {
         let source = manager.create_data_source(qh, ());
@@ -178,7 +220,7 @@ fn handle(st: &mut State, conn: &Connection, qh: &QueueHandle<State>, device: &E
         for m in mimes {
             source.offer(m.to_string());
         }
-        st.sources.insert(source.id(), Arc::new(data));
+        st.sources.insert(source.id(), Arc::new(Served::Clip(Arc::new(data))));
         device.set_selection(Some(&source));
         let _ = conn.flush();
     }
@@ -285,6 +327,18 @@ fn receive(offer: &ExtDataControlOfferV1, mime: &str, conn: &Connection, image: 
     });
 }
 
+fn receive_files(offer: &ExtDataControlOfferV1, mime: &'static str, conn: &Connection, out: Out) {
+    let Ok((r, w)) = pipe() else { return };
+    offer.receive(mime.to_string(), w.as_fd());
+    drop(w);
+    let _ = conn.flush();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = std::fs::File::from(r).take(1 << 20).read_to_string(&mut buf);
+        out(Event::Files(lapin_ux_core::desktop::parse_file_clip(mime, &buf)));
+    });
+}
+
 /// Width and height from a PNG header.
 fn png_size(b: &[u8]) -> Option<(u32, u32)> {
     if b.len() < 24 || &b[..8] != b"\x89PNG\r\n\x1a\n" {
@@ -331,6 +385,11 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
             }
             ext_data_control_device_v1::Event::Selection { id: Some(offer) } => {
                 let mimes = st.offers.get(&offer.id()).cloned().unwrap_or_default();
+                // Files (for Paste on the desktop) are read separately from history.
+                match FILE_MIMES.iter().find(|m| mimes.iter().any(|x| x == *m)) {
+                    Some(m) => receive_files(&offer, m, conn, st.out.clone()),
+                    None => (st.out)(Event::Files(None)),
+                }
                 if mimes.iter().any(|m| m == SECRET_HINT) {
                     tracing::debug!("clipboard: skipping a password manager secret");
                 } else if let Some(m) = TEXT_MIMES.iter().find(|m| mimes.iter().any(|x| x == *m)) {
@@ -341,7 +400,7 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
                 // Earlier offers are finished with.
                 st.offers.retain(|id, _| *id == offer.id());
             }
-            ext_data_control_device_v1::Event::Selection { id: None } => {}
+            ext_data_control_device_v1::Event::Selection { id: None } => (st.out)(Event::Files(None)),
             ext_data_control_device_v1::Event::Finished => {
                 (st.out)(Event::Unavailable("clipboard device finished".into()));
             }
@@ -365,15 +424,12 @@ impl Dispatch<ExtDataControlOfferV1, ()> for State {
 impl Dispatch<ExtDataControlSourceV1, ()> for State {
     fn event(st: &mut Self, source: &ExtDataControlSourceV1, ev: ext_data_control_source_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match ev {
-            ext_data_control_source_v1::Event::Send { fd, .. } => {
+            ext_data_control_source_v1::Event::Send { fd, mime_type } => {
                 let Some(data) = st.sources.get(&source.id()).cloned() else { return };
                 // Write off-thread so a slow reader can't stall us.
                 std::thread::spawn(move || {
                     let mut f = std::fs::File::from(fd);
-                    let _ = match &*data {
-                        ClipData::Text(t) => f.write_all(t.as_bytes()),
-                        ClipData::Image { png, .. } => f.write_all(png),
-                    };
+                    let _ = f.write_all(&data.bytes(&mime_type));
                 });
             }
             ext_data_control_source_v1::Event::Cancelled => {
