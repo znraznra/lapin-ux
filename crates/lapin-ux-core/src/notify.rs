@@ -203,6 +203,11 @@ impl Queue {
 
     /// Record a notification without showing a toast (used while the
     /// notification centre is open, where it appears directly).
+    /// Into the notification centre without a pop-up, still unread.
+    pub fn push_quiet(&mut self, n: Notification) {
+        self.remember(&n);
+    }
+
     pub fn push_silent(&mut self, n: Notification) {
         self.remember(&n);
         self.unread.remove(&n.id);

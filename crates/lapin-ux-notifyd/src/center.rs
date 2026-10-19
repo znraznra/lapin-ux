@@ -90,9 +90,17 @@ fn entry(n: &Notification) -> Element<'_, Message> {
 }
 
 fn notifications(app: &App) -> Element<'_, Message> {
+    if app.quiet.settings_open {
+        return card(crate::quiet::settings(app)).height(Length::Fill).into();
+    }
     let dnd = app.queue.do_not_disturb;
     let header = row::with_children(vec![
         text::title4("Notifications").width(Length::Fill).into(),
+        button::custom(icon::from_name("emblem-system-symbolic").size(16))
+            .padding(6)
+            .class(theme::Button::Icon)
+            .on_press(Message::Quiet(crate::quiet::QuietMsg::OpenSettings(true)))
+            .into(),
         button::text("Clear all").on_press_maybe((app.queue.history().next().is_some()).then_some(Message::ClearAll)).into(),
     ])
     .align_y(Alignment::Center);
@@ -154,7 +162,7 @@ fn calendar(app: &App) -> Element<'_, Message> {
     ])
     .align_y(Alignment::Center);
     if collapsed {
-        return card(header).into();
+        return card(column::with_children(vec![header.into(), crate::quiet::focus_row(app)]).spacing(10)).into();
     }
     let cal = widget::calendar(
         &app.calendar,
@@ -167,15 +175,30 @@ fn calendar(app: &App) -> Element<'_, Message> {
             jiff::civil::Weekday::Monday
         },
     );
-    card(column::with_children(vec![header.into(), container(cal).center_x(Length::Fill).into()]).spacing(8)).into()
+    card(
+        column::with_children(vec![
+            header.into(),
+            container(cal).center_x(Length::Fill).into(),
+            crate::quiet::agenda(app),
+            widget::divider::horizontal::default().into(),
+            crate::quiet::focus_row(app),
+        ])
+        .spacing(10),
+    )
+    .into()
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    let empty = app.queue.history().next().is_none();
+    let empty = app.queue.history().next().is_none() && !app.quiet.settings_open;
     let mut col = column::with_capacity(3).spacing(12).width(Length::Fill).height(Length::Fill);
     if empty {
         // Transparent space above the cards; clicking it closes the centre.
         col = col.push(mouse_area(widget::Space::new().width(Length::Fill).height(Length::Fill)).on_press(Message::CloseCenter));
     }
-    col.push(notifications(app)).push(calendar(app)).into()
+    col = col.push(notifications(app));
+    // Settings get the whole height.
+    if !app.quiet.settings_open {
+        col = col.push(calendar(app));
+    }
+    col.into()
 }

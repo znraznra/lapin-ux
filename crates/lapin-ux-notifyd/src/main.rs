@@ -8,6 +8,7 @@
 
 mod center;
 mod dbus;
+mod quiet;
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -54,6 +55,7 @@ pub enum Message {
     CalendarSelect(jiff::civil::Date),
     CalendarPrev,
     CalendarNext,
+    Quiet(quiet::QuietMsg),
     Noop,
 }
 
@@ -72,6 +74,9 @@ pub struct App {
     pub calendar: cosmic::widget::calendar::CalendarModel,
     pub calendar_collapsed: bool,
     settings: Option<cosmic::cosmic_config::Config>,
+    pub quiet: quiet::Quiet,
+    /// Ids for notices the daemon itself shows (focus session over…).
+    local_id: u32,
 }
 
 impl App {
@@ -129,14 +134,25 @@ impl App {
         })
     }
 
-    fn set_dnd(&mut self, on: bool) -> Task<Message> {
-        self.queue.do_not_disturb = on;
-        if let Some(cfg) = &self.settings
-            && let Err(e) = cosmic::cosmic_config::ConfigSet::set(cfg, "do_not_disturb", on)
-        {
-            tracing::warn!("saving Do Not Disturb: {e}");
-        }
-        self.publish()
+    /// A notification from the desktop itself.
+    pub(crate) fn local_notice(&mut self, summary: &str, body: &str) -> Task<Message> {
+        self.local_id += 1;
+        let n = Notification {
+            id: 0xF000_0000 + self.local_id,
+            app_name: "Clock".into(),
+            app_icon: "alarm-symbolic".into(),
+            summary: summary.into(),
+            body: body.into(),
+            actions: Vec::new(),
+            urgency: Urgency::Normal,
+            expire_timeout: -1,
+            transient: false,
+            desktop_entry: None,
+            received: std::time::SystemTime::now(),
+            image: None,
+        };
+        self.queue.push(n, Instant::now());
+        Task::batch([self.sync_surface(), self.publish()])
     }
 
     fn open_center(&mut self) -> Task<Message> {
@@ -151,6 +167,7 @@ impl App {
         self.center = Some(id);
         self.queue.mark_all_read();
         self.calendar = cosmic::widget::calendar::CalendarModel::now();
+        self.quiet.settings_open = false;
         let r = 8u32;
         let catcher = window::Id::unique();
         self.catcher = Some(catcher);
@@ -188,6 +205,7 @@ impl App {
                 None,
             )),
             self.publish(),
+            quiet::load_events(self.quiet.calendars.clone()),
         ])
     }
 
@@ -239,7 +257,10 @@ impl Application for App {
             .ok();
         let mut queue = Queue::default();
         use cosmic::cosmic_config::ConfigGet;
-        queue.do_not_disturb = settings.as_ref().and_then(|c| c.get::<bool>("do_not_disturb").ok()).unwrap_or(false);
+        let mut quiet = quiet::Quiet::load(settings.as_ref());
+        let now_min = { use chrono::Timelike; let t = chrono::Local::now(); t.hour() * 60 + t.minute() };
+        queue.do_not_disturb = quiet.dnd.update(now_min, std::time::SystemTime::now()).active;
+        let sources = quiet.calendars.clone();
         (
             App {
                 core,
@@ -253,8 +274,10 @@ impl Application for App {
                 calendar: cosmic::widget::calendar::CalendarModel::now(),
                 calendar_collapsed: settings.as_ref().and_then(|c| c.get::<bool>("calendar_collapsed").ok()).unwrap_or(false),
                 settings,
+                quiet,
+                local_id: 0,
             },
-            Task::none(),
+            quiet::load_events(sources),
         )
     }
 
@@ -308,6 +331,7 @@ impl Application for App {
                 _ => None,
             }),
         ];
+        subs.push(cosmic::iced::time::every(Duration::from_secs(30)).map(|_| Message::Quiet(quiet::QuietMsg::Minute)));
         if self.surface.is_some() || self.center.is_some() {
             subs.push(cosmic::iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
@@ -326,6 +350,17 @@ impl Application for App {
                     tracing::error!("cannot own {}: {e} (is another notification daemon running?)", dbus::NAME);
                 }
                 dbus::Event::Notify(n) => {
+                    if !n.app_name.is_empty() && !self.quiet.seen_apps.contains(&n.app_name) {
+                        self.quiet.seen_apps.push(n.app_name.clone());
+                    }
+                    match lapin_ux_core::dnd::delivery(&self.quiet.rules, &n.app_name) {
+                        lapin_ux_core::dnd::Delivery::Drop => return Task::none(),
+                        lapin_ux_core::dnd::Delivery::Silent if n.urgency != Urgency::Critical => {
+                            self.queue.push_quiet(*n);
+                            return self.publish();
+                        }
+                        _ => {}
+                    }
                     if self.center.is_some() {
                         // Shown directly in the open centre; no toast.
                         self.queue.push_silent(*n);
@@ -428,6 +463,7 @@ impl Application for App {
             Message::CalendarSelect(d) => self.calendar.set_selected_visible(d),
             Message::CalendarPrev => self.calendar.show_prev_month(),
             Message::CalendarNext => self.calendar.show_next_month(),
+            Message::Quiet(m) => return self.update_quiet(m),
             Message::Noop => {}
         }
         Task::none()
