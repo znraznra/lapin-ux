@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Update
+GenericName=Software Update
+Comment=Check for and install updates
+Exec=lapin-ux-update
+Icon=system-software-update
+Categories=System;Settings;PackageManager;
+Keywords=update;upgrade;pacman;flatpak;windows update;
+StartupNotify=true
+StartupWMClass=dev.lapinux.Update

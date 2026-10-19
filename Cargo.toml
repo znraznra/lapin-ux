@@ -7,6 +7,7 @@ members = [
     "crates/lapin-ux-session",
     "crates/lapin-ux-taskmgr",
     "crates/lapin-ux-control",
+    "crates/lapin-ux-update",
 ]
 
 [workspace.package]

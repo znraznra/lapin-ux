@@ -29,6 +29,7 @@ pub mod sysmon;
 pub mod system;
 pub mod taskbar;
 pub mod thumb;
+pub mod updates;
 
 /// Reverse-DNS identifiers. Change these in one place when the project gets
 /// its final name / domain.

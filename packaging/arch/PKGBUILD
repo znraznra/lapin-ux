@@ -93,6 +93,7 @@ package_lapin-ux-desktop-git() {
         'upower'                   # battery
         'wireplumber'              # volume (wpctl)
         'pipewire-audio'           # system sounds (pw-play)
+        'pacman-contrib'           # checkupdates, for Update
         'iio-sensor-proxy'         # auto-rotate on tablets and convertibles
         'python-pillow'            # lapin-ux-cursors (optional pointer pack)
         'libpulse'                 # sound output and per-app volume (pactl)
@@ -108,7 +109,7 @@ package_lapin-ux-desktop-git() {
 
     cd "$_src"
     local bin
-    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-taskmgr lapin-ux-control; do
+    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-taskmgr lapin-ux-control lapin-ux-update; do
         install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
     done
     install -Dm755 data/session/start-lapin-ux        "$pkgdir/usr/bin/start-lapin-ux"

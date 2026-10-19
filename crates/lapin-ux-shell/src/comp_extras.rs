@@ -36,6 +36,9 @@ pub struct Extras {
     /// Last orientation reported, and the one applied to the screen.
     orientation: Option<String>,
     applied: Option<String>,
+    /// Background update check (`lapin-ux-update --check`) and when next.
+    update_check: Option<std::process::Child>,
+    next_check: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,8 +134,25 @@ impl Shell {
         }
     }
 
+    /// Look for updates 10 minutes after sign-in, then every 6 hours.
+    fn update_tick(&mut self) {
+        let now = std::time::Instant::now();
+        let next = *self.extras.next_check.get_or_insert(now + Duration::from_secs(600));
+        if now < next {
+            return;
+        }
+        self.extras.next_check = Some(now + Duration::from_secs(6 * 3600));
+        if let Some(c) = &mut self.extras.update_check
+            && matches!(c.try_wait(), Ok(None))
+        {
+            return; // the last one is still waiting on its notification
+        }
+        self.extras.update_check = std::process::Command::new("lapin-ux-update").arg("--check").spawn().ok();
+    }
+
     /// Once a second: follow the night light schedule.
     pub(crate) fn extras_tick(&mut self) {
+        self.update_tick();
         let now = chrono::Local::now();
         let minute = (now.hour() * 60 + now.minute()) as u16;
         let prev = self.extras.last_minute.replace(minute);

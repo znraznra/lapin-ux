@@ -59,7 +59,7 @@ const CATEGORIES: &[Category] = &[
         title: "Programs",
         icon: "system-software-install",
         target: Target::Settings("applications"),
-        tasks: &[r("Uninstall a program", "cosmic-store"), s("Default programs", "default-apps"), s("Startup apps", "startup-apps")],
+        tasks: &[r("Uninstall a program", "cosmic-store"), r("Check for updates", "lapin-ux-update"), s("Default programs", "default-apps"), s("Startup apps", "startup-apps")],
     },
     Category {
         title: "User Accounts",
@@ -101,6 +101,7 @@ const ITEMS: &[(&str, &str, Target)] = &[
     ("Personalization", "preferences-desktop-theme", Target::Settings("appearance")),
     ("Power Options", "preferences-system-power", Target::Settings("power")),
     ("Programs and Features", "system-software-install", Target::Run("cosmic-store")),
+    ("Update", "system-software-update", Target::Run("lapin-ux-update")),
     ("Region", "preferences-desktop-locale", Target::Settings("region-language")),
     ("Sound", "audio-card", Target::Settings("sound")),
     ("Startup Apps", "system-run", Target::Settings("startup-apps")),

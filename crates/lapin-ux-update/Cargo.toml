@@ -1,0 +1,13 @@
+[package]
+name = "lapin-ux-update"
+description = "Lapin UX Update: check for and install system and Flatpak updates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lapin-ux-core.workspace = true
+libcosmic.workspace = true
+tokio.workspace = true
+futures.workspace = true
+zbus.workspace = true
