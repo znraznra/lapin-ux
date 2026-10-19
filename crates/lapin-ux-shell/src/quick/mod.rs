@@ -786,18 +786,19 @@ fn main_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         body = body.push(media_card(shell, p));
     }
     body = body.push(grid);
-    // Brightness and volume rows share one layout: a 24 px icon cell, the
-    // slider, and a 28 px end cell (the sound-output arrow, or empty), so the
-    // two sliders start and end at the same place.
+    // Brightness and volume rows share one layout: a 24 px icon cell, then
+    // the slider. The volume row ends with the sound-output arrow; the
+    // brightness slider runs on to the arrow's tip (its glyph reaches 2 px
+    // past the button), so both rows end at the same place.
     let slider_row = |lead: Element<'a, Message>, bar: Element<'a, Message>, end: Option<Element<'a, Message>>| -> Element<'a, Message> {
-        let end = end.unwrap_or_else(|| widget::Space::new().width(28).height(28).into());
-        container(
-            row::with_children(vec![container(lead).width(24).height(24).center(Length::Fixed(24.0)).into(), bar, end])
-                .spacing(10)
-                .align_y(Alignment::Center),
-        )
-        .padding([0, 4])
-        .into()
+        let lead: Element<'a, Message> = container(lead).width(24).height(24).center(Length::Fixed(24.0)).into();
+        let (cells, right) = match end {
+            Some(end) => (vec![lead, bar, end], 4),
+            None => (vec![lead, bar], 2),
+        };
+        container(row::with_children(cells).spacing(10).align_y(Alignment::Center))
+            .padding(cosmic::iced::Padding { top: 0.0, right: right as f32, bottom: 0.0, left: 4.0 })
+            .into()
     };
     if let Some((_, b)) = &q.backlight {
         body = body.push(slider_row(
