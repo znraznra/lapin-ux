@@ -34,6 +34,8 @@ pub enum SnapMsg {
     Open,
     Pick(usize, usize),
     Assist(WindowId),
+    /// Bring a snap group back: every window in it, `last` on top.
+    RestoreGroup(Vec<WindowId>),
 }
 
 impl Shell {
@@ -108,12 +110,34 @@ impl Shell {
                     return self.finish_snap(target);
                 }
             }
+            SnapMsg::RestoreGroup(ids) => {
+                // Raise one after another so they all end up above other windows.
+                let tasks = ids.into_iter().enumerate().map(|(i, id)| {
+                    Task::future(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(120 + 80 * i as u64)).await;
+                        cosmic::Action::App(Message::ActivateWindow(id))
+                    })
+                });
+                let close = self.close_popup();
+                return Task::batch(std::iter::once(close).chain(tasks));
+            }
         }
         Task::none()
     }
 
-    /// Close the panel and give the first window the focus back.
+    /// Close the panel and give the first window the focus back. Windows
+    /// placed together form a snap group.
     fn finish_snap(&mut self, target: WindowId) -> Task<Message> {
+        if let Some(p) = self.snap_panel()
+            && p.placed.len() > 1
+        {
+            let group = p.placed.clone();
+            for g in &mut self.snap_groups {
+                g.retain(|h| !group.contains(h));
+            }
+            self.snap_groups.retain(|g| g.len() > 1);
+            self.snap_groups.push(group);
+        }
         let close = self.close_panel();
         Task::batch([
             close,

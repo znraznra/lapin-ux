@@ -77,7 +77,17 @@ impl Shell {
     }
 
     fn app_windows(&self, app: &str) -> Vec<WindowId> {
-        self.taskbar.windows().iter().filter(|w| w.app == app).map(|w| w.handle).collect()
+        let mine: Vec<WindowId> = self.taskbar.windows().iter().filter(|w| w.app == app).map(|w| w.handle).collect();
+        // Plus the other windows of its snap groups (their group card).
+        let mut out = mine.clone();
+        for g in self.snap_groups.iter().filter(|g| g.iter().any(|h| mine.contains(h))) {
+            for h in g {
+                if !out.contains(h) {
+                    out.push(*h);
+                }
+            }
+        }
+        out
     }
 
     pub(crate) fn note_activation(&mut self, id: WindowId) {
@@ -289,9 +299,21 @@ fn picture<'a>(shell: &'a Shell, id: WindowId, app: &str, max_w: f32, max_h: f32
     }
 }
 
+/// A fixed-size picture (for the side-by-side pictures of a snap group).
+fn small_picture<'a>(shell: &'a Shell, id: WindowId, app: &str, w: f32, h: f32) -> Element<'a, Message> {
+    let inner: Element<'a, Message> = match shell.thumbs.get(&id) {
+        Some(t) => {
+            let s = (w / t.width as f32).min(h / t.height as f32).min(1.0);
+            widget::image(t.handle.clone()).width(t.width as f32 * s).height(t.height as f32 * s).into()
+        }
+        None => icon(app_icon(shell, app)).size(32).into(),
+    };
+    container(inner).width(w).height(h).align_x(Alignment::Center).align_y(Alignment::Center).into()
+}
+
 /// Hover preview above a taskbar button: one card per window.
 pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
-    let cards: Vec<Element<'a, Message>> = shell
+    let mut cards: Vec<Element<'a, Message>> = shell
         .taskbar
         .windows()
         .iter()
@@ -317,6 +339,32 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
                 .into()
         })
         .collect();
+    // Snap groups this app's windows belong to: one card each.
+    for group in &shell.snap_groups {
+        let members: Vec<&lapin_ux_core::taskbar::Window<WindowId>> =
+            group.iter().filter_map(|h| shell.taskbar.windows().iter().find(|w| w.handle == *h)).collect();
+        let Some(mine) = members.iter().find(|w| w.app == app) else { continue };
+        let n = members.len().max(1) as f32;
+        let icons = row::with_children(members.iter().map(|w| icon(app_icon(shell, &w.app)).size(16).into()).collect::<Vec<_>>()).spacing(4);
+        let head = row::with_children(vec![icons.into(), text::caption("Group").width(Length::Fill).height(18).into()])
+            .spacing(8)
+            .align_y(Alignment::Center);
+        let pics = row::with_children(
+            members.iter().map(|w| small_picture(shell, w.handle, &w.app, 200.0 / n - 2.0, 120.0)).collect::<Vec<_>>(),
+        )
+        .spacing(2);
+        // The hovered app's window comes up last, with the focus.
+        let mut order: Vec<WindowId> = group.iter().copied().filter(|h| *h != mine.handle).collect();
+        order.push(mine.handle);
+        cards.push(
+            button::custom(column::with_children(vec![head.into(), pics.into()]).spacing(6))
+                .width(220)
+                .padding(8)
+                .class(style::flat_button(false))
+                .on_press(Message::Snap(crate::snap::SnapMsg::RestoreGroup(order)))
+                .into(),
+        );
+    }
     let body = container(row::with_children(cards).spacing(4)).padding(4).class(style::panel_bg());
     mouse_area(body)
         .on_enter(Message::Preview(PreviewMsg::PopupHover(true)))

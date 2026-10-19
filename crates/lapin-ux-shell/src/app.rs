@@ -320,6 +320,8 @@ pub struct Shell {
     pub hover_gen: u64,
     /// Windows, most recently focused first (Alt+Tab order).
     pub mru: Vec<Handle>,
+    /// Snap groups: windows placed together with a snap layout.
+    pub snap_groups: Vec<Vec<Handle>>,
     /// Windows minimized by "Show desktop", restored by a second click.
     pub(crate) desktop_shown: Vec<Handle>,
     /// Start was requested before any taskbar existed (Super pressed at login).
@@ -612,6 +614,10 @@ impl Shell {
         self.taskbar.remove(&id);
         self.desktop_shown.retain(|h| h != &id);
         self.desktops.of_window.remove(&id);
+        for g in &mut self.snap_groups {
+            g.retain(|h| h != &id);
+        }
+        self.snap_groups.retain(|g| g.len() > 1);
     }
 
     /// Ordered list of what the Start menu currently shows, for keyboard nav.
@@ -815,6 +821,7 @@ impl Application for Shell {
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
+            snap_groups: Vec::new(),
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
