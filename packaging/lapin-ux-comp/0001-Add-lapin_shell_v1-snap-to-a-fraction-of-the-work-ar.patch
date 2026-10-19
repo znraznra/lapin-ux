@@ -1,0 +1,416 @@
+From 099ceaceeb634ed43a572e49cc9832433a8768ab Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 09:30:32 +0800
+Subject: [PATCH] Add lapin_shell_v1: snap to a fraction of the work area,
+ attention events
+
+Lapin UX's taskbar flashes a window's button when it asks for the focus
+but doesn't get it, and its snap layouts place windows in halves, thirds
+and quarters.
+---
+ resources/protocols/lapin-shell-v1.xml |  36 +++++++++
+ src/shell/layout/floating/mod.rs       |  42 ++++++++++
+ src/state.rs                           |   4 +
+ src/wayland/handlers/lapin_shell.rs    |  34 ++++++++
+ src/wayland/handlers/mod.rs            |   1 +
+ src/wayland/handlers/xdg_activation.rs |  31 ++++++++
+ src/wayland/protocols/lapin_shell.rs   | 104 +++++++++++++++++++++++++
+ src/wayland/protocols/mod.rs           |   1 +
+ src/wayland/protocols/toplevel_info.rs |  19 +++++
+ 9 files changed, 272 insertions(+)
+ create mode 100644 resources/protocols/lapin-shell-v1.xml
+ create mode 100644 src/wayland/handlers/lapin_shell.rs
+ create mode 100644 src/wayland/protocols/lapin_shell.rs
+
+diff --git a/resources/protocols/lapin-shell-v1.xml b/resources/protocols/lapin-shell-v1.xml
+new file mode 100644
+index 0000000..555965e
+--- /dev/null
++++ b/resources/protocols/lapin-shell-v1.xml
+@@ -0,0 +1,36 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="lapin_shell_v1">
++  <copyright>
++    SPDX-License-Identifier: GPL-3.0-only
++  </copyright>
++  <description summary="Lapin UX shell extras">
++    Small additions the Lapin UX shell needs from the compositor: placing a
++    window in a fraction of the work area (snap layouts) and hearing when a
++    window wants attention (taskbar flashing). Windows are named by the
++    identifier of their ext_foreign_toplevel_handle_v1.
++  </description>
++
++  <interface name="lapin_shell_manager_v1" version="1">
++    <request name="destroy" type="destructor"/>
++
++    <request name="snap">
++      <description summary="place a window in part of the work area">
++        Float the window and place it in the given part of the work area of
++        its monitor (panels excluded), in ten-thousandths of the area's
++        width and height. Gaps are applied by the compositor.
++      </description>
++      <arg name="identifier" type="string"/>
++      <arg name="x" type="uint"/>
++      <arg name="y" type="uint"/>
++      <arg name="width" type="uint"/>
++      <arg name="height" type="uint"/>
++    </request>
++
++    <event name="attention">
++      <description summary="a window asked for attention">
++        Sent when a window asks to be activated but isn't given the focus.
++      </description>
++      <arg name="identifier" type="string"/>
++    </event>
++  </interface>
++</protocol>
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index da54445..75473bf 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -1735,6 +1735,48 @@ impl FloatingLayout {
+         }
+     }
+ 
++    /// Place a window in part of the work area (fractions of its width and
++    /// height), like a snapped half but any size: thirds, two-thirds…
++    pub fn snap_to_fraction(&mut self, element: &CosmicMapped, x: f64, y: f64, w: f64, h: f64) {
++        let output = self.space.outputs().next().unwrap().clone();
++        let layers = layer_map_for_output(&output);
++        let area = layers.non_exclusive_zone();
++        std::mem::drop(layers);
++        let (_, inner) = self.gaps();
++        let px = |f: f64, len: i32| (f * len as f64).round() as i32;
++        let left = area.loc.x + px(x, area.size.w);
++        let top = area.loc.y + px(y, area.size.h);
++        let right = area.loc.x + px(x + w, area.size.w);
++        let bottom = area.loc.y + px(y + h, area.size.h);
++        // Full gap at the screen edges, half between neighbours.
++        let gap = |at_edge: bool| if at_edge { inner } else { inner / 2 };
++        let l = left + gap(x <= 0.0);
++        let t = top + gap(y <= 0.0);
++        let r = right - gap(x + w >= 1.0);
++        let b = bottom - gap(y + h >= 1.0);
++        let pos: Point<i32, Local> = Point::from((l, t));
++        let size: Size<i32, Logical> = Size::from(((r - l).max(1), (b - t).max(1)));
++
++        let start = self.space.element_geometry(element).map(RectExt::as_local);
++        let mut tiled_state = element.floating_tiled.lock().unwrap();
++        if tiled_state.is_none() {
++            let last = element
++                .maximized_state
++                .lock()
++                .unwrap()
++                .take()
++                .map(|state| state.original_geometry)
++                .or(start);
++            *element.last_geometry.lock().unwrap() = last;
++        }
++        *tiled_state = None;
++        std::mem::drop(tiled_state);
++        element.set_tiled(true);
++        element.set_maximized(false);
++        element.moved_since_mapped.store(true, Ordering::SeqCst);
++        self.map_internal(element.clone(), Some(pos), Some(size), start);
++    }
++
+     pub fn snap_to_corner(&self, mapped: &CosmicMapped, corners: &TiledCorners) {
+         *mapped.floating_tiled.lock().unwrap() = Some(*corners);
+         mapped.set_tiled(true);
+diff --git a/src/state.rs b/src/state.rs
+index e3d170b..b1f47d4 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -307,6 +307,7 @@ pub struct Common {
+     pub a11y_state: A11yState,
+     pub dbus_state: DBusState,
+     pub keyboard_layout_state: KeyboardLayoutState,
++    pub lapin_shell_state: crate::wayland::protocols::lapin_shell::LapinShellState,
+     pub background_effect_state: BackgroundEffectState,
+ 
+     // shell-related wayland state
+@@ -714,6 +715,8 @@ impl State {
+         SinglePixelBufferState::new::<Self>(dh);
+         FixesState::new::<Self>(dh);
+         let keyboard_layout_state = KeyboardLayoutState::new::<State, _>(dh, client_not_sandboxed);
++        let lapin_shell_state =
++            crate::wayland::protocols::lapin_shell::LapinShellState::new::<State, _>(dh, client_not_sandboxed);
+ 
+         let background_effect_state = BackgroundEffectState::new::<Self>(dh);
+ 
+@@ -836,6 +839,7 @@ impl State {
+                 pointer_focus_state: None,
+                 dbus_state,
+                 keyboard_layout_state,
++                lapin_shell_state,
+                 session_lock_layer_state,
+ 
+                 #[cfg(feature = "logind")]
+diff --git a/src/wayland/handlers/lapin_shell.rs b/src/wayland/handlers/lapin_shell.rs
+new file mode 100644
+index 0000000..0f58d80
+--- /dev/null
++++ b/src/wayland/handlers/lapin_shell.rs
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: GPL-3.0-only
++
++use smithay::wayland::seat::WaylandFocus;
++
++use crate::state::State;
++use crate::wayland::protocols::{
++    lapin_shell::{LapinShellHandler, LapinShellState},
++    toplevel_info::window_from_identifier,
++};
++
++impl LapinShellHandler for State {
++    fn lapin_shell_state(&mut self) -> &mut LapinShellState {
++        &mut self.common.lapin_shell_state
++    }
++
++    fn snap(&mut self, identifier: &str, x: f64, y: f64, width: f64, height: f64) {
++        let Some(window) = window_from_identifier(self, identifier).cloned() else { return };
++        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else { return };
++        let mut shell = self.common.shell.write();
++        let seat = shell.seats.last_active().clone();
++        let Some(mapped) = shell.element_for_surface(&surface).cloned() else { return };
++        let Some(workspace) = shell.space_for_mut(&mapped) else { return };
++        if mapped.is_maximized(false) {
++            workspace.unmaximize_request(&mapped);
++        }
++        // Snapping works on floating windows; take it out of tiling first.
++        if !workspace.is_floating(&window) {
++            workspace.toggle_floating_window(&seat, &mapped);
++        }
++        if workspace.floating_layer.mapped().any(|m| m == &mapped) {
++            workspace.floating_layer.snap_to_fraction(&mapped, x, y, width, height);
++        }
++    }
++}
+diff --git a/src/wayland/handlers/mod.rs b/src/wayland/handlers/mod.rs
+index 3757dd8..ef20a81 100644
+--- a/src/wayland/handlers/mod.rs
++++ b/src/wayland/handlers/mod.rs
+@@ -20,6 +20,7 @@ pub mod image_capture_source;
+ pub mod image_copy_capture;
+ pub mod input_method;
+ pub mod keyboard_layout;
++pub mod lapin_shell;
+ pub mod keyboard_shortcuts_inhibit;
+ pub mod layer_shell;
+ pub mod output;
+diff --git a/src/wayland/handlers/xdg_activation.rs b/src/wayland/handlers/xdg_activation.rs
+index 38ba621..9290d0c 100644
+--- a/src/wayland/handlers/xdg_activation.rs
++++ b/src/wayland/handlers/xdg_activation.rs
+@@ -120,8 +120,22 @@ impl XdgActivationHandler for State {
+             return;
+         };
+ 
++        // Lapin UX: the taskbar flashes the window's button.
++        let lapin_urgent = |state: &mut State, surface: &WlSurface| {
++            let shell = state.common.shell.read();
++            let id = shell
++                .element_for_surface(surface)
++                .map(|m| m.active_window())
++                .and_then(|w| crate::wayland::protocols::toplevel_info::identifier_of(&w));
++            std::mem::drop(shell);
++            if let Some(id) = id {
++                state.common.lapin_shell_state.attention(&id);
++            }
++        };
++
+         match context {
+             ActivationContext::UrgentOnly => {
++                lapin_urgent(self, &surface);
+                 let shell = self.common.shell.write();
+                 if let Some((workspace, _output)) = shell.workspace_for_surface(&surface) {
+                     let mut workspace_guard = self.common.workspace_state.update();
+@@ -157,9 +171,13 @@ impl XdgActivationHandler for State {
+                         } else {
+                             let mut workspace_guard = self.common.workspace_state.update();
+                             workspace_guard.add_workspace_state(&target_workspace, WState::Urgent);
++                            std::mem::drop(workspace_guard);
++                            std::mem::drop(shell);
++                            lapin_urgent(self, &surface);
+                         }
+                     }
+                     ActivationPolicy::Urgent => {
++                        lapin_urgent(self, &surface);
+                         let shell = self.common.shell.write();
+                         if let Some((workspace, _output)) = shell.workspace_for_surface(&surface) {
+                             let mut workspace_guard = self.common.workspace_state.update();
+@@ -287,6 +305,19 @@ impl State {
+                 }
+                 let mut workspace_guard = self.common.workspace_state.update();
+                 workspace_guard.add_workspace_state(&workspace, WState::Urgent);
++                std::mem::drop(workspace_guard);
++                // Lapin UX: flash the window's taskbar button.
++                std::mem::drop(shell);
++                let id = self
++                    .common
++                    .toplevel_info_state
++                    .registered_toplevels()
++                    .find(|w| smithay::wayland::seat::WaylandFocus::wl_surface(*w).as_deref() == Some(surface))
++                    .and_then(crate::wayland::protocols::toplevel_info::identifier_of);
++                if let Some(id) = id {
++                    self.common.lapin_shell_state.attention(&id);
++                }
++                return;
+             }
+         } else if let Some((activation_key, context)) = pending_activation {
+             shell.pending_activations.insert(activation_key, context);
+diff --git a/src/wayland/protocols/lapin_shell.rs b/src/wayland/protocols/lapin_shell.rs
+new file mode 100644
+index 0000000..ac26d8f
+--- /dev/null
++++ b/src/wayland/protocols/lapin_shell.rs
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! lapin_shell_v1: snap a window into part of the work area, and tell the
++//! shell when a window asks for attention.
++
++pub use generated::lapin_shell_manager_v1;
++
++#[allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
++mod generated {
++    use smithay::reexports::wayland_server;
++
++    pub mod __interfaces {
++        use wayland_backend;
++        wayland_scanner::generate_interfaces!("resources/protocols/lapin-shell-v1.xml");
++    }
++    use self::__interfaces::*;
++
++    wayland_scanner::generate_server_code!("resources/protocols/lapin-shell-v1.xml");
++}
++
++use lapin_shell_manager_v1::LapinShellManagerV1;
++use smithay::{
++    reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New},
++    wayland::{Dispatch2, GlobalDispatch2},
++};
++use wayland_backend::server::{ClientId, GlobalId};
++
++pub trait LapinShellHandler {
++    fn lapin_shell_state(&mut self) -> &mut LapinShellState;
++    /// Place the window in this part of its work area (fractions 0..1).
++    fn snap(&mut self, identifier: &str, x: f64, y: f64, width: f64, height: f64);
++}
++
++#[derive(Debug)]
++pub struct LapinShellState {
++    pub global: GlobalId,
++    managers: Vec<LapinShellManagerV1>,
++}
++
++pub struct LapinShellGlobalData {
++    filter: Box<dyn for<'a> Fn(&'a Client) -> bool + Send + Sync>,
++}
++
++pub struct LapinShellManagerData;
++
++impl LapinShellState {
++    pub fn new<D, F>(dh: &DisplayHandle, client_filter: F) -> Self
++    where
++        D: GlobalDispatch<LapinShellManagerV1, LapinShellGlobalData> + 'static,
++        F: for<'a> Fn(&'a Client) -> bool + Send + Sync + 'static,
++    {
++        let global = dh.create_global::<D, LapinShellManagerV1, _>(1, LapinShellGlobalData { filter: Box::new(client_filter) });
++        LapinShellState { global, managers: Vec::new() }
++    }
++
++    /// Tell every shell client that a window wants attention.
++    pub fn attention(&self, identifier: &str) {
++        for m in &self.managers {
++            m.attention(identifier.to_string());
++        }
++    }
++}
++
++impl<D> GlobalDispatch2<LapinShellManagerV1, D> for LapinShellGlobalData
++where
++    D: Dispatch<LapinShellManagerV1, LapinShellManagerData> + LapinShellHandler + 'static,
++{
++    fn bind(&self, state: &mut D, _handle: &DisplayHandle, _client: &Client, resource: New<LapinShellManagerV1>, data_init: &mut DataInit<'_, D>) {
++        let m = data_init.init(resource, LapinShellManagerData);
++        state.lapin_shell_state().managers.push(m);
++    }
++
++    fn can_view(&self, client: &Client) -> bool {
++        (self.filter)(client)
++    }
++}
++
++impl<D> Dispatch2<LapinShellManagerV1, D> for LapinShellManagerData
++where
++    D: LapinShellHandler + 'static,
++{
++    fn request(
++        &self,
++        state: &mut D,
++        _client: &Client,
++        _resource: &LapinShellManagerV1,
++        request: lapin_shell_manager_v1::Request,
++        _dhandle: &DisplayHandle,
++        _data_init: &mut DataInit<'_, D>,
++    ) {
++        match request {
++            lapin_shell_manager_v1::Request::Snap { identifier, x, y, width, height } => {
++                let f = |v: u32| (v.min(10_000) as f64) / 10_000.0;
++                if width > 0 && height > 0 {
++                    state.snap(&identifier, f(x), f(y), f(width), f(height));
++                }
++            }
++            lapin_shell_manager_v1::Request::Destroy => {}
++        }
++    }
++
++    fn destroyed(&self, state: &mut D, _client: ClientId, resource: &LapinShellManagerV1) {
++        state.lapin_shell_state().managers.retain(|m| m != resource);
++    }
++}
+diff --git a/src/wayland/protocols/mod.rs b/src/wayland/protocols/mod.rs
+index 48aa833..20e3506 100644
+--- a/src/wayland/protocols/mod.rs
++++ b/src/wayland/protocols/mod.rs
+@@ -5,6 +5,7 @@ pub mod corner_radius;
+ pub mod drm;
+ pub mod image_capture_source;
+ pub mod keyboard_layout;
++pub mod lapin_shell;
+ pub mod output_configuration;
+ pub mod output_power;
+ pub mod overlap_notify;
+diff --git a/src/wayland/protocols/toplevel_info.rs b/src/wayland/protocols/toplevel_info.rs
+index 3146adc..c5cd04c 100644
+--- a/src/wayland/protocols/toplevel_info.rs
++++ b/src/wayland/protocols/toplevel_info.rs
+@@ -697,6 +697,25 @@ where
+     })
+ }
+ 
++/// The window whose ext_foreign_toplevel_handle_v1 has this identifier.
++pub fn window_from_identifier<'a, W: Window + 'static, D>(state: &'a D, identifier: &str) -> Option<&'a W>
++where
++    D: ToplevelInfoHandler<Window = W>,
++{
++    state.toplevel_info_state().toplevels.iter().find(|w| {
++        w.user_data().get::<ToplevelState>().is_some_and(|inner| {
++            inner.lock().unwrap().foreign_handle.as_ref().is_some_and(|h| h.identifier() == identifier)
++        })
++    })
++}
++
++/// The identifier of a window's ext_foreign_toplevel_handle_v1.
++pub fn identifier_of<W: Window + 'static>(window: &W) -> Option<String> {
++    let inner = window.user_data().get::<ToplevelState>()?;
++    let inner = inner.lock().unwrap();
++    inner.foreign_handle.as_ref().map(|h| h.identifier().to_string())
++}
++
+ pub fn window_from_ext_handle<'a, W: Window + 'static, D>(
+     state: &'a D,
+     foreign_toplevel: &ExtForeignToplevelHandleV1,
+-- 
+2.43.0
+

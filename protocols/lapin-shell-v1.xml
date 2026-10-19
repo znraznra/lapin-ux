@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="lapin_shell_v1">
+  <copyright>
+    SPDX-License-Identifier: GPL-3.0-only
+  </copyright>
+  <description summary="Lapin UX shell extras">
+    Small additions the Lapin UX shell needs from the compositor: placing a
+    window in a fraction of the work area (snap layouts) and hearing when a
+    window wants attention (taskbar flashing). Windows are named by the
+    identifier of their ext_foreign_toplevel_handle_v1.
+  </description>
+
+  <interface name="lapin_shell_manager_v1" version="1">
+    <request name="destroy" type="destructor"/>
+
+    <request name="snap">
+      <description summary="place a window in part of the work area">
+        Float the window and place it in the given part of the work area of
+        its monitor (panels excluded), in ten-thousandths of the area's
+        width and height. Gaps are applied by the compositor.
+      </description>
+      <arg name="identifier" type="string"/>
+      <arg name="x" type="uint"/>
+      <arg name="y" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </request>
+
+    <event name="attention">
+      <description summary="a window asked for attention">
+        Sent when a window asks to be activated but isn't given the focus.
+      </description>
+      <arg name="identifier" type="string"/>
+    </event>
+  </interface>
+</protocol>

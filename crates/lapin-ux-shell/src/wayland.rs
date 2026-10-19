@@ -53,6 +53,7 @@ use cosmic::cctk::{
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
 };
 use cosmic::iced::{self, Subscription, stream};
+use crate::lapin_proto::lapin_shell_manager_v1::{self, LapinShellManagerV1};
 use futures::{
     SinkExt, StreamExt,
     channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
@@ -105,6 +106,10 @@ pub enum WaylandUpdate {
     KeyboardGroup(u32),
     /// Virtual desktops in order, and whether new ones can be made.
     Workspaces(Vec<WorkspaceInfo>, bool),
+    /// A window asked for attention (lapin-ux-comp only).
+    Attention(WindowId),
+    /// Whether snap layouts are possible (lapin-ux-comp is running).
+    SnapSupported(bool),
 }
 
 /// What the compositor reports about its accessibility features.
@@ -138,6 +143,8 @@ pub enum WaylandRequest {
     RemoveWorkspace(WorkspaceId),
     /// Move a window to another desktop.
     MoveToWorkspace(WindowId, WorkspaceId),
+    /// Put a window in part of its monitor's work area (fractions 0..1).
+    Snap(WindowId, [f32; 4]),
 }
 
 /// Thumbnails are captured at most this size.
@@ -243,6 +250,10 @@ struct AppData {
     workspace_state: WorkspaceState,
     ws_ids: HashMap<ObjectId, WorkspaceId>,
     ws_objects: HashMap<WorkspaceId, ExtWorkspaceHandleV1>,
+    lapin: Option<LapinShellManagerV1>,
+    /// ext-foreign-toplevel identifiers, both ways.
+    by_identifier: HashMap<String, WindowId>,
+    identifiers: HashMap<WindowId, String>,
 }
 
 impl AppData {
@@ -261,6 +272,9 @@ impl AppData {
         let id = self.ids.remove(obj)?;
         self.objects.remove(&id);
         self.wlr_pending.remove(obj);
+        if let Some(ident) = self.identifiers.remove(&id) {
+            self.by_identifier.remove(&ident);
+        }
         Some(id)
     }
 
@@ -285,6 +299,13 @@ impl AppData {
             | WaylandRequest::NewWorkspace
             | WaylandRequest::RemoveWorkspace(_)
             | WaylandRequest::MoveToWorkspace(..) => return self.workspace_request(req),
+            WaylandRequest::Snap(id, [x, y, w, h]) => {
+                if let (Some(m), Some(ident)) = (&self.lapin, self.identifiers.get(&id)) {
+                    let u = |f: f32| (f.clamp(0.0, 1.0) * 10_000.0).round() as u32;
+                    m.snap(ident.clone(), u(x), u(y), u(w), u(h));
+                }
+                return;
+            }
             _ => {}
         }
         let target = |id: &WindowId| self.objects.get(id).cloned();
@@ -295,7 +316,8 @@ impl AppData {
             | WaylandRequest::ActivateWorkspace(_)
             | WaylandRequest::NewWorkspace
             | WaylandRequest::RemoveWorkspace(_)
-            | WaylandRequest::MoveToWorkspace(..) => {}
+            | WaylandRequest::MoveToWorkspace(..)
+            | WaylandRequest::Snap(..) => {}
             WaylandRequest::Activate(id) => match target(&id) {
                 Some(Toplevel::Cosmic(ext)) => {
                     if let (Some(Backend::Cosmic { manager: Some(m), .. }), Some(t), Some(seat)) =
@@ -374,6 +396,10 @@ impl AppData {
         let outputs = self.output_names(&info.output);
         let workspaces = info.workspace.iter().map(|w| self.ws_id(w)).collect();
         let id = self.id_for(ext.id(), Toplevel::Cosmic(ext.clone()));
+        if !info.identifier.is_empty() && !self.identifiers.contains_key(&id) {
+            self.by_identifier.insert(info.identifier.clone(), id);
+            self.identifiers.insert(id, info.identifier.clone());
+        }
         let _ = self.tx.unbounded_send(WaylandUpdate::Window(WindowInfo {
             id,
             app_id: info.app_id,
@@ -545,7 +571,11 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         workspace_state: WorkspaceState::new(&registry_state_for_ws, &qh),
         ws_ids: HashMap::new(),
         ws_objects: HashMap::new(),
+        lapin: globals.bind::<LapinShellManagerV1, _, _>(&qh, 1..=1, ()).ok(),
+        by_identifier: HashMap::new(),
+        identifiers: HashMap::new(),
     };
+    let _ = data.tx.unbounded_send(WaylandUpdate::SnapSupported(data.lapin.is_some()));
     if data.a11y.is_some() {
         data.a11y_state.available = true;
         let _ = data.tx.unbounded_send(WaylandUpdate::A11y(data.a11y_state));
@@ -835,6 +865,16 @@ impl Dispatch<ZcosmicKeyboardLayoutV1, ()> for AppData {
     fn event(state: &mut Self, _: &ZcosmicKeyboardLayoutV1, event: zcosmic_keyboard_layout_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let zcosmic_keyboard_layout_v1::Event::Group { group } = event {
             let _ = state.tx.unbounded_send(WaylandUpdate::KeyboardGroup(group));
+        }
+    }
+}
+
+impl Dispatch<LapinShellManagerV1, ()> for AppData {
+    fn event(state: &mut Self, _: &LapinShellManagerV1, event: lapin_shell_manager_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let lapin_shell_manager_v1::Event::Attention { identifier } = event
+            && let Some(id) = state.by_identifier.get(&identifier)
+        {
+            let _ = state.tx.unbounded_send(WaylandUpdate::Attention(*id));
         }
     }
 }

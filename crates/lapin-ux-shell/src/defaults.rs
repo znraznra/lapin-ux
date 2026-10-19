@@ -141,7 +141,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 7;
+pub const DEFAULTS_VERSION: u32 = 9;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -179,6 +179,7 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Super, Shift], key: "Right"): MoveToOutput(Right),"#.to_string(),
         // Task view and virtual desktops.
         r#"(modifiers: [Super], key: "Tab"): Spawn("lapin-ux-shell taskview"),"#.to_string(),
+        r#"(modifiers: [Super], key: "z"): Spawn("lapin-ux-shell snap"),"#.to_string(),
         r#"(modifiers: [Super, Ctrl], key: "Left"): PreviousWorkspace,"#.to_string(),
         r#"(modifiers: [Super, Ctrl], key: "Right"): NextWorkspace,"#.to_string(),
         r#"(modifiers: [Super, Ctrl], key: "d"): LastWorkspace,"#.to_string(),
@@ -213,9 +214,30 @@ fn apply_keybindings() -> Result<bool, cosmic_config::Error> {
     Ok(true)
 }
 
+/// Apps that ask for the focus while you're on another desktop flash on the
+/// taskbar instead of pulling you over (COSMIC's default switches desktops).
+/// Left alone if the user chose a policy.
+fn apply_activation_policy() -> Result<bool, cosmic_config::Error> {
+    let dir = cfg_path("com.system76.CosmicComp");
+    let file = dir.join("activation_policy");
+    if file.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(&dir).map_err(cosmic_config::Error::Io)?;
+    std::fs::write(&file, "FocusIfActiveWorkspace").map_err(cosmic_config::Error::Io)?;
+    Ok(true)
+}
+
 /// Defaults that newer releases add for people who already ran an older one.
 pub fn apply_upgrade(from: u32) {
     tracing::info!(from, to = DEFAULTS_VERSION, "upgrading defaults");
+    if from < 9 {
+        match apply_activation_policy() {
+            Ok(true) => tracing::info!("apps on other desktops now ask for attention"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("could not set the activation policy: {e}"),
+        }
+    }
     match apply_keybindings() {
         Ok(true) => tracing::info!("updated keyboard shortcuts"),
         Ok(false) => {}
@@ -285,6 +307,7 @@ pub fn apply_first_run() {
         ("interface font", apply_font()),
         ("Super key", apply_shortcuts()),
         ("keyboard shortcuts", apply_keybindings()),
+        ("focus requests", apply_activation_policy()),
     ] {
         match res {
             Ok(true) => tracing::info!("applied default {what}"),

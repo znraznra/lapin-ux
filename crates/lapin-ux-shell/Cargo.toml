@@ -23,6 +23,9 @@ tracing-subscriber.workspace = true
 zbus.workspace = true
 # Clipboard history and typing emoji (their own Wayland connection).
 wayland-client = "0.31"
+# Client code for our own compositor protocol (protocols/lapin-shell-v1.xml).
+wayland-scanner = "0.31"
+wayland-backend = "0.3"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 libc = "0.2"

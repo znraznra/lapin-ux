@@ -106,7 +106,8 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         buttons = buttons
             .into_iter()
             .filter_map(|mut b| {
-                b.windows.retain(|w| shell.desktops.of_window.get(&w.handle).is_none_or(|l| l.contains(&ws)));
+                // Windows asking for attention show wherever they are.
+                b.windows.retain(|w| w.urgent || shell.desktops.of_window.get(&w.handle).is_none_or(|l| l.contains(&ws)));
                 (b.pinned || !b.windows.is_empty()).then_some(b)
             })
             .collect();
@@ -249,11 +250,20 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>) -> Element
     .height(Length::Fill);
 
     let dragging = shell.drag.as_ref().is_some_and(|d| d.active && d.app == b.app);
+    // Asking for attention: the button flashes a few times, then stays lit.
+    let flashing = b.urgent() || badge.urgent;
+    let class = if flashing {
+        let since = b.windows.iter().filter_map(|w| shell.attention.get(&w.handle)).min().map(|t| t.elapsed().as_secs());
+        let blink_off = since.is_some_and(|s| s < 7 && s % 2 == 1);
+        if blink_off { style::flat_button(active) } else { style::urgent_button() }
+    } else {
+        style::flat_button(active || dragging)
+    };
     let btn = button::custom(content)
         .width(style::TASK_BUTTON)
         .height(style::TASK_BUTTON)
         .padding(0)
-        .class(style::flat_button(active || dragging))
+        .class(class)
         .on_press(Message::TaskClick(bar.id, b.app.clone()));
 
     let area = mouse_area(btn)

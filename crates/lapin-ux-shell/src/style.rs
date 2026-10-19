@@ -65,6 +65,29 @@ pub fn panel_footer() -> theme::Container<'static> {
     })
 }
 
+/// A taskbar button whose window wants attention: warm highlight.
+pub fn urgent_button() -> theme::Button {
+    let look = move |alpha: f32| {
+        move |t: &cosmic::Theme| {
+            let c = t.cosmic();
+            let warn: Color = c.warning_color().into();
+            button::Style {
+                background: Some(Background::Color(Color { a: alpha, ..warn })),
+                border_radius: CONTROL_RADIUS.into(),
+                text_color: Some(c.on_bg_color().into()),
+                icon_color: Some(c.on_bg_color().into()),
+                ..Default::default()
+            }
+        }
+    };
+    theme::Button::Custom {
+        active: Box::new(move |_f, t| look(0.45)(t)),
+        disabled: Box::new(move |t| look(0.45)(t)),
+        hovered: Box::new(move |_f, t| look(0.55)(t)),
+        pressed: Box::new(move |_f, t| look(0.35)(t)),
+    }
+}
+
 /// Flat button that lights up on hover; `selected` gives it a resting tint
 /// (focused app on the taskbar, keyboard selection in Start).
 pub fn flat_button(selected: bool) -> theme::Button {

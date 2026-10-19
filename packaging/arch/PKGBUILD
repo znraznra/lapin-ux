@@ -48,6 +48,7 @@ optdepends=(
     'gnome-keyring: saved passwords and SSH keys'
     'papirus-icon-theme: broader app icon coverage'
     'xdg-desktop-portal-gtk: file pickers for GTK apps'
+    'lapin-ux-comp: snap layouts (Super+Z) and taskbar flashing (packaging/lapin-ux-comp)'
     'localsearch: search inside documents from Start'
     'accountsservice: changing the account picture'
 )

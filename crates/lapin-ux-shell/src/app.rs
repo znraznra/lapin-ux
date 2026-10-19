@@ -198,6 +198,7 @@ pub enum Message {
     Unpin(String),
     PinStart(String),
     TaskView(crate::taskview::TaskViewMsg),
+    Snap(crate::snap::SnapMsg),
     ClosePopup,
     /// Modifier keys changed (on whichever surface has the keyboard).
     Modifiers(window::Id, keyboard::Modifiers),
@@ -280,6 +281,10 @@ pub struct Shell {
     /// Account picture chosen this session (AccountsService keeps it too).
     pub avatar: Option<std::path::PathBuf>,
     pub can_switch_user: bool,
+    /// When windows asked for attention (their buttons flash for a while).
+    pub attention: HashMap<Handle, Instant>,
+    /// lapin-ux-comp is running: snap layouts work.
+    pub snap_supported: bool,
     /// Virtual desktops.
     pub desktops: crate::taskview::Desktops,
     pub mods: keyboard::Modifiers,
@@ -551,13 +556,18 @@ impl Shell {
             // click should hide again rather than restore the old set.
             self.desktop_shown.clear();
         }
+        // Asking for attention lasts until the window is used.
+        let was_urgent = self.taskbar.windows().iter().any(|w| w.handle == info.id && w.urgent);
+        if info.activated {
+            self.attention.remove(&info.id);
+        }
         self.taskbar.upsert(Window {
             handle: info.id,
             app,
             title: info.title,
             active: info.activated,
             minimized: info.minimized,
-            urgent: false,
+            urgent: was_urgent && !info.activated,
             outputs: info.outputs,
         });
         if !info.workspaces.is_empty() {
@@ -756,6 +766,8 @@ impl Application for Shell {
             drag_hover: None,
             avatar: None,
             can_switch_user: false,
+            attention: HashMap::new(),
+            snap_supported: false,
             desktops: Default::default(),
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
@@ -832,6 +844,7 @@ impl Application for Shell {
                 "winx" => self.update(Message::Panel(crate::panels::PanelMsg::OpenWinX)),
                 "run" => self.update(Message::Panel(crate::panels::PanelMsg::OpenRun)),
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
+                "snap" => self.update(Message::Snap(crate::snap::SnapMsg::Open)),
                 "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
                 "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
@@ -934,6 +947,14 @@ impl Shell {
                 }
                 WaylandUpdate::A11y(a) => self.quick.a11y = a,
                 WaylandUpdate::KeyboardGroup(g) => self.quick.kb_group = g,
+                WaylandUpdate::Attention(id) => {
+                    if let Some(mut w) = self.taskbar.windows().iter().find(|w| w.handle == id && !w.active).cloned() {
+                        w.urgent = true;
+                        self.taskbar.upsert(w);
+                        self.attention.insert(id, Instant::now());
+                    }
+                }
+                WaylandUpdate::SnapSupported(on) => self.snap_supported = on,
                 WaylandUpdate::Workspaces(list, can_create) => {
                     self.desktops.list = list;
                     self.desktops.can_create = can_create;
@@ -1295,6 +1316,7 @@ impl Shell {
             }
             Message::Pins(m) => return self.update_pins(m),
             Message::TaskView(m) => return self.update_taskview(m),
+            Message::Snap(m) => return self.update_snap(m),
             Message::ClosePopup => return self.close_popup(),
             Message::Modifiers(w, m) => {
                 if self.mods.control() && !m.control() {

@@ -63,7 +63,12 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let compositor = std::env::args().nth(1).unwrap_or_else(|| "cosmic-comp".into());
+    // Prefer Lapin UX's build of the compositor (snap layouts, attention)
+    // when it's installed; plain cosmic-comp works too.
+    let compositor = std::env::args().nth(1).unwrap_or_else(|| {
+        let on_path = |b: &str| std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(b).is_file()));
+        if on_path("lapin-ux-comp") { "lapin-ux-comp".into() } else { "cosmic-comp".into() }
+    });
     // Started from inside another desktop (testing in a window): leave that
     // desktop's systemd/D-Bus environment and session target alone.
     let nested = std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();

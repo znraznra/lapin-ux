@@ -38,6 +38,7 @@ pub enum PanelKind {
     Clip(crate::clipboard::ClipPanel),
     AltTab(crate::previews::AltTab),
     TaskView(crate::taskview::TaskView),
+    Snap(crate::snap::SnapPanel),
 }
 
 pub struct Panel {
@@ -177,6 +178,8 @@ impl Shell {
             }
             PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above, left: 12 }, RUN_WIDTH),
             PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
+            // Top centre, where the benchmark shows it over a window's maximize button.
+            PanelKind::Snap(_) => (Anchor::TOP, IcedMargin { top: 12, right: 0, bottom: 0, left: 0 }, crate::snap::WIDTH),
             // Everything above the taskbar, which stays usable.
             PanelKind::TaskView(_) => (
                 Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
@@ -330,6 +333,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
     }
     let content: Element<'_, Message> = match &panel.kind {
         PanelKind::TaskView(_) => unreachable!(),
+        PanelKind::Snap(s) => crate::snap::view(shell, s),
         PanelKind::WinX { power, selected } => {
             let mut col = column::with_capacity(20).spacing(1);
             let mut idx = 0usize;
@@ -420,6 +424,7 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Clip(_) => crate::clipboard::WIDTH,
         PanelKind::AltTab(a) => crate::previews::switcher_width(a.order.len()),
         PanelKind::TaskView(_) => 0,
+        PanelKind::Snap(_) => crate::snap::WIDTH,
     } as f32;
     widget::autosize::autosize(
         container(content).width(Length::Fill).class(style::panel_bg()),
