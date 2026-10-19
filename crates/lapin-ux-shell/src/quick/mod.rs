@@ -4,6 +4,7 @@
 //! saver and Do not disturb tiles, brightness and volume sliders, battery.
 
 pub mod backend;
+pub mod bt_agent;
 pub mod media;
 
 use std::time::{Duration, Instant};
@@ -34,6 +35,12 @@ pub struct QuickState {
     /// Configured keyboard layouts: (code, description).
     pub layouts: Vec<(String, String)>,
     pub screen_reader: bool,
+    /// A question from the Bluetooth pairing agent.
+    pub bt_prompt: Option<bt_agent::Prompt>,
+    pub bt_pin: String,
+    /// Device being paired, and how the last attempt went.
+    pub pairing: Option<String>,
+    pub pair_result: Option<String>,
     /// Media players, the one playing first.
     pub media: Vec<media::Player>,
     pub backlight: Option<(String, Brightness)>,
@@ -56,6 +63,8 @@ pub enum Page {
     Hotspot,
     Keyboard,
     Accessibility,
+    /// Looking for Bluetooth devices to pair.
+    BtAdd,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -101,6 +110,13 @@ pub enum QuickMsg {
     Magnifier(bool),
     ColorFilter(bool),
     ScreenReader(bool),
+    Agent(bt_agent::AgentEvent),
+    BtPair(String),
+    /// Pairing finished: device path, error message if it failed.
+    BtPaired(String, Option<String>),
+    /// Answer the agent: yes / no.
+    BtAnswer(bool),
+    BtPin(String),
     /// Start a helper app (cast, nearby sharing) and close the panel.
     Run(&'static str),
 }
@@ -212,10 +228,27 @@ impl Shell {
             QuickMsg::Page(page) => {
                 let scan = page == Page::Wifi && !q.network.wifi_device.is_empty();
                 let device = q.network.wifi_device.clone();
+                let adapter = q.bluetooth.adapter.clone();
+                let was = self.quick_panel().map(|p| p.page.clone());
                 if let Some(p) = self.quick_panel() {
-                    p.page = page;
+                    p.page = page.clone();
                     p.selected = None;
                     p.password.clear();
+                }
+                // Look for devices only while the "Add device" page is up.
+                let discover = match (was == Some(Page::BtAdd), page == Page::BtAdd) {
+                    (false, true) => Some(true),
+                    (true, false) => Some(false),
+                    _ => None,
+                };
+                if let Some(on) = discover {
+                    self.quick.pair_result = None;
+                    return Task::future(async move {
+                        if let Err(e) = backend::set_discovery(adapter, on).await {
+                            tracing::warn!("bluetooth discovery: {e}");
+                        }
+                        cosmic::Action::App(Message::Noop)
+                    });
                 }
                 if scan {
                     return Task::future(async move { done(backend::wifi_scan(device).await, "scan for networks") });
@@ -440,6 +473,44 @@ impl Shell {
                     cosmic::Action::App(Message::Noop)
                 });
             }
+            QuickMsg::Agent(ev) => match ev {
+                bt_agent::AgentEvent::Prompt(p) => {
+                    q.bt_pin.clear();
+                    q.bt_prompt = Some(p);
+                    // A device asking on its own: bring the panel up.
+                    if !self.quick_open() {
+                        let mut panel = QuickPanel::default();
+                        panel.page = Page::BtAdd;
+                        return self.open_panel(PanelKind::Quick(panel));
+                    }
+                }
+                bt_agent::AgentEvent::Cancelled => q.bt_prompt = None,
+            },
+            QuickMsg::BtPair(path) => {
+                q.pairing = Some(path.clone());
+                q.pair_result = None;
+                return Task::future(async move {
+                    let r = backend::bluetooth_pair(path.clone()).await;
+                    if let Err(e) = &r {
+                        tracing::warn!("pairing: {e}");
+                    }
+                    cosmic::Action::App(Message::Quick(QuickMsg::BtPaired(path, r.err().map(|_| "Couldn't connect. Make sure the device is ready to pair.".to_string()))))
+                });
+            }
+            QuickMsg::BtPaired(path, err) => {
+                if q.pairing.as_deref() == Some(path.as_str()) {
+                    q.pairing = None;
+                }
+                q.bt_prompt = None;
+                q.pair_result = Some(err.unwrap_or_else(|| "Your device is ready to go!".into()));
+            }
+            QuickMsg::BtAnswer(yes) => {
+                if let Some(p) = q.bt_prompt.take() {
+                    let reply = yes.then(|| std::mem::take(&mut q.bt_pin));
+                    bt_agent::answer(p.id, reply);
+                }
+            }
+            QuickMsg::BtPin(pin) => q.bt_pin = pin.chars().filter(|c| c.is_ascii_alphanumeric()).take(16).collect(),
             QuickMsg::Run(bin) => {
                 let close = self.close_panel();
                 let run = Task::future(async move {
@@ -471,11 +542,12 @@ impl Shell {
     /// Esc on a sub-page goes back to the main page.
     pub(crate) fn quick_escape(&mut self) -> Option<Task<Message>> {
         let p = self.quick_panel()?;
-        if p.page == Page::Main {
-            return None;
-        }
-        p.page = Page::Main;
-        Some(Task::none())
+        let back = match p.page {
+            Page::Main => return None,
+            Page::BtAdd => Page::Bluetooth,
+            _ => Page::Main,
+        };
+        Some(self.update_quick(QuickMsg::Page(back)))
     }
 }
 
@@ -916,7 +988,16 @@ fn bluetooth_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     column::with_children(vec![
         container(header("Bluetooth", Some((bt.powered, |on| Message::Quick(QuickMsg::Bluetooth(on)))))).padding([12, 12, 4, 12]).into(),
         scrollable(container(list).padding([0, 12])).height(Length::Fixed(300.0)).into(),
-        container(link("Add a device or more Bluetooth settings", "bluetooth")).padding([8, 20, 14, 20]).into(),
+        container(
+            row::with_children(vec![
+                button::standard("Add device").on_press_maybe(bt.powered.then_some(Message::Quick(QuickMsg::Page(Page::BtAdd)))).into(),
+                widget::Space::new().width(Length::Fill).into(),
+                link("More Bluetooth settings", "bluetooth"),
+            ])
+            .align_y(Alignment::Center),
+        )
+        .padding([8, 20, 14, 20])
+        .into(),
     ])
     .spacing(4)
     .into()
@@ -1067,8 +1148,92 @@ fn keyboard_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     page("Keyboard layout", list, Some(("More keyboard settings", "keyboard")))
 }
 
+/// Pairing: nearby devices, and the agent's questions.
+fn bt_add_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
+    let q = &shell.quick;
+    let mut c = column::with_capacity(4).spacing(8);
+    if let Some(p) = &q.bt_prompt {
+        let who = if p.device.is_empty() { "The device".to_string() } else { p.device.clone() };
+        let mut card = column::with_capacity(4).spacing(10);
+        let yes_no = |yes: &'static str| {
+            row::with_children(vec![
+                widget::Space::new().width(Length::Fill).into(),
+                button::standard("Cancel").on_press(Message::Quick(QuickMsg::BtAnswer(false))).into(),
+                button::suggested(yes).on_press(Message::Quick(QuickMsg::BtAnswer(true))).into(),
+            ])
+            .spacing(8)
+        };
+        match &p.ask {
+            bt_agent::Ask::Confirm(code) => {
+                card = card
+                    .push(text::body(format!("Make sure this PIN matches the one on {who}.")))
+                    .push(text::title3(format!("{code:06}")))
+                    .push(yes_no("Connect"));
+            }
+            bt_agent::Ask::Display(code) => {
+                card = card.push(text::body(format!("Type this PIN on {who}, then press Enter there."))).push(text::title3(code.clone()));
+            }
+            bt_agent::Ask::EnterPin => {
+                card = card
+                    .push(text::body(format!("Enter the PIN for {who}.")))
+                    .push(
+                        text_input::text_input("PIN", &q.bt_pin)
+                            .on_input(|s| Message::Quick(QuickMsg::BtPin(s)))
+                            .on_submit(|_| Message::Quick(QuickMsg::BtAnswer(true))),
+                    )
+                    .push(yes_no("Connect"));
+            }
+            bt_agent::Ask::Authorize => {
+                card = card.push(text::body(format!("Allow {who} to connect?"))).push(yes_no("Allow"));
+            }
+        }
+        c = c.push(container(card).padding(12).class(style::folder_card()));
+    } else if let Some(r) = &q.pair_result {
+        c = c.push(container(text::body(r.clone())).padding([4, 10]));
+    }
+    let bt = &q.bluetooth;
+    if bt.nearby.is_empty() {
+        let msg = if bt.discovering { "Looking for devices… Make sure yours is turned on and ready to pair." } else { "Starting the search…" };
+        c = c.push(container(text::body(msg).class(style::dim_text())).padding(10));
+    }
+    let mut list = column::with_capacity(bt.nearby.len()).spacing(2);
+    for d in &bt.nearby {
+        let busy = q.pairing.as_deref() == Some(d.path.as_str());
+        let icon_name = if d.icon.is_empty() { "bluetooth-active-symbolic".to_string() } else { format!("{}-symbolic", d.icon) };
+        let content = row::with_children(vec![
+            sym(&icon_name, &["bluetooth-active-symbolic"]).into(),
+            text::body(d.name.clone()).width(Length::Fill).into(),
+            text::caption(if busy { "Connecting…" } else { "" }).class(style::dim_text()).into(),
+        ])
+        .spacing(12)
+        .align_y(Alignment::Center);
+        let msg = (q.pairing.is_none()).then(|| Message::Quick(QuickMsg::BtPair(d.path.clone())));
+        list = list.push(button::custom(content).width(Length::Fill).padding([8, 10]).class(style::flat_button(busy)).on_press_maybe(msg));
+    }
+    c = c.push(scrollable(list).height(Length::Shrink));
+    column::with_children(vec![
+        container(
+            row::with_children(vec![
+                button::custom(sym("go-previous-symbolic", &[]))
+                    .padding(8)
+                    .class(style::flat_button(false))
+                    .on_press(Message::Quick(QuickMsg::Page(Page::Bluetooth)))
+                    .into(),
+                text::title4("Add a device").into(),
+            ])
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([12, 12, 4, 12])
+        .into(),
+        container(c).padding([0, 12, 14, 12]).into(),
+    ])
+    .into()
+}
+
 pub fn view<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
     match p.page {
+        Page::BtAdd => bt_add_page(shell),
         Page::Vpn => vpn_page(shell),
         Page::Hotspot => hotspot_page(shell),
         Page::Keyboard => keyboard_page(shell),

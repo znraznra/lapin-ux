@@ -70,6 +70,10 @@ pub struct Bluetooth {
     pub powered: bool,
     /// Paired devices, connected first.
     pub devices: Vec<BtDevice>,
+    /// The adapter is looking for new devices.
+    pub discovering: bool,
+    /// Devices found nearby that aren't paired yet (named ones only).
+    pub nearby: Vec<BtDevice>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

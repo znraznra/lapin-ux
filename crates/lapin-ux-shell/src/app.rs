@@ -843,6 +843,7 @@ impl Application for Shell {
             crate::clipboard::subscription().map(Message::Clip),
             crate::quick::backend::subscriptions().map(|e| Message::Quick(crate::quick::QuickMsg::Event(e))),
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
+            crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
             wl::subscription().map(Message::Wayland),
             self.core.watch_config::<ShellConfig>(lapin_ux_core::ids::SHELL_APP_ID).map(|u| Message::Config(u.config)),
             rectangle_tracker_subscription(0).map(|(_, u)| Message::Rect(u)),

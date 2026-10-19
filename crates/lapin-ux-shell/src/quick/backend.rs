@@ -375,6 +375,18 @@ pub async fn bluetooth(conn: &Connection) -> zbus::Result<Bluetooth> {
         {
             bt.adapter = path.to_string();
             bt.powered = prop::<bool>(a, "Powered").unwrap_or(false);
+            bt.discovering = prop::<bool>(a, "Discovering").unwrap_or(false);
+        }
+        if let Some(d) = ifaces.get("org.bluez.Device1")
+            && !prop::<bool>(d, "Paired").unwrap_or(false)
+            && let Some(name) = prop::<String>(d, "Name")
+        {
+            bt.nearby.push(BtDevice {
+                path: path.to_string(),
+                name,
+                icon: prop::<String>(d, "Icon").unwrap_or_default(),
+                connected: false,
+            });
         }
         if let Some(d) = ifaces.get("org.bluez.Device1")
             && prop::<bool>(d, "Paired").unwrap_or(false)
@@ -397,6 +409,25 @@ pub async fn bluetooth(conn: &Connection) -> zbus::Result<Bluetooth> {
 pub async fn set_bluetooth(adapter: String, on: bool) -> zbus::Result<()> {
     let conn = Connection::system().await?;
     proxy(&conn, BLUEZ, &adapter, "org.bluez.Adapter1").await?.set_property("Powered", on).await.map_err(Into::into)
+}
+
+/// BlueZ ends a discovery when the connection that started it closes, so
+/// discovery uses one long-lived connection.
+static DISCOVERY_BUS: tokio::sync::OnceCell<Connection> = tokio::sync::OnceCell::const_new();
+
+pub async fn set_discovery(adapter: String, on: bool) -> zbus::Result<()> {
+    let conn = DISCOVERY_BUS.get_or_try_init(Connection::system).await?;
+    let a = proxy(&conn, BLUEZ, &adapter, "org.bluez.Adapter1").await?;
+    a.call::<_, _, ()>(if on { "StartDiscovery" } else { "StopDiscovery" }, &()).await
+}
+
+/// Pair (the agent handles any PIN or confirmation), trust, then connect.
+pub async fn bluetooth_pair(device: String) -> zbus::Result<()> {
+    let conn = Connection::system().await?;
+    let d = proxy(&conn, BLUEZ, &device, "org.bluez.Device1").await?;
+    d.call::<_, _, ()>("Pair", &()).await?;
+    let _ = d.set_property("Trusted", true).await;
+    d.call::<_, _, ()>("Connect", &()).await
 }
 
 pub async fn bluetooth_connect(device: String, connect: bool) -> zbus::Result<()> {

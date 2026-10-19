@@ -144,7 +144,17 @@ impl Shell {
         match self.panel.take() {
             Some(p) => {
                 self.panel_closed_at = std::time::Instant::now();
-                destroy_layer_surface(p.id)
+                // Closing on the "Add a device" page ends the Bluetooth search.
+                let stop = if matches!(&p.kind, PanelKind::Quick(q) if q.page == crate::quick::Page::BtAdd) {
+                    let adapter = self.quick.bluetooth.adapter.clone();
+                    Task::future(async move {
+                        let _ = crate::quick::backend::set_discovery(adapter, false).await;
+                        cosmic::Action::App(Message::Noop)
+                    })
+                } else {
+                    Task::none()
+                };
+                Task::batch([stop, destroy_layer_surface(p.id)])
             }
             None => Task::none(),
         }
