@@ -118,6 +118,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] A password copied from a password manager (KeePassXC etc.) does not appear
 - [ ] Super+. in a text field: type "heart", click one: it's inserted; it shows under "Most recently used" next time
 - [ ] Kaomoji and Symbols tabs insert what you click
+- [ ] Emoji look like Microsoft's Fluent Emoji (soft gradients, Windows 11 style), in the panel and in apps (e.g. a 😀 typed in Firefox or a GTK text field)
 
 ### Quick settings
 - [ ] Network, volume and (on laptops) battery icons show left of the clock and match reality

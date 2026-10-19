@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install Lapin UX's look into your home folder without the package: the
 # Selawik font (and the fontconfig rule making it the one system font), the
+# Lapin Fluent Emoji font (Microsoft's Fluent Emoji), the
 # Lapin UX icon themes (Fluent UI System Icons) and the Win11 icon theme
 # (app, folder and file icons). Everything comes from this repository.
 # Handy for the "try it in a window" test.
@@ -12,7 +13,7 @@ fcdir="${XDG_CONFIG_HOME:-$HOME/.config}/fontconfig/conf.d"
 fc=50-lapin-ux-selawik.conf
 
 if [[ ${1:-} == --remove ]]; then
-    rm -rf "$data/fonts/lapin-ux-selawik" "$data/icons/Lapin-UX" "$data/icons/Lapin-UX-dark" "$data/icons/Win11" "$data/icons/Win11-dark"
+    rm -rf "$data/fonts/lapin-ux-selawik" "$data/fonts/lapin-ux-fluent-emoji" "$data/icons/Lapin-UX" "$data/icons/Lapin-UX-dark" "$data/icons/Win11" "$data/icons/Win11-dark"
     rm -f "$fcdir/$fc"
     fc-cache -f >/dev/null 2>&1 || true
     echo "Removed."
@@ -21,6 +22,8 @@ fi
 
 mkdir -p "$data/fonts/lapin-ux-selawik" "$data/icons" "$fcdir"
 cp "$repo"/data/fonts/selawik/*.ttf "$repo/data/fonts/selawik/OFL.txt" "$data/fonts/lapin-ux-selawik/"
+mkdir -p "$data/fonts/lapin-ux-fluent-emoji"
+cp "$repo"/data/fonts/fluent-emoji/* "$data/fonts/lapin-ux-fluent-emoji/"
 cp "$repo/data/fontconfig/$fc" "$fcdir/"
 fc-cache -f >/dev/null 2>&1 || true
 rm -rf "$data/icons/Lapin-UX" "$data/icons/Lapin-UX-dark"

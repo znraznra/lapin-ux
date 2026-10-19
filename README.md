@@ -161,8 +161,12 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   fontconfig rule makes it the font for `sans-serif`, `serif`, `system-ui`
   and the interface fonts other desktops default to (Inter, Cantarell, Noto
   Sans, DejaVu Sans…). Monospace (terminals, code) keeps a fixed-width font;
-  characters Selawik doesn't have (Japanese, Chinese, Korean, emoji, other
-  scripts) come from the Noto fonts.
+  characters Selawik doesn't have (Japanese, Chinese, Korean, other scripts)
+  come from the Noto fonts.
+- Emoji: Microsoft's Fluent Emoji everywhere, as the bundled colour font
+  *Lapin Fluent Emoji*. The emoji panel draws only with it (and lists only
+  emoji Fluent Emoji has), and the fontconfig rule makes it the emoji font
+  for every app, even ones that ask for Noto Color Emoji or Segoe UI Emoji.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
   Apps, files, folders, shortcuts and desktop items use the full-colour
   Win11 icon theme; everything else (menus, tray, quick settings, buttons)
@@ -241,7 +245,7 @@ cd lapin-ux
 That's all: the script installs the build tools, builds Lapin UX and its
 compositor build (`lapin-ux-comp`, for snap layouts and taskbar flashing),
 and pacman installs every other dependency automatically (COSMIC services,
-NetworkManager, Bluetooth, sound, search, fonts for other scripts and emoji).
+NetworkManager, Bluetooth, sound, search, fonts for other scripts).
 Nothing to install by hand. The Selawik font, the Fluent UI icons and the
 Win11 icon theme all ship inside this repository (`data/` and
 `third_party/`), so the build downloads nothing but Rust crates and the
@@ -281,6 +285,7 @@ RUST_LOG=lapin_ux_shell=debug target/debug/lapin-ux-shell   # run the shell alon
 target/debug/lapin-ux-shell start                          # toggle Start in the running shell
 python3 tools/make-wallpaper.py                          # re-render wallpapers
 python3 tools/make-fluent-icons.py <fluentui-system-icons checkout>   # regenerate data/icons/Lapin-UX*
+python3 tools/make-fluent-emoji.py <fluentui-emoji checkout> <out>    # rebuild the emoji font (needs nanoemoji)
 ```
 
 `lapin-ux-core` holds anything that can be tested without a display; put new
@@ -318,7 +323,8 @@ those terms.
 | Selawik 1.01, © Microsoft Corporation | Interface font | SIL Open Font License 1.1 | `data/fonts/selawik/` (unmodified, licence in `OFL.txt`) | [microsoft/Selawik](https://github.com/microsoft/Selawik) |
 | Fluent UI System Icons, © Microsoft Corporation | Symbolic icons in `Lapin-UX` / `Lapin-UX-dark` | MIT | `data/icons/Lapin-UX/symbolic/` (renamed to freedesktop names and recoloured by `tools/make-fluent-icons.py`; licence in `LICENSE-fluentui-system-icons`) | [microsoft/fluentui-system-icons](https://github.com/microsoft/fluentui-system-icons) |
 | Win11 icon theme by yeyushengfan258 (based on Ubuntu's Yaru) | App, folder, file, shortcut and desktop icons | GPL-3.0 | `third_party/win11-icon-theme/` (unmodified, pinned commit in `UPSTREAM.md`; licence in `COPYING`) | [yeyushengfan258/Win11-icon-theme](https://github.com/yeyushengfan258/Win11-icon-theme) |
-| Noto fonts (Arch packages) | Only characters Selawik lacks (CJK, emoji, other scripts) | SIL Open Font License 1.1 | installed as dependencies | [notofonts](https://github.com/notofonts) |
+| Fluent Emoji, © Microsoft Corporation | All emoji (built into the *Lapin Fluent Emoji* colour font) | MIT | `data/fonts/fluent-emoji/` (the "Color" artwork rendered into a colour-bitmap font by `tools/make-fluent-emoji.py`; licence in `LICENSE-fluentui-emoji`) | [microsoft/fluentui-emoji](https://github.com/microsoft/fluentui-emoji) |
+| Noto fonts (Arch packages) | Only characters Selawik lacks (CJK, other scripts) | SIL Open Font License 1.1 | installed as dependencies | [notofonts](https://github.com/notofonts) |
 
 Installed packages put every licence in `/usr/share/licenses/lapin-ux-desktop-git/`.
 
