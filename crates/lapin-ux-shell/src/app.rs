@@ -475,8 +475,8 @@ impl Shell {
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    // Starts on the taskbar's top edge and rises into place (anim.rs).
-                    margin: IcedMargin { top: 0, right: 0, bottom: above - 12, left: if left { 12 } else { 0 } },
+                    // Opens a little low and rises into place (anim.rs).
+                    margin: IcedMargin { top: 0, right: 0, bottom: above - 8, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE

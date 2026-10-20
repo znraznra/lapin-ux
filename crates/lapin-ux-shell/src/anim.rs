@@ -14,10 +14,10 @@ use crate::app::{Message, Shell};
 use crate::config::TaskbarAlignment;
 
 const START_SLIDE: Duration = Duration::from_millis(220);
-/// How far below its resting place Start begins: the 12 px gap above the
-/// taskbar, so it starts sitting on the taskbar's top edge, never over it,
-/// and nothing of it is cut off.
-const START_DROP: f32 = 12.0;
+/// How far below its resting place Start begins. Start rests 12 px above
+/// the taskbar, as in Windows 11, and opens 4 px above it: it never touches
+/// or covers the taskbar and nothing of it is cut off.
+const START_DROP: f32 = 8.0;
 const LAUNCH_HOP: Duration = Duration::from_millis(900);
 /// Height of the launch hop.
 const HOP: f32 = 5.0;
