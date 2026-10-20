@@ -1,0 +1,75 @@
+From 8a5441f299eade9585d2e2673f1449a380adda07 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 18:28:59 +0800
+Subject: [PATCH 3/3] Lapin UX: Update uses the Win11 theme's refresh icon
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/lapin/categories.rs |  2 +-
+ cosmic-settings/src/lapin/view.rs       | 15 +++++++++++++--
+ 2 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 650b591..dd66bf9 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -150,7 +150,7 @@ const SPECS: &[Spec] = &[
+     Spec {
+         id: "lapin-update",
+         title: "Update",
+-        icon: "system-software-update",
++        icon: super::view::UPDATE_ICON,
+         description: "Updates for your system, apps and firmware",
+         children: &[],
+     },
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index 6da747a..d424fb1 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -76,13 +76,24 @@ fn colour_icon(name: &str) -> icon::Handle {
+         }
+         out
+     });
++    // "apps/name" picks the icon from that folder of the theme, for names
++    // the theme draws differently in different folders.
++    let (folder, name) = match name.split_once('/') {
++        Some((f, n)) => (Some(f), n),
++        None => (None, name),
++    };
+     DIRS.iter()
++        .filter(|d| folder.is_none_or(|f| d.parent().and_then(|p| p.file_name()).is_some_and(|c| c == f)))
+         .map(|d| d.join(format!("{name}.svg")))
+         .find(|p| p.exists())
+         .map(icon::from_path)
+         .unwrap_or_else(|| icon::from_name(name).handle())
+ }
+ 
++/// Windows' Update icon: the theme's blue round arrows (its "preferences"
++/// folder has a store-style icon under the same name).
++pub const UPDATE_ICON: &str = "apps/system-software-update";
++
+ fn avatar(account: &Account, size: f32) -> Element<'static, Message> {
+     match &account.avatar {
+         Some(p) => widget::image(widget::image::Handle::from_path(p))
+@@ -234,7 +245,7 @@ pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a St
+         let card = row::with_capacity(3)
+             .spacing(16)
+             .align_y(Alignment::Center)
+-            .push(icon(colour_icon("system-software-update")).size(40))
++            .push(icon(colour_icon(UPDATE_ICON)).size(40))
+             .push(
+                 column::with_capacity(2)
+                     .spacing(2)
+@@ -300,7 +311,7 @@ fn system_top<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State) ->
+         row::with_capacity(2)
+             .spacing(12)
+             .align_y(Alignment::Center)
+-            .push(icon(colour_icon("system-software-update")).size(28))
++            .push(icon(colour_icon(UPDATE_ICON)).size(28))
+             .push(
+                 column::with_capacity(2)
+                     .spacing(2)
+-- 
+2.43.0
+
