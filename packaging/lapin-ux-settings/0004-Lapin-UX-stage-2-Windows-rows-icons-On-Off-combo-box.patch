@@ -1,0 +1,466 @@
+From 801c705ab9eb373744ec36e28640c6b63c862e55 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 21:01:06 +0800
+Subject: [PATCH 4/4] Lapin UX stage 2: Windows rows (icons, On/Off, combo
+ boxes), Power mode and mouse button drop-downs, buttons inside rows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs                    |   1 +
+ cosmic-settings/src/lapin/icons.rs            | 142 ++++++++++++++++++
+ cosmic-settings/src/lapin/mod.rs              |   2 +
+ cosmic-settings/src/lapin/pages.rs            |  51 +++++++
+ .../src/pages/applications/startup_apps.rs    |  24 ++-
+ .../src/pages/input/keyboard/mod.rs           |  19 ++-
+ cosmic-settings/src/pages/input/mouse.rs      |   7 +-
+ cosmic-settings/src/pages/power/mod.rs        |  16 +-
+ cosmic-settings/src/pages/time/region.rs      |  12 ++
+ cosmic-settings/src/widget/mod.rs             |  12 +-
+ 10 files changed, 269 insertions(+), 17 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/icons.rs
+ create mode 100644 cosmic-settings/src/lapin/pages.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index 42dda3a..db8bdd6 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -242,6 +242,7 @@ impl cosmic::Application for SettingsApp {
+             app.lapin.layout = crate::lapin::arrange(&mut app.pages);
+             // Windows draws each setting as its own card.
+             cosmic::lapin::set_card_lists(true);
++            cosmic::lapin::set_item_icons(crate::lapin::icons::row_icon);
+         }
+ 
+         let active_id = match flags.sub_command {
+diff --git a/cosmic-settings/src/lapin/icons.rs b/cosmic-settings/src/lapin/icons.rs
+new file mode 100644
+index 0000000..6fa2d46
+--- /dev/null
++++ b/cosmic-settings/src/lapin/icons.rs
+@@ -0,0 +1,142 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! The outline icon at the left of each settings row, as Windows 11 shows
++//! one on almost every row. Chosen from the row's title by keyword, so it
++//! works on every COSMIC page without editing them. Titles are matched in
++//! English; in other languages rows simply have no icon.
++
++/// Keyword (lower case, anywhere in the title) → Fluent icon. Earlier
++/// entries win, so specific phrases come before general words.
++const RULES: &[(&str, &str)] = &[
++    // System > Display
++    ("night light", "night-light-symbolic"),
++    ("brightness", "display-brightness-symbolic"),
++    ("resolution", "view-fullscreen-symbolic"),
++    ("refresh rate", "view-refresh-symbolic"),
++    ("variable refresh", "view-refresh-symbolic"),
++    ("scale", "zoom-fit-best-symbolic"),
++    ("orientation", "rotation-allowed-symbolic"),
++    ("mirroring", "view-restore-symbolic"),
++    // Sound
++    ("amplification", "audio-volume-overamplified-symbolic"),
++    ("balance", "audio-volume-medium-symbolic"),
++    ("output device", "audio-speakers-symbolic"),
++    ("input device", "audio-input-microphone-symbolic"),
++    ("microphone", "audio-input-microphone-symbolic"),
++    ("volume", "audio-volume-high-symbolic"),
++    ("alert", "notification-symbolic"),
++    ("device profiles", "audio-card-symbolic"),
++    ("applications", "view-app-grid-symbolic"),
++    ("slideshow", "emblem-photos-symbolic"),
++    ("typing", "input-keyboard-symbolic"),
++    ("applet", "view-app-grid-symbolic"),
++    // Power & battery
++    ("power mode", "power-profile-balanced-symbolic"),
++    ("extended battery", "power-profile-power-saver-symbolic"),
++    ("battery", "battery-full-symbolic"),
++    ("balanced", "power-profile-balanced-symbolic"),
++    ("high performance", "power-profile-performance-symbolic"),
++    ("turn off the screen", "video-display-symbolic"),
++    ("screen off", "video-display-symbolic"),
++    ("suspend", "weather-clear-night-symbolic"),
++    ("sleep", "weather-clear-night-symbolic"),
++    // Mouse, touchpad, keyboard
++    ("primary button", "input-mouse-symbolic"),
++    ("mouse", "input-mouse-symbolic"),
++    ("acceleration", "input-mouse-symbolic"),
++    ("tap", "input-touchpad-symbolic"),
++    ("touchpad", "input-touchpad-symbolic"),
++    ("disable while typing", "input-touchpad-symbolic"),
++    ("scroll", "input-mouse-symbolic"),
++    ("speed", "input-mouse-symbolic"),
++    ("on-screen keyboard", "input-keyboard-symbolic"),
++    ("input source", "input-keyboard-symbolic"),
++    ("keyboard", "input-keyboard-symbolic"),
++    ("shortcut", "input-keyboard-symbolic"),
++    ("compose", "input-keyboard-symbolic"),
++    ("caps lock", "input-keyboard-symbolic"),
++    ("alternate characters", "input-keyboard-symbolic"),
++    ("tablet", "input-tablet-symbolic"),
++    // Bluetooth & network
++    ("bluetooth", "bluetooth-active-symbolic"),
++    ("wi-fi", "network-wireless-symbolic"),
++    ("airplane", "airplane-mode-symbolic"),
++    ("vpn", "network-vpn-symbolic"),
++    // Time & language
++    ("time zone", "web-browser-symbolic"),
++    ("24-hour", "preferences-system-time-symbolic"),
++    ("date", "x-office-calendar-symbolic"),
++    ("first day", "x-office-calendar-symbolic"),
++    ("time", "preferences-system-time-symbolic"),
++    ("language", "preferences-desktop-locale-symbolic"),
++    ("region", "preferences-desktop-locale-symbolic"),
++    ("format", "preferences-desktop-locale-symbolic"),
++    // Personalization
++    ("wallpaper", "preferences-desktop-wallpaper-symbolic"),
++    ("background", "preferences-desktop-wallpaper-symbolic"),
++    ("fit", "zoom-fit-best-symbolic"),
++    ("accent", "preferences-color-symbolic"),
++    ("light and dark", "preferences-desktop-theme-symbolic"),
++    ("text tint", "insert-text-symbolic"),
++    ("component tint", "preferences-color-symbolic"),
++    ("window hint", "preferences-system-windows-symbolic"),
++    ("frosted", "preferences-desktop-appearance-symbolic"),
++    ("roundness", "preferences-desktop-appearance-symbolic"),
++    ("interface density", "view-grid-symbolic"),
++    ("icons", "preferences-desktop-theme-symbolic"),
++    ("font", "insert-text-symbolic"),
++    // Windows and multitasking
++    ("super key", "view-app-grid-symbolic"),
++    ("gravitate", "preferences-system-windows-symbolic"),
++    ("maximize", "window-maximize-symbolic"),
++    ("minimize", "window-minimize-symbolic"),
++    ("focus", "object-select-symbolic"),
++    ("workspace", "view-grid-symbolic"),
++    ("multi-monitor", "video-display-symbolic"),
++    ("window", "preferences-system-windows-symbolic"),
++    // Accessibility
++    ("screen reader", "audio-x-generic-symbolic"),
++    ("magnifier", "zoom-in-symbolic"),
++    ("zoom", "zoom-in-symbolic"),
++    ("contrast", "preferences-desktop-appearance-symbolic"),
++    ("invert", "view-reveal-symbolic"),
++    ("color filter", "preferences-color-symbolic"),
++    ("shake", "input-mouse-symbolic"),
++    // Apps
++    ("web browser", "web-browser-symbolic"),
++    ("file manager", "system-file-manager-symbolic"),
++    ("mail", "mail-unread-symbolic"),
++    ("music", "emblem-music-symbolic"),
++    ("video", "video-x-generic-symbolic"),
++    ("photos", "image-x-generic-symbolic"),
++    ("calendar", "x-office-calendar-symbolic"),
++    ("terminal", "utilities-terminal-symbolic"),
++    ("text editor", "accessories-text-editor-symbolic"),
++    // About
++    ("device name", "computer-symbolic"),
++    ("hardware model", "computer-symbolic"),
++    ("memory", "utilities-system-monitor-symbolic"),
++    ("processor", "applications-system-symbolic"),
++    ("graphics", "video-display-symbolic"),
++    ("disk", "drive-harddisk-symbolic"),
++    ("operating system", "computer-symbolic"),
++    ("windowing system", "preferences-system-windows-symbolic"),
++];
++
++pub fn row_icon(title: &str) -> Option<&'static str> {
++    let t = title.to_lowercase();
++    RULES.iter().find(|(k, _)| t.contains(k)).map(|(_, icon)| *icon)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::row_icon;
++
++    #[test]
++    fn picks() {
++        assert_eq!(row_icon("Night light"), Some("night-light-symbolic"));
++        assert_eq!(row_icon("Refresh rate"), Some("view-refresh-symbolic"));
++        assert_eq!(row_icon("Time zone"), Some("web-browser-symbolic"));
++        assert_eq!(row_icon("Automatically switch between light and dark modes"), Some("preferences-desktop-theme-symbolic"));
++        assert_eq!(row_icon("Something else"), None);
++    }
++}
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 84a3805..a437270 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -10,6 +10,8 @@
+ 
+ mod categories;
+ pub mod device;
++pub mod icons;
++pub mod pages;
+ mod style;
+ mod view;
+ 
+diff --git a/cosmic-settings/src/lapin/pages.rs b/cosmic-settings/src/lapin/pages.rs
+new file mode 100644
+index 0000000..a47353c
+--- /dev/null
++++ b/cosmic-settings/src/lapin/pages.rs
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Rows COSMIC shows as lists or segmented buttons, drawn as Windows 11
++//! draws them: one row with a drop-down. Each COSMIC page calls in here from
++//! a single `if crate::lapin::enabled()` line, so the page code is untouched
++//! otherwise.
++
++use cosmic::Element;
++use cosmic::widget::{self, segmented_button, settings};
++
++use crate::pages::input;
++use crate::pages::power::{self, backend::PowerProfile};
++
++/// Windows' names for the power modes.
++const POWER_MODES: [&str; 3] = ["Best power efficiency", "Balanced", "Best performance"];
++const POWER_PROFILES: [PowerProfile; 3] = [PowerProfile::Battery, PowerProfile::Balanced, PowerProfile::Performance];
++
++/// System > Power & battery: "Power mode" with a drop-down.
++pub fn power_mode_row<'a>(available: &[PowerProfile], current: PowerProfile) -> Element<'a, power::Message> {
++    let _ = available;
++    let selected = POWER_PROFILES.iter().position(|p| *p == current);
++    settings::item::builder("Power mode")
++        .description("Optimize your device based on power use and performance")
++        .control(widget::dropdown(&POWER_MODES[..], selected, |i| {
++            power::Message::PowerProfileChange(POWER_PROFILES[i.min(2)])
++        }))
++        .into()
++}
++
++const BUTTONS: [&str; 2] = ["Left", "Right"];
++
++/// Bluetooth & devices > Mouse: "Primary mouse button" with a drop-down.
++pub fn primary_button_row<'a>(model: &segmented_button::SingleSelectModel) -> Element<'a, input::Message> {
++    let left = model.iter().next();
++    let right = model.iter().nth(1);
++    let selected = model.position(model.active()).map(usize::from);
++    settings::item::builder("Primary mouse button")
++        .control(widget::dropdown(&BUTTONS[..], selected, move |i| {
++            let entity = if i == 0 { left } else { right };
++            input::Message::PrimaryButtonSelected(entity.unwrap_or_default(), false)
++        }))
++        .into()
++}
++
++/// A row whose control is a button, as Windows places "Add a language",
++/// "Add" and similar buttons: inside the row, at the right.
++pub fn button_row<'a, M: Clone + 'static>(title: &'a str, description: &'a str, label: &'a str, msg: M) -> Element<'a, M> {
++    settings::item::builder(title)
++        .description(description)
++        .control(widget::button::standard(label).on_press(msg))
++        .into()
++}
+diff --git a/cosmic-settings/src/pages/applications/startup_apps.rs b/cosmic-settings/src/pages/applications/startup_apps.rs
+index f7118a4..2466b25 100644
+--- a/cosmic-settings/src/pages/applications/startup_apps.rs
++++ b/cosmic-settings/src/pages/applications/startup_apps.rs
+@@ -413,7 +413,16 @@ fn apps() -> Section<crate::pages::Message> {
+                 for directory_type in order {
+                     let mut section = settings::section();
+ 
+-                    view = view.push(text::heading(directory_type.to_string()));
++                    if crate::lapin::enabled() {
++                        section = section.add(crate::lapin::pages::button_row(
++                            "Startup apps",
++                            "Apps that start automatically when you sign in",
++                            "Add app",
++                            Message::ShowApplicationSidebar(directory_type.clone()).into(),
++                        ));
++                    } else {
++                        view = view.push(text::heading(directory_type.to_string()));
++                    }
+ 
+                     if let Some(apps) = startup_apps.apps.get(&directory_type) {
+                         if apps.is_empty() {
+@@ -456,11 +465,14 @@ fn apps() -> Section<crate::pages::Message> {
+                     let add_startup_app = widget::button::standard(fl!("startup-apps", "add"))
+                         .on_press(Message::ShowApplicationSidebar(directory_type.clone()).into());
+ 
+-                    view = view.push(section).push(
+-                        widget::container(add_startup_app)
+-                            .width(Length::Fill)
+-                            .align_x(Alignment::End),
+-                    );
++                    view = view.push(section);
++                    if !crate::lapin::enabled() {
++                        view = view.push(
++                            widget::container(add_startup_app)
++                                .width(Length::Fill)
++                                .align_x(Alignment::End),
++                        );
++                    }
+                 }
+             }
+ 
+diff --git a/cosmic-settings/src/pages/input/keyboard/mod.rs b/cosmic-settings/src/pages/input/keyboard/mod.rs
+index f53b9e3..ba1cad3 100644
+--- a/cosmic-settings/src/pages/input/keyboard/mod.rs
++++ b/cosmic-settings/src/pages/input/keyboard/mod.rs
+@@ -768,7 +768,20 @@ fn input_sources() -> Section<crate::pages::Message> {
+         .title(fl!("keyboard-sources"))
+         .view::<Page>(move |_binder, page, section| {
+             // TODO Need something more custom, with drag and drop
+-            let mut section = settings::section().title(&section.title);
++            let mut section = if crate::lapin::enabled() {
++                settings::section()
++            } else {
++                settings::section().title(&section.title)
++            };
++
++            if crate::lapin::enabled() {
++                section = section.add(crate::lapin::pages::button_row(
++                    "Input sources",
++                    "Keyboard layouts you can switch between with Win+Space",
++                    "Add",
++                    Message::ShowInputSourcesContext,
++                ));
++            }
+ 
+             for (position, id) in page.active_layouts.iter().enumerate() {
+                 if let Some((_locale, _variant, description, _source)) =
+@@ -787,6 +800,10 @@ fn input_sources() -> Section<crate::pages::Message> {
+             let add_input_source = widget::button::standard(fl!("keyboard-sources", "add"))
+                 .on_press(Message::ShowInputSourcesContext);
+ 
++            if crate::lapin::enabled() {
++                return Element::from(section).map(crate::pages::Message::Keyboard);
++            }
++
+             widget::column::with_capacity(2)
+                 .spacing(theme::spacing().space_xxs)
+                 .push(section)
+diff --git a/cosmic-settings/src/pages/input/mouse.rs b/cosmic-settings/src/pages/input/mouse.rs
+index 849820f..685964f 100644
+--- a/cosmic-settings/src/pages/input/mouse.rs
++++ b/cosmic-settings/src/pages/input/mouse.rs
+@@ -61,15 +61,16 @@ fn mouse() -> Section<crate::pages::Message> {
+ 
+             settings::section()
+                 .title(&section.title)
+-                .add(
++                .add_maybe(crate::lapin::enabled().then(|| crate::lapin::pages::primary_button_row(&input.primary_button)))
++                .add_maybe((!crate::lapin::enabled()).then(|| {
+                     settings::flex_item(
+                         &descriptions[primary_button],
+                         cosmic::widget::segmented_control::horizontal(&input.primary_button)
+                             .minimum_button_width(0)
+                             .on_activate(|x| Message::PrimaryButtonSelected(x, false)),
+                     )
+-                    .align_items(Alignment::Center),
+-                )
++                    .align_items(Alignment::Center)
++                }))
+                 .add(
+                     settings::item::builder(&descriptions[mouse_speed]).flex_control({
+                         let value = (input
+diff --git a/cosmic-settings/src/pages/power/mod.rs b/cosmic-settings/src/pages/power/mod.rs
+index 3664b66..9e1d6b2 100644
+--- a/cosmic-settings/src/pages/power/mod.rs
++++ b/cosmic-settings/src/pages/power/mod.rs
+@@ -1,4 +1,4 @@
+-mod backend;
++pub(crate) mod backend;
+ 
+ use self::backend::{GetCurrentPowerProfile, SetPowerProfile};
+ use backend::{Battery, ConnectedDevice, PowerProfile};
+@@ -529,12 +529,22 @@ fn profiles() -> Section<crate::pages::Message> {
+         .title(fl!("power-mode"))
+         .descriptions(descriptions)
+         .view::<Page>(move |_binder, page, section| {
+-            let mut section = settings::section().title(&section.title);
++            let mut section = if crate::lapin::enabled() {
++                // Windows: the "Power mode" row is its own title.
++                settings::section()
++            } else {
++                settings::section().title(&section.title)
++            };
+ 
+             if page.backend.is_some() {
+                 let profiles = backend::get_power_profiles();
+ 
+-                if let Some(current_profile) = page.current_power_profile {
++                if let Some(current_profile) = page.current_power_profile
++                    && crate::lapin::enabled()
++                {
++                    // Windows: one "Power mode" row with a drop-down.
++                    section = section.add(crate::lapin::pages::power_mode_row(&profiles, current_profile));
++                } else if let Some(current_profile) = page.current_power_profile {
+                     section = profiles
+                         .into_iter()
+                         .map(|profile| {
+diff --git a/cosmic-settings/src/pages/time/region.rs b/cosmic-settings/src/pages/time/region.rs
+index 7da958a..bb3948e 100644
+--- a/cosmic-settings/src/pages/time/region.rs
++++ b/cosmic-settings/src/pages/time/region.rs
+@@ -513,6 +513,14 @@ mod preferred_languages {
+                 let description = widget::text::body(&section.descriptions[pref_lang_desc]);
+ 
+                 let mut content = widget::settings::section();
++                if crate::lapin::enabled() {
++                    content = content.add(crate::lapin::pages::button_row(
++                        "Preferred languages",
++                        &section.descriptions[pref_lang_desc],
++                        "Add a language",
++                        Message::AddLanguageContext,
++                    ));
++                }
+ 
+                 if let Some(((_config, locales), registry)) =
+                     page.config.as_ref().zip(page.registry.as_ref())
+@@ -537,6 +545,10 @@ mod preferred_languages {
+                         .width(Length::Fill)
+                         .align_x(Alignment::End);
+ 
++                if crate::lapin::enabled() {
++                    return cosmic::Element::from(content).map(Into::into);
++                }
++
+                 widget::column::with_capacity(5)
+                     .push(title)
+                     .push(description)
+diff --git a/cosmic-settings/src/widget/mod.rs b/cosmic-settings/src/widget/mod.rs
+index e53b151..4ac262e 100644
+--- a/cosmic-settings/src/widget/mod.rs
++++ b/cosmic-settings/src/widget/mod.rs
+@@ -188,13 +188,15 @@ pub fn go_next_item<Msg: 'static>(
+     description: &str,
+     msg_opt: impl Into<Option<Msg>>,
+ ) -> list::ListButton<'_, Msg> {
+-    settings::item_row(vec![
++    let mut children: Vec<cosmic::Element<'_, Msg>> = Vec::with_capacity(3);
++    children.extend(cosmic::lapin::item_icon(description));
++    settings::item_row(children.into_iter().chain([
+         text::body(description)
+             .width(Length::Fill)
+             .wrapping(Wrapping::Word)
+             .into(),
+         icon::from_name("go-next-symbolic").size(16).icon().into(),
+-    ])
++    ]).collect())
+     .apply(list::button)
+     .on_press_maybe(msg_opt.into())
+ }
+@@ -204,7 +206,9 @@ pub fn go_next_with_item<'a, Msg: 'static>(
+     item: impl Into<cosmic::Element<'a, Msg>>,
+     msg_opt: impl Into<Option<Msg>>,
+ ) -> list::ListButton<'a, Msg> {
+-    settings::item_row(vec![
++    let mut children: Vec<cosmic::Element<'a, Msg>> = Vec::with_capacity(3);
++    children.extend(cosmic::lapin::item_icon(description));
++    settings::item_row(children.into_iter().chain([
+         text::body(description)
+             .width(Length::Fill)
+             .wrapping(Wrapping::Word)
+@@ -215,7 +219,7 @@ pub fn go_next_with_item<'a, Msg: 'static>(
+             .align_y(Alignment::Center)
+             .spacing(theme::spacing().space_s)
+             .into(),
+-    ])
++    ]).collect())
+     .apply(list::button)
+     .on_press_maybe(msg_opt.into())
+ }
+-- 
+2.43.0
+

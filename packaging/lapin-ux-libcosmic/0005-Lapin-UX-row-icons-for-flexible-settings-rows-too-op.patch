@@ -1,0 +1,40 @@
+From b41b476de0a84ceefc675442d0234eb20bbfd02d Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 20:16:15 +0800
+Subject: [PATCH 5/5] Lapin UX: row icons for flexible settings rows too
+ (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/widget/settings/item.rs | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/src/widget/settings/item.rs b/src/widget/settings/item.rs
+index 64735b0..77dffb6 100644
+--- a/src/widget/settings/item.rs
++++ b/src/widget/settings/item.rs
+@@ -53,13 +53,13 @@ pub fn flex_item<'a, Message: 'static>(
+         title: Cow<'a, str>,
+         widget: Element<'a, Message>,
+     ) -> FlexRow<'a, Message> {
+-        flex_item_row(vec![
+-            text(title)
+-                .wrapping(Wrapping::Word)
+-                .width(Length::Fill)
+-                .into(),
+-            container(widget).width(Length::Shrink).into(),
+-        ])
++        let icon = crate::lapin::item_icon(&title);
++        let label: Element<'a, Message> = text(title).wrapping(Wrapping::Word).width(Length::Fill).into();
++        let label = match icon {
++            Some(icon) => row::with_capacity(2).spacing(theme::spacing().space_xs).align_y(iced::Alignment::Center).push(icon).push(label).width(Length::Fill).into(),
++            None => label,
++        };
++        flex_item_row(vec![label, container(widget).width(Length::Shrink).into()])
+         .width(Length::Fill)
+     }
+ 
+-- 
+2.43.0
+

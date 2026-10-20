@@ -1,0 +1,146 @@
+From d6b11267b0dd0f01957e7fad93e5f505d49470c5 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 19:42:03 +0800
+Subject: [PATCH 3/5] Lapin UX: settings row icons, grey descriptions, On/Off
+ beside toggles (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/lapin.rs                | 49 ++++++++++++++++++++++++++++++++++++-
+ src/widget/settings/item.rs | 23 +++++++++--------
+ 2 files changed, 61 insertions(+), 11 deletions(-)
+
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 18641ea..20f6b7d 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: MPL-2.0
+-//! Lapin UX: Windows 11 title bars for COSMIC apps.
++//! Lapin UX: Windows 11 looks for COSMIC apps (title bars; and, for apps
++//! that opt in, settings rows drawn as Windows 11 Settings draws them).
+ //!
+ //! Windows puts the app's icon and the window title at the left of the title
+ //! bar; COSMIC centres the title. Everything Lapin changes lives here so the
+@@ -53,3 +54,49 @@ pub fn set_card_lists(on: bool) {
+ pub fn card_lists() -> bool {
+     CARD_LISTS.load(Ordering::Relaxed)
+ }
++
++static ITEM_ICONS: OnceLock<fn(&str) -> Option<&'static str>> = OnceLock::new();
++
++/// Lets an app give settings rows an icon at the left, chosen from the
++/// row's title, as Windows 11 Settings shows. Only used with card lists.
++pub fn set_item_icons(f: fn(&str) -> Option<&'static str>) {
++    let _ = ITEM_ICONS.set(f);
++}
++
++/// The icon for a settings row, if the app chose one for this title.
++pub fn item_icon<'a, M: 'static>(title: &str) -> Option<Element<'a, M>> {
++    if !card_lists() {
++        return None;
++    }
++    let name = ITEM_ICONS.get()?(title)?;
++    Some(
++        widget::container(widget::icon::from_name(name).size(20))
++            .padding([0, 12, 0, 0])
++            .into(),
++    )
++}
++
++/// Descriptions under a settings row's title are grey on Windows.
++pub fn quiet<'a>(t: widget::text::Text<'a, crate::Theme>) -> widget::text::Text<'a, crate::Theme> {
++    if !card_lists() {
++        return t;
++    }
++    t.class(crate::theme::Text::Custom(|theme| {
++        let mut c: iced::Color = theme.cosmic().on_bg_color().into();
++        c.a = 0.72;
++        iced::widget::text::Style { color: Some(c), ..Default::default() }
++    }))
++}
++
++/// Windows writes "On" or "Off" beside every toggle.
++pub fn on_off<'a, M: 'static>(on: bool, toggle: impl Into<Element<'a, M>>) -> Element<'a, M> {
++    if !card_lists() {
++        return toggle.into();
++    }
++    widget::row::with_capacity(2)
++        .spacing(12)
++        .align_y(iced::Alignment::Center)
++        .push(widget::text::body(if on { "On" } else { "Off" }))
++        .push(toggle)
++        .into()
++}
+diff --git a/src/widget/settings/item.rs b/src/widget/settings/item.rs
+index 4eb5bb1..64735b0 100644
+--- a/src/widget/settings/item.rs
++++ b/src/widget/settings/item.rs
+@@ -23,11 +23,10 @@ pub fn item<'a, Message: 'static>(
+         title: Cow<'a, str>,
+         widget: Element<'a, Message>,
+     ) -> Row<'a, Message, Theme> {
+-        item_row(vec![
+-            text(title).wrapping(Wrapping::Word).into(),
+-            space::horizontal().into(),
+-            widget,
+-        ])
++        let mut children = Vec::with_capacity(4);
++        children.extend(crate::lapin::item_icon(&title));
++        children.extend([text(title).wrapping(Wrapping::Word).into(), space::horizontal().into(), widget]);
++        item_row(children)
+     }
+ 
+     inner(title.into(), widget.into())
+@@ -118,7 +117,7 @@ impl<'a, Message: Clone + 'static> Item<'a, Message> {
+             column::with_capacity(2)
+                 .spacing(2)
+                 .push(text::body(self.title).wrapping(Wrapping::Word))
+-                .push(text::caption(description).wrapping(Wrapping::Word))
++                .push(crate::lapin::quiet(text::caption(description).wrapping(Wrapping::Word)))
+                 .width(Length::Fill)
+                 .into()
+         } else {
+@@ -131,6 +130,8 @@ impl<'a, Message: Clone + 'static> Item<'a, Message> {
+         let mut contents = Vec::with_capacity(3);
+         if let Some(icon) = self.icon.take() {
+             contents.push(icon);
++        } else {
++            contents.extend(crate::lapin::item_icon(&self.title));
+         }
+         contents.push(self.label());
+         contents.push(widget);
+@@ -148,11 +149,12 @@ impl<'a, Message: Clone + 'static> Item<'a, Message> {
+     ) -> list::ListButton<'a, Message> {
+         let on_press = message(!is_checked);
+         list::button(
+-            self.control(
++            self.control(crate::lapin::on_off(
++                is_checked,
+                 crate::widget::toggler(is_checked)
+                     .width(Length::Shrink)
+                     .on_toggle(message),
+-            ),
++            )),
+         )
+         .on_press(on_press)
+     }
+@@ -164,11 +166,12 @@ impl<'a, Message: Clone + 'static> Item<'a, Message> {
+     ) -> list::ListButton<'a, Message> {
+         let on_press = message.as_ref().map(|f| f(!is_checked));
+         list::button(
+-            self.control(
++            self.control(crate::lapin::on_off(
++                is_checked,
+                 crate::widget::toggler(is_checked)
+                     .width(Length::Shrink)
+                     .on_toggle_maybe(message),
+-            ),
++            )),
+         )
+         .on_press_maybe(on_press)
+     }
+-- 
+2.43.0
+

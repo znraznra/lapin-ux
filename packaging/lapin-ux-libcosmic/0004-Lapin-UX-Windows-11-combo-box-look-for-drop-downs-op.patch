@@ -1,0 +1,57 @@
+From f48b143a458882a235292aa4f83f587f19c1cf69 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 19:53:32 +0800
+Subject: [PATCH 4/5] Lapin UX: Windows 11 combo box look for drop-downs
+ (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/lapin.rs            | 19 +++++++++++++++++++
+ src/theme/style/iced.rs |  3 +++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 20f6b7d..600a438 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -100,3 +100,22 @@ pub fn on_off<'a, M: 'static>(on: bool, toggle: impl Into<Element<'a, M>>) -> El
+         .push(toggle)
+         .into()
+ }
++
++/// Windows 11's drop-down (combo box): a light fill, a thin border and
++/// small corners, a little lighter under the pointer.
++pub fn combo_box(theme: &crate::Theme, status: iced::widget::pick_list::Status) -> iced::widget::pick_list::Style {
++    use iced::widget::pick_list::Status;
++    let on: iced::Color = theme.cosmic().on_bg_color().into();
++    let tint = |a: f32| iced::Color { a, ..on };
++    let fill = match status {
++        Status::Hovered | Status::Opened { is_hovered: true } => 0.09,
++        _ => 0.06,
++    };
++    iced::widget::pick_list::Style {
++        text_color: on,
++        placeholder_color: tint(0.6),
++        handle_color: on,
++        background: tint(fill).into(),
++        border: iced::Border { radius: 4.0.into(), width: 1.0, color: tint(0.09) },
++    }
++}
+diff --git a/src/theme/style/iced.rs b/src/theme/style/iced.rs
+index 0b45fd7..29ad891 100644
+--- a/src/theme/style/iced.rs
++++ b/src/theme/style/iced.rs
+@@ -833,6 +833,9 @@ impl pick_list::Catalog for Theme {
+         class: &<Self as pick_list::Catalog>::Class<'_>,
+         status: pick_list::Status,
+     ) -> pick_list::Style {
++        if crate::lapin::card_lists() {
++            return crate::lapin::combo_box(self, status);
++        }
+         let cosmic = &self.cosmic();
+         let hc = cosmic.is_high_contrast;
+         let appearance = pick_list::Style {
+-- 
+2.43.0
+
