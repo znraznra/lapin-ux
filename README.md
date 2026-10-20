@@ -77,7 +77,7 @@ flowchart LR
 - [x] Task view, virtual desktops, names and wallpaper per desktop
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
-- [ ] **Settings app** in Windows 11's layout — *being built in 6 stages; stage 1, the Windows 11 frame (sidebar, categories, Home, System page), is done; stage 2, the Windows look inside pages, is in review. COSMIC Settings fills in for now*
+- [ ] **Settings app** in Windows 11's layout — *being built in 6 stages; stage 1, the Windows 11 frame (sidebar, categories, Home, System page), is done; stage 2, the Windows look inside pages, is done. COSMIC Settings fills in for now*
 - [x] Windows-style volume and brightness pop-ups
 
 ### Phase 3 — system apps (4 of 6, 1 partly)
