@@ -256,3 +256,15 @@ pub fn transparent_window() -> cosmic::iced::theme::Style {
         icon_color: t.cosmic().on_bg_color().into(),
     }
 }
+
+/// The box around a text file's first lines in Start's preview pane.
+pub fn preview_box() -> theme::Container<'static> {
+    theme::Container::custom(|t| {
+        let c = t.cosmic();
+        cosmic::widget::container::Style {
+            background: Some(cosmic::iced::Color::from(c.background(t.transparent).component.base).into()),
+            border: cosmic::iced::Border { radius: 4.0.into(), width: 1.0, color: c.bg_divider().into() },
+            ..Default::default()
+        }
+    })
+}

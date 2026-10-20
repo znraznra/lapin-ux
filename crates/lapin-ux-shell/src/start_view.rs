@@ -365,18 +365,99 @@ fn detail_card<'a>(shell: &'a Shell, item: &StartItem) -> Element<'a, Message> {
         }
         StartItem::Setting(p) => head(named(p.icon), p.title.to_string(), "System settings".into())
             .push(lapin_ux_ui::button::suggested("Open").on_press(Message::StartActivate(item.clone()))),
-        StartItem::File { path, is_dir } => {
-            let kind = if *is_dir { "Folder" } else { "File" };
-            head(file_icon(path, *is_dir), file_name(path), format!("{kind} \u{00B7} {}", location(path)))
-                .push(lapin_ux_ui::button::suggested("Open").on_press(Message::StartActivate(item.clone())))
-                .push(action("Open file location".into(), Message::ShowInFolder(path.clone())))
-                .push(action("Pin to Start".into(), Message::Pins(crate::start_pins::PinMsg::PinPath(path.clone()))))
-        }
+        StartItem::File { path, is_dir } => return file_card(path, *is_dir, item, action),
         StartItem::Pin(_) => return widget::Space::new().into(),
         StartItem::Web(q) => head(named("system-search-symbolic"), q.clone(), "Search the web".into())
             .push(lapin_ux_ui::button::suggested("Open results in browser").on_press(Message::StartActivate(item.clone()))),
     };
     card.into()
+}
+
+thread_local! {
+    /// The last previewed file, so the pane isn't re-read on every redraw.
+    static PREVIEW: std::cell::RefCell<Option<(std::path::PathBuf, std::time::Instant, lapin_ux_core::preview::FilePreview)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn cached_preview(path: &std::path::Path, is_dir: bool) -> lapin_ux_core::preview::FilePreview {
+    PREVIEW.with_borrow_mut(|c| {
+        if let Some((p, at, fp)) = c.as_ref() {
+            if p == path && at.elapsed().as_secs() < 5 {
+                return fp.clone();
+            }
+        }
+        let fp = lapin_ux_core::preview::file_preview(path, is_dir);
+        *c = Some((path.to_path_buf(), std::time::Instant::now(), fp.clone()));
+        fp
+    })
+}
+
+/// Windows 11's search preview pane for a file or folder: a picture or the
+/// first lines of the file, its name, then Type / Size / Date modified /
+/// Location, and the actions.
+fn file_card<'a>(
+    path: &std::path::Path,
+    is_dir: bool,
+    item: &StartItem,
+    action: impl Fn(String, Message) -> button::Button<'a, Message>,
+) -> Element<'a, Message> {
+    use lapin_ux_core::preview::{Body, date_text};
+    let fp = cached_preview(path, is_dir);
+    let big: Element<'a, Message> = match &fp.body {
+        Body::Image => container(
+            widget::image(widget::image::Handle::from_path(path)).content_fit(cosmic::iced::ContentFit::Contain),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(160.0))
+        .center_x(Length::Fill)
+        .into(),
+        Body::Text(t) => container(text::caption(t.clone()).font(cosmic::font::mono()).width(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fixed(160.0))
+            .clip(true)
+            .padding([8, 10])
+            .class(style::preview_box())
+            .into(),
+        Body::Folder { .. } | Body::Icon => container(icon(file_icon(path, is_dir)).size(64)).center_x(Length::Fill).padding([16, 0]).into(),
+    };
+    let sub = match fp.body {
+        Body::Folder { items } => format!("{items} item{}", if items == 1 { "" } else { "s" }),
+        _ => fp.kind.clone(),
+    };
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(4);
+    let mut detail = |label: &'static str, value: String| {
+        rows.push(
+            row::with_capacity(2)
+                .spacing(8)
+                .push(text::caption(label).class(style::dim_text()).width(Length::Fixed(84.0)))
+                .push(text::caption(value).width(Length::Fill))
+                .into(),
+        );
+    };
+    if let Some(s) = fp.size {
+        let t = lapin_ux_core::props::size_text(s);
+        detail("Size", t.split(" (").next().unwrap_or(&t).to_string());
+    }
+    if let Some(m) = fp.modified {
+        detail("Date modified", date_text(m));
+    }
+    detail("Location", location(path));
+    let details = column::with_children(rows).spacing(4);
+    column::with_capacity(10)
+        .width(Length::Fill)
+        .spacing(8)
+        .push(widget::Space::new().height(8))
+        .push(big)
+        .push(text::title4(file_name(path)).width(Length::Fill).align_x(Alignment::Center))
+        .push(text::caption(sub).class(style::dim_text()).width(Length::Fill).align_x(Alignment::Center))
+        .push(widget::Space::new().height(4))
+        .push(lapin_ux_ui::button::suggested("Open").on_press(Message::StartActivate(item.clone())))
+        .push(action("Open file location".into(), Message::ShowInFolder(path.to_path_buf())))
+        .push(action("Copy path".into(), Message::CopyText(path.display().to_string())))
+        .push(action("Pin to Start".into(), Message::Pins(crate::start_pins::PinMsg::PinPath(path.to_path_buf()))))
+        .push(widget::divider::horizontal::light())
+        .push(details)
+        .into()
 }
 
 fn search_results<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {

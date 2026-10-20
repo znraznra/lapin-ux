@@ -17,6 +17,7 @@ pub mod files;
 pub mod ics;
 pub mod notify;
 pub mod pins;
+pub mod preview;
 pub mod procs;
 pub mod nightlight;
 pub mod props;

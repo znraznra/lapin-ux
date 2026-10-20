@@ -253,6 +253,8 @@ pub enum Message {
     Uninstall(String),
     StartActivate(crate::start_search::StartItem),
     ShowInFolder(std::path::PathBuf),
+    /// Put text on the clipboard (Start's "Copy path").
+    CopyText(String),
     Quick(crate::quick::QuickMsg),
     /// Super+N: close our panels, then toggle the notification centre.
     ToggleNotifications,
@@ -1581,6 +1583,7 @@ impl Shell {
                 let close = self.close_start();
                 return Task::batch([close, crate::start_search::show_in_folder(path)]);
             }
+            Message::CopyText(text) => return cosmic::iced::clipboard::write(text),
             Message::Quick(m) => return self.update_quick(m),
             Message::ToggleNotifications => {
                 let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);
