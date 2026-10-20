@@ -168,6 +168,28 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   sideways to switch apps; four fingers sideways to switch desktops.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
+**Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.10.0 with
+patches in `packaging/lapin-ux-settings`; in progress, stages 0–2 of 5 done)
+- Windows 11 layout: account card and colour category icons in the sidebar
+  (Home, System, Bluetooth & devices, Network & internet, Personalization,
+  Apps, Accounts, Time & language, Accessibility, Privacy & security,
+  Update), Find a setting centred in the title bar, back arrow, breadcrumb
+  page titles, category pages of rows, Home, and the System page header
+  (wallpaper, PC name and model, Rename, Update's last check).
+- COSMIC's pages are re-parented under Windows' categories at start-up
+  (with Windows' names), not edited; old links (`cosmic-settings system`…)
+  open the matching category.
+- Inside pages: every setting its own card with an icon chosen from its
+  title, grey descriptions, On/Off beside switches, Windows-style drop-downs,
+  round slider thumbs, 4 px buttons; Power mode and the primary mouse button
+  as drop-downs; Add buttons inside rows; About laid out like Windows with
+  Device and OS specification cards (Copy, links).
+- All Lapin code is in `cosmic-settings/src/lapin/`; COSMIC's files get small
+  hooks. The look inside pages comes from opt-in libcosmic patches
+  (`packaging/lapin-ux-libcosmic` 0002–0007), turned on only by Lapin
+  Settings. The layout switches on only in a Lapin UX session
+  (`XDG_CURRENT_DESKTOP` contains `LapinUX`, or `LAPIN_UX_SETTINGS=1`).
+
 **Pop-ups and admin prompt** (`lapin-ux-osd`, a patch on COSMIC's cosmic-osd)
 - Volume and brightness keys show a small rounded box 12 px above the
   taskbar: icon, thin bar, number.
@@ -324,10 +346,10 @@ window into a fraction of the work area, tell the shell when a window asks
 for attention, desktop peek, night light, touchpad swipes for the shell, and
 a window-open animation. Everything else works on stock cosmic-comp.
 
-Four more COSMIC programs are built with small patches, each as its own
+Five more COSMIC programs are built with small patches, each as its own
 package that replaces the original: `lapin-ux-greeter` (lock and sign-in
 screens), `lapin-ux-osk` (touch keyboard), `lapin-ux-osd` (volume/brightness
-pop-ups and the admin prompt) and `lapin-ux-portal` (file dialogs; COSMIC's
+pop-ups and the admin prompt), `lapin-ux-settings` (Settings) and `lapin-ux-portal` (file dialogs; COSMIC's
 portal built against a patched COSMIC Files). Each patch keeps Lapin's code
 in its own file with a few call sites and is pinned to a COSMIC stable
 (epoch) release, so it rebases easily when COSMIC updates.

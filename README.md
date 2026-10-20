@@ -6,7 +6,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. Settings, File Explorer, a Store and an admin prompt are still to come (see the [roadmap](#roadmap)).
+> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings-in-progress) is being built in stages (2 of 5 done); File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
 >
 > Lapin UX copies how Windows 11 *behaves and looks*, not Microsoft's files. It ships no Microsoft logos, Windows artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#license)). It is an independent project, not affiliated with or endorsed by Microsoft.
 
@@ -15,11 +15,11 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | Phase | What it covers | Progress |
 |---|---|---|
 | 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
-| 2. Settings and multitasking | Quick settings, notification centre, Alt+Tab, Task view, snapping | `█████████░` 8 of 9 |
+| 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `█████████░` 8 of 9, 1 partly |
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 20 October 2026 (build `14f2e42`).*
+*Last updated: 20 October 2026 (build `70108c5`).*
 
 ## Take the tour
 
@@ -34,7 +34,32 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | ![Get Started](docs/tour/get-started.webp) **Get Started** — first-sign-in setup: Wi-Fi, light or dark. | ![Open file dialog](docs/tour/file-dialog.webp) **Open and Save dialogs** — Windows-style for every app. |
 | ![Volume pop-up above the taskbar](docs/tour/volume-popup.webp) **Volume and brightness pop-ups** — a small box above the taskbar when you press the keys. | ![Admin permission prompt](docs/tour/admin-prompt.webp) **Admin prompt** — the screen dims and asks before an app changes your system. |
 | ![Search preview of a text file](docs/tour/search-preview.webp) **Search preview** — see a file's first lines or picture before opening it. | ![Task Manager Services tab](docs/tour/task-manager-services.webp) **Task Manager: Users and Services** — who's signed in, and every background service. |
-| ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | |
+| ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | ![Shut Down dialog](docs/tour/shut-down.webp) **Shut Down** — Alt+F4 on the desktop, with your Linux's name and logo. |
+| ![Win+X menu](docs/tour/winx-menu.webp) **Win+X menu** — the power-user menu by the Start button. | ![Run dialog](docs/tour/run.webp) **Run** — Win+R opens programs, folders and websites. |
+| ![Taskbar jump list](docs/tour/jump-list.webp) **Jump lists** — right-click a taskbar app for recent files and actions. | ![Snap assist](docs/tour/snap-assist.webp) **Snap assist** — after snapping a window, pick what fills the rest. |
+| ![Snap group on the taskbar](docs/tour/snap-group.webp) **Snap groups** — windows snapped together come back together. | ![Windows-style title bars](docs/tour/title-bars.webp) **Title bars** — the app's icon and name on the left. |
+| ![Touch keyboard](docs/tour/touch-keyboard.webp) **Touch keyboard** — for tablets and touch screens. | ![Clipboard history](docs/tour/clipboard-history.webp) **Clipboard history** — Win+V brings back what you copied earlier. |
+| ![Task Manager performance](docs/tour/task-manager-performance.webp) **Task Manager: Performance** — live CPU, memory, disk and network graphs. | |
+
+## Settings (in progress)
+
+A new Settings app in Windows 11's layout, built from COSMIC Settings so every setting keeps working the same way underneath. It is being made in stages, each one reviewed screen by screen before the next starts.
+
+| | |
+|---|---|
+| ![Settings Home](docs/tour/settings-home.webp) **Home** — opens like Windows: your account, Find a setting in the title bar, and the settings people change most. | ![Settings System page](docs/tour/settings-system.webp) **System** — your wallpaper, PC name and Update at the top, then every System page. |
+| ![Display settings](docs/tour/settings-display.webp) **Display** — each setting is its own card with an icon, as on Windows. | ![Sound settings](docs/tour/settings-sound.webp) **Sound** — round slider thumbs and On/Off beside every switch. |
+| ![Power and battery settings](docs/tour/settings-power.webp) **Power & battery** — Windows' Power mode drop-down. | ![Colors settings](docs/tour/settings-colors.webp) **Colors** — light or dark, accent colour and more. |
+| ![About settings](docs/tour/settings-about.webp) **About** — device and system specifications with Copy, just like Windows. | ![Find a setting](docs/tour/settings-search.webp) **Find a setting** — search every page from the title bar. |
+
+- [x] **Stage 0 — groundwork:** COSMIC Settings set up as Lapin's own package, pinned to COSMIC's stable release
+- [x] **Stage 1 — the Windows 11 frame:** sidebar with your account and the Windows categories, Home, page titles like "System > Display", the System page header
+- [x] **Stage 2 — the Windows look inside pages:** setting cards with icons, On/Off switches, drop-downs and buttons in Windows' style, the About page
+- [ ] **Stage 3 — Windows' page layout:** Multitasking, Taskbar, Start, Lock screen, Notifications and Clipboard pages; COSMIC-only options under "Advanced"
+- [ ] **Stage 4 — pages COSMIC doesn't have:** Installed apps, Storage, Sign-in options, Privacy & security, and Update moved inside Settings
+- [ ] **Stage 5 — joining it up:** Find a setting results in Windows' style; Start, Control Panel, quick settings and Win+I open the right page
+
+Under plain COSMIC the same app still looks like COSMIC Settings: the Windows layout switches on only in a Lapin UX session.
 
 ## Roadmap
 
@@ -43,7 +68,7 @@ The work is split into four phases. Green is done, yellow is partly done, grey i
 ```mermaid
 flowchart LR
     P1["Phase 1<br/>Core desktop"]:::done --> P2["Phase 2<br/>Settings and multitasking"]:::mostly --> P3["Phase 3<br/>System apps"]:::partly --> P4["Phase 4<br/>Road to 1:1 Windows 11"]:::mostly
-    P2 -.- S["Settings app"]:::todo
+    P2 -.- S["Settings app<br/>(stage 2 of 5)"]:::partly
     P3 -.- FE["File Explorer"]:::todo
     P4 -.- ST["Store"]:::todo
     P4 -.- MK["Snip markup editor"]:::todo
@@ -68,7 +93,7 @@ flowchart LR
 - [x] Session: starts everything and restarts anything that crashes
 - [x] Arch package and one-step installer *(built, not yet tried on a real Arch machine)*
 
-### Phase 2 — settings and multitasking (8 of 9)
+### Phase 2 — settings and multitasking (8 of 9, 1 partly)
 
 - [x] Quick settings: Wi-Fi, Bluetooth, sound and per-app volume, media, brightness, Energy saver, hotspot, VPN, accessibility
 - [x] Edit quick settings, Night light with a schedule, rotation lock
@@ -77,7 +102,7 @@ flowchart LR
 - [x] Task view, virtual desktops, names and wallpaper per desktop
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
-- [ ] **Settings app** in Windows 11's layout — *being built in 6 stages; stage 1, the Windows 11 frame (sidebar, categories, Home, System page), is done; stage 2, the Windows look inside pages, is done. COSMIC Settings fills in for now*
+- [~] **Settings app** in Windows 11's layout — *stages 0–2 of 5 done (frame, categories, Home, the Windows look inside every page, About); see [Settings (in progress)](#settings-in-progress)*
 - [x] Windows-style volume and brightness pop-ups
 
 ### Phase 3 — system apps (4 of 6, 1 partly)
@@ -133,7 +158,7 @@ flowchart TB
     end
     subgraph opened["Opened when needed"]
         apps["Lapin apps<br/>Task Manager, Control Panel,<br/>Update, Get Started"]
-        cosmic["COSMIC programs with Lapin changes<br/>lock and sign-in, touch keyboard,<br/>Open/Save dialogs, volume pop-ups,<br/>admin prompt, COSMIC app title bars"]
+        cosmic["COSMIC programs with Lapin changes<br/>Settings, lock and sign-in, touch keyboard,<br/>Open/Save dialogs, volume pop-ups,<br/>admin prompt, COSMIC app title bars"]
     end
     shared["Shared building blocks<br/>logic and Windows-style controls"]
     shell --> shared
