@@ -235,7 +235,7 @@ impl cosmic::Application for App {
                 .filter(|(name, ..)| q.is_empty() || name.to_lowercase().contains(&q))
                 .map(|(name, ic, t)| {
                     button::custom(
-                        row::with_children(vec![icon::from_name(*ic).size(32).into(), text::body(*name).into()]).spacing(12).align_y(Alignment::Center),
+                        row::with_children(vec![icon(win11_icon(ic)).size(32).into(), text::body(*name).into()]).spacing(12).align_y(Alignment::Center),
                     )
                     .width(Length::Fill)
                     .padding(8)
@@ -262,7 +262,7 @@ impl cosmic::Application for App {
                     for t in c.tasks {
                         links = links.push(link(t.label, t.target, false));
                     }
-                    row::with_children(vec![icon::from_name(c.icon).size(48).into(), links.width(Length::Fixed(LINKS_WIDTH)).into()])
+                    row::with_children(vec![icon(win11_icon(c.icon)).size(48).into(), links.width(Length::Fixed(LINKS_WIDTH)).into()])
                         .spacing(16)
                         .width(Length::Fill)
                         .into()
@@ -285,6 +285,38 @@ impl cosmic::Application for App {
             .height(Length::Fill)
             .into()
     }
+}
+
+/// Control Panel's pictures are the full-colour Win11 icons, as in Windows,
+/// not the Fluent glyphs the Lapin UX icon theme uses for small symbolic
+/// icons. Looks in the installed Win11 theme (the dark variant first in dark
+/// mode) and falls back to a normal theme lookup.
+fn win11_icon(name: &str) -> icon::Handle {
+    static DIRS: std::sync::LazyLock<Vec<std::path::PathBuf>> = std::sync::LazyLock::new(|| {
+        let mut bases: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(d) = dirs::data_dir() {
+            bases.push(d.join("icons"));
+        }
+        let data = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        bases.extend(data.split(':').filter(|d| !d.is_empty()).map(|d| std::path::Path::new(d).join("icons")));
+        let themes: &[&str] = if cosmic::theme::is_dark() { &["Win11-dark", "Win11"] } else { &["Win11"] };
+        let mut out = Vec::new();
+        for theme in themes {
+            for base in &bases {
+                for ctx in ["apps", "preferences", "devices", "places", "categories", "status", "actions"] {
+                    for size in ["scalable", "48", "32", "24"] {
+                        out.push(base.join(theme).join(ctx).join(size));
+                    }
+                }
+            }
+        }
+        out
+    });
+    DIRS.iter()
+        .map(|d| d.join(format!("{name}.svg")))
+        .find(|p| p.exists())
+        .map(icon::from_path)
+        .unwrap_or_else(|| icon::from_name(name).handle())
 }
 
 fn main() -> cosmic::iced::Result {

@@ -65,8 +65,6 @@ pub enum StartPage {
 
 pub struct StartMenu {
     pub id: window::Id,
-    /// Height of Start's surface (the panel slides within it).
-    pub height: u32,
     pub query: String,
     pub page: StartPage,
     /// Keyboard selection. Home and All apps only highlight once the user
@@ -449,7 +447,6 @@ impl Shell {
         let index = self.refresh_file_index();
         self.start = Some(StartMenu {
             id,
-            height,
             query: String::new(),
             page: StartPage::Home,
             selected: None,
@@ -478,8 +475,8 @@ impl Shell {
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    // Sits above the taskbar; the panel slides up inside it (anim.rs).
-                    margin: IcedMargin { top: 0, right: 0, bottom: above, left: if left { 12 } else { 0 } },
+                    // Starts on the taskbar's top edge and rises into place (anim.rs).
+                    margin: IcedMargin { top: 0, right: 0, bottom: above - 12, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE

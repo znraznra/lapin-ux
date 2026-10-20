@@ -2939,6 +2939,7 @@ dependencies = [
 name = "lapin-ux-control"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",

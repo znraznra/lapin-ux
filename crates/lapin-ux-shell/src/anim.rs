@@ -7,13 +7,17 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use cosmic::app::Task;
+use cosmic::iced::platform_specific::shell::commands::layer_surface::set_margin;
 use cosmic::iced::window;
 
 use crate::app::{Message, Shell};
+use crate::config::TaskbarAlignment;
 
 const START_SLIDE: Duration = Duration::from_millis(220);
-/// How far below its resting place Start begins.
-const START_DROP: f32 = 48.0;
+/// How far below its resting place Start begins: the 12 px gap above the
+/// taskbar, so it starts sitting on the taskbar's top edge, never over it,
+/// and nothing of it is cut off.
+const START_DROP: f32 = 12.0;
 const LAUNCH_HOP: Duration = Duration::from_millis(900);
 /// Height of the launch hop.
 const HOP: f32 = 5.0;
@@ -83,14 +87,11 @@ impl Shell {
         if t >= 1.0 && (self.anims.start_shown || t0.elapsed() > slow(Duration::from_secs(3))) {
             self.anims.start = None;
         }
-        // The Start view reads `start_drop` and slides the panel inside its
-        // own surface, so it never covers the taskbar.
-        Task::none()
+        let left = self.config.alignment == TaskbarAlignment::Left;
+        set_margin(id, 0, 0, self.above_bar() - self.start_drop() as i32, if left { 12 } else { 0 })
     }
 
-    /// How far below its resting place Start's panel is drawn right now.
-    /// The surface itself stays put above the taskbar and clips the panel,
-    /// so Start looks like it rises out of the taskbar's top edge.
+    /// How far below its resting place Start is right now.
     pub(crate) fn start_drop(&self) -> f32 {
         let Some((id, t0)) = self.anims.start else { return 0.0 };
         if self.start.as_ref().is_none_or(|s| s.id != id) {

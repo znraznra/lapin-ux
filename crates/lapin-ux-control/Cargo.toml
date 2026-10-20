@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 lapin-ux-core.workspace = true
 libcosmic.workspace = true
+dirs.workspace = true
 lapin-ux-ui.workspace = true

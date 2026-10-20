@@ -161,18 +161,9 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
         ]),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(start.height as f32))
+    .height(Length::Fill)
     .class(style::panel_bg());
-    // While opening, the panel is drawn lower and clipped at the surface's
-    // bottom edge (the top of the taskbar), as if rising out of it.
-    // `pin` keeps the panel's full size; whatever falls past the surface's
-    // bottom edge simply isn't drawn.
-    cosmic::iced::widget::pin(panel)
-        .y(shell.start_drop())
-        .overflow(true)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    panel.into()
 }
 
 fn home<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {

@@ -1,4 +1,4 @@
-From 5b15393b0616d283563c6e8887d3d7518358db6a Mon Sep 17 00:00:00 2001
+From 5c8ee19cc9b15595ff719d5b05e69ba0f18927bf Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 21:34:36 +0800
 Subject: [PATCH] Lapin UX: Windows-style file dialog footer
@@ -7,10 +7,36 @@ File name / Save as type rows with the type filter beside the name,
 Open/Save then Cancel at the bottom right; folders first; no preview pane
 by default.
 ---
- src/config.rs |   4 +-
- src/dialog.rs | 210 ++++++++++++++++++++++++++++++--------------------
- 2 files changed, 127 insertions(+), 87 deletions(-)
+ examples/dialog.rs |   7 ++
+ src/config.rs      |   4 +-
+ src/dialog.rs      | 250 +++++++++++++++++++++++++++++----------------
+ 3 files changed, 171 insertions(+), 90 deletions(-)
 
+diff --git a/examples/dialog.rs b/examples/dialog.rs
+index df77069..d2ab124 100644
+--- a/examples/dialog.rs
++++ b/examples/dialog.rs
+@@ -86,6 +86,10 @@ impl Application for App {
+                         Message::DialogResult,
+                     );
+                     let mut tasks = vec![task];
++                    // Lapin UX: stands in for the asking app's id, as the portal passes it.
++                    if let Ok(icon) = std::env::var("DIALOG_TITLE_ICON") {
++                        dialog.set_title_icon(icon);
++                    }
+                     dialog.set_choices(vec![
+                         DialogChoice::ComboBox {
+                             id: "example-combobox".into(),
+@@ -127,6 +131,9 @@ impl Application for App {
+                         Message::DialogResult,
+                     );
+                     let mut tasks = vec![task];
++                    if let Ok(icon) = std::env::var("DIALOG_TITLE_ICON") {
++                        dialog.set_title_icon(icon);
++                    }
+                     tasks.push(dialog.set_filters(
+                         vec![
+                             DialogFilter {
 diff --git a/src/config.rs b/src/config.rs
 index 617c459..a761a38 100644
 --- a/src/config.rs
@@ -28,10 +54,42 @@ index 617c459..a761a38 100644
              view: View::List,
          }
 diff --git a/src/dialog.rs b/src/dialog.rs
-index d0037d2..5b14238 100644
+index d0037d2..575bd64 100644
 --- a/src/dialog.rs
 +++ b/src/dialog.rs
-@@ -571,8 +571,27 @@ struct App {
+@@ -319,6 +319,13 @@ impl<M: Send + 'static> Dialog<M> {
+             .map(move |message| cosmic::action::app(mapper(message)))
+     }
+ 
++    /// Lapin UX: show this app's icon beside the title (an icon name,
++    /// usually the asking app's id).
++    pub fn set_title_icon(&mut self, icon: impl Into<String>) {
++        let icon = icon.into();
++        self.cosmic.app.lapin_icon = (!icon.is_empty()).then_some(icon);
++    }
++
+     pub fn set_accept_label(&mut self, accept_label: impl AsRef<str>) {
+         self.cosmic.app.accept_label = DialogLabel::from(accept_label);
+     }
+@@ -454,6 +461,8 @@ struct Flags {
+ enum Message {
+     None,
+     Cancel,
++    /// Lapin UX: a place picked in the dialog's own sidebar.
++    LapinNavSelect(segmented_button::Entity),
+     Choice(usize, usize),
+     Config(Config),
+     DialogCancel,
+@@ -548,6 +557,8 @@ struct App {
+     flags: Flags,
+     title: String,
+     accept_label: DialogLabel,
++    /// Lapin UX: icon name of the app that asked for the dialog.
++    lapin_icon: Option<String>,
+     choices: Vec<DialogChoice>,
+     context_page: ContextPage,
+     dialog_pages: VecDeque<DialogPage>,
+@@ -571,8 +582,27 @@ struct App {
      type_select_last_key: Option<Instant>,
  }
  
@@ -59,7 +117,7 @@ index d0037d2..5b14238 100644
          let cosmic_theme::Spacing {
              space_xxxs,
              space_xxs,
-@@ -581,107 +600,123 @@ impl App {
+@@ -581,107 +611,123 @@ impl App {
              space_l,
              ..
          } = theme::spacing();
@@ -267,7 +325,7 @@ index d0037d2..5b14238 100644
              .into()
      }
  
-@@ -938,7 +973,8 @@ impl App {
+@@ -938,7 +984,8 @@ impl App {
      }
  
      fn update_title(&mut self) -> Task<Message> {
@@ -277,17 +335,81 @@ index d0037d2..5b14238 100644
          self.set_window_title(self.title.clone(), self.flags.window_id)
      }
  
-@@ -1204,6 +1240,10 @@ impl Application for App {
+@@ -1044,6 +1091,7 @@ impl Application for App {
+             flags,
+             title,
+             accept_label: DialogLabel::from(accept_label),
++            lapin_icon: None,
+             choices: Vec::new(),
+             context_page: ContextPage::Preview(None, PreviewKind::Selected),
+             dialog_pages: VecDeque::new(),
+@@ -1204,6 +1252,16 @@ impl Application for App {
          Some(self.button_view())
      }
  
 +    fn header_start(&self) -> Vec<Element<'_, Message>> {
-+        vec![widget::container(widget::text::body(self.title.as_str())).padding([0, 0, 0, 8]).into()]
++        // Lapin UX: the asking app's icon, then the title, at the left.
++        let mut row = widget::row::with_capacity(2).spacing(10).align_y(Alignment::Center);
++        if let Some(icon) = &self.lapin_icon {
++            row = row.push(widget::icon::from_name(icon.as_str()).size(16));
++        }
++        row = row.push(widget::text::body(self.title.as_str()));
++        vec![widget::container(row).padding([0, 0, 0, 8]).into()]
 +    }
 +
      fn header_end(&self) -> Vec<Element<'_, Message>> {
          let mut elements = Vec::with_capacity(3);
  
+@@ -1256,7 +1314,9 @@ impl Application for App {
+     }
+ 
+     fn nav_bar(&self) -> Option<Element<'_, cosmic::Action<Self::Message>>> {
+-        if !self.core().nav_bar_active() {
++        // Lapin UX: the dialog draws its sidebar itself (see `view`), so
++        // libcosmic adds no sidebar toggle in front of the title.
++        if true {
+             return None;
+         }
+ 
+@@ -1283,7 +1343,8 @@ impl Application for App {
+     }
+ 
+     fn nav_model(&self) -> Option<&segmented_button::SingleSelectModel> {
+-        Some(&self.nav_model)
++        // Lapin UX: see `nav_bar`.
++        None
+     }
+ 
+     fn on_app_exit(&mut self) -> Option<Message> {
+@@ -1350,6 +1411,7 @@ impl Application for App {
+     fn update(&mut self, message: Message) -> Task<Message> {
+         match message {
+             Message::None => {}
++            Message::LapinNavSelect(entity) => return self.on_nav_select(entity),
+             Message::Cancel => {
+                 self.result_opt = Some(DialogResult::Cancel);
+                 return window::close(self.flags.window_id);
+@@ -1958,7 +2020,19 @@ impl Application for App {
+                 .map(Message::TabMessage),
+         );
+ 
+-        col.into()
++        // Lapin UX: the places sidebar, drawn here rather than by libcosmic.
++        if self.core.is_condensed() {
++            return col.into();
++        }
++        let nav = cosmic::widget::nav_bar(&self.nav_model, Message::LapinNavSelect)
++            .close_icon(widget::icon::from_name("media-eject-symbolic").size(16).icon())
++            .into_container()
++            .max_width(280)
++            .width(Length::Shrink)
++            .height(Length::Fill);
++        widget::row::with_children([Element::from(nav), col.into()])
++            .spacing(space_xxs)
++            .into()
+     }
+ 
+     fn subscription(&self) -> Subscription<Message> {
 -- 
 2.43.0
 

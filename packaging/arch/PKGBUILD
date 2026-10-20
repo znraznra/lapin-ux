@@ -78,6 +78,7 @@ prepare() {
     git apply "$_src"/packaging/lapin-ux-portal/*.patch
     cd "$srcdir/xdg-desktop-portal-cosmic"
     git reset -q --hard
+    git apply "$_src"/packaging/lapin-ux-portal/portal/*.patch
     rm -f rust-toolchain rust-toolchain.toml
     # Use the patched COSMIC Files for the file dialogs.
     cargo fetch --config "$_files_patch" --target "$host"

@@ -1,0 +1,26 @@
+From 9c579860d96849f86de93845a90ee4ef187b8923 Mon Sep 17 00:00:00 2001
+From: Lapin UX <arnz.lee16@gmail.com>
+Date: Tue, 20 Oct 2026 09:26:41 +0800
+Subject: [PATCH] Lapin UX: show the asking app's icon in the file dialog's
+ title bar
+
+---
+ src/file_chooser.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/file_chooser.rs b/src/file_chooser.rs
+index ea4905e..f27cb27 100644
+--- a/src/file_chooser.rs
++++ b/src/file_chooser.rs
+@@ -433,6 +433,8 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
+     let (mut dialog, command) = Dialog::new(settings, Msg::DialogMessage, Msg::DialogResult);
+     cmds.push(command);
+     cmds.push(dialog.set_title(args.title.clone()));
++    // Lapin UX: the asking app's icon beside the title, as in Windows.
++    dialog.set_title_icon(args.app_id.clone());
+     if let Some(accept_label) = args.options.accept_label() {
+         dialog.set_accept_label(accept_label);
+     }
+-- 
+2.43.0
+
