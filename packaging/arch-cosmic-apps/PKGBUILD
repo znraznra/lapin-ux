@@ -1,0 +1,106 @@
+# Maintainer: Lapin UX contributors
+#
+# Optional: COSMIC's own apps rebuilt with Windows 11 title bars (the app's
+# icon and the title at the left, instead of a centred title).
+#
+# Nothing in the apps themselves is changed. The only patch is a few lines in
+# libcosmic, the toolkit they share (packaging/lapin-ux-libcosmic), and it
+# only takes effect in a Lapin UX session, so the apps look stock under
+# COSMIC. Each app is pinned to COSMIC's stable release (epoch tags) and
+# built with its own Cargo.lock (--frozen). The libcosmic patch is applied
+# to the build's private copy of libcosmic, so the lockfiles stay untouched
+# and the same patch works across libcosmic versions.
+#
+# Build:  cd packaging/arch-cosmic-apps && makepkg -si
+# Undo:   reinstall the COSMIC packages (pacman -S cosmic-settings …).
+
+pkgbase=lapin-ux-cosmic-apps
+pkgname=('lapin-ux-cosmic-settings' 'lapin-ux-cosmic-files' 'lapin-ux-cosmic-term' 'lapin-ux-cosmic-edit' 'lapin-ux-cosmic-store')
+pkgver=1.10.0
+pkgrel=1
+pkgdesc="COSMIC apps with Windows 11 title bars for Lapin UX"
+arch=('x86_64' 'aarch64')
+url="https://github.com/znraznra/lapin-ux"
+license=('GPL-3.0-only')
+makedepends=('cargo' 'git' 'just' 'clang' 'mold')
+options=('!lto')
+
+# COSMIC epoch-1.10.0
+_apps=(cosmic-settings cosmic-files cosmic-term cosmic-edit cosmic-store)
+_commits=(58aeb65244b8830880e8b6ced89dcd25663f20b1   # cosmic-settings
+          ac5cef76fa60b5a329bfda3d30825489ec28af53   # cosmic-files
+          3bfca1eb804de2f069e62d0709982beca908cb01   # cosmic-term
+          5ddf5115995e02fd71851a42bf0e6a9c9b5a1ce5   # cosmic-edit
+          c7b36a2fdccf1ce88944793af67c3664413ee560)  # cosmic-store
+source=()
+for _i in "${!_apps[@]}"; do
+    source+=("${_apps[$_i]}::git+https://github.com/pop-os/${_apps[$_i]}.git#commit=${_commits[$_i]}")
+done
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+_src="$startdir/../.."
+
+# Applies Lapin's libcosmic patch to every libcosmic copy this app fetched.
+_patch_libcosmic() {
+    local dir patched=0
+    for dir in "$CARGO_HOME"/git/checkouts/libcosmic-*/*/; do
+        [ -f "$dir/src/widget/header_bar.rs" ] || continue
+        if [ -f "$dir/src/lapin.rs" ]; then patched=1; continue; fi
+        git -C "$dir" apply "$_src"/packaging/lapin-ux-libcosmic/*.patch
+        patched=1
+    done
+    [ "$patched" = 1 ] || { echo "libcosmic not found for $1" >&2; return 1; }
+}
+
+prepare() {
+    export RUSTUP_TOOLCHAIN=stable
+    local host app
+    host="$(rustc -vV | sed -n 's/host: //p')"
+    for app in "${_apps[@]}"; do
+        cd "$srcdir/$app"
+        rm -f rust-toolchain rust-toolchain.toml
+        export CARGO_HOME="$srcdir/cargo-$app"
+        cargo fetch --locked --target "$host"
+        _patch_libcosmic "$app"
+    done
+}
+
+build() {
+    export RUSTUP_TOOLCHAIN=stable
+    local app
+    for app in "${_apps[@]}"; do
+        cd "$srcdir/$app"
+        CARGO_HOME="$srcdir/cargo-$app" just build-release --frozen
+    done
+}
+
+_install() {
+    cd "$srcdir/$1"
+    CARGO_HOME="$srcdir/cargo-$1" just rootdir="$pkgdir" install
+}
+
+package_lapin-ux-cosmic-settings() {
+    pkgdesc="COSMIC Settings with Windows 11 title bars (Lapin UX)"
+    provides=('cosmic-settings'); conflicts=('cosmic-settings')
+    _install cosmic-settings
+}
+package_lapin-ux-cosmic-files() {
+    pkgdesc="COSMIC Files with Windows 11 title bars (Lapin UX)"
+    provides=('cosmic-files'); conflicts=('cosmic-files')
+    _install cosmic-files
+}
+package_lapin-ux-cosmic-term() {
+    pkgdesc="COSMIC Terminal with Windows 11 title bars (Lapin UX)"
+    provides=('cosmic-terminal'); conflicts=('cosmic-terminal')
+    _install cosmic-term
+}
+package_lapin-ux-cosmic-edit() {
+    pkgdesc="COSMIC Text Editor with Windows 11 title bars (Lapin UX)"
+    provides=('cosmic-text-editor'); conflicts=('cosmic-text-editor')
+    _install cosmic-edit
+}
+package_lapin-ux-cosmic-store() {
+    pkgdesc="COSMIC Store with Windows 11 title bars (Lapin UX)"
+    provides=('cosmic-store'); conflicts=('cosmic-store')
+    _install cosmic-store
+}

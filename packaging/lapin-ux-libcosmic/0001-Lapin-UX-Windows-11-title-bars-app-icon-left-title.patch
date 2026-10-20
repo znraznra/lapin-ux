@@ -1,0 +1,109 @@
+From 581d8e15f7a0c41a9ab18a7573da979db978e422 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 14:00:05 +0800
+Subject: [PATCH] Lapin UX: Windows 11 title bars (app icon + left title)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/app/mod.rs           |  1 +
+ src/lapin.rs             | 42 ++++++++++++++++++++++++++++++++++++++++
+ src/lib.rs               |  2 ++
+ src/widget/header_bar.rs |  6 +++++-
+ 4 files changed, 50 insertions(+), 1 deletion(-)
+ create mode 100644 src/lapin.rs
+
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 84cf57f..d0b7d0c 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -65,6 +65,7 @@ pub(crate) fn iced_settings<App: Application>(
+     let mut window_settings = iced::window::Settings::default();
+     window_settings.exit_on_close_request = exit_on_close;
+     iced.id = Some(App::APP_ID.to_owned());
++    crate::lapin::set_app_id(App::APP_ID);
+     #[cfg(target_os = "linux")]
+     {
+         window_settings.platform_specific.application_id = App::APP_ID.to_string();
+diff --git a/src/lapin.rs b/src/lapin.rs
+new file mode 100644
+index 0000000..1c47e88
+--- /dev/null
++++ b/src/lapin.rs
+@@ -0,0 +1,42 @@
++// SPDX-License-Identifier: MPL-2.0
++//! Lapin UX: Windows 11 title bars for COSMIC apps.
++//!
++//! Windows puts the app's icon and the window title at the left of the title
++//! bar; COSMIC centres the title. Everything Lapin changes lives here so the
++//! patch to libcosmic is a few call sites. It only takes effect in a Lapin UX
++//! session, so the same build looks stock under COSMIC.
++
++use std::sync::OnceLock;
++
++use crate::{Element, iced, widget};
++
++static APP_ID: OnceLock<String> = OnceLock::new();
++
++/// Remembers the running app's id, for its icon in the title bar.
++pub fn set_app_id(id: &str) {
++    let _ = APP_ID.set(id.to_string());
++}
++
++/// True in a Lapin UX session (`XDG_CURRENT_DESKTOP` lists `LapinUX`), or
++/// when `LAPIN_UX_TITLEBAR=1` forces it.
++pub fn enabled() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var("LAPIN_UX_TITLEBAR").is_ok_and(|v| v == "1")
++            || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("LapinUX")))
++    })
++}
++
++/// The app's icon and the title, left-aligned, as on Windows 11.
++pub fn title<'a, M: 'static>(title: std::borrow::Cow<'a, str>) -> Element<'a, M> {
++    let mut row = widget::row::with_capacity(2).spacing(10).align_y(iced::Alignment::Center).padding([0, 0, 0, 6]);
++    if let Some(id) = APP_ID.get() {
++        row = row.push(widget::icon::from_name(id.as_str()).size(16));
++    }
++    row.push(
++        widget::text::body(title)
++            .wrapping(iced_core::text::Wrapping::None)
++            .ellipsize(iced_core::text::Ellipsize::End(iced_core::text::EllipsizeHeightLimit::Lines(1))),
++    )
++    .into()
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 9ac7575..51adf7f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -153,6 +153,8 @@ pub use iced;
+ pub mod icon_theme;
+ pub mod keyboard_nav;
+ 
++pub mod lapin;
++
+ mod localize;
+ 
+ #[cfg(all(target_env = "gnu", not(target_os = "windows")))]
+diff --git a/src/widget/header_bar.rs b/src/widget/header_bar.rs
+index 556466f..d82b61e 100644
+--- a/src/widget/header_bar.rs
++++ b/src/widget/header_bar.rs
+@@ -370,8 +370,12 @@ impl<'a, Message: Clone + 'static> HeaderBar<'a, Message> {
+         let is_ssd = self.is_ssd;
+ 
+         // Take ownership of the regions to be packed.
+-        let start = std::mem::take(&mut self.start);
++        let mut start = std::mem::take(&mut self.start);
+         let center = std::mem::take(&mut self.center);
++        // Lapin UX: a plain title goes left with the app icon, as on Windows.
++        if crate::lapin::enabled() && center.is_empty() && !self.title.is_empty() {
++            start.insert(0, crate::lapin::title(std::mem::take(&mut self.title)));
++        }
+         let mut end = std::mem::take(&mut self.end);
+ 
+         // Also packs the window controls at the very end.
+-- 
+2.43.0
+
