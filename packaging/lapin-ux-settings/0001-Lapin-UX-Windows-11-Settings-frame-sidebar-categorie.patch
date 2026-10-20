@@ -1,0 +1,984 @@
+From cc776678b8bae0c5f77ddb3db0aa2c4cb42d35c4 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 16:34:29 +0800
+Subject: [PATCH] Lapin UX: Windows 11 Settings frame (sidebar, categories,
+ breadcrumb, Home)
+
+All Lapin code is in cosmic-settings/src/lapin/; app.rs/main.rs get small
+hooks. Active only in a Lapin UX session (or LAPIN_UX_SETTINGS=1).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs              |  83 ++++++-
+ cosmic-settings/src/lapin/categories.rs | 254 +++++++++++++++++++++
+ cosmic-settings/src/lapin/mod.rs        |  74 ++++++
+ cosmic-settings/src/lapin/style.rs      | 116 ++++++++++
+ cosmic-settings/src/lapin/view.rs       | 285 ++++++++++++++++++++++++
+ cosmic-settings/src/main.rs             |   7 +-
+ 6 files changed, 816 insertions(+), 3 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/categories.rs
+ create mode 100644 cosmic-settings/src/lapin/mod.rs
+ create mode 100644 cosmic-settings/src/lapin/style.rs
+ create mode 100644 cosmic-settings/src/lapin/view.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index b77f643..105d160 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -67,6 +67,8 @@ pub struct SettingsApp {
+     search_input: String,
+     search_selections: Vec<(page::Entity, section::Entity)>,
+     context_title: Option<String>,
++    /// Lapin UX: Windows 11 layout (sidebar, categories, back arrow).
++    lapin: crate::lapin::State,
+ }
+ 
+ impl SettingsApp {
+@@ -165,6 +167,7 @@ pub enum Message {
+     OutputRemoved(WlOutput),
+     Page(page::Entity),
+     PageMessage(crate::pages::Message),
++    Lapin(crate::lapin::Msg),
+     #[cfg(feature = "wayland")]
+     PanelConfig(Box<CosmicPanelConfig>),
+     #[cfg(feature = "cosmic-comp-config")]
+@@ -212,6 +215,7 @@ impl cosmic::Application for SettingsApp {
+             search_input: String::new(),
+             search_selections: Vec::default(),
+             context_title: None,
++            lapin: crate::lapin::State::default(),
+         };
+ 
+         #[cfg(feature = "page-networking")]
+@@ -233,8 +237,15 @@ impl cosmic::Application for SettingsApp {
+         app.insert_page::<time::Page>();
+         app.insert_page::<system::Page>();
+ 
++        let lapin = crate::lapin::enabled();
++        if lapin {
++            app.lapin.layout = crate::lapin::arrange(&mut app.pages);
++        }
++
+         let active_id = match flags.sub_command {
+             Some(p) => app.subtask_to_page(&p),
++            // Windows opens Settings on Home.
++            None if lapin => Some(app.lapin.layout.home),
+             None => app
+                 .pages
+                 .find_page_by_id(&app.last_active_page)
+@@ -250,10 +261,14 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn nav_model(&self) -> Option<&nav_bar::Model> {
+-        Some(&self.nav_model)
++        // Lapin UX draws its own sidebar (see `view`).
++        (!crate::lapin::enabled()).then_some(&self.nav_model)
+     }
+ 
+     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
++        if crate::lapin::enabled() {
++            return crate::lapin::header_start(&self.lapin);
++        }
+         let mut widgets = Vec::new();
+ 
+         widgets.push(if self.search_active {
+@@ -377,6 +392,25 @@ impl cosmic::Application for SettingsApp {
+         match message {
+             Message::Page(page) => return self.activate_page(page),
+ 
++            Message::Lapin(msg) => match msg {
++                crate::lapin::Msg::Back => {
++                    if let Some(page) = self.lapin.history.pop() {
++                        self.lapin.going_back = true;
++                        return self.activate_page(page);
++                    }
++                }
++                crate::lapin::Msg::Search(phrase) => {
++                    if phrase.is_empty() {
++                        self.search_active = false;
++                        self.search_clear();
++                    } else {
++                        self.search_active = true;
++                        return self.search_changed(phrase);
++                    }
++                }
++                crate::lapin::Msg::OpenUpdate => crate::lapin::open_update(),
++            },
++
+             Message::None => (),
+ 
+             Message::SetWindowTitle => return self.set_title(),
+@@ -898,6 +932,9 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn view(&self) -> Element<'_, Message> {
++        if crate::lapin::enabled() {
++            return self.lapin_view();
++        }
+         let view = if self.search_active && !self.search_input.is_empty() {
+             self.search_view()
+         } else if let Some(content) = self.pages.content(self.active_page) {
+@@ -964,8 +1001,10 @@ impl cosmic::Application for SettingsApp {
+ impl SettingsApp {
+     /// Activates a page.
+     fn activate_page(&mut self, page: page::Entity) -> Task<crate::Message> {
++        let page = self.lapin.layout.redirect(page);
+         let current_page = self.active_page;
+         self.active_page = page;
++        self.lapin.visit(current_page, page);
+ 
+         let mut leave_task = iced::Task::none();
+         let mut close_context_drawer_task = iced::Task::none();
+@@ -985,7 +1024,12 @@ impl SettingsApp {
+             self.config.set_active_page(self.last_active_page.clone());
+         }
+ 
+-        self.search_clear();
++        if crate::lapin::enabled() {
++            self.search_input.clear();
++            self.search_selections.clear();
++        } else {
++            self.search_clear();
++        }
+         self.search_active = false;
+         self.activate_navbar(page);
+         self.loaded_pages.insert(page);
+@@ -1005,6 +1049,9 @@ impl SettingsApp {
+     }
+ 
+     fn set_title(&mut self) -> Task<crate::Message> {
++        if crate::lapin::enabled() {
++            return self.set_window_title(crate::lapin::TITLE.into(), self.core.main_window_id().unwrap());
++        }
+         self.set_window_title(
+             format!(
+                 "{} - COSMIC Settings",
+@@ -1067,6 +1114,14 @@ impl SettingsApp {
+ 
+         let header = if let Some(custom_header) = page.header() {
+             custom_header.map(Message::from)
++        } else if crate::lapin::enabled() {
++            let mut head = row::with_capacity(2)
++                .align_y(iced::Alignment::Center)
++                .push(cosmic::widget::container(crate::lapin::breadcrumb(&self.pages, self.active_page, page.title())).width(Length::Fill));
++            if let Some(element) = page.header_view() {
++                head = head.push(element.map(Message::from));
++            }
++            head.into()
+         } else if let Some(parent) = page_info.parent {
+             let page_header = crate::widget::sub_page_header(
+                 page.title().unwrap_or(page_info.title.as_str()),
+@@ -1227,6 +1282,30 @@ impl SettingsApp {
+             .into()
+     }
+ 
++    /// Lapin UX: Windows 11's sidebar beside the open page.
++    fn lapin_view(&self) -> Element<'_, Message> {
++        let layout = &self.lapin.layout;
++        let page = self.active_page;
++        let body = if !self.search_input.is_empty() {
++            self.search_view()
++        } else if page == layout.home {
++            crate::lapin::home_view(&self.pages, layout)
++        } else if layout.categories.contains(&page) {
++            crate::lapin::category_view(&self.pages, page)
++        } else if let Some(content) = self.pages.content(page) {
++            self.page_view(content)
++        } else if let Some(sub_pages) = self.pages.sub_pages(page) {
++            self.sub_page_view(sub_pages)
++        } else {
++            self.page_container(cosmic::widget::space())
++        };
++        row::with_capacity(2)
++            .push(crate::lapin::sidebar(&self.pages, &self.lapin, page, &self.search_input))
++            .push(body)
++            .height(Length::Fill)
++            .into()
++    }
++
+     /// Displays the sub-pages view of a page.
+     fn sub_page_view(&self, sub_pages: &[page::Entity]) -> cosmic::Element<'_, Message> {
+         let page_list = sub_pages
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+new file mode 100644
+index 0000000..80611c0
+--- /dev/null
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -0,0 +1,254 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Windows 11's categories, and which of COSMIC's pages go in each.
++
++use cosmic_settings_page::{self as page, Binder, Entity};
++
++use crate::pages::Message;
++
++/// A Windows category (System, Bluetooth & devices…) or Home: a page with no
++/// settings of its own, whose sub-pages are listed as rows.
++pub struct Category {
++    id: &'static str,
++    title: &'static str,
++    icon: &'static str,
++    description: &'static str,
++}
++
++impl page::Page<Message> for Category {
++    fn info(&self) -> page::Info {
++        page::Info::new(self.id, self.icon).title(self.title).description(self.description)
++    }
++}
++
++/// One of COSMIC's pages placed in a category, with Windows' name and
++/// description for it (`None` keeps COSMIC's).
++struct Child {
++    id: &'static str,
++    /// A Fluent outline icon, as Windows uses on its rows.
++    icon: &'static str,
++    title: Option<&'static str>,
++    description: Option<&'static str>,
++}
++
++const fn c(id: &'static str, icon: &'static str, title: &'static str, description: &'static str) -> Child {
++    Child { id, icon, title: Some(title), description: Some(description) }
++}
++
++const fn keep(id: &'static str, icon: &'static str) -> Child {
++    Child { id, icon, title: None, description: None }
++}
++
++struct Spec {
++    id: &'static str,
++    title: &'static str,
++    /// A full-colour icon from the Win11 icon theme.
++    icon: &'static str,
++    description: &'static str,
++    children: &'static [Child],
++}
++
++/// Windows 11's sidebar, top to bottom (Gaming is left out on purpose).
++/// Pages COSMIC has that Windows doesn't are kept for now at the end of the
++/// closest category; stage 3 moves them under "Advanced" or hides them.
++const SPECS: &[Spec] = &[
++    Spec {
++        id: "lapin-system",
++        title: "System",
++        icon: "cs-display",
++        description: "Display, sound, power, about",
++        children: &[
++            c("display", "preferences-desktop-display-symbolic", "Display", "Monitors, brightness, night light, display profile"),
++            c("sound", "audio-volume-high-symbolic", "Sound", "Volume levels, output, input, sound devices"),
++            c("power", "battery-full-symbolic", "Power & battery", "Sleep, battery usage, power mode"),
++            keep("window-management", "preferences-system-windows-symbolic"),
++            keep("workspaces", "view-grid-symbolic"),
++            c("about", "help-about-symbolic", "About", "Device specifications, rename this PC"),
++        ],
++    },
++    Spec {
++        id: "lapin-devices",
++        title: "Bluetooth & devices",
++        icon: "bluetooth",
++        description: "Bluetooth, mouse, touchpad, keyboard",
++        children: &[
++            c("bluetooth", "bluetooth-active-symbolic", "Bluetooth", "Pair, connect and remove devices"),
++            c("mouse", "input-mouse-symbolic", "Mouse", "Buttons, mouse pointer speed, scrolling"),
++            c("touchpad", "input-touchpad-symbolic", "Touchpad", "Taps, gestures, scrolling, zooming"),
++            c("keyboard", "input-keyboard-symbolic", "Keyboard", "Input sources, shortcuts, special characters"),
++            c("drawing-tablet", "input-tablet-symbolic", "Pen & tablet", "Tablet buttons, display mapping"),
++        ],
++    },
++    Spec {
++        id: "lapin-network",
++        title: "Network & internet",
++        icon: "preferences-system-network",
++        description: "Wi-Fi, Ethernet, VPN",
++        children: &[
++            c("wifi", "network-wireless-symbolic", "Wi-Fi", "Connect, manage known networks"),
++            c("wired", "network-wired-symbolic", "Ethernet", "Authentication, IP and DNS settings"),
++            c("vpn", "network-vpn-symbolic", "VPN", "Add, connect, manage"),
++        ],
++    },
++    Spec {
++        id: "lapin-personalization",
++        title: "Personalization",
++        icon: "cs-cat-appearance",
++        description: "Background, colors, themes",
++        children: &[
++            c("wallpaper", "preferences-desktop-wallpaper-symbolic", "Background", "Background images, color, slideshow"),
++            c("appearance", "preferences-color-symbolic", "Colors", "Accent color, transparency effects, light and dark mode"),
++            keep("panel", "user-desktop-symbolic"),
++            keep("dock", "view-app-grid-symbolic"),
++        ],
++    },
++    Spec {
++        id: "lapin-apps",
++        title: "Apps",
++        icon: "applications-all",
++        description: "Default apps, startup",
++        children: &[
++            c("default-apps", "preferences-desktop-default-applications-symbolic", "Default apps", "Defaults for file and link types"),
++            c("startup-apps", "system-run-symbolic", "Startup", "Apps that start automatically when you sign in"),
++            keep("legacy-applications", "window-new-symbolic"),
++        ],
++    },
++    Spec {
++        id: "lapin-accounts",
++        title: "Accounts",
++        icon: "cs-user-accounts",
++        description: "Your account, other users",
++        children: &[c("users", "system-users-symbolic", "Users", "Your account and other people who use this PC")],
++    },
++    Spec {
++        id: "lapin-time",
++        title: "Time & language",
++        icon: "preferences-desktop-locale",
++        description: "Date & time, language & region",
++        children: &[
++            c("time-date", "preferences-system-time-symbolic", "Date & time", "Time zone, automatic clock settings, calendar display"),
++            c("time-region", "preferences-desktop-locale-symbolic", "Language & region", "Display language, preferred languages, regional format"),
++        ],
++    },
++    Spec {
++        id: "lapin-accessibility",
++        title: "Accessibility",
++        icon: "cs-universal-access",
++        description: "Narrator, magnifier, contrast",
++        children: &[
++            c("accessibility", "preferences-desktop-accessibility-symbolic", "Vision", "Narrator, contrast, color filters, invert colors"),
++            c("accessibility_magnifier", "zoom-in-symbolic", "Magnifier", "Zoom level, zoom increment"),
++            c("accessibility_osk", "input-keyboard-symbolic", "Keyboard", "On-screen keyboard"),
++        ],
++    },
++    Spec {
++        id: "lapin-privacy",
++        title: "Privacy & security",
++        icon: "firewall",
++        description: "Security and app permissions",
++        children: &[],
++    },
++    Spec {
++        id: "lapin-update",
++        title: "Update",
++        icon: "system-software-update",
++        description: "Updates for your system, apps and firmware",
++        children: &[],
++    },
++];
++
++pub const HOME_ID: &str = "lapin-home";
++pub const PRIVACY_ID: &str = "lapin-privacy";
++pub const UPDATE_ID: &str = "lapin-update";
++
++/// COSMIC's group pages and the category that replaces each, so links to
++/// them (`cosmic-settings system`, Control Panel…) open the right place.
++const REDIRECTS: &[(&str, &str)] = &[
++    ("system", "lapin-system"),
++    ("desktop", "lapin-personalization"),
++    ("input-devices", "lapin-devices"),
++    ("network-and-wireless", "lapin-network"),
++    ("applications", "lapin-apps"),
++    ("time", "lapin-time"),
++];
++
++/// The sidebar's pages, in order.
++#[derive(Default)]
++pub struct Layout {
++    pub home: Entity,
++    pub categories: Vec<Entity>,
++    redirects: Vec<(Entity, Entity)>,
++}
++
++impl Layout {
++    /// The page to open instead of one of COSMIC's group pages.
++    pub fn redirect(&self, page: Entity) -> Entity {
++        self.redirects.iter().find(|(from, _)| *from == page).map_or(page, |(_, to)| *to)
++    }
++
++    /// The sidebar entry a page belongs to (its top-most ancestor).
++    pub fn top_of(&self, pages: &Binder<Message>, mut page: Entity) -> Entity {
++        while let Some(parent) = pages.info.get(page).and_then(|i| i.parent) {
++            page = parent;
++        }
++        page
++    }
++
++    pub fn is_category(&self, page: Entity) -> bool {
++        page == self.home || self.categories.contains(&page)
++    }
++}
++
++/// Adds Home and the categories, and moves COSMIC's pages under them.
++/// Pages COSMIC doesn't have on this machine (no touchpad support compiled,
++/// say) are simply skipped.
++pub fn arrange(pages: &mut Binder<Message>) -> Layout {
++    let home = pages.register_page(Category {
++        id: HOME_ID,
++        title: "Home",
++        icon: "go-home-symbolic",
++        description: "Recommended settings",
++    });
++    let mut layout = Layout { home, categories: Vec::with_capacity(SPECS.len()), redirects: Vec::new() };
++    for spec in SPECS {
++        let cat = pages.register_page(Category {
++            id: spec.id,
++            title: spec.title,
++            icon: spec.icon,
++            description: spec.description,
++        });
++        let mut kids = Vec::with_capacity(spec.children.len());
++        for child in spec.children {
++            let Some((entity, _)) = pages.find_page_by_id(child.id) else { continue };
++            // Out of its old parent's list…
++            if let Some(old) = pages.info[entity].parent {
++                if let Some(list) = pages.sub_pages.get_mut(old) {
++                    list.retain(|e| *e != entity);
++                }
++            }
++            // …into the category, with Windows' wording.
++            let info = &mut pages.info[entity];
++            info.parent = Some(cat);
++            if let Some(t) = child.title {
++                info.title = t.to_string();
++            }
++            if let Some(d) = child.description {
++                info.description = d.to_string();
++            }
++            info.icon_name = child.icon.into();
++            kids.push(entity);
++        }
++        pages.sub_pages.insert(cat, kids);
++        layout.categories.push(cat);
++    }
++    for (from, to) in REDIRECTS {
++        if let (Some((f, _)), Some((t, _))) = (pages.find_page_by_id(from), pages.find_page_by_id(to)) {
++            layout.redirects.push((f, t));
++        }
++    }
++    layout
++}
++
++/// The category's colour icon (the Win11 icon theme's file, if installed).
++pub fn icon_name(pages: &Binder<Message>, page: Entity) -> String {
++    pages.info.get(page).map(|i| i.icon_name.to_string()).unwrap_or_default()
++}
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+new file mode 100644
+index 0000000..b348036
+--- /dev/null
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Lapin UX: Windows 11's Settings layout on top of COSMIC Settings.
++//!
++//! Everything Lapin adds lives in this module. COSMIC's own pages are not
++//! edited: at start-up they are re-parented under Windows' categories, and
++//! the app's sidebar, page header and category pages are drawn here. The
++//! patch to COSMIC's files is a handful of hooks in `app.rs`, so it rebases
++//! easily onto new COSMIC releases. It only takes effect in a Lapin UX
++//! session (or with `LAPIN_UX_SETTINGS=1`); under COSMIC the app is stock.
++
++mod categories;
++mod style;
++mod view;
++
++pub use categories::{Layout, arrange};
++pub use view::{breadcrumb, category_view, header_start, home_view, sidebar};
++
++use std::sync::OnceLock;
++
++/// True in a Lapin UX session (`XDG_CURRENT_DESKTOP` lists `LapinUX`), or
++/// when `LAPIN_UX_SETTINGS=1` forces it.
++pub fn enabled() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| {
++        if let Ok(v) = std::env::var("LAPIN_UX_SETTINGS") {
++            return v == "1";
++        }
++        std::env::var("XDG_CURRENT_DESKTOP")
++            .is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("LapinUX")))
++    })
++}
++
++/// The window title, as on Windows.
++pub const TITLE: &str = "Settings";
++
++/// Messages from Lapin's parts of the window.
++#[derive(Clone, Debug)]
++pub enum Msg {
++    /// The title bar's back arrow.
++    Back,
++    /// Typing in the sidebar's "Find a setting" box.
++    Search(String),
++    /// Open the Update app (until Update moves into Settings, stage 4).
++    OpenUpdate,
++}
++
++/// Lapin's state inside the app.
++#[derive(Default)]
++pub struct State {
++    pub layout: Layout,
++    /// Pages visited, for the back arrow.
++    pub history: Vec<cosmic_settings_page::Entity>,
++    pub account: view::Account,
++    /// Set by Back so the page it opens isn't added to the history.
++    pub going_back: bool,
++}
++
++impl State {
++    /// Remember the page being left, for Back. Going back doesn't add to it.
++    pub fn visit(&mut self, from: cosmic_settings_page::Entity, to: cosmic_settings_page::Entity) {
++        if std::mem::take(&mut self.going_back) || from == to || from == cosmic_settings_page::Entity::default() {
++            return;
++        }
++        self.history.push(from);
++        if self.history.len() > 64 {
++            self.history.remove(0);
++        }
++    }
++}
++
++/// Opens Lapin UX's Update app.
++pub fn open_update() {
++    let _ = std::process::Command::new("lapin-ux-update").spawn();
++}
+diff --git a/cosmic-settings/src/lapin/style.rs b/cosmic-settings/src/lapin/style.rs
+new file mode 100644
+index 0000000..b55bafe
+--- /dev/null
++++ b/cosmic-settings/src/lapin/style.rs
+@@ -0,0 +1,116 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Windows 11 looks for Settings' sidebar and rows.
++
++use cosmic::iced::{Background, Border, Color};
++use cosmic::theme::{self, Button};
++use cosmic::widget::{self, button::Catalog};
++
++fn on_bg(t: &cosmic::Theme) -> Color {
++    t.cosmic().on_bg_color().into()
++}
++
++fn tint(t: &cosmic::Theme, alpha: f32) -> Option<Background> {
++    let mut c = on_bg(t);
++    c.a = alpha;
++    Some(Background::Color(c))
++}
++
++/// A sidebar entry: no fill, a soft fill on hover, a stronger one when open.
++pub fn nav_item(selected: bool) -> Button {
++    let fill = move |t: &cosmic::Theme, hover: bool, press: bool| {
++        let mut s = t.active(false, false, &Button::Text);
++        let a = match (selected, hover, press) {
++            (_, _, true) => 0.05,
++            (true, true, _) => 0.10,
++            (true, false, _) => 0.08,
++            (false, true, _) => 0.06,
++            (false, false, _) => 0.0,
++        };
++        s.background = tint(t, a);
++        s.border_radius = 4.0.into();
++        s.text_color = Some(on_bg(t));
++        s.icon_color = Some(on_bg(t));
++        s
++    };
++    Button::Custom {
++        active: Box::new(move |_, t| fill(t, false, false)),
++        disabled: Box::new(move |t| fill(t, false, false)),
++        hovered: Box::new(move |_, t| fill(t, true, false)),
++        pressed: Box::new(move |_, t| fill(t, true, true)),
++    }
++}
++
++/// A row on a category page: its own rounded card, lighter on hover.
++pub fn row_card() -> Button {
++    let fill = move |t: &cosmic::Theme, hover: bool, press: bool| {
++        let mut s = t.active(false, false, &Button::Text);
++        let c = t.cosmic();
++        let base: Color = c.background(t.transparent).component.base.into();
++        let hovered: Color = c.background(t.transparent).component.hover.into();
++        let pressed: Color = c.background(t.transparent).component.pressed.into();
++        s.background = Some(Background::Color(if press {
++            pressed
++        } else if hover {
++            hovered
++        } else {
++            base
++        }));
++        s.border_radius = 4.0.into();
++        s.border_width = 1.0;
++        s.border_color = c.bg_divider().into();
++        s.text_color = Some(on_bg(t));
++        s.icon_color = Some(on_bg(t));
++        s
++    };
++    Button::Custom {
++        active: Box::new(move |_, t| fill(t, false, false)),
++        disabled: Box::new(move |t| fill(t, false, false)),
++        hovered: Box::new(move |_, t| fill(t, true, false)),
++        pressed: Box::new(move |_, t| fill(t, true, true)),
++    }
++}
++
++/// A card holding several rows (Home).
++pub fn card() -> theme::Container<'static> {
++    theme::Container::custom(|t| {
++        let c = t.cosmic();
++        widget::container::Style {
++            background: Some(Color::from(c.background(t.transparent).component.base).into()),
++            border: Border { radius: 8.0.into(), width: 1.0, color: c.bg_divider().into() },
++            text_color: Some(on_bg(t)),
++            icon_color: Some(on_bg(t)),
++            ..Default::default()
++        }
++    })
++}
++
++/// The accent pill beside the open page in the sidebar.
++pub fn pill(visible: bool) -> theme::Container<'static> {
++    theme::Container::custom(move |t| widget::container::Style {
++        background: visible.then(|| Color::from(t.cosmic().accent_color()).into()),
++        border: Border { radius: 2.0.into(), ..Default::default() },
++        ..Default::default()
++    })
++}
++
++/// Grey text: descriptions and the account type.
++pub fn quiet() -> theme::Text {
++    theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
++        color: Some({
++            let mut c = on_bg(t);
++            c.a = 0.72;
++            c
++        }),
++        ..Default::default()
++    })
++}
++
++/// The round picture holder when there's no account picture.
++pub fn avatar_bg() -> theme::Container<'static> {
++    theme::Container::custom(|t| widget::container::Style {
++        background: tint(t, 0.12),
++        border: Border { radius: 999.0.into(), ..Default::default() },
++        icon_color: Some(on_bg(t)),
++        ..Default::default()
++    })
++}
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+new file mode 100644
+index 0000000..04cd0cd
+--- /dev/null
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -0,0 +1,285 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Windows 11 Settings: the sidebar, the title bar's back arrow, the
++//! breadcrumb page title, category pages and Home.
++
++use std::path::PathBuf;
++use std::sync::LazyLock;
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, button, column, container, icon, row, text};
++use cosmic::{Apply, Element};
++use cosmic_settings_page::{Binder, Entity};
++
++use super::categories::{Layout, PRIVACY_ID, UPDATE_ID};
++use super::{Msg, State, style};
++use crate::app::Message;
++
++pub const SIDEBAR_WIDTH: f32 = 280.0;
++const CONTENT_MAX: f32 = 1000.0;
++
++/// The signed-in person, for the top of the sidebar.
++pub struct Account {
++    pub name: String,
++    pub avatar: Option<PathBuf>,
++}
++
++impl Default for Account {
++    fn default() -> Self {
++        let uid = std::fs::read_to_string("/proc/self/status").ok().and_then(|s| {
++            s.lines()
++                .find_map(|l| l.strip_prefix("Uid:"))
++                .and_then(|v| v.split_whitespace().next().map(str::to_string))
++        });
++        let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
++        let entry = passwd
++            .lines()
++            .map(|l| l.split(':').map(str::to_string).collect::<Vec<_>>())
++            .find(|f| f.get(2) == uid.as_ref());
++        let login = entry
++            .as_ref()
++            .and_then(|f| f.first().cloned())
++            .or_else(|| std::env::var("USER").ok())
++            .unwrap_or_default();
++        let full = entry
++            .as_ref()
++            .and_then(|f| f.get(4).map(|g| g.split(',').next().unwrap_or("").trim().to_string()))
++            .filter(|g| !g.is_empty());
++        let avatar = [
++            PathBuf::from(format!("/var/lib/AccountsService/icons/{login}")),
++            dirs::home_dir().unwrap_or_default().join(".face"),
++        ]
++        .into_iter()
++        .find(|p| p.exists());
++        Account { name: full.unwrap_or(login), avatar }
++    }
++}
++
++/// A full-colour icon from the Win11 icon theme, falling back to the
++/// system icon of that name.
++fn colour_icon(name: &str) -> icon::Handle {
++    static DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
++        let mut bases: Vec<PathBuf> = Vec::new();
++        if let Some(d) = dirs::data_dir() {
++            bases.push(d.join("icons"));
++        }
++        let data = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
++        bases.extend(data.split(':').filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("icons")));
++        let mut out = Vec::new();
++        for theme in ["Win11-dark", "Win11"] {
++            for base in &bases {
++                for ctx in ["preferences", "apps", "categories", "devices", "places", "status", "actions"] {
++                    for size in ["scalable", "32", "48", "24"] {
++                        out.push(base.join(theme).join(ctx).join(size));
++                    }
++                }
++            }
++        }
++        out
++    });
++    DIRS.iter()
++        .map(|d| d.join(format!("{name}.svg")))
++        .find(|p| p.exists())
++        .map(icon::from_path)
++        .unwrap_or_else(|| icon::from_name(name).handle())
++}
++
++fn avatar(account: &Account, size: f32) -> Element<'static, Message> {
++    match &account.avatar {
++        Some(p) => widget::image(widget::image::Handle::from_path(p))
++            .width(Length::Fixed(size))
++            .height(Length::Fixed(size))
++            .border_radius(size / 2.0)
++            .into(),
++        None => container(icon::from_name("avatar-default-symbolic").size((size * 0.5) as u16))
++            .width(Length::Fixed(size))
++            .height(Length::Fixed(size))
++            .center(Length::Fixed(size))
++            .class(style::avatar_bg())
++            .into(),
++    }
++}
++
++/// Windows 11's Settings sidebar: the account at the top, "Find a setting",
++/// then Home and the categories with their colour icons.
++pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, active: Entity, query: &'a str) -> Element<'a, Message> {
++    let open = state.layout.top_of(pages, active);
++    let account = row::with_capacity(2)
++        .spacing(16)
++        .align_y(Alignment::Center)
++        .push(avatar(&state.account, 64.0))
++        .push(
++            column::with_capacity(2)
++                .spacing(2)
++                .push(text::heading(state.account.name.clone()))
++                .push(text::caption("Local Account").class(style::quiet())),
++        );
++    let mut search = widget::search_input("Find a setting", query)
++        .on_input(|s| Message::Lapin(Msg::Search(s)))
++        .width(Length::Fill);
++    if !query.is_empty() {
++        search = search.on_clear(Message::Lapin(Msg::Search(String::new())));
++    }
++
++    let mut items = column::with_capacity(state.layout.categories.len() + 1).spacing(4);
++    for &page in std::iter::once(&state.layout.home).chain(state.layout.categories.iter()) {
++        let info = &pages.info[page];
++        let selected = page == open;
++        let entry = row::with_capacity(3)
++            .spacing(14)
++            .align_y(Alignment::Center)
++            .push(
++                container(widget::Space::new().width(3).height(16))
++                    .class(style::pill(selected)),
++            )
++            .push(icon(colour_icon(&info.icon_name)).size(20))
++            .push(text::body(info.title.clone()));
++        items = items.push(
++            button::custom(entry)
++                .padding([9, 12, 9, 0])
++                .width(Length::Fill)
++                .class(style::nav_item(selected))
++                .on_press(Message::Page(page)),
++        );
++    }
++
++    column::with_capacity(3)
++        .push(container(account).padding([4, 4, 20, 4]))
++        .push(container(search).padding([0, 0, 12, 0]))
++        .push(widget::scrollable(items).height(Length::Fill))
++        .width(Length::Fixed(SIDEBAR_WIDTH))
++        .padding([8, 12, 12, 16])
++        .into()
++}
++
++/// Title bar: Windows' back arrow and "Settings" at the left.
++pub fn header_start(state: &State) -> Vec<Element<'_, Message>> {
++    let back = button::custom(icon::from_name("go-previous-symbolic").size(16))
++        .padding([8, 12])
++        .class(style::nav_item(false))
++        .on_press_maybe((!state.history.is_empty()).then_some(Message::Lapin(Msg::Back)));
++    vec![
++        back.into(),
++        text::body(super::TITLE).apply(container).padding([0, 0, 0, 4]).into(),
++    ]
++}
++
++/// The page title as Windows writes it: "System  >  Display", where the
++/// earlier parts are dimmer and take you back up.
++pub fn breadcrumb<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity, own_title: Option<&'a str>) -> Element<'a, Message> {
++    let mut chain = vec![page];
++    let mut at = page;
++    while let Some(parent) = pages.info.get(at).and_then(|i| i.parent) {
++        chain.push(parent);
++        at = parent;
++    }
++    chain.reverse();
++    let last = chain.len() - 1;
++    let mut r = row::with_capacity(chain.len() * 2).spacing(12).align_y(Alignment::Center);
++    for (i, &p) in chain.iter().enumerate() {
++        let title = if i == last { own_title.unwrap_or(pages.info[p].title.as_str()) } else { pages.info[p].title.as_str() };
++        if i == last {
++            r = r.push(text::title2(title));
++        } else {
++            r = r.push(
++                button::custom(text::title2(title).class(style::quiet()))
++                    .padding(0)
++                    .class(cosmic::theme::Button::Text)
++                    .on_press(Message::Page(p)),
++            );
++            r = r.push(icon::from_name("go-next-symbolic").size(16).apply(container).class(cosmic::theme::Container::default()));
++        }
++    }
++    container(r).padding([4, 0, 20, 0]).into()
++}
++
++/// A Windows row: icon, title, grey description, and an arrow at the end.
++fn page_row<'a>(icon_name: &str, title: &'a str, description: &'a str, msg: Message) -> Element<'a, Message> {
++    let mut words = column::with_capacity(2).spacing(2).push(text::body(title));
++    if !description.is_empty() {
++        words = words.push(text::caption(description).class(style::quiet()));
++    }
++    button::custom(
++        row::with_capacity(4)
++            .spacing(16)
++            .align_y(Alignment::Center)
++            .push(icon::from_name(icon_name.to_string()).size(20))
++            .push(words.width(Length::Fill))
++            .push(icon::from_name("go-next-symbolic").size(16)),
++    )
++    .padding([14, 16])
++    .width(Length::Fill)
++    .class(style::row_card())
++    .on_press(msg)
++    .into()
++}
++
++fn page_frame<'a>(head: Element<'a, Message>, body: Element<'a, Message>) -> Element<'a, Message> {
++    let content = column::with_capacity(2)
++        .push(head)
++        .push(body)
++        .max_width(CONTENT_MAX)
++        .width(Length::Fill)
++        .padding([8, 40, 32, 24]);
++    widget::scrollable(content).height(Length::Fill).width(Length::Fill).into()
++}
++
++/// A category: its pages as rows, as on Windows' System page.
++pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity) -> Element<'a, Message> {
++    let info = &pages.info[page];
++    let body: Element<'a, Message> = if info.id == UPDATE_ID {
++        let card = row::with_capacity(3)
++            .spacing(16)
++            .align_y(Alignment::Center)
++            .push(icon(colour_icon("system-software-update")).size(40))
++            .push(
++                column::with_capacity(2)
++                    .spacing(2)
++                    .push(text::title4("Check for updates"))
++                    .push(text::caption("System, app and firmware updates. Update moves into Settings in a later stage.").class(style::quiet()))
++                    .width(Length::Fill),
++            )
++            .push(button::suggested("Open Update").on_press(Message::Lapin(Msg::OpenUpdate)));
++        container(card).padding(20).width(Length::Fill).class(style::card()).into()
++    } else if info.id == PRIVACY_ID {
++        container(
++            column::with_capacity(2)
++                .spacing(4)
++                .push(text::body("Security and app permissions"))
++                .push(text::caption("These settings arrive in a later stage (Privacy & security).").class(style::quiet())),
++        )
++        .padding(20)
++        .width(Length::Fill)
++        .class(style::card())
++        .into()
++    } else {
++        let kids = pages.sub_pages(page).unwrap_or_default();
++        let mut list = column::with_capacity(kids.len()).spacing(4);
++        for &k in kids {
++            let ki = &pages.info[k];
++            list = list.push(page_row(&ki.icon_name, ki.title.as_str(), ki.description.as_str(), Message::Page(k)));
++        }
++        list.into()
++    };
++    page_frame(breadcrumb(pages, page, None), body)
++}
++
++/// Home: a few cards of the settings people change most, as on Windows.
++pub fn home_view<'a>(pages: &'a Binder<crate::pages::Message>, layout: &'a Layout) -> Element<'a, Message> {
++    let find = |id: &str| pages.find_page_by_id(id).map(|(e, _)| e);
++    let card = |title: &'static str, ids: &[&str]| -> Element<'a, Message> {
++        let mut c = column::with_capacity(ids.len() + 1).spacing(4).push(text::heading(title).apply(container).padding([0, 0, 8, 0]));
++        for id in ids {
++            if let Some(e) = find(id) {
++                let i = &pages.info[e];
++                c = c.push(page_row(&i.icon_name, i.title.as_str(), i.description.as_str(), Message::Page(e)));
++            }
++        }
++        container(c).padding(16).width(Length::Fill).class(style::card()).into()
++    };
++    let body = column::with_capacity(3)
++        .spacing(16)
++        .push(card("Recommended settings", &["display", "sound", "wifi", "bluetooth"]))
++        .push(card("Personalize your device", &["wallpaper", "appearance"]))
++        .push(card("Your account", &["users"]));
++    page_frame(breadcrumb(pages, layout.home, None), body.into())
++}
+diff --git a/cosmic-settings/src/main.rs b/cosmic-settings/src/main.rs
+index faf1a8f..92749a7 100644
+--- a/cosmic-settings/src/main.rs
++++ b/cosmic-settings/src/main.rs
+@@ -21,6 +21,7 @@ pub mod config;
+ 
+ #[macro_use]
+ pub mod localize;
++pub mod lapin;
+ pub mod pages;
+ pub mod service_manager;
+ pub mod subscription;
+@@ -216,8 +217,12 @@ pub fn main() -> color_eyre::Result<()> {
+         };
+     }
+ 
+-    let settings = cosmic::app::Settings::default()
++    let mut settings = cosmic::app::Settings::default()
+         .size_limits(Limits::NONE.min_width(360.0).min_height(300.0));
++    if lapin::enabled() {
++        // About the size Windows 11 opens Settings at.
++        settings = settings.size(cosmic::iced::Size::new(1100.0, 720.0));
++    }
+ 
+     #[cfg(feature = "single-instance")]
+     {
+-- 
+2.43.0
+
