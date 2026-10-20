@@ -1,0 +1,502 @@
+From 6329e98456928236c96b6399d1d952289b695e42 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 23:20:24 +0800
+Subject: [PATCH 5/5] Lapin UX: Windows 11 About page (name card, device and OS
+ specification cards with Copy and links)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/lapin/about.rs        | 387 ++++++++++++++++++++++
+ cosmic-settings/src/lapin/mod.rs          |   3 +-
+ cosmic-settings/src/lapin/style.rs        |   9 +
+ cosmic-settings/src/pages/system/about.rs |  21 +-
+ 4 files changed, 416 insertions(+), 4 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/about.rs
+
+diff --git a/cosmic-settings/src/lapin/about.rs b/cosmic-settings/src/lapin/about.rs
+new file mode 100644
+index 0000000..a15833d
+--- /dev/null
++++ b/cosmic-settings/src/lapin/about.rs
+@@ -0,0 +1,387 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! System > About, laid out as on Windows 11: a card with the PC's name,
++//! model and "Rename this PC", then two expanding cards, "Device
++//! specifications" and "<OS> specifications", each with Copy and links.
++//! The facts are Linux's own: where Windows shows something Linux doesn't
++//! have (Product ID, OS build), the nearest real value is shown instead or
++//! the row is left out.
++
++use std::path::Path;
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, button, column, container, icon, row, text};
++use cosmic::{Apply, Element};
++
++use crate::pages::system::about::{Message as AboutMsg, Page};
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    ToggleDevice,
++    ToggleOs,
++    CopyDevice,
++    CopyOs,
++    /// A web page from os-release (home page, support…).
++    Open(String),
++    /// A Lapin UX app (Task Manager, Control Panel).
++    Run(&'static str),
++}
++
++/// Facts Windows shows that COSMIC's About doesn't collect.
++#[derive(Clone, Debug, Default)]
++pub struct Extra {
++    pub installed_ram: String,
++    pub device_id: String,
++    pub system_type: String,
++    pub pen_touch: String,
++    pub os_name: String,
++    pub os_version: String,
++    pub os_logo: Option<String>,
++    pub installed_on: String,
++    pub links: Vec<(String, String)>,
++}
++
++#[derive(Clone, Debug)]
++pub struct State {
++    pub device_open: bool,
++    pub os_open: bool,
++    pub extra: Extra,
++}
++
++impl Default for State {
++    fn default() -> Self {
++        State { device_open: true, os_open: true, extra: Extra::default() }
++    }
++}
++
++const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
++
++fn read(path: impl AsRef<Path>) -> Option<String> {
++    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
++}
++
++/// "8.00 GB (7.79 GB usable)": memory the kernel can address (online memory
++/// blocks) and what's left for programs (MemTotal).
++pub fn ram_text(installed: Option<u64>, usable_kib: Option<u64>) -> String {
++    let gb = |b: f64| format!("{:.2} GB", b / GIB);
++    match (installed, usable_kib) {
++        (Some(i), Some(u)) => format!("{} ({} usable)", gb(i as f64), gb(u as f64 * 1024.0)),
++        (None, Some(u)) => format!("{} usable", gb(u as f64 * 1024.0)),
++        (Some(i), None) => gb(i as f64),
++        (None, None) => String::new(),
++    }
++}
++
++fn installed_memory() -> Option<u64> {
++    let size = u64::from_str_radix(read("/sys/devices/system/memory/block_size_bytes")?.trim_start_matches("0x"), 16).ok()?;
++    let online = std::fs::read_dir("/sys/devices/system/memory")
++        .ok()?
++        .flatten()
++        .filter(|e| e.file_name().to_string_lossy().starts_with("memory"))
++        .filter(|e| read(e.path().join("online")).as_deref() == Some("1"))
++        .count() as u64;
++    (online > 0).then_some(online * size)
++}
++
++fn usable_memory_kib() -> Option<u64> {
++    read("/proc/meminfo")?
++        .lines()
++        .find_map(|l| l.strip_prefix("MemTotal:"))
++        .and_then(|v| v.split_whitespace().next()?.parse().ok())
++}
++
++/// The machine ID written like a Windows device ID (a GUID).
++pub fn guid(machine_id: &str) -> String {
++    let h: String = machine_id.chars().filter(char::is_ascii_hexdigit).collect::<String>().to_uppercase();
++    if h.len() != 32 {
++        return h;
++    }
++    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
++}
++
++fn system_type() -> String {
++    match std::env::consts::ARCH {
++        "x86_64" => "64-bit operating system, x64-based processor".into(),
++        "aarch64" => "64-bit operating system, ARM-based processor".into(),
++        "x86" => "32-bit operating system, x86-based processor".into(),
++        other => format!("{other} processor"),
++    }
++}
++
++fn pen_touch() -> String {
++    let devices = read("/proc/bus/input/devices").unwrap_or_default().to_lowercase();
++    let names: Vec<&str> = devices.lines().filter(|l| l.starts_with("n: name=")).collect();
++    let touch = names.iter().any(|n| n.contains("touchscreen") || n.contains("touch screen"));
++    let pen = names.iter().any(|n| n.contains("pen") || n.contains("stylus"));
++    match (pen, touch) {
++        (true, true) => "Pen and touch support".into(),
++        (false, true) => "Touch support".into(),
++        (true, false) => "Pen support".into(),
++        (false, false) => "No pen or touch input is available for this display".into(),
++    }
++}
++
++/// os-release as key → value.
++fn os_release() -> Vec<(String, String)> {
++    let text = read("/etc/os-release").or_else(|| read("/usr/lib/os-release")).unwrap_or_default();
++    text.lines()
++        .filter_map(|l| l.split_once('='))
++        .map(|(k, v)| (k.to_string(), v.trim_matches('"').to_string()))
++        .collect()
++}
++
++fn installed_on() -> String {
++    let date = std::fs::metadata("/").and_then(|m| m.created()).ok().or_else(|| {
++        // pacman's log starts at installation.
++        let log = read("/var/log/pacman.log")?;
++        let first = log.lines().next()?;
++        let day = first.get(1..11)?;
++        chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
++            .ok()
++            .and_then(|d| d.and_hms_opt(0, 0, 0))
++            .map(|d| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(d.and_utc().timestamp().max(0) as u64))
++    });
++    date.map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%-m/%-d/%Y").to_string()).unwrap_or_default()
++}
++
++impl Extra {
++    pub fn read() -> Self {
++        let os = os_release();
++        let get = |k: &str| os.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
++        let os_version = get("VERSION")
++            .or_else(|| get("VERSION_ID"))
++            .or_else(|| get("BUILD_ID").map(|b| if b == "rolling" { "Rolling release".to_string() } else { b }))
++            .unwrap_or_default();
++        let mut links = Vec::new();
++        for (key, label) in [("HOME_URL", "Home page"), ("SUPPORT_URL", "Support"), ("BUG_REPORT_URL", "Report a problem"), ("PRIVACY_POLICY_URL", "Privacy policy")] {
++            if let Some(url) = get(key) {
++                links.push((label.to_string(), url));
++            }
++        }
++        Extra {
++            installed_ram: ram_text(installed_memory(), usable_memory_kib()),
++            device_id: read("/etc/machine-id").map(|m| guid(&m)).unwrap_or_default(),
++            system_type: system_type(),
++            pen_touch: pen_touch(),
++            os_name: get("NAME").unwrap_or_else(|| "Linux".into()),
++            os_version,
++            os_logo: get("LOGO"),
++            installed_on: installed_on(),
++            links,
++        }
++    }
++}
++
++fn device_rows(page: &Page) -> Vec<(&'static str, String)> {
++    let e = &page.lapin.extra;
++    let mut v = vec![
++        ("Device name", page.info.device_name.clone()),
++        ("Processor", page.info.processor.clone()),
++        ("Installed RAM", e.installed_ram.clone()),
++        ("Device ID", e.device_id.clone()),
++        ("System type", e.system_type.clone()),
++        ("Pen and touch", e.pen_touch.clone()),
++    ];
++    v.retain(|(_, value)| !value.is_empty());
++    v
++}
++
++fn os_rows(page: &Page) -> Vec<(&'static str, String)> {
++    let e = &page.lapin.extra;
++    let mut v = vec![
++        ("Edition", e.os_name.clone()),
++        ("Version", e.os_version.clone()),
++        ("Installed on", e.installed_on.clone()),
++        ("Kernel", page.info.kernel_version.clone()),
++        ("Desktop", "Lapin UX".to_string()),
++    ];
++    v.retain(|(_, value)| !value.is_empty());
++    v
++}
++
++fn as_text(title: &str, rows: &[(&'static str, String)]) -> String {
++    let mut s = format!("{title}\n\n");
++    for (k, v) in rows {
++        s.push_str(&format!("{k}\t{v}\n"));
++    }
++    s
++}
++
++impl Page {
++    pub fn lapin_update(&mut self, msg: Msg) -> cosmic::app::Task<crate::Message> {
++        match msg {
++            Msg::ToggleDevice => self.lapin.device_open = !self.lapin.device_open,
++            Msg::ToggleOs => self.lapin.os_open = !self.lapin.os_open,
++            Msg::CopyDevice => return cosmic::iced::clipboard::write(as_text("Device specifications", &device_rows(self))),
++            Msg::CopyOs => {
++                let title = format!("{} specifications", self.lapin.extra.os_name);
++                return cosmic::iced::clipboard::write(as_text(&title, &os_rows(self)));
++            }
++            Msg::Open(url) => {
++                let _ = std::process::Command::new("xdg-open").arg(url).spawn();
++            }
++            Msg::Run(cmd) => {
++                let _ = std::process::Command::new(cmd).spawn();
++            }
++        }
++        cosmic::Task::none()
++    }
++}
++
++fn msg(m: Msg) -> AboutMsg {
++    AboutMsg::Lapin(m)
++}
++
++fn card<'a>(content: impl Into<Element<'a, AboutMsg>>) -> Element<'a, AboutMsg> {
++    container(content)
++        .width(Length::Fill)
++        .class(cosmic::theme::Container::List)
++        .into()
++}
++
++/// The two-column list inside an expanded card.
++fn facts<'a>(rows: Vec<(&'static str, String)>) -> Element<'a, AboutMsg> {
++    let mut col = column::with_capacity(rows.len()).spacing(10);
++    for (k, v) in rows {
++        col = col.push(
++            row::with_capacity(2)
++                .push(text::body(k).width(Length::Fixed(200.0)))
++                .push(text::body(v).class(super::style::quiet()).width(Length::Fill)),
++        );
++    }
++    container(col).padding([16, 16, 18, 68]).width(Length::Fill).into()
++}
++
++fn link<'a>(label: String, m: Msg) -> Element<'a, AboutMsg> {
++    button::link(label).padding(0).on_press(msg(m)).into()
++}
++
++/// An expanding card: icon, title, Copy and the arrow; when open, the facts
++/// and a strip of links.
++fn expander<'a>(
++    icon_el: Element<'a, AboutMsg>,
++    title: String,
++    open: bool,
++    toggle: Msg,
++    copy: Msg,
++    rows: Vec<(&'static str, String)>,
++    links_title: Option<&'static str>,
++    links: Vec<Element<'a, AboutMsg>>,
++) -> Element<'a, AboutMsg> {
++    let head = button::custom(
++        row::with_capacity(4)
++            .spacing(16)
++            .align_y(Alignment::Center)
++            .push(icon_el)
++            .push(text::body(title).width(Length::Fill))
++            .push(button::standard("Copy").on_press(msg(copy)))
++            .push(icon::from_name(if open { "pan-up-symbolic" } else { "pan-down-symbolic" }).size(16)),
++    )
++    .padding([14, 16])
++    .width(Length::Fill)
++    .class(super::style::nav_item(false))
++    .on_press(msg(toggle));
++    let mut col = column::with_capacity(4).push(head);
++    if open {
++        col = col.push(widget::divider::horizontal::default()).push(facts(rows));
++        if links_title.is_none() && !links.is_empty() {
++            // Windows lists the OS card's links under its facts, one per line.
++            let mut stack = column::with_capacity(links.len()).spacing(8);
++            for l in links {
++                stack = stack.push(l);
++            }
++            col = col.push(container(stack).padding([0, 16, 18, 68]));
++        } else if !links.is_empty() {
++            let mut strip = row::with_capacity(links.len() + 1).spacing(32).align_y(Alignment::Center);
++            if let Some(t) = links_title {
++                strip = strip.push(text::heading(t));
++            }
++            for l in links {
++                strip = strip.push(l);
++            }
++            col = col.push(widget::divider::horizontal::default()).push(
++                container(strip).padding([16, 16]).width(Length::Fill).class(super::style::link_strip()),
++            );
++        }
++    }
++    card(col)
++}
++
++/// The whole page.
++pub fn view(page: &Page) -> Element<'_, AboutMsg> {
++    let e = &page.lapin.extra;
++    // Top card: name, model, Rename this PC (renaming happens in place).
++    let mut who = column::with_capacity(2).spacing(2).push(text::heading(page.info.device_name.clone()));
++    if !page.info.hardware_model.trim().is_empty() {
++        who = who.push(text::body(page.info.hardware_model.clone()).class(super::style::quiet()));
++    }
++    let action: Element<'_, AboutMsg> = if page.editing_device_name {
++        row::with_capacity(3)
++            .spacing(8)
++            .align_y(Alignment::Center)
++            .push(
++                widget::text_input("New name", &page.hostname_input)
++                    .on_input(AboutMsg::HostnameInput)
++                    .on_submit(|_| AboutMsg::HostnameSubmit)
++                    .width(Length::Fixed(220.0)),
++            )
++            .push(button::suggested("Rename").on_press(AboutMsg::HostnameSubmit))
++            .push(button::standard("Cancel").on_press(AboutMsg::HostnameEdit(false)))
++            .into()
++    } else {
++        button::standard("Rename this PC").on_press(AboutMsg::HostnameEdit(true)).into()
++    };
++    let top = card(
++        row::with_capacity(2)
++            .align_y(Alignment::Center)
++            .push(who.width(Length::Fill))
++            .push(action)
++            .apply(container)
++            .padding([18, 16]),
++    );
++
++    let device = expander(
++        icon::from_name("help-about-symbolic").size(20).into(),
++        "Device specifications".into(),
++        page.lapin.device_open,
++        Msg::ToggleDevice,
++        Msg::CopyDevice,
++        device_rows(page),
++        Some("Related links"),
++        vec![link("Task Manager".into(), Msg::Run("lapin-ux-taskmgr")), link("Control Panel".into(), Msg::Run("lapin-ux-control"))],
++    );
++
++    let logo: Element<'_, AboutMsg> = match &e.os_logo {
++        Some(name) => icon::from_name(name.as_str()).size(24).into(),
++        None => icon::from_name("computer-symbolic").size(20).into(),
++    };
++    let os_links = e.links.iter().map(|(label, url)| link(label.clone(), Msg::Open(url.clone()))).collect();
++    let os = expander(
++        logo,
++        format!("{} specifications", e.os_name),
++        page.lapin.os_open,
++        Msg::ToggleOs,
++        Msg::CopyOs,
++        os_rows(page),
++        None,
++        os_links,
++    );
++
++    column::with_capacity(3).spacing(4).push(top).push(device).push(os).into()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn ram() {
++        let gib = 1024u64 * 1024 * 1024;
++        assert_eq!(ram_text(Some(8 * gib), Some(8_169_000)), "8.00 GB (7.79 GB usable)");
++        assert_eq!(ram_text(None, Some(8_169_000)), "7.79 GB usable");
++    }
++
++    #[test]
++    fn device_id() {
++        assert_eq!(guid("0123456789abcdef0123456789abcdef"), "01234567-89AB-CDEF-0123-456789ABCDEF");
++    }
++}
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index a437270..695022f 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -8,11 +8,12 @@
+ //! easily onto new COSMIC releases. It only takes effect in a Lapin UX
+ //! session (or with `LAPIN_UX_SETTINGS=1`); under COSMIC the app is stock.
+ 
++pub mod about;
+ mod categories;
+ pub mod device;
+ pub mod icons;
+ pub mod pages;
+-mod style;
++pub(crate) mod style;
+ mod view;
+ 
+ pub use categories::{Layout, arrange};
+diff --git a/cosmic-settings/src/lapin/style.rs b/cosmic-settings/src/lapin/style.rs
+index a320651..9effdfc 100644
+--- a/cosmic-settings/src/lapin/style.rs
++++ b/cosmic-settings/src/lapin/style.rs
+@@ -123,3 +123,12 @@ pub fn screen() -> theme::Container<'static> {
+         ..Default::default()
+     })
+ }
++
++/// The "Related links" strip at the bottom of an About card.
++pub fn link_strip() -> theme::Container<'static> {
++    theme::Container::custom(|t| widget::container::Style {
++        background: tint(t, 0.03),
++        border: Border { radius: [0.0, 0.0, 4.0, 4.0].into(), ..Default::default() },
++        ..Default::default()
++    })
++}
+diff --git a/cosmic-settings/src/pages/system/about.rs b/cosmic-settings/src/pages/system/about.rs
+index d169ddb..56a1faf 100644
+--- a/cosmic-settings/src/pages/system/about.rs
++++ b/cosmic-settings/src/pages/system/about.rs
+@@ -17,6 +17,8 @@ pub enum Message {
+     HostnameSubmit,
+     HostnameSuccess(String),
+     Info(Box<Info>),
++    /// Lapin UX's Windows-style About.
++    Lapin(crate::lapin::about::Msg),
+ }
+ 
+ impl From<Message> for crate::app::Message {
+@@ -34,10 +36,11 @@ impl From<Message> for crate::pages::Message {
+ #[derive(Clone, Debug, Default)]
+ pub struct Page {
+     entity: page::Entity,
+-    editing_device_name: bool,
+-    hostname_input: String,
+-    info: Info,
++    pub(crate) editing_device_name: bool,
++    pub(crate) hostname_input: String,
++    pub(crate) info: Info,
+     on_enter_handle: Option<cosmic::iced::task::Handle>,
++    pub(crate) lapin: crate::lapin::about::State,
+ }
+ 
+ impl page::AutoBind<crate::pages::Message> for Page {}
+@@ -51,6 +54,13 @@ impl page::Page<crate::pages::Message> for Page {
+         &self,
+         sections: &mut SlotMap<section::Entity, Section<crate::pages::Message>>,
+     ) -> Option<page::Content> {
++        if crate::lapin::enabled() {
++            return Some(vec![sections.insert(
++                Section::default().view::<Page>(|_binder, page, _section| {
++                    crate::lapin::about::view(page).map(crate::pages::Message::About)
++                }),
++            )]);
++        }
+         Some(vec![
+             sections.insert(device()),
+             sections.insert(hardware()),
+@@ -97,7 +107,12 @@ impl Page {
+ 
+             Message::HostnameSubmit => return self.hostname_submit(),
+ 
++            Message::Lapin(msg) => return self.lapin_update(msg),
++
+             Message::Info(info) => {
++                if crate::lapin::enabled() {
++                    self.lapin.extra = crate::lapin::about::Extra::read();
++                }
+                 self.info = *info;
+                 self.hostname_input = self.info.device_name.clone();
+             }
+-- 
+2.43.0
+

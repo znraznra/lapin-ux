@@ -1,7 +1,7 @@
 From f48b143a458882a235292aa4f83f587f19c1cf69 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 19:53:32 +0800
-Subject: [PATCH 4/5] Lapin UX: Windows 11 combo box look for drop-downs
+Subject: [PATCH 4/7] Lapin UX: Windows 11 combo box look for drop-downs
  (opt-in)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

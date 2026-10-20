@@ -1,0 +1,44 @@
+From 9d1b1880e4b9a9e6c3278e92e64b489fe2761851 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 23:00:51 +0800
+Subject: [PATCH 7/7] Lapin UX: 4 px push buttons (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/lapin.rs              | 9 +++++++++
+ src/theme/style/button.rs | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/src/lapin.rs b/src/lapin.rs
+index a23445d..a63a00b 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -130,3 +130,12 @@ pub fn round_slider_thumb(style: &mut iced::widget::slider::Style) {
+         style.handle.shape = iced::widget::slider::HandleShape::Rectangle { width, height, border_radius: r.into() };
+     }
+ }
++
++/// Windows' push buttons (Copy, Rename this PC, Add…) have small 4 px
++/// corners, not pills.
++pub fn push_button_corners(style: &crate::theme::Button, appearance: &mut crate::widget::button::Style) {
++    use crate::theme::Button;
++    if card_lists() && matches!(style, Button::Standard | Button::Suggested | Button::Destructive) {
++        appearance.border_radius = 4.0.into();
++    }
++}
+diff --git a/src/theme/style/button.rs b/src/theme/style/button.rs
+index 9653e92..8020fe4 100644
+--- a/src/theme/style/button.rs
++++ b/src/theme/style/button.rs
+@@ -191,6 +191,7 @@ pub fn appearance(
+     }
+ 
+     appearance.border_radius = (*corner_radii).into();
++    crate::lapin::push_button_corners(style, &mut appearance);
+ 
+     if focused {
+         appearance.outline_width = 1.0;
+-- 
+2.43.0
+

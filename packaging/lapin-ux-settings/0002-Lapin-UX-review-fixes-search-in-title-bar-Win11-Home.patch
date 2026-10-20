@@ -1,7 +1,7 @@
 From ed1b5d421a797e5213d2e4db3b60ae6820b4a2b4 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 18:15:15 +0800
-Subject: [PATCH 2/4] Lapin UX: review fixes (search in title bar, Win11 Home
+Subject: [PATCH 2/5] Lapin UX: review fixes (search in title bar, Win11 Home
  icon, System top section, card lists, page widths)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

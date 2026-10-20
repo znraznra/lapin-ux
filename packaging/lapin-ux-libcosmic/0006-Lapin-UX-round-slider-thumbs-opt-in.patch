@@ -1,0 +1,46 @@
+From 8b7dd292f4bff43712a2009df648e47c92594082 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 22:37:02 +0800
+Subject: [PATCH 6/7] Lapin UX: round slider thumbs (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/lapin.rs            | 11 +++++++++++
+ src/theme/style/iced.rs |  1 +
+ 2 files changed, 12 insertions(+)
+
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 600a438..a23445d 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -119,3 +119,14 @@ pub fn combo_box(theme: &crate::Theme, status: iced::widget::pick_list::Status)
+         border: iced::Border { radius: 4.0.into(), width: 1.0, color: tint(0.09) },
+     }
+ }
++
++/// Windows' slider thumbs are circles (COSMIC's are rounded squares).
++pub fn round_slider_thumb(style: &mut iced::widget::slider::Style) {
++    if !card_lists() {
++        return;
++    }
++    if let iced::widget::slider::HandleShape::Rectangle { width, height, .. } = style.handle.shape {
++        let r = f32::from(width.max(height)) / 2.0;
++        style.handle.shape = iced::widget::slider::HandleShape::Rectangle { width, height, border_radius: r.into() };
++    }
++}
+diff --git a/src/theme/style/iced.rs b/src/theme/style/iced.rs
+index 29ad891..d619c7a 100644
+--- a/src/theme/style/iced.rs
++++ b/src/theme/style/iced.rs
+@@ -777,6 +777,7 @@ impl slider::Catalog for Theme {
+             }
+             Slider::Custom { active, .. } => active(self),
+         };
++        crate::lapin::round_slider_thumb(&mut appearance);
+         match status {
+             slider::Status::Active => appearance,
+             slider::Status::Hovered => match class {
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
 From 581d8e15f7a0c41a9ab18a7573da979db978e422 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 14:00:05 +0800
-Subject: [PATCH 1/5] Lapin UX: Windows 11 title bars (app icon + left title)
+Subject: [PATCH 1/7] Lapin UX: Windows 11 title bars (app icon + left title)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
