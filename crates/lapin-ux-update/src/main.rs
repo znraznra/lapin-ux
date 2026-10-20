@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Lapin UX Update: like Windows Update. Checks for system (pacman) and
-//! Flatpak updates, installs them all with one button (asking for your
+//! Flatpak updates, and device firmware through fwupd, installs them all with one button (asking for your
 //! password through polkit), shows progress and update history, and offers
 //! a restart when the kernel or other core parts changed.
 
@@ -68,6 +68,15 @@ async fn check() -> (Vec<Update>, Option<String>) {
     {
         list.extend(updates::parse_flatpak(&String::from_utf8_lossy(&o.stdout)));
     }
+    // Firmware (fwupd). It exits 2 when there's nothing to do; any other
+    // trouble (no fwupd, no supported devices) just means no firmware rows.
+    if let Ok(o) = tokio::process::Command::new("fwupdmgr")
+        .args(["get-updates", "--json", "--no-unreported-check", "--no-metadata-check"])
+        .output()
+        .await
+    {
+        list.extend(updates::parse_fwupd(&String::from_utf8_lossy(&o.stdout)));
+    }
     (list, problem)
 }
 
@@ -105,7 +114,7 @@ async fn run_streamed(out: &mut futures::channel::mpsc::Sender<Message>, cmd: &s
     }
 }
 
-fn install(system: bool, flatpak: bool) -> Task<Message> {
+fn install(system: bool, flatpak: bool, firmware: bool) -> Task<Message> {
     let s = stream::channel(64, move |mut out: futures::channel::mpsc::Sender<Message>| async move {
         use futures::SinkExt;
         let mut result = Ok(());
@@ -114,6 +123,16 @@ fn install(system: bool, flatpak: bool) -> Task<Message> {
         }
         if result.is_ok() && flatpak {
             result = run_streamed(&mut out, "flatpak", &["update", "-y", "--noninteractive"]).await;
+        }
+        if result.is_ok() && firmware {
+            // fwupd asks polkit itself, which shows the admin prompt; the
+            // firmware is applied on the next restart.
+            result = run_streamed(
+                &mut out,
+                "fwupdmgr",
+                &["update", "-y", "--no-reboot-check", "--no-unreported-check", "--no-metadata-check"],
+            )
+            .await;
         }
         let _ = out.send(Message::Installed(result)).await;
     });
@@ -163,6 +182,10 @@ impl cosmic::Application for App {
         (app, Task::batch([title, Task::done(cosmic::Action::App(Message::Check))]))
     }
 
+    fn header_start(&self) -> Vec<Element<'_, Message>> {
+        vec![lapin_ux_ui::title_bar("system-software-update", "Update")]
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Check => {
@@ -184,9 +207,10 @@ impl cosmic::Application for App {
             Message::Install => {
                 self.state = State::Installing;
                 self.log.clear();
-                let system = self.updates.iter().any(|u| !u.flatpak);
+                let system = self.updates.iter().any(|u| !u.flatpak && !u.firmware);
                 let flatpak = self.updates.iter().any(|u| u.flatpak);
-                return install(system, flatpak);
+                let firmware = self.updates.iter().any(|u| u.firmware);
+                return install(system, flatpak, firmware);
             }
             Message::Line(l) => {
                 self.log.push(l);
@@ -246,10 +270,19 @@ impl cosmic::Application for App {
                 let version = if u.from.is_empty() { u.to.clone() } else { format!("{} → {}", u.from, u.to) };
                 list = list.push(
                     row::with_children(vec![
-                        icon::from_name(if u.flatpak { "application-x-executable-symbolic" } else { "package-x-generic-symbolic" }).size(16).into(),
+                        icon::from_name(if u.firmware {
+                            "firmware-symbolic"
+                        } else if u.flatpak {
+                            "application-x-executable-symbolic"
+                        } else {
+                            "package-x-generic-symbolic"
+                        })
+                        .fallback(Some(cosmic::widget::icon::IconFallback::Names(vec!["drive-harddisk-system-symbolic".into()])))
+                        .size(16)
+                        .into(),
                         text::body(u.name.clone()).width(Length::Fill).into(),
                         text::caption(version).into(),
-                        text::caption(if u.flatpak { "App" } else { "System" }).width(60).into(),
+                        text::caption(if u.firmware { "Firmware" } else if u.flatpak { "App" } else { "System" }).width(64).into(),
                     ])
                     .spacing(12)
                     .align_y(Alignment::Center),

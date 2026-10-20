@@ -127,3 +127,15 @@ pub fn nav_item(selected: bool) -> Button {
         pressed: Box::new(move |f, t| plain(t.pressed(f, false, &kind()), t)),
     }
 }
+
+/// Windows 11's title: the app's icon and name at the left of the title
+/// bar (the same look the libcosmic patch gives COSMIC's own apps).
+pub fn title_bar<'a, M: 'static>(icon_name: &'a str, title: &'a str) -> cosmic::Element<'a, M> {
+    cosmic::widget::row::with_capacity(2)
+        .spacing(10)
+        .padding([0, 0, 0, 6])
+        .align_y(cosmic::iced::Alignment::Center)
+        .push(cosmic::widget::icon::from_name(icon_name).size(16))
+        .push(cosmic::widget::text::body(title))
+        .into()
+}

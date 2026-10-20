@@ -507,6 +507,7 @@ impl cosmic::Application for App {
                 .class(lapin_ux_ui::nav_item(false))
                 .on_press(Message::ToggleNav)
                 .into(),
+            lapin_ux_ui::title_bar("utilities-system-monitor", "Task Manager"),
         ]
     }
 
