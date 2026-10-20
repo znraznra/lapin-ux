@@ -19,7 +19,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 20 October 2026 (build `07c7359`).*
+*Last updated: 20 October 2026 (build `14f2e42`).*
 
 ## Take the tour
 
@@ -32,14 +32,9 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | ![Control Panel](docs/tour/control-panel.webp) **Control Panel** — the classic categories, opening the right settings. | ![Update](docs/tour/update.webp) **Update** — system and app updates with one button. |
 | ![Lock screen](docs/tour/lock-screen.webp) **Lock screen** — big clock over your wallpaper. | ![Sign-in panel](docs/tour/sign-in.webp) **Sign-in** — picture, name and password, centred. |
 | ![Get Started](docs/tour/get-started.webp) **Get Started** — first-sign-in setup: Wi-Fi, light or dark. | ![Open file dialog](docs/tour/file-dialog.webp) **Open and Save dialogs** — Windows-style for every app. |
-| ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | |
-
-**Just added** *(new on 20 October, still being reviewed)*
-
-| | |
-|---|---|
 | ![Volume pop-up above the taskbar](docs/tour/volume-popup.webp) **Volume and brightness pop-ups** — a small box above the taskbar when you press the keys. | ![Admin permission prompt](docs/tour/admin-prompt.webp) **Admin prompt** — the screen dims and asks before an app changes your system. |
 | ![Search preview of a text file](docs/tour/search-preview.webp) **Search preview** — see a file's first lines or picture before opening it. | ![Task Manager Services tab](docs/tour/task-manager-services.webp) **Task Manager: Users and Services** — who's signed in, and every background service. |
+| ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | |
 
 ## Roadmap
 
