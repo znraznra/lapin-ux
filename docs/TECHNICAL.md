@@ -61,8 +61,10 @@ COSMIC compositor. Arch Linux first.
   and Videos (own background index, hidden folders skipped), and offers
   **Search the web** (DuckDuckGo by default; `web_search` setting, `{}` = query,
   `hide_web_search` to turn it off). Results are grouped Best match / Apps /
-  Settings / Folders / Documents / Web with a details card; files have
-  *Open file location*. With LocalSearch installed, **document contents** are
+  Settings / Folders / Documents / Web with a details card. For files the
+  card is a preview pane: the first lines of a text file, the picture itself,
+  or a folder's item count, then Open, *Open file location*, Copy path and
+  Pin to Start, then size, date modified and location. With LocalSearch installed, **document contents** are
   searched too.
 - Right-click any app: pin/unpin to Start or taskbar, **Uninstall** (asks
   first; pacman packages through an admin prompt, Flatpaks directly; core
@@ -166,6 +168,24 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   sideways to switch apps; four fingers sideways to switch desktops.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
+**Pop-ups and admin prompt** (`lapin-ux-osd`, a patch on COSMIC's cosmic-osd)
+- Volume and brightness keys show a small rounded box 12 px above the
+  taskbar: icon, thin bar, number.
+- When an app needs admin rights, polkit's request shows as Windows'
+  "Do you want to allow this app to make changes to your device?": the screen
+  dims, a card names the program, *Show more details* lists the action and
+  command, and the password box sits above Yes / No.
+- `LAPIN_OSD_PREVIEW=volume|brightness|admin` shows one of them for checking.
+
+**Title bars of COSMIC's own apps** (optional, `packaging/arch-cosmic-apps`)
+- A small libcosmic patch (`packaging/lapin-ux-libcosmic`) puts the app icon
+  and title at the left of COSMIC apps' title bars. It only acts in a Lapin UX
+  session (`XDG_CURRENT_DESKTOP` contains `LapinUX`, or `LAPIN_UX_TITLEBAR=1`),
+  so the same apps look stock under COSMIC. The opt-in PKGBUILD rebuilds COSMIC
+  Settings, Files, Terminal, Text Editor and Store at COSMIC's stable tag with
+  the patch applied to the build's private libcosmic copy (lockfiles stay
+  frozen). GTK, Electron and Qt/KDE apps keep their own title bars.
+
 **Snipping** (Win+Shift+S or Print Screen)
 - The screen freezes and dims; pick Rectangle (drag), Window or Full screen
   from the toolbar. The snip is copied to the clipboard, saved in
@@ -174,12 +194,16 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 **System tools**
 - **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Win+X): Processes (apps with
   their child processes, background processes, CPU/memory/disk, End task, Run
-  new task), Performance graphs, Startup apps (turn them on or off), Details.
+  new task), Performance graphs, Startup apps (turn them on or off), Users
+  (who is signed in, from logind, with their CPU and memory; Manage user
+  accounts), Details, and Services (every systemd service with PID and status;
+  Start, Stop and Restart go through polkit and the admin prompt).
 - **Control Panel**: the classic category view and Large icons, opening the
   matching Settings page or tool.
-- **Update**: checks pacman and Flatpak updates, installs them with one
+- **Update**: checks pacman, Flatpak and firmware (fwupd, via
+  `fwupdmgr get-updates --json`) updates, installs them with one
   button (polkit), shows progress and history, and offers a restart when the
-  kernel changed. A background check notifies you when updates are waiting.
+  kernel or firmware changed. A background check notifies you when updates are waiting.
 - **Get Started**: on the first sign-in, connect to Wi-Fi, choose light or
   dark mode, and optionally get the Windows 11-style pointers.
 - Desktop icons: **Properties** (Alt+Enter), *This PC*, user folder, *Network*
@@ -277,22 +301,22 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
                                       ├─ lapin-ux-notifyd         notification toasts + centre   ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
                                       ├─ cosmic-bg              wallpaper                      (reused)
-                                      ├─ cosmic-osd             volume OSD, polkit dialogs     (reused)
+                                      ├─ lapin-ux-osd           volume pop-ups, admin prompt   (COSMIC's + patch)
                                       ├─ cosmic-idle            screen blanking                (reused)
                                       └─ lapin-ux-greeter       lock screen (COSMIC's + patch)
 ```
 
 | Crate | What it is | Depends on libcosmic |
 |---|---|---|
-| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts, displays, night light, process and system monitoring, updates, sounds, OS name. 93 unit tests. | no |
+| `lapin-ux-core` | Search ranking, taskbar model, toast queue, clock formats, recent files, pins, calendars, file operations, snap layouts, displays, night light, process and system monitoring, updates (incl. fwupd), sounds, OS name, users and services, search preview. 99 unit tests. | no |
 | `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
 | `lapin-ux-notifyd` | Notification server and toasts | yes |
 | `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
 | `lapin-ux-taskmgr` | Task Manager | yes |
 | `lapin-ux-control` | Control Panel | yes |
-| `lapin-ux-update` | Update (pacman + Flatpak) | yes |
+| `lapin-ux-update` | Update (pacman + Flatpak + firmware) | yes |
 | `lapin-ux-welcome` | First-run setup | yes |
-| `lapin-ux-ui` | Shared Windows-style widget styles (4 px buttons, round slider thumbs, sidebar items) | yes |
+| `lapin-ux-ui` | Shared Windows-style widget styles (4 px buttons, round slider thumbs, sidebar items, icon + title for title bars) | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
 pinned commit plus two patches adding `lapin_shell_v1` (`protocols/`): snap a
@@ -300,10 +324,13 @@ window into a fraction of the work area, tell the shell when a window asks
 for attention, desktop peek, night light, touchpad swipes for the shell, and
 a window-open animation. Everything else works on stock cosmic-comp.
 
-Three more COSMIC programs are built with small patches, each as its own
+Four more COSMIC programs are built with small patches, each as its own
 package that replaces the original: `lapin-ux-greeter` (lock and sign-in
-screens), `lapin-ux-osk` (touch keyboard) and `lapin-ux-portal` (file
-dialogs; COSMIC's portal built against a patched COSMIC Files).
+screens), `lapin-ux-osk` (touch keyboard), `lapin-ux-osd` (volume/brightness
+pop-ups and the admin prompt) and `lapin-ux-portal` (file dialogs; COSMIC's
+portal built against a patched COSMIC Files). Each patch keeps Lapin's code
+in its own file with a few call sites and is pinned to a COSMIC stable
+(epoch) release, so it rebases easily when COSMIC updates.
 
 Window tracking supports two backends: cosmic-comp's protocols (full
 control) and `wlr-foreign-toplevel-management` (sway, Hyprland, labwc,

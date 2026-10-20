@@ -15,11 +15,11 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | Phase | What it covers | Progress |
 |---|---|---|
 | 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
-| 2. Settings and multitasking | Quick settings, notification centre, Alt+Tab, Task view, snapping | `████████░░` 7 of 9 |
-| 3. System apps | File Explorer, Update, Control Panel | `██████░░░░` 3 of 6, 1 partly |
-| 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `███████░░░` 13 of 19, 1 partly |
+| 2. Settings and multitasking | Quick settings, notification centre, Alt+Tab, Task view, snapping | `█████████░` 8 of 9 |
+| 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
+| 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 20 October 2026 (build `967213a`).*
+*Last updated: 20 October 2026 (build `07c7359`).*
 
 ## Take the tour
 
@@ -34,6 +34,13 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | ![Get Started](docs/tour/get-started.webp) **Get Started** — first-sign-in setup: Wi-Fi, light or dark. | ![Open file dialog](docs/tour/file-dialog.webp) **Open and Save dialogs** — Windows-style for every app. |
 | ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | |
 
+**Just added** *(new on 20 October, still being reviewed)*
+
+| | |
+|---|---|
+| ![Volume pop-up above the taskbar](docs/tour/volume-popup.webp) **Volume and brightness pop-ups** — a small box above the taskbar when you press the keys. | ![Admin permission prompt](docs/tour/admin-prompt.webp) **Admin prompt** — the screen dims and asks before an app changes your system. |
+| ![Search preview of a text file](docs/tour/search-preview.webp) **Search preview** — see a file's first lines or picture before opening it. | ![Task Manager Services tab](docs/tour/task-manager-services.webp) **Task Manager: Users and Services** — who's signed in, and every background service. |
+
 ## Roadmap
 
 The work is split into four phases. Green is done, yellow is partly done, grey is still to build.
@@ -44,7 +51,7 @@ flowchart LR
     P2 -.- S["Settings app"]:::todo
     P3 -.- FE["File Explorer"]:::todo
     P4 -.- ST["Store"]:::todo
-    P4 -.- AP["Admin prompt"]:::todo
+    P4 -.- MK["Snip markup editor"]:::todo
     classDef done fill:#2e7d32,color:#fff,stroke:#1b5e20
     classDef mostly fill:#9e9d24,color:#fff,stroke:#827717
     classDef partly fill:#f9a825,color:#000,stroke:#f57f17
@@ -66,7 +73,7 @@ flowchart LR
 - [x] Session: starts everything and restarts anything that crashes
 - [x] Arch package and one-step installer *(built, not yet tried on a real Arch machine)*
 
-### Phase 2 — settings and multitasking (7 of 9)
+### Phase 2 — settings and multitasking (8 of 9)
 
 - [x] Quick settings: Wi-Fi, Bluetooth, sound and per-app volume, media, brightness, Energy saver, hotspot, VPN, accessibility
 - [x] Edit quick settings, Night light with a schedule, rotation lock
@@ -76,29 +83,29 @@ flowchart LR
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
 - [ ] **Settings app** in Windows 11's layout — *COSMIC Settings fills in for now*
-- [ ] Windows-style volume and brightness pop-ups
+- [x] Windows-style volume and brightness pop-ups
 
-### Phase 3 — system apps (3 of 6, 1 partly)
+### Phase 3 — system apps (4 of 6, 1 partly)
 
 - [ ] **File Explorer** in Windows 11's layout — *COSMIC Files fills in for now*
 - [~] Open and Save dialogs — *Windows-style bottom row and title bar done; the side pane is still COSMIC's*
 - [x] "How do you want to open this file?" picker
 - [x] Update: system and Flatpak apps, history, restart prompt, background check
-- [ ] Firmware updates
+- [x] Firmware updates (BIOS, SSDs, docks) *(not yet tried with real firmware)*
 - [x] Control Panel
 
-### Phase 4 — road to a 1:1 Windows 11 (13 of 19, 1 partly)
+### Phase 4 — road to a 1:1 Windows 11 (16 of 19, 1 partly)
 
 - [x] Night light and desktop peek
 - [x] Touchpad gestures *(untested on a real touchpad)*
 - [x] Window open, minimize and restore animations
-- [~] Windows 11 title bars (app icon, title on the left) — *done for most apps; apps that draw their own title bar keep theirs*
+- [~] Windows 11 title bars (app icon, title on the left) — *done for most apps, Lapin's apps and (optionally) COSMIC's own apps; other apps that draw their own title bar keep theirs on purpose*
 - [x] Win+X menu, Run, Win+P, Ctrl+Alt+Del, Alt+F4 Shut Down dialog
 - [x] Lock screen, sign-in screen, fingerprint sign-in
 - [x] Get Started (first-sign-in setup)
 - [x] Desktop: Properties, This PC, Network and Control Panel icons, classic right-click menu
 - [x] Task Manager: Processes, Performance, Startup apps, Details
-- [ ] Task Manager: Users and Services tabs
+- [x] Task Manager: Users and Services tabs
 - [x] Snipping: rectangle, window, full screen
 - [ ] Snip markup editor (pen, highlighter, crop)
 - [x] Keyboard layout switcher and input methods (Japanese, Chinese…)
@@ -106,8 +113,8 @@ flowchart LR
 - [x] Narrator, Contrast themes, Magnifier, colour filters
 - [x] System sounds and Windows 11-style pointers
 - [ ] **Store**
-- [ ] **Admin prompt** in Windows 11's style
-- [ ] Richer file preview in search
+- [x] Admin prompt in Windows 11's style
+- [x] Richer file preview in search
 
 *`[~]` = partly done.*
 
@@ -131,14 +138,14 @@ flowchart TB
     end
     subgraph opened["Opened when needed"]
         apps["Lapin apps<br/>Task Manager, Control Panel,<br/>Update, Get Started"]
-        cosmic["COSMIC programs with Lapin changes<br/>lock and sign-in, touch keyboard,<br/>Open/Save dialogs"]
+        cosmic["COSMIC programs with Lapin changes<br/>lock and sign-in, touch keyboard,<br/>Open/Save dialogs, volume pop-ups,<br/>admin prompt, COSMIC app title bars"]
     end
     shared["Shared building blocks<br/>logic and Windows-style controls"]
     shell --> shared
     apps --> shared
 ```
 
-Lapin UX is built on COSMIC, System76's Rust desktop. It writes its own taskbar, Start menu and apps, and reuses COSMIC's compositor and services, carrying small Lapin changes on top of four COSMIC programs. The [technical reference](docs/TECHNICAL.md) explains every part.
+Lapin UX is built on COSMIC, System76's Rust desktop. It writes its own taskbar, Start menu and apps, and reuses COSMIC's compositor and services, carrying small Lapin changes on top of a few COSMIC programs. Each change is kept in its own file and pinned to COSMIC's stable releases, so COSMIC updates don't break it. The [technical reference](docs/TECHNICAL.md) explains every part.
 
 ## Install (Arch Linux)
 
