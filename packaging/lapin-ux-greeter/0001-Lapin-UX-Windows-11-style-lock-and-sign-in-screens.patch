@@ -1,4 +1,4 @@
-From 7cc5fb3c14e2fbcfd95d0761f0be2d5b463aa729 Mon Sep 17 00:00:00 2001
+From fee9beaf9e58c6d9d1a7fb4a36c33b7dfac6b33c Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 20:44:30 +0800
 Subject: [PATCH] Lapin UX: Windows 11-style lock and sign-in screens
@@ -11,10 +11,10 @@ examples/lapin_preview shows both in a window.
 ---
  examples/lapin_preview.rs |  74 +++++++++++
  src/greeter.rs            | 224 +++++++++++++++++----------------
- src/lapin.rs              | 161 ++++++++++++++++++++++++
+ src/lapin.rs              | 162 ++++++++++++++++++++++++
  src/lib.rs                |   2 +
  src/locker.rs             | 252 +++++++++++++-------------------------
- 5 files changed, 436 insertions(+), 277 deletions(-)
+ 5 files changed, 437 insertions(+), 277 deletions(-)
  create mode 100644 examples/lapin_preview.rs
  create mode 100644 src/lapin.rs
 
@@ -414,10 +414,10 @@ index 852e219..0f6d6c8 100644
          }
 diff --git a/src/lapin.rs b/src/lapin.rs
 new file mode 100644
-index 0000000..d3d9214
+index 0000000..5877d23
 --- /dev/null
 +++ b/src/lapin.rs
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,162 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +//! Lapin UX's Windows 11-style faces for the lock and sign-in screens:
 +//! the lock screen is a big clock and date over the wallpaper; clicking or
@@ -502,11 +502,11 @@ index 0000000..d3d9214
 +        .push(widget::container(message).width(Length::Fixed(box_width)).align_x(Alignment::Center))
 +        .align_x(Alignment::Center)
 +        .spacing(12.0 * scale);
-+    // Windows centres the panel a little above the middle of the screen.
-+    let page = widget::column::with_capacity(4)
-+        .push(widget::space::vertical().height(Length::FillPortion(5)))
-+        .push(widget::container(panel).width(Length::Fill).align_x(Alignment::Center))
-+        .push(widget::space::vertical().height(Length::FillPortion(6)))
++    // The panel sits at the dead centre of the screen; the corner rows are
++    // drawn on a layer above it so they don't push it off centre.
++    let centred = widget::container(panel).center(Length::Fill);
++    let corners = widget::column::with_capacity(2)
++        .push(widget::space::vertical().height(Length::Fill))
 +        .push(
 +            widget::row::with_capacity(3)
 +                .push(bottom_left)
@@ -517,6 +517,7 @@ index 0000000..d3d9214
 +        )
 +        .width(Length::Fill)
 +        .height(Length::Fill);
++    let page = iced::widget::stack![centred, corners].width(Length::Fill).height(Length::Fill);
 +    widget::container(page)
 +        .width(Length::Fill)
 +        .height(Length::Fill)

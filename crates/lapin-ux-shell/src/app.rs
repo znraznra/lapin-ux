@@ -65,6 +65,8 @@ pub enum StartPage {
 
 pub struct StartMenu {
     pub id: window::Id,
+    /// Height of Start's surface (the panel slides within it).
+    pub height: u32,
     pub query: String,
     pub page: StartPage,
     /// Keyboard selection. Home and All apps only highlight once the user
@@ -447,6 +449,7 @@ impl Shell {
         let index = self.refresh_file_index();
         self.start = Some(StartMenu {
             id,
+            height,
             query: String::new(),
             page: StartPage::Home,
             selected: None,
@@ -461,8 +464,10 @@ impl Shell {
         self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
-                move |_: &Shell| LiveSettings {
-                    blur: Some(true),
+                move |shell: &Shell| LiveSettings {
+                    // No blur while sliding: the blur covers the whole surface,
+                    // part of which the panel hasn't reached yet.
+                    blur: Some(!shell.start_sliding()),
                     corners: Some(CornerRadius { top_left: r, top_right: r, bottom_left: r, bottom_right: r }),
                     ..Default::default()
                 },
@@ -473,8 +478,8 @@ impl Shell {
                     anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    // Starts a little low and slides up (anim.rs).
-                    margin: IcedMargin { top: 0, right: 0, bottom: above - 48, left: if left { 12 } else { 0 } },
+                    // Sits above the taskbar; the panel slides up inside it (anim.rs).
+                    margin: IcedMargin { top: 0, right: 0, bottom: above, left: if left { 12 } else { 0 } },
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
@@ -1143,6 +1148,11 @@ impl Shell {
                     return Task::none();
                 }
                 return self.close_start();
+            }
+            // Start is on screen: run its slide from here, not from when it was
+            // asked for (a slow first frame would otherwise skip the slide).
+            Message::Layer(LayerEvent::Focused, id) if self.start.as_ref().is_some_and(|s| s.id == id) => {
+                self.anim_start_shown(id);
             }
             Message::Layer(LayerEvent::Focused, id) if self.panel.as_ref().is_some_and(|p| p.id == id) => {
                 return self.panel_focused();

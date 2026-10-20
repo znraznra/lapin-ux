@@ -67,6 +67,26 @@ pub mod button {
     pub fn icon<'a, M>(handle: impl Into<Handle>) -> IconButton<'a, M> {
         button::icon(handle).class(super::icon())
     }
+
+    /// A fixed-width push button with its label centred both ways (libcosmic
+    /// text buttons keep the label at the left when given a width). Windows
+    /// dialog buttons look like this.
+    pub fn sized<'a, M: Clone + 'a>(
+        label: impl Into<Cow<'a, str>> + 'a,
+        width: f32,
+        class: cosmic::theme::Button,
+    ) -> cosmic::widget::Button<'a, M> {
+        use cosmic::iced::Length;
+        button::custom(
+            cosmic::widget::container(cosmic::widget::text::body(label))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
+        )
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(32.0))
+        .padding(0)
+        .class(class)
+    }
 }
 
 /// Sliders with a round thumb. libcosmic draws the thumb with the theme's

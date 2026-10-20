@@ -7,11 +7,9 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use cosmic::app::Task;
-use cosmic::iced::platform_specific::shell::commands::layer_surface::set_margin;
 use cosmic::iced::window;
 
 use crate::app::{Message, Shell};
-use crate::config::TaskbarAlignment;
 
 const START_SLIDE: Duration = Duration::from_millis(220);
 /// How far below its resting place Start begins.
@@ -23,7 +21,18 @@ const HOP: f32 = 5.0;
 #[derive(Default)]
 pub struct Anims {
     start: Option<(window::Id, Instant)>,
+    /// The slide clock was restarted when Start first got focus.
+    start_shown: bool,
     launches: HashMap<String, Instant>,
+}
+
+/// `LAPIN_UX_ANIM_SCALE=10` plays animations ten times slower (for checking
+/// them frame by frame).
+fn slow(d: Duration) -> Duration {
+    static SCALE: std::sync::LazyLock<f32> = std::sync::LazyLock::new(|| {
+        std::env::var("LAPIN_UX_ANIM_SCALE").ok().and_then(|v| v.parse().ok()).filter(|v: &f32| *v > 0.0).unwrap_or(1.0)
+    });
+    d.mul_f32(*SCALE)
 }
 
 fn ease_out(t: f32) -> f32 {
@@ -39,6 +48,14 @@ impl Anims {
 impl Shell {
     pub(crate) fn anim_start_opened(&mut self, id: window::Id) {
         self.anims.start = Some((id, Instant::now()));
+        self.anims.start_shown = false;
+    }
+
+    pub(crate) fn anim_start_shown(&mut self, id: window::Id) {
+        if !self.anims.start_shown && self.anims.start.is_some_and(|(s, _)| s == id) {
+            self.anims.start = Some((id, Instant::now()));
+            self.anims.start_shown = true;
+        }
     }
 
     pub(crate) fn anim_launched(&mut self, app: &str) {
@@ -60,12 +77,31 @@ impl Shell {
             self.anims.start = None;
             return Task::none();
         }
-        let t = (t0.elapsed().as_secs_f32() / START_SLIDE.as_secs_f32()).min(1.0);
-        if t >= 1.0 {
+        let t = (t0.elapsed().as_secs_f32() / slow(START_SLIDE).as_secs_f32()).min(1.0);
+        // Keep the clock until Start has shown (its clock restarts then), but
+        // give up after a few seconds in case focus never arrives.
+        if t >= 1.0 && (self.anims.start_shown || t0.elapsed() > slow(Duration::from_secs(3))) {
             self.anims.start = None;
         }
-        let drop = (START_DROP * (1.0 - ease_out(t))).round() as i32;
-        let left = self.config.alignment == TaskbarAlignment::Left;
-        set_margin(id, 0, 0, self.above_bar() - drop, if left { 12 } else { 0 })
+        // The Start view reads `start_drop` and slides the panel inside its
+        // own surface, so it never covers the taskbar.
+        Task::none()
+    }
+
+    /// How far below its resting place Start's panel is drawn right now.
+    /// The surface itself stays put above the taskbar and clips the panel,
+    /// so Start looks like it rises out of the taskbar's top edge.
+    pub(crate) fn start_drop(&self) -> f32 {
+        let Some((id, t0)) = self.anims.start else { return 0.0 };
+        if self.start.as_ref().is_none_or(|s| s.id != id) {
+            return 0.0;
+        }
+        let t = (t0.elapsed().as_secs_f32() / slow(START_SLIDE).as_secs_f32()).min(1.0);
+        (START_DROP * (1.0 - ease_out(t))).round()
+    }
+
+    /// Start is still sliding (its blur waits until it has arrived).
+    pub(crate) fn start_sliding(&self) -> bool {
+        self.start_drop() > 0.0
     }
 }

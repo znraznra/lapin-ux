@@ -318,8 +318,8 @@ pub fn shutdown_view(choice: usize) -> Element<'static, Message> {
         widget::Space::new().height(Length::Fill).into(),
         row::with_children(vec![
             widget::Space::new().width(Length::Fill).into(),
-            lapin_ux_ui::button::suggested("OK").width(Length::Fixed(88.0)).on_press(Message::System(SystemMsg::ShutDownOk)).into(),
-            lapin_ux_ui::button::standard("Cancel").width(Length::Fixed(88.0)).on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
+            lapin_ux_ui::button::sized("OK", 88.0, lapin_ux_ui::suggested()).on_press(Message::System(SystemMsg::ShutDownOk)).into(),
+            lapin_ux_ui::button::sized("Cancel", 88.0, lapin_ux_ui::standard()).on_press(Message::Panel(crate::panels::PanelMsg::Close)).into(),
         ])
         .spacing(8)
         .into(),
@@ -455,7 +455,7 @@ pub fn security_view(shell: &Shell, power: bool) -> Element<'_, Message> {
     // Cancel sits right under the list, lined up with it.
     links = links.push(widget::Space::new().height(18));
     links = links.push(
-        container(lapin_ux_ui::button::standard("Cancel").width(Length::Fixed(120.0)).on_press(Message::Panel(crate::panels::PanelMsg::Close)))
+        container(lapin_ux_ui::button::sized("Cancel", 120.0, lapin_ux_ui::standard()).on_press(Message::Panel(crate::panels::PanelMsg::Close)))
             .padding([0, 14]),
     );
     let bottom = row::with_children(vec![widget::Space::new().width(Length::Fill).into(), corner.into()])

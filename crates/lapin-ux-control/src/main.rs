@@ -154,10 +154,16 @@ fn available(t: Target) -> bool {
 const LINKS_WIDTH: f32 = 206.0;
 
 fn link<'a>(label: &'a str, t: Target, big: bool) -> Element<'a, Message> {
-    let txt: Element<'a, Message> = if big { text::title4(label).width(Length::Fill).into() } else { text::body(label).width(Length::Fill).into() };
+    // Tight lines, as in Windows: a wrapped title reads as one block.
+    use cosmic::iced::widget::text::LineHeight;
+    let txt: Element<'a, Message> = if big {
+        text::title4(label).line_height(LineHeight::Relative(1.15)).width(Length::Fill).into()
+    } else {
+        text::body(label).line_height(LineHeight::Relative(1.2)).width(Length::Fill).into()
+    };
     button::custom(txt)
         .width(Length::Fill)
-        .padding([2, 0])
+        .padding([1, 0])
         .class(theme::Button::Link)
         .on_press_maybe(available(t).then_some(Message::Open(t)))
         .into()
@@ -252,7 +258,7 @@ impl cosmic::Application for App {
             let cards: Vec<Element<'_, Message>> = CATEGORIES
                 .iter()
                 .map(|c| {
-                    let mut links = column::with_capacity(c.tasks.len() + 1).spacing(2).push(link(c.title, c.target, true));
+                    let mut links = column::with_capacity(c.tasks.len() + 2).spacing(0).push(link(c.title, c.target, true)).push(widget::Space::new().height(2));
                     for t in c.tasks {
                         links = links.push(link(t.label, t.target, false));
                     }
