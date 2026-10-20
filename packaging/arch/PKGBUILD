@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-portal')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-portal')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -35,15 +35,19 @@ _comp_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
 _greeter_commit=5b912ba331af1f6c1cb0cb53fa9366c8f54662c1
 # The touch keyboard: upstream cosmic-osk plus our patches.
 _osk_commit=3a4800a10b03efac1684817238922db5d6746403
+# Volume/brightness pop-ups and the admin prompt: cosmic-osd at its stable
+# release tag (epoch-1.10.0) plus our patch.
+_osd_commit=9b14ee017fb8fdb7d03d73da597cf17b89d890f7
 # File dialogs: COSMIC's portal built against COSMIC Files plus our patch.
 _portal_commit=9d35e6300b69cf06da723a502a9a56604a022786
 _files_commit=f7679791f4fbf82ba7c9a01cf3f8ae0e21265975
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}"
         "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}"
         "cosmic-osk::git+https://github.com/pop-os/cosmic-osk.git#commit=${_osk_commit}"
+        "cosmic-osd::git+https://github.com/pop-os/cosmic-osd.git#commit=${_osd_commit}"
         "xdg-desktop-portal-cosmic::git+https://github.com/pop-os/xdg-desktop-portal-cosmic.git#commit=${_portal_commit}"
         "cosmic-files::git+https://github.com/pop-os/cosmic-files.git#commit=${_files_commit}")
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 options=('!lto')
 
 _src="$startdir/../.."
@@ -73,6 +77,12 @@ prepare() {
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
 
+    cd "$srcdir/cosmic-osd"
+    git reset -q --hard
+    git apply "$_src"/packaging/lapin-ux-osd/*.patch
+    rm -f rust-toolchain rust-toolchain.toml
+    cargo fetch --locked --target "$host"
+
     cd "$srcdir/cosmic-files"
     git reset -q --hard
     git apply "$_src"/packaging/lapin-ux-portal/*.patch
@@ -99,6 +109,9 @@ build() {
     just build-release --frozen
 
     cd "$srcdir/cosmic-osk"
+    just build-release --frozen
+
+    cd "$srcdir/cosmic-osd"
     just build-release --frozen
 
     cd "$srcdir/xdg-desktop-portal-cosmic"
@@ -235,6 +248,18 @@ package_lapin-ux-osk() {
     provides=('cosmic-osk')
     conflicts=('cosmic-osk')
     cd "$srcdir/cosmic-osk"
+    just rootdir="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-ux-osd() {
+    pkgdesc="COSMIC on-screen displays with Lapin UX's Windows 11 volume/brightness pop-ups and admin prompt"
+    url="https://github.com/pop-os/cosmic-osd"
+    license=('GPL-3.0-only')
+    depends=('libxkbcommon' 'wayland' 'polkit' 'pipewire')
+    provides=('cosmic-osd')
+    conflicts=('cosmic-osd')
+    cd "$srcdir/cosmic-osd"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

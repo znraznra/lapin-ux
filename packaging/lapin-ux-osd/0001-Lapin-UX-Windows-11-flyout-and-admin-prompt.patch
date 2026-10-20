@@ -1,0 +1,490 @@
+From 3a1cc3dec1c7d423169418974962e2a23974ab99 Mon Sep 17 00:00:00 2001
+From: Lapin UX <arnz.lee16@gmail.com>
+Date: Tue, 20 Oct 2026 11:34:17 +0800
+Subject: [PATCH] Lapin UX: Windows 11 volume/brightness flyout and admin
+ permission prompt
+
+All drawing lives in src/lapin.rs; COSMIC's files only gain call sites:
+- osd_indicator: value pop-ups use lapin::value_osd (icon, thin bar, number)
+- app: pop-ups 12 px above the taskbar; Lapin's taskbar isn't counted twice
+- polkit_dialog: full-screen dimmed prompt via lapin::admin_prompt, with
+  Show more details, Yes / No
+- LAPIN_OSD_PREVIEW=volume|brightness|admin shows one at start for checks
+---
+ src/components/app.rs           |  22 +++-
+ src/components/osd_indicator.rs |  14 ++
+ src/components/polkit_dialog.rs |  69 +++++-----
+ src/lapin.rs                    | 227 ++++++++++++++++++++++++++++++++
+ src/main.rs                     |   1 +
+ 5 files changed, 292 insertions(+), 41 deletions(-)
+ create mode 100644 src/lapin.rs
+
+diff --git a/src/components/app.rs b/src/components/app.rs
+index edc50c7..b8dbc3a 100644
+--- a/src/components/app.rs
++++ b/src/components/app.rs
+@@ -195,6 +195,8 @@ pub enum DisplayMode {
+ 
+ #[derive(Clone, Debug)]
+ pub enum Msg {
++    /// Lapin UX: show the LAPIN_OSD_PREVIEW pop-up (see src/lapin.rs).
++    LapinPreview,
+     Action(OsdTask),
+     AudioClient(super::audio::Message),
+     Confirm,
+@@ -364,7 +366,7 @@ impl App {
+             let (mut top, mut left, mut bottom, mut right) = if is_display_number {
+                 (0, 0, 48, 0) // Top margin for display numbers
+             } else {
+-                (0, 0, 48, 0) // Bottom margin for other OSDs
++                (0, 0, crate::lapin::POPUP_GAP, 0) // Lapin UX: 12 px above the taskbar
+             };
+             for overlap in self.overlap.values() {
+                 let tl = tl.intersects(overlap);
+@@ -617,6 +619,14 @@ impl cosmic::Application for App {
+             have_source_volume: false,
+         };
+         let t = app.create_dummy_layer_surface();
++        // Lapin UX: LAPIN_OSD_PREVIEW=volume|brightness|admin shows one at start.
++        let t = Task::batch([
++            t,
++            cosmic::task::future(async {
++                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
++                Msg::LapinPreview
++            }),
++        ]);
+         (app, t)
+     }
+ 
+@@ -698,6 +708,11 @@ impl cosmic::Application for App {
+                 }
+                 iced::Task::none()
+             }
++            Msg::LapinPreview => match crate::lapin::preview() {
++                Some(crate::lapin::Preview::Value(p)) => self.create_indicator(p),
++                Some(crate::lapin::Preview::Admin(p)) => self.update(Msg::PolkitAgent(polkit_agent::Event::CreateDialog(p))),
++                None => Task::none(),
++            },
+             Msg::PolkitAgent(event) => match event {
+                 polkit_agent::Event::CreateDialog(params) => {
+                     log::trace!("create polkit dialog: {}", params.cookie);
+@@ -868,7 +883,10 @@ impl cosmic::Application for App {
+                         logical_rect,
+                         exclusive,
+                         ..
+-                    } if (namespace == "Dock" || namespace == "Panel" || exclusive > 0) => {
++                    } if (namespace == "Dock" || namespace == "Panel" || exclusive > 0)
++                        // Lapin UX: the taskbar reserves its own space already.
++                        && !namespace.starts_with("lapin-ux-") =>
++                    {
+                         self.overlap.insert(identifier, logical_rect);
+                         return self.handle_overlap();
+                     }
+diff --git a/src/components/osd_indicator.rs b/src/components/osd_indicator.rs
+index 47a9233..c4f3c47 100644
+--- a/src/components/osd_indicator.rs
++++ b/src/components/osd_indicator.rs
+@@ -324,6 +324,20 @@ impl State {
+             return self.view_display_number(display_number);
+         }
+ 
++        // Lapin UX: Windows 11's volume / brightness flyout (src/lapin.rs).
++        if let Some(value) = self.params.value() {
++            return widget::autosize::autosize(
++                widget::container(crate::lapin::value_osd(self.params.icon_name(), value, self.max_value()))
++                    .align_x(Alignment::Center)
++                    .width(Length::Shrink)
++                    .align_bottom(Length::Shrink),
++                OSD_INDICATOR_ID.clone(),
++            )
++            .min_width(1.)
++            .min_height(1.)
++            .into();
++        }
++
+         let icon = widget::icon::from_name(self.params.icon_name());
+ 
+         // Use large radius on value-OSD to enforce pill-shape with "Round" system style
+diff --git a/src/components/polkit_dialog.rs b/src/components/polkit_dialog.rs
+index 1239599..ea3fa62 100644
+--- a/src/components/polkit_dialog.rs
++++ b/src/components/polkit_dialog.rs
+@@ -7,7 +7,7 @@ use crate::subscriptions::polkit_agent::PolkitError;
+ use crate::subscriptions::polkit_agent_helper;
+ use cosmic::iced::event::{PlatformSpecific, wayland};
+ use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+-    KeyboardInteractivity, Layer, destroy_layer_surface,
++    Anchor, KeyboardInteractivity, Layer, destroy_layer_surface,
+ };
+ use cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
+ use cosmic::iced::window::Id as SurfaceId;
+@@ -42,6 +42,8 @@ pub enum Msg {
+     Password(String),
+     Sent(bool),
+     TogglePasswordVisibility,
++    /// Lapin UX: "Show more details".
++    ToggleDetails,
+ }
+ 
+ pub struct State {
+@@ -56,6 +58,8 @@ pub struct State {
+     pub text_input_id: iced::id::Id,
+     sensitive: bool,
+     retries: u32,
++    /// Lapin UX: "Show more details" is open.
++    details_open: bool,
+     // TODO: Better way to use fluent with iced?
+     msg_cancel: String,
+     msg_authenticate: String,
+@@ -76,7 +80,10 @@ impl State {
+                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                 namespace: "osd".into(),
+                 layer: Layer::Overlay,
+-                size: None,
++                // Lapin UX: the whole screen, dimmed behind the prompt.
++                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
++                exclusive_zone: -1,
++                size: Some((None, None)),
+                 ..Default::default()
+             },
+             None::<fn() -> Element<'static, cosmic::Action<T>>>,
+@@ -94,6 +101,7 @@ impl State {
+                 text_input_id,
+                 sensitive: true,
+                 retries: 0,
++            details_open: false,
+                 msg_cancel: fl!("cancel"),
+                 msg_authenticate: fl!("authenticate"),
+                 msg_authentication_required: fl!("authentication-required"),
+@@ -127,6 +135,8 @@ impl State {
+                 polkit_agent_helper::Event::Responder(responder) => {
+                     self.responder = Some(responder);
+                 }
++                // Lapin UX: the preview prompt has no polkit behind it.
++                polkit_agent_helper::Event::Failed if self.params.cookie == crate::lapin::PREVIEW_COOKIE => {}
+                 polkit_agent_helper::Event::Failed => {
+                     return (None, self.respond(Err(PolkitError::Failed)));
+                 }
+@@ -171,6 +181,7 @@ impl State {
+             Msg::Password(password) => {
+                 self.password = password;
+             }
++            Msg::ToggleDetails => self.details_open = !self.details_open,
+             Msg::TogglePasswordVisibility => {
+                 self.password_visible = !self.password_visible;
+             }
+@@ -201,49 +212,29 @@ impl State {
+         } else {
+             widget::text_input(placeholder, &self.password).id(self.text_input_id.clone())
+         };
+-        let mut cancel_button = widget::button::standard(&self.msg_cancel);
+-        let mut authenticate_button = widget::button::suggested(&self.msg_authenticate);
++        // Lapin UX: Windows' admin permission prompt (src/lapin.rs).
++        let (mut yes, mut no) = (None, None);
+         if self.sensitive {
+             password_input = password_input.on_input(Msg::Password);
+-            cancel_button = cancel_button.on_press(Msg::Cancel);
+-
++            no = Some(Msg::Cancel);
+             if self.responder.is_some() {
+                 password_input = password_input.on_submit(|_| Msg::Authenticate);
+-                authenticate_button = authenticate_button.on_press(Msg::Authenticate);
++                yes = Some(Msg::Authenticate);
+             }
+         }
+-        let mut right_column: Vec<cosmic::Element<_>> = vec![password_input.into()];
+-        if self.retries > 0 {
+-            right_column.push(
+-                widget::text::body(&self.msg_invalid_password)
+-                    .class(cosmic::theme::Text::Color(iced::Color::from_rgb(
+-                        1.0, 0.0, 0.0,
+-                    )))
+-                    .into(),
+-            );
+-        } else {
+-            right_column.push(widget::text::body("").into())
+-        }
+-        let icon = widget::icon::from_name(
+-            self.params
+-                .icon_name
+-                .as_deref()
+-                .unwrap_or("dialog-authentication"),
+-        )
+-        .size(64);
+-        widget::autosize::autosize(
+-            widget::dialog::dialog()
+-                .title(&self.msg_authentication_required)
+-                .body(&self.params.message)
+-                .control(widget::column::with_children(right_column).spacing(4))
+-                .icon(icon)
+-                .primary_action(authenticate_button)
+-                .secondary_action(cancel_button),
+-            POLKIT_DIALOG_ID.clone(),
+-        )
+-        .min_width(1.)
+-        .min_height(1.)
+-        .into()
++        crate::lapin::admin_prompt(crate::lapin::AdminPrompt {
++            message: &self.params.message,
++            icon_name: self.params.icon_name.as_deref(),
++            action_id: &self.params.action_id,
++            details: &self.params.details,
++            user: &self.params.pw_name,
++            password: password_input.into(),
++            error: (self.retries > 0).then_some(self.msg_invalid_password.as_str()),
++            details_open: self.details_open,
++            toggle_details: Msg::ToggleDetails,
++            yes,
++            no,
++        })
+     }
+ 
+     pub fn subscription(&self) -> Subscription<Msg> {
+diff --git a/src/lapin.rs b/src/lapin.rs
+new file mode 100644
+index 0000000..584a6f1
+--- /dev/null
++++ b/src/lapin.rs
+@@ -0,0 +1,227 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Lapin UX: Windows 11 looks for cosmic-osd's pop-ups.
++//!
++//! Everything Lapin draws lives here, so the patch to COSMIC's own files is
++//! a handful of call sites and survives COSMIC updates with little rework.
++//! - `value_osd`: the volume / brightness flyout (icon, thin bar, number).
++//! - `admin_prompt`: the admin permission prompt, over a dimmed screen.
++
++use std::collections::HashMap;
++
++use cosmic::iced::{self, Alignment, Background, Border, Color, Length};
++use cosmic::{Element, theme, widget};
++
++/// Gap between the taskbar and a pop-up, as for Start and quick settings.
++pub const POPUP_GAP: i32 = 12;
++
++const FLYOUT_RADIUS: f32 = 8.0;
++const BUTTON_RADIUS: f32 = 4.0;
++
++fn flyout_style(t: &cosmic::Theme) -> widget::container::Style {
++    let c = t.cosmic();
++    widget::container::Style {
++        text_color: Some(c.background(t.transparent).on.into()),
++        icon_color: Some(c.background(t.transparent).on.into()),
++        background: Some(Color::from(c.background(t.transparent).base).into()),
++        border: Border { radius: FLYOUT_RADIUS.into(), width: 1.0, color: c.bg_divider().into() },
++        ..Default::default()
++    }
++}
++
++/// Windows 11's volume / brightness flyout: icon, a thin accent bar and the
++/// value, in a small rounded box above the taskbar.
++pub fn value_osd<'a, M: Clone + 'static>(icon_name: &'static str, value: u32, max: f32) -> Element<'a, M> {
++    let progress = (value as f32 / max).clamp(0.0, 1.0);
++    let bar = if max > 100.0 {
++        widget::determinate_linear(progress).markers([100.0 / max])
++    } else {
++        widget::determinate_linear(progress)
++    }
++    .girth(4)
++    .width(Length::Fixed(124.0));
++    widget::container(
++        iced::widget::row![
++            widget::icon::from_name(icon_name).size(16),
++            bar,
++            widget::text::body(value.to_string()).width(Length::Fixed(28.0)).align_x(Alignment::End),
++        ]
++        .spacing(12)
++        .align_y(Alignment::Center),
++    )
++    .padding([0, 16])
++    .height(Length::Fixed(48.0))
++    .align_y(Alignment::Center)
++    .class(theme::Container::custom(flyout_style))
++    .into()
++}
++
++/// What the admin prompt shows and the messages its controls send.
++pub struct AdminPrompt<'a, M> {
++    /// polkit's own sentence, e.g. "Authentication is required to install software".
++    pub message: &'a str,
++    pub icon_name: Option<&'a str>,
++    pub action_id: &'a str,
++    pub details: &'a HashMap<String, String>,
++    pub user: &'a str,
++    pub password: Element<'a, M>,
++    pub error: Option<&'a str>,
++    pub details_open: bool,
++    pub toggle_details: M,
++    /// `None` while the password is being checked.
++    pub yes: Option<M>,
++    pub no: Option<M>,
++}
++
++fn win_button(suggested: bool) -> theme::Button {
++    let kind = move || if suggested { theme::Button::Suggested } else { theme::Button::Standard };
++    let square = |mut s: widget::button::Style| {
++        s.border_radius = BUTTON_RADIUS.into();
++        s
++    };
++    use widget::button::Catalog;
++    theme::Button::Custom {
++        active: Box::new(move |f, t| square(t.active(f, false, &kind()))),
++        disabled: Box::new(move |t| square(t.disabled(&kind()))),
++        hovered: Box::new(move |f, t| square(t.hovered(f, false, &kind()))),
++        pressed: Box::new(move |f, t| square(t.pressed(f, false, &kind()))),
++    }
++}
++
++fn prompt_button<'a, M: Clone + 'a>(label: &'a str, suggested: bool, msg: Option<M>) -> Element<'a, M> {
++    widget::button::custom(widget::container(widget::text::body(label)).center_x(Length::Fill).center_y(Length::Fill))
++        .width(Length::Fill)
++        .height(Length::Fixed(32.0))
++        .padding(0)
++        .class(win_button(suggested))
++        .on_press_maybe(msg)
++        .into()
++}
++
++/// The app that asked: pkexec passes the program; otherwise polkit's message.
++fn asker(details: &HashMap<String, String>, message: &str) -> String {
++    details
++        .get("program")
++        .and_then(|p| std::path::Path::new(p).file_name())
++        .map(|n| n.to_string_lossy().into_owned())
++        .unwrap_or_else(|| message.to_string())
++}
++
++/// Windows' admin permission prompt: the screen dims, and a card in the
++/// middle asks whether to allow the app to make changes. Linux always asks
++/// for a password, so the card ends with the password box above Yes / No.
++pub fn admin_prompt<'a, M: Clone + 'static>(p: AdminPrompt<'a, M>) -> Element<'a, M> {
++    let active = theme::active();
++    let quiet = theme::Text::Color(Color::from(active.cosmic().background(false).on).scale_alpha(0.75));
++    let name = asker(p.details, p.message);
++    let mut app = widget::column::with_capacity(4).spacing(2);
++    app = app.push(widget::text::heading(name.clone()));
++    if name != p.message {
++        app = app.push(widget::text::body(p.message).class(quiet.clone()));
++    }
++    let mut body = widget::column::with_capacity(8).spacing(12);
++    body = body.push(
++        widget::text::title4("Do you want to allow this app to make changes to your device?")
++            .width(Length::Fill),
++    );
++    body = body.push(
++        iced::widget::row![
++            widget::icon::from_name(p.icon_name.unwrap_or("dialog-password-symbolic")).size(32),
++            app,
++        ]
++        .spacing(12)
++        .align_y(Alignment::Center),
++    );
++    if p.details_open {
++        let mut more = widget::column::with_capacity(4).spacing(2);
++        more = more.push(widget::text::caption(format!("Action: {}", p.action_id)).class(quiet.clone()));
++        if let Some(cmd) = p.details.get("command_line") {
++            more = more.push(widget::text::caption(format!("Command: {cmd}")).class(quiet.clone()));
++        }
++        body = body.push(more);
++    }
++    body = body.push(
++        widget::button::link(if p.details_open { "Hide details" } else { "Show more details" })
++            .padding(0)
++            .on_press(p.toggle_details),
++    );
++    body = body.push(widget::text::body(format!("To continue, enter the password for {}.", p.user)));
++    body = body.push(p.password);
++    if let Some(e) = p.error {
++        body = body.push(widget::text::body(e).class(theme::Text::Color(Color::from_rgb(0.95, 0.35, 0.35))));
++    }
++    let footer = widget::container(
++        iced::widget::row![prompt_button("Yes", true, p.yes), prompt_button("No", false, p.no)].spacing(8),
++    )
++    .padding(24)
++    .class(theme::Container::custom(|t| {
++        let c = t.cosmic();
++        widget::container::Style {
++            background: Some(Color::from(c.primary(t.transparent).base).into()),
++            border: Border { radius: [0.0, 0.0, FLYOUT_RADIUS, FLYOUT_RADIUS].into(), ..Default::default() },
++            ..Default::default()
++        }
++    }));
++    let card = widget::container(
++        widget::column::with_children(vec![
++            widget::container(
++                widget::column::with_children(vec![
++                    widget::text::body("Admin permission").class(quiet).into(),
++                    body.into(),
++                ])
++                .spacing(8),
++            )
++            .padding([20, 24, 24, 24])
++            .into(),
++            footer.into(),
++        ]),
++    )
++    .width(Length::Fixed(456.0))
++    .class(theme::Container::custom(flyout_style));
++    // The dimmed screen behind the card, as Windows' secure desktop.
++    widget::container(card)
++        .center(Length::Fill)
++        .class(theme::Container::custom(|_| widget::container::Style {
++            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.55))),
++            ..Default::default()
++        }))
++        .into()
++}
++
++/// Cookie of the preview prompt: no polkit behind it, so it isn't closed
++/// when the password helper can't start.
++pub const PREVIEW_COOKIE: &str = "lapin-ux-preview";
++
++/// What `LAPIN_OSD_PREVIEW` asks to show at start, for checking the look
++/// without changing the volume or asking polkit (volume, brightness, admin).
++pub enum Preview {
++    Value(crate::components::osd_indicator::Params),
++    Admin(crate::components::polkit_dialog::Params),
++}
++
++pub fn preview() -> Option<Preview> {
++    use crate::components::{audio::model::NodeVolume, osd_indicator::Params, polkit_dialog};
++    match std::env::var("LAPIN_OSD_PREVIEW").ok()?.as_str() {
++        "volume" => Some(Preview::Value(Params::SinkVolume(NodeVolume { volume: 46, mute: false }))),
++        "brightness" => Some(Preview::Value(Params::DisplayBrightnessExact(0.7))),
++        "admin" => {
++            let (tx, _rx) = tokio::sync::oneshot::channel();
++            let details = [("program".to_string(), "/usr/bin/pacman".to_string()), ("command_line".to_string(), "/usr/bin/pacman -Syu".to_string())]
++                .into_iter()
++                .collect();
++            Some(Preview::Admin(polkit_dialog::Params {
++                pw_name: whoami(),
++                action_id: "org.archlinux.pkexec.pacman".into(),
++                message: "Authentication is required to update software".into(),
++                icon_name: Some("system-software-update".into()),
++                details,
++                cookie: PREVIEW_COOKIE.into(),
++                response_sender: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
++            }))
++        }
++        _ => None,
++    }
++}
++
++fn whoami() -> String {
++    std::env::var("USER").unwrap_or_else(|_| "user".into())
++}
+diff --git a/src/main.rs b/src/main.rs
+index 1453ef5..f79c31d 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -5,6 +5,7 @@ use std::sync::LazyLock;
+ 
+ mod components;
+ mod config;
++mod lapin;
+ pub mod cosmic_session;
+ pub mod session_manager;
+ mod subscriptions;
+-- 
+2.43.0
+

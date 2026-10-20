@@ -2,7 +2,8 @@
 //! Lapin UX Task Manager (Ctrl+Shift+Esc): Processes (apps and background
 //! processes with CPU, memory and disk use, End task), Performance (CPU,
 //! memory, disk and network graphs), Startup apps (turn sign-in apps on or
-//! off) and Details (every process).
+//! off), Users (signed-in people and their share of the machine), Details
+//! (every process) and Services (system services: start, stop, restart).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,11 @@ use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Size, Subscription};
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
 use cosmic::{ApplicationExt, Core, Element, theme};
+use lapin_ux_core::services::{self as svc, Account, Service, ServiceStatus};
 use lapin_ux_core::sysmon::{self, Memory, Proc, Startup};
+
+mod bus;
+use bus::Verb;
 
 const HISTORY: usize = 60;
 const CLK_TCK: f64 = 100.0;
@@ -22,7 +27,9 @@ enum Page {
     Processes,
     Performance,
     Startup,
+    Users,
     Details,
+    Services,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +81,13 @@ enum Message {
     Page(Page),
     /// The ☰ button: icons only, or icons and names.
     ToggleNav,
+    UsersLoaded(Option<Vec<u32>>),
+    UserExpand(u32),
+    ManageAccounts,
+    ServicesLoaded(Result<Vec<Service>, String>),
+    ServiceSelect(String),
+    ServiceDo(String, Verb),
+    ServiceDone(Result<(), String>),
 }
 
 /// One line in the Processes list: an app (head process plus children)
@@ -129,6 +143,21 @@ struct App {
     startup: Vec<Startup>,
     startup_selected: Option<String>,
     uid: u32,
+    accounts: HashMap<u32, Account>,
+    /// Uids with a session (logind); `None` until known or when unavailable.
+    signed_in: Option<Vec<u32>>,
+    user_expanded: Vec<u32>,
+    services: Vec<Service>,
+    services_note: Option<String>,
+    service_selected: Option<String>,
+}
+
+fn load_services() -> Task<Message> {
+    Task::future(async { cosmic::Action::App(Message::ServicesLoaded(bus::services().await)) })
+}
+
+fn load_users() -> Task<Message> {
+    Task::future(async { cosmic::Action::App(Message::UsersLoaded(bus::signed_in_uids().await)) })
 }
 
 fn sample() -> Sample {
@@ -456,6 +485,12 @@ impl cosmic::Application for App {
             startup: Vec::new(),
             startup_selected: None,
             uid,
+            accounts: svc::parse_passwd(&std::fs::read_to_string("/etc/passwd").unwrap_or_default()),
+            signed_in: None,
+            user_expanded: Vec::new(),
+            services: Vec::new(),
+            services_note: None,
+            service_selected: None,
         };
         app.reload_startup();
         let title = match app.core.main_window_id() {
@@ -504,11 +539,43 @@ impl cosmic::Application for App {
             Message::Select(pid) => self.selected = Some(pid),
             Message::Page(p) => {
                 self.page = p;
-                if p == Page::Startup {
-                    self.reload_startup();
+                match p {
+                    Page::Startup => self.reload_startup(),
+                    Page::Users => return load_users(),
+                    Page::Services => {
+                        self.services_note = Some("Loading services…".into());
+                        return load_services();
+                    }
+                    _ => {}
                 }
             }
             Message::ToggleNav => self.nav_collapsed = !self.nav_collapsed,
+            Message::UsersLoaded(uids) => self.signed_in = uids,
+            Message::UserExpand(uid) => {
+                if let Some(i) = self.user_expanded.iter().position(|u| *u == uid) {
+                    self.user_expanded.remove(i);
+                } else {
+                    self.user_expanded.push(uid);
+                }
+            }
+            Message::ManageAccounts => {
+                let _ = std::process::Command::new("cosmic-settings").arg("users").spawn();
+            }
+            Message::ServicesLoaded(res) => match res {
+                Ok(list) => {
+                    self.services = list;
+                    self.services_note = None;
+                }
+                Err(e) => self.services_note = Some(format!("Services can't be listed: {e}")),
+            },
+            Message::ServiceSelect(unit) => self.service_selected = Some(unit),
+            Message::ServiceDo(unit, verb) => {
+                return Task::future(async move { cosmic::Action::App(Message::ServiceDone(bus::service_action(unit, verb).await)) });
+            }
+            Message::ServiceDone(res) => {
+                self.services_note = res.err().map(|e| format!("That didn't work: {e}"));
+                return load_services();
+            }
             Message::Expand(pid) => {
                 if let Some(i) = self.expanded.iter().position(|p| *p == pid) {
                     self.expanded.remove(i);
@@ -551,18 +618,22 @@ impl cosmic::Application for App {
             Page::Processes => self.processes_view(),
             Page::Performance => self.performance_view(),
             Page::Startup => self.startup_view(),
+            Page::Users => self.users_view(),
             Page::Details => self.details_view(),
+            Page::Services => self.services_view(),
         };
         let body = container(body).padding([8, 16, 16, 16]).width(Length::Fill).height(Length::Fill);
         row::with_children(vec![self.sidebar(), body.into()]).height(Length::Fill).into()
     }
 }
 
-const PAGES: [(&str, &str, Page); 4] = [
+const PAGES: [(&str, &str, Page); 6] = [
     ("Processes", "view-grid-symbolic", Page::Processes),
     ("Performance", "utilities-system-monitor-symbolic", Page::Performance),
     ("Startup apps", "system-run-symbolic", Page::Startup),
+    ("Users", "system-users-symbolic", Page::Users),
     ("Details", "view-list-symbolic", Page::Details),
+    ("Services", "applications-system-symbolic", Page::Services),
 ];
 
 /// Space between the sidebar's edge and its icons; the longest name gets
@@ -871,6 +942,127 @@ impl App {
             self.page_head("Startup apps", buttons),
             container(header).class(card()).into(),
             scrollable(list).height(Length::Fill).into(),
+        ])
+        .spacing(8)
+        .into()
+    }
+
+    fn users_view(&self) -> Element<'_, Message> {
+        let mem_frac = if self.mem.total == 0 { 0.0 } else { self.mem.used() as f64 / self.mem.total as f64 };
+        let users = svc::usage_by_user(&self.procs, &self.cpu_of, self.signed_in.as_deref(), self.uid);
+        let header = row::with_children(vec![
+            text::caption("User").width(Length::Fill).into(),
+            text::caption("Status").width(120).into(),
+            container(text::caption(format!("{:.0}%\nCPU", self.cpu_now * 100.0))).width(90).align_x(Alignment::End).into(),
+            container(text::caption(format!("{:.0}%\nMemory", mem_frac * 100.0))).width(110).align_x(Alignment::End).into(),
+        ])
+        .padding([6, 22, 6, 12]);
+        let mut list = column::with_capacity(users.len() * 2).spacing(1);
+        for u in &users {
+            let name = self.accounts.get(&u.uid).map(|a| a.display().to_string()).unwrap_or_else(|| u.uid.to_string());
+            let open = self.user_expanded.contains(&u.uid);
+            let status = if u.uid == self.uid { "Active" } else { "Signed in" };
+            let cells = row::with_children(vec![
+                row::with_children(vec![
+                    icon::from_name(if open { "pan-down-symbolic" } else { "pan-end-symbolic" }).size(12).into(),
+                    icon::from_name("avatar-default-symbolic").size(20).into(),
+                    text::body(format!("{name} ({})", u.pids.len())).into(),
+                ])
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .into(),
+                text::body(status).width(120).into(),
+                container(text::body(format!("{:.1}%", u.cpu))).width(90).align_x(Alignment::End).padding([6, 8]).class(heat(u.cpu / 50.0)).into(),
+                container(text::body(sysmon::bytes_text(u.mem)))
+                    .width(110)
+                    .align_x(Alignment::End)
+                    .padding([6, 8])
+                    .class(heat(if self.mem.total == 0 { 0.0 } else { u.mem as f64 / self.mem.total as f64 * 4.0 }))
+                    .into(),
+            ])
+            .align_y(Alignment::Center)
+            .padding([0, 0, 0, 12]);
+            list = list.push(
+                button::custom(container(cells).width(Length::Fill).class(row_style(false)))
+                    .padding(0)
+                    .width(Length::Fill)
+                    .class(theme::Button::MenuItem)
+                    .on_press(Message::UserExpand(u.uid)),
+            );
+            if open {
+                let mut procs: Vec<&Proc> = self.procs.iter().filter(|p| u.pids.contains(&p.pid)).collect();
+                procs.sort_by(|a, b| self.cpu_of.get(&b.pid).unwrap_or(&0.0).total_cmp(self.cpu_of.get(&a.pid).unwrap_or(&0.0)));
+                for p in procs.into_iter().take(50) {
+                    list = list.push(
+                        button::custom(container(self.sub_row(p)).width(Length::Fill).class(row_style(self.selected == Some(p.pid))))
+                            .padding(0)
+                            .width(Length::Fill)
+                            .class(theme::Button::MenuItem)
+                            .on_press(Message::Select(p.pid)),
+                    );
+                }
+            }
+        }
+        let buttons = vec![
+            lapin_ux_ui::button::standard("End task").on_press_maybe(self.selected.map(|_| Message::EndTask)).into(),
+            lapin_ux_ui::button::standard("Manage user accounts").on_press(Message::ManageAccounts).into(),
+        ];
+        column::with_children(vec![
+            self.page_head("Users", buttons),
+            container(header).class(card()).into(),
+            scrollable(container(list).padding([0, 14, 0, 0])).height(Length::Fill).into(),
+        ])
+        .spacing(8)
+        .into()
+    }
+
+    fn services_view(&self) -> Element<'_, Message> {
+        let sel = self.services.iter().find(|s| Some(&s.unit) == self.service_selected.as_ref());
+        let act = |verb: Verb, ok: fn(&Service) -> bool| sel.filter(|s| ok(s)).map(|s| Message::ServiceDo(s.unit.clone(), verb));
+        let buttons: Vec<Element<'_, Message>> = vec![
+            lapin_ux_ui::button::standard("Start").on_press_maybe(act(Verb::Start, |s| !s.running())).into(),
+            lapin_ux_ui::button::standard("Stop").on_press_maybe(act(Verb::Stop, |s| s.running())).into(),
+            lapin_ux_ui::button::standard("Restart").on_press_maybe(act(Verb::Restart, |s| s.running())).into(),
+        ];
+        let header = row::with_children(vec![
+            text::caption("Name").width(220).into(),
+            text::caption("PID").width(70).into(),
+            text::caption("Description").width(Length::Fill).into(),
+            text::caption("Status").width(90).into(),
+        ])
+        .padding([6, 12]);
+        let mut list = column::with_capacity(self.services.len() + 1).spacing(1);
+        if let Some(note) = &self.services_note {
+            list = list.push(container(text::body(note.clone())).padding([6, 12]));
+        }
+        for s in self.services.iter().filter(|s| self.matches(s.name(), s.pid.unwrap_or(0)) || self.matches(&s.description, 0)) {
+            let status = s.status();
+            let status_text = text::body(status.label()).width(90);
+            let cells = row::with_children(vec![
+                text::body(s.name().to_string()).width(220).into(),
+                text::body(s.pid.map(|p| p.to_string()).unwrap_or_default()).width(70).into(),
+                text::body(s.description.clone()).width(Length::Fill).height(20).into(),
+                if status == ServiceStatus::Failed {
+                    status_text.class(theme::Text::Color(Color::from_rgb(0.9, 0.35, 0.3))).into()
+                } else {
+                    status_text.into()
+                },
+            ])
+            .align_y(Alignment::Center)
+            .padding([4, 12]);
+            list = list.push(
+                button::custom(container(cells).width(Length::Fill).class(row_style(self.service_selected.as_ref() == Some(&s.unit))))
+                    .padding(0)
+                    .width(Length::Fill)
+                    .class(theme::Button::MenuItem)
+                    .on_press(Message::ServiceSelect(s.unit.clone())),
+            );
+        }
+        column::with_children(vec![
+            self.page_head("Services", buttons),
+            container(header).class(card()).into(),
+            scrollable(container(list).padding([0, 14, 0, 0])).height(Length::Fill).into(),
         ])
         .spacing(8)
         .into()
