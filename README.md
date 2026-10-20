@@ -17,7 +17,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
 | 2. Settings and multitasking | Quick settings, notification centre, Alt+Tab, Task view, snapping | `████████░░` 7 of 9 |
 | 3. System apps | File Explorer, Update, Control Panel | `██████░░░░` 3 of 6, 1 partly |
-| 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `███████░░░` 13 of 20, 2 partly |
+| 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `███████░░░` 13 of 19, 1 partly |
 
 *Last updated: 20 October 2026 (build `967213a`).*
 
@@ -87,12 +87,11 @@ flowchart LR
 - [ ] Firmware updates
 - [x] Control Panel
 
-### Phase 4 — road to a 1:1 Windows 11 (13 of 20, 2 partly)
+### Phase 4 — road to a 1:1 Windows 11 (13 of 19, 1 partly)
 
 - [x] Night light and desktop peek
 - [x] Touchpad gestures *(untested on a real touchpad)*
 - [x] Window open, minimize and restore animations
-- [~] Window close animation — *not yet*
 - [~] Windows 11 title bars (app icon, title on the left) — *done for most apps; apps that draw their own title bar keep theirs*
 - [x] Win+X menu, Run, Win+P, Ctrl+Alt+Del, Alt+F4 Shut Down dialog
 - [x] Lock screen, sign-in screen, fingerprint sign-in
@@ -114,7 +113,7 @@ flowchart LR
 
 ### Not planned
 
-Left out on purpose: theming of GTK 3, GTK 4 and KDE (Qt) apps, the newer Start layout, search highlights, widgets and Copilot. Parked for later: live captions, Win+H voice typing and see-through (Mica) app windows. Some things can't be copied at all because they are Microsoft's own services or files: Microsoft account, OneDrive, Phone Link, Windows Hello face sign-in, and Segoe fonts and sounds (open look-alikes are used instead).
+Left out on purpose: theming of GTK 3, GTK 4 and KDE (Qt) apps, the newer Start layout, search highlights, widgets and Copilot, and a closing animation for windows. Parked for later: live captions, Win+H voice typing and see-through (Mica) app windows. Some things can't be copied at all because they are Microsoft's own services or files: Microsoft account, OneDrive, Phone Link, Windows Hello face sign-in, and Segoe fonts and sounds (open look-alikes are used instead).
 
 ## How it fits together
 
