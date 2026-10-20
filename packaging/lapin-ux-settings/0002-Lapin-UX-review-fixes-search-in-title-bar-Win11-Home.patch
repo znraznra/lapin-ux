@@ -1,0 +1,457 @@
+From ed1b5d421a797e5213d2e4db3b60ae6820b4a2b4 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 18:15:15 +0800
+Subject: [PATCH 2/2] Lapin UX: review fixes (search in title bar, Win11 Home
+ icon, System top section, card lists, page widths)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs              |  26 +++++-
+ cosmic-settings/src/lapin/categories.rs |   3 +-
+ cosmic-settings/src/lapin/device.rs     | 110 ++++++++++++++++++++++++
+ cosmic-settings/src/lapin/mod.rs        |   8 +-
+ cosmic-settings/src/lapin/style.rs      |   9 ++
+ cosmic-settings/src/lapin/view.rs       |  92 ++++++++++++++++----
+ 6 files changed, 226 insertions(+), 22 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/device.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index 105d160..42dda3a 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -240,6 +240,8 @@ impl cosmic::Application for SettingsApp {
+         let lapin = crate::lapin::enabled();
+         if lapin {
+             app.lapin.layout = crate::lapin::arrange(&mut app.pages);
++            // Windows draws each setting as its own card.
++            cosmic::lapin::set_card_lists(true);
+         }
+ 
+         let active_id = match flags.sub_command {
+@@ -265,6 +267,13 @@ impl cosmic::Application for SettingsApp {
+         (!crate::lapin::enabled()).then_some(&self.nav_model)
+     }
+ 
++    fn header_center(&self) -> Vec<Element<'_, Self::Message>> {
++        if crate::lapin::enabled() {
++            return crate::lapin::header_center(&self.search_input);
++        }
++        Vec::new()
++    }
++
+     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+         if crate::lapin::enabled() {
+             return crate::lapin::header_start(&self.lapin);
+@@ -1121,7 +1130,7 @@ impl SettingsApp {
+             if let Some(element) = page.header_view() {
+                 head = head.push(element.map(Message::from));
+             }
+-            head.into()
++            cosmic::widget::container(head).padding([8, 0, 0, 0]).into()
+         } else if let Some(parent) = page_info.parent {
+             let page_header = crate::widget::sub_page_header(
+                 page.title().unwrap_or(page_info.title.as_str()),
+@@ -1270,7 +1279,7 @@ impl SettingsApp {
+                 let section = (section.view_fn)(&self.pages, model.as_ref(), section)
+                     .map(Message::PageMessage)
+                     .apply(container)
+-                    .padding([0, 0, 0, cosmic::theme::active().cosmic().space_l()]);
++                    .padding([0, 0, 0, if crate::lapin::enabled() { 0 } else { cosmic::theme::active().cosmic().space_l() }]);
+ 
+                 sections.push(section.into());
+             }
+@@ -1291,7 +1300,7 @@ impl SettingsApp {
+         } else if page == layout.home {
+             crate::lapin::home_view(&self.pages, layout)
+         } else if layout.categories.contains(&page) {
+-            crate::lapin::category_view(&self.pages, page)
++            crate::lapin::category_view(&self.pages, &self.lapin, page)
+         } else if let Some(content) = self.pages.content(page) {
+             self.page_view(content)
+         } else if let Some(sub_pages) = self.pages.sub_pages(page) {
+@@ -1300,7 +1309,7 @@ impl SettingsApp {
+             self.page_container(cosmic::widget::space())
+         };
+         row::with_capacity(2)
+-            .push(crate::lapin::sidebar(&self.pages, &self.lapin, page, &self.search_input))
++            .push(crate::lapin::sidebar(&self.pages, &self.lapin, page))
+             .push(body)
+             .height(Length::Fill)
+             .into()
+@@ -1351,6 +1360,15 @@ impl SettingsApp {
+         // prevents content from touching window edge on bottom of scroll
+         let bottom_spacer = theme.cosmic().space_m();
+ 
++        if crate::lapin::enabled() {
++            // Same width and left edge as Lapin's category pages.
++            return container(content.into())
++                .max_width(crate::lapin::CONTENT_MAX)
++                .width(Length::Fill)
++                .padding([0, 40, bottom_spacer, 24])
++                .into();
++        }
++
+         container(content.into())
+             .max_width(800)
+             .width(Length::Fill)
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 80611c0..650b591 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -157,6 +157,7 @@ const SPECS: &[Spec] = &[
+ ];
+ 
+ pub const HOME_ID: &str = "lapin-home";
++pub const SYSTEM_ID: &str = "lapin-system";
+ pub const PRIVACY_ID: &str = "lapin-privacy";
+ pub const UPDATE_ID: &str = "lapin-update";
+ 
+@@ -205,7 +206,7 @@ pub fn arrange(pages: &mut Binder<Message>) -> Layout {
+     let home = pages.register_page(Category {
+         id: HOME_ID,
+         title: "Home",
+-        icon: "go-home-symbolic",
++        icon: "home",
+         description: "Recommended settings",
+     });
+     let mut layout = Layout { home, categories: Vec::with_capacity(SPECS.len()), redirects: Vec::new() };
+diff --git a/cosmic-settings/src/lapin/device.rs b/cosmic-settings/src/lapin/device.rs
+new file mode 100644
+index 0000000..6a36f15
+--- /dev/null
++++ b/cosmic-settings/src/lapin/device.rs
+@@ -0,0 +1,110 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! What the top of Windows' System page shows: the wallpaper in a small
++//! screen, this PC's name and model, and when updates were last checked.
++
++use std::path::PathBuf;
++use std::time::{Duration, SystemTime};
++
++#[derive(Debug, Default, Clone)]
++pub struct Device {
++    /// The computer's name (hostname).
++    pub name: String,
++    /// "Lenovo ThinkPad X1 Carbon Gen 11", when the firmware says.
++    pub model: Option<String>,
++    pub wallpaper: Option<PathBuf>,
++    /// When Lapin UX's Update last looked for updates.
++    pub last_check: Option<SystemTime>,
++}
++
++fn read_trim(path: &str) -> Option<String> {
++    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
++}
++
++/// Firmware placeholders that aren't a real model name.
++fn real(s: &str) -> bool {
++    let l = s.to_ascii_lowercase();
++    !["to be filled", "system product name", "default string", "not specified", "o.e.m.", "none"]
++        .iter()
++        .any(|bad| l.contains(bad))
++}
++
++fn model() -> Option<String> {
++    let vendor = read_trim("/sys/class/dmi/id/sys_vendor").filter(|v| real(v));
++    // Lenovo keeps the marketing name in product_version.
++    let product = read_trim("/sys/class/dmi/id/product_version")
++        .filter(|p| vendor.as_deref().is_some_and(|v| v.eq_ignore_ascii_case("LENOVO")) && real(p))
++        .or_else(|| read_trim("/sys/class/dmi/id/product_name").filter(|p| real(p)))?;
++    Some(match vendor {
++        Some(v) if !product.to_lowercase().starts_with(&v.to_lowercase()) => format!("{v} {product}"),
++        _ => product,
++    })
++}
++
++/// The wallpaper COSMIC's background service shows (all screens).
++fn wallpaper() -> Option<PathBuf> {
++    let file = dirs::config_dir()?.join("cosmic/com.system76.CosmicBackground/v1/all");
++    let text = std::fs::read_to_string(file).ok()?;
++    let start = text.find("Path(\"")? + 6;
++    let end = text[start..].find('"')? + start;
++    let path = PathBuf::from(&text[start..end]);
++    path.is_file().then_some(path)
++}
++
++/// Where Lapin UX's Update writes the time of its last check (seconds since
++/// 1970, one number). Shared with crates/lapin-ux-update.
++pub fn last_check_file() -> Option<PathBuf> {
++    Some(dirs::state_dir()?.join("lapin-ux/update-last-check"))
++}
++
++fn last_check() -> Option<SystemTime> {
++    let secs: u64 = std::fs::read_to_string(last_check_file()?).ok()?.trim().parse().ok()?;
++    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
++}
++
++impl Device {
++    pub fn read() -> Self {
++        Device {
++            name: read_trim("/proc/sys/kernel/hostname").or_else(|| read_trim("/etc/hostname")).unwrap_or_else(|| "This PC".into()),
++            model: model(),
++            wallpaper: wallpaper(),
++            last_check: last_check(),
++        }
++    }
++}
++
++/// "Last checked: 3 hours ago", as on Windows.
++pub fn last_checked_text(when: Option<SystemTime>, now: SystemTime) -> String {
++    let Some(when) = when else { return "Not checked yet".into() };
++    let secs = now.duration_since(when).map(|d| d.as_secs()).unwrap_or(0);
++    let ago = |n: u64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
++    let text = match secs {
++        0..60 => "just now".to_string(),
++        60..3600 => ago(secs / 60, "minute"),
++        3600..86400 => ago(secs / 3600, "hour"),
++        _ => ago(secs / 86400, "day"),
++    };
++    format!("Last checked: {text}")
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn checked_text() {
++        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
++        let at = |s: u64| Some(now - Duration::from_secs(s));
++        assert_eq!(last_checked_text(None, now), "Not checked yet");
++        assert_eq!(last_checked_text(at(5), now), "Last checked: just now");
++        assert_eq!(last_checked_text(at(60), now), "Last checked: 1 minute ago");
++        assert_eq!(last_checked_text(at(3 * 3600 + 5), now), "Last checked: 3 hours ago");
++        assert_eq!(last_checked_text(at(2 * 86400), now), "Last checked: 2 days ago");
++    }
++
++    #[test]
++    fn placeholders() {
++        assert!(!real("To Be Filled By O.E.M."));
++        assert!(!real("System Product Name"));
++        assert!(real("ThinkPad X1 Carbon Gen 11"));
++    }
++}
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index b348036..84a3805 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -9,11 +9,12 @@
+ //! session (or with `LAPIN_UX_SETTINGS=1`); under COSMIC the app is stock.
+ 
+ mod categories;
++pub mod device;
+ mod style;
+ mod view;
+ 
+ pub use categories::{Layout, arrange};
+-pub use view::{breadcrumb, category_view, header_start, home_view, sidebar};
++pub use view::{CONTENT_MAX, breadcrumb, category_view, header_center, header_start, home_view, sidebar};
+ 
+ use std::sync::OnceLock;
+ 
+@@ -53,11 +54,16 @@ pub struct State {
+     pub account: view::Account,
+     /// Set by Back so the page it opens isn't added to the history.
+     pub going_back: bool,
++    /// The top of the System page; re-read whenever System opens.
++    pub device: device::Device,
+ }
+ 
+ impl State {
+     /// Remember the page being left, for Back. Going back doesn't add to it.
+     pub fn visit(&mut self, from: cosmic_settings_page::Entity, to: cosmic_settings_page::Entity) {
++        if self.layout.categories.first() == Some(&to) {
++            self.device = device::Device::read();
++        }
+         if std::mem::take(&mut self.going_back) || from == to || from == cosmic_settings_page::Entity::default() {
+             return;
+         }
+diff --git a/cosmic-settings/src/lapin/style.rs b/cosmic-settings/src/lapin/style.rs
+index b55bafe..a320651 100644
+--- a/cosmic-settings/src/lapin/style.rs
++++ b/cosmic-settings/src/lapin/style.rs
+@@ -114,3 +114,12 @@ pub fn avatar_bg() -> theme::Container<'static> {
+         ..Default::default()
+     })
+ }
++
++/// The small "screen" around the wallpaper on the System page.
++pub fn screen() -> theme::Container<'static> {
++    theme::Container::custom(|t| widget::container::Style {
++        background: Some(Color::from_rgb(0.08, 0.08, 0.09).into()),
++        border: Border { radius: 6.0.into(), width: 1.0, color: t.cosmic().bg_divider().into() },
++        ..Default::default()
++    })
++}
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index 04cd0cd..6da747a 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -10,12 +10,12 @@ use cosmic::widget::{self, button, column, container, icon, row, text};
+ use cosmic::{Apply, Element};
+ use cosmic_settings_page::{Binder, Entity};
+ 
+-use super::categories::{Layout, PRIVACY_ID, UPDATE_ID};
++use super::categories::{Layout, PRIVACY_ID, SYSTEM_ID, UPDATE_ID};
+ use super::{Msg, State, style};
+ use crate::app::Message;
+ 
+ pub const SIDEBAR_WIDTH: f32 = 280.0;
+-const CONTENT_MAX: f32 = 1000.0;
++pub const CONTENT_MAX: f32 = 1000.0;
+ 
+ /// The signed-in person, for the top of the sidebar.
+ pub struct Account {
+@@ -101,7 +101,7 @@ fn avatar(account: &Account, size: f32) -> Element<'static, Message> {
+ 
+ /// Windows 11's Settings sidebar: the account at the top, "Find a setting",
+ /// then Home and the categories with their colour icons.
+-pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, active: Entity, query: &'a str) -> Element<'a, Message> {
++pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, active: Entity) -> Element<'a, Message> {
+     let open = state.layout.top_of(pages, active);
+     let account = row::with_capacity(2)
+         .spacing(16)
+@@ -113,12 +113,6 @@ pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, a
+                 .push(text::heading(state.account.name.clone()))
+                 .push(text::caption("Local Account").class(style::quiet())),
+         );
+-    let mut search = widget::search_input("Find a setting", query)
+-        .on_input(|s| Message::Lapin(Msg::Search(s)))
+-        .width(Length::Fill);
+-    if !query.is_empty() {
+-        search = search.on_clear(Message::Lapin(Msg::Search(String::new())));
+-    }
+ 
+     let mut items = column::with_capacity(state.layout.categories.len() + 1).spacing(4);
+     for &page in std::iter::once(&state.layout.home).chain(state.layout.categories.iter()) {
+@@ -142,15 +136,25 @@ pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, a
+         );
+     }
+ 
+-    column::with_capacity(3)
++    column::with_capacity(2)
+         .push(container(account).padding([4, 4, 20, 4]))
+-        .push(container(search).padding([0, 0, 12, 0]))
+         .push(widget::scrollable(items).height(Length::Fill))
+         .width(Length::Fixed(SIDEBAR_WIDTH))
+         .padding([8, 12, 12, 16])
+         .into()
+ }
+ 
++/// "Find a setting", in the middle of the title bar.
++pub fn header_center(query: &str) -> Vec<Element<'_, Message>> {
++    let mut search = widget::search_input("Find a setting", query)
++        .on_input(|s| Message::Lapin(Msg::Search(s)))
++        .width(Length::Fixed(400.0));
++    if !query.is_empty() {
++        search = search.on_clear(Message::Lapin(Msg::Search(String::new())));
++    }
++    vec![search.into()]
++}
++
+ /// Title bar: Windows' back arrow and "Settings" at the left.
+ pub fn header_start(state: &State) -> Vec<Element<'_, Message>> {
+     let back = button::custom(icon::from_name("go-previous-symbolic").size(16))
+@@ -224,7 +228,7 @@ fn page_frame<'a>(head: Element<'a, Message>, body: Element<'a, Message>) -> Ele
+ }
+ 
+ /// A category: its pages as rows, as on Windows' System page.
+-pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity) -> Element<'a, Message> {
++pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, page: Entity) -> Element<'a, Message> {
+     let info = &pages.info[page];
+     let body: Element<'a, Message> = if info.id == UPDATE_ID {
+         let card = row::with_capacity(3)
+@@ -253,7 +257,10 @@ pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity)
+         .into()
+     } else {
+         let kids = pages.sub_pages(page).unwrap_or_default();
+-        let mut list = column::with_capacity(kids.len()).spacing(4);
++        let mut list = column::with_capacity(kids.len() + 1).spacing(4);
++        if info.id == SYSTEM_ID {
++            list = list.push(system_top(pages, state));
++        }
+         for &k in kids {
+             let ki = &pages.info[k];
+             list = list.push(page_row(&ki.icon_name, ki.title.as_str(), ki.description.as_str(), Message::Page(k)));
+@@ -263,21 +270,74 @@ pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity)
+     page_frame(breadcrumb(pages, page, None), body)
+ }
+ 
++/// The top of Windows' System page: the wallpaper in a small screen, the
++/// PC's name, model and Rename; at the far right, Update and when it last
++/// checked. Rename opens About (where the name is changed) and Update opens
++/// the Update page.
++fn system_top<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State) -> Element<'a, Message> {
++    let d = &state.device;
++    let find = |id: &str| pages.find_page_by_id(id).map(|(e, _)| e);
++    let screen: Element<'a, Message> = match &d.wallpaper {
++        Some(p) => widget::image(widget::image::Handle::from_path(p))
++            .content_fit(cosmic::iced::ContentFit::Cover)
++            .width(Length::Fixed(152.0))
++            .height(Length::Fixed(95.0))
++            .border_radius(4.0)
++            .into(),
++        None => widget::Space::new().width(152).height(95).into(),
++    };
++    let screen = container(screen).padding(3).class(style::screen());
++    let mut who = column::with_capacity(3).spacing(2).push(text::title4(d.name.clone()));
++    if let Some(m) = &d.model {
++        who = who.push(text::body(m.clone()).class(style::quiet()));
++    }
++    who = who.push(
++        button::link("Rename")
++            .padding(0)
++            .on_press_maybe(find("about").map(Message::Page)),
++    );
++    let update = button::custom(
++        row::with_capacity(2)
++            .spacing(12)
++            .align_y(Alignment::Center)
++            .push(icon(colour_icon("system-software-update")).size(28))
++            .push(
++                column::with_capacity(2)
++                    .spacing(2)
++                    .push(text::heading("Update"))
++                    .push(text::caption(super::device::last_checked_text(d.last_check, std::time::SystemTime::now())).class(style::quiet())),
++            ),
++    )
++    .padding([8, 12])
++    .class(style::nav_item(false))
++    .on_press_maybe(find(UPDATE_ID).map(Message::Page));
++    row::with_capacity(3)
++        .spacing(20)
++        .align_y(Alignment::Center)
++        .push(screen)
++        .push(who.width(Length::Fill))
++        .push(update)
++        .apply(container)
++        .padding([0, 0, 20, 0])
++        .into()
++}
++
+ /// Home: a few cards of the settings people change most, as on Windows.
+ pub fn home_view<'a>(pages: &'a Binder<crate::pages::Message>, layout: &'a Layout) -> Element<'a, Message> {
+     let find = |id: &str| pages.find_page_by_id(id).map(|(e, _)| e);
++    // A heading over its rows; only the rows have a background.
+     let card = |title: &'static str, ids: &[&str]| -> Element<'a, Message> {
+-        let mut c = column::with_capacity(ids.len() + 1).spacing(4).push(text::heading(title).apply(container).padding([0, 0, 8, 0]));
++        let mut c = column::with_capacity(ids.len() + 1).spacing(4).push(text::heading(title).apply(container).padding([0, 0, 4, 0]));
+         for id in ids {
+             if let Some(e) = find(id) {
+                 let i = &pages.info[e];
+                 c = c.push(page_row(&i.icon_name, i.title.as_str(), i.description.as_str(), Message::Page(e)));
+             }
+         }
+-        container(c).padding(16).width(Length::Fill).class(style::card()).into()
++        c.into()
+     };
+     let body = column::with_capacity(3)
+-        .spacing(16)
++        .spacing(28)
+         .push(card("Recommended settings", &["display", "sound", "wifi", "bluetooth"]))
+         .push(card("Personalize your device", &["wallpaper", "appearance"]))
+         .push(card("Your account", &["users"]));
+-- 
+2.43.0
+

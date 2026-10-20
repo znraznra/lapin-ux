@@ -55,6 +55,26 @@ pub fn parse_fwupd(json: &str) -> Vec<Update> {
         .collect()
 }
 
+/// Where the time of the last update check is kept (seconds since 1970, one
+/// number), for Settings' System page ("Last checked: 3 hours ago").
+pub fn last_check_file() -> Option<std::path::PathBuf> {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))?;
+    Some(state.join("lapin-ux/update-last-check"))
+}
+
+/// Notes that updates were just checked.
+pub fn record_check() {
+    let Some(file) = last_check_file() else { return };
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(file, secs.to_string());
+}
+
 /// Updates that only take effect after a restart.
 pub fn needs_restart(updates: &[Update]) -> bool {
     const CORE: &[&str] = &["linux", "linux-lts", "linux-zen", "linux-hardened", "systemd", "glibc", "mesa", "nvidia", "amd-ucode", "intel-ucode", "lapin-ux-comp", "cosmic-comp"];

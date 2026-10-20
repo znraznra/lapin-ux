@@ -1,0 +1,115 @@
+From a94e249c1ea1dfae59485ee300c1f08f009ced75 Mon Sep 17 00:00:00 2001
+From: Lapin UX <lapin@localhost>
+Date: Tue, 20 Oct 2026 17:34:16 +0800
+Subject: [PATCH 2/2] Lapin UX: settings lists as separate cards (opt-in)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/lapin.rs                   | 13 ++++++++
+ src/widget/list/list_column.rs | 57 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 70 insertions(+)
+
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 1c47e88..18641ea 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -7,6 +7,7 @@
+ //! session, so the same build looks stock under COSMIC.
+ 
+ use std::sync::OnceLock;
++use std::sync::atomic::{AtomicBool, Ordering};
+ 
+ use crate::{Element, iced, widget};
+ 
+@@ -40,3 +41,15 @@ pub fn title<'a, M: 'static>(title: std::borrow::Cow<'a, str>) -> Element<'a, M>
+     )
+     .into()
+ }
++
++static CARD_LISTS: AtomicBool = AtomicBool::new(false);
++
++/// Draw list columns (settings sections) as separate cards, as Windows 11
++/// Settings does. Off unless an app turns it on (Lapin Settings does).
++pub fn set_card_lists(on: bool) {
++    CARD_LISTS.store(on, Ordering::Relaxed);
++}
++
++pub fn card_lists() -> bool {
++    CARD_LISTS.load(Ordering::Relaxed)
++}
+diff --git a/src/widget/list/list_column.rs b/src/widget/list/list_column.rs
+index 9818be6..6eba59b 100644
+--- a/src/widget/list/list_column.rs
++++ b/src/widget/list/list_column.rs
+@@ -166,6 +166,9 @@ impl<'a, Message: Clone + 'static> ListColumn<'a, Message> {
+ 
+     #[must_use]
+     pub fn into_element(self) -> Element<'a, Message> {
++        if crate::lapin::card_lists() {
++            return self.lapin_cards();
++        }
+         let count = self.children.len();
+         let last_index = count.saturating_sub(1);
+         let radius_s = theme::active().cosmic().radius_s();
+@@ -248,3 +251,57 @@ fn get_radius(radius: [f32; 4], first: bool, last: bool) -> [f32; 4] {
+         (false, false) => [0.0, 0.0, 0.0, 0.0],
+     }
+ }
++
++// Lapin UX: Windows 11 draws every setting as its own card, a few pixels
++// apart, instead of one box split by dividers. Only apps that ask for it
++// (`crate::lapin::set_card_lists`) get this.
++impl<'a, Message: Clone + 'static> ListColumn<'a, Message> {
++    fn lapin_cards(self) -> Element<'a, Message> {
++        let radius = theme::active().cosmic().radius_s();
++        let mut col = column::with_capacity(self.children.len()).spacing(4);
++        // Windows' setting cards are at least 68 px tall with 16 px sides.
++        let content_row = |content| {
++            row![
++                container(content).width(Length::Fill),
++                container(row![]).height(44)
++            ]
++            .align_y(iced::Alignment::Center)
++        };
++        for ListEntry { item, .. } in self.children {
++            col = match item {
++                ListItem::Element(content) => col.push(
++                    content_row(content)
++                        .padding([12, 16])
++                        .width(Length::Fill)
++                        .apply(container)
++                        .class(theme::Container::List),
++                ),
++                ListItem::Button(ListButton {
++                    content,
++                    on_press,
++                    selected,
++                    dnd_source_builder,
++                    dnd_destination_builder,
++                }) => {
++                    let mut button: Element<'a, Message> = content_row(content)
++                        .apply(button::custom)
++                        .padding([12, 16])
++                        .width(Length::Fill)
++                        .on_press_maybe(on_press)
++                        .selected(selected)
++                        .class(theme::Button::ListItem(radius))
++                        .into();
++                    if let Some(builder) = dnd_source_builder {
++                        button = builder(button).into();
++                    }
++                    if let Some(builder) = dnd_destination_builder {
++                        button = builder(button).into();
++                    }
++                    // The card's background under the (see-through) button.
++                    col.push(container(button).class(theme::Container::List))
++                }
++            };
++        }
++        col.width(Length::Fill).into()
++    }
++}
+-- 
+2.43.0
+

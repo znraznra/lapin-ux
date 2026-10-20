@@ -77,6 +77,9 @@ async fn check() -> (Vec<Update>, Option<String>) {
     {
         list.extend(updates::parse_fwupd(&String::from_utf8_lossy(&o.stdout)));
     }
+    if problem.is_none() {
+        updates::record_check();
+    }
     (list, problem)
 }
 

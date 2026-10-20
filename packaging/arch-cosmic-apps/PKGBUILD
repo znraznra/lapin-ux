@@ -45,7 +45,7 @@ _patch_libcosmic() {
     for dir in "$CARGO_HOME"/git/checkouts/libcosmic-*/*/; do
         [ -f "$dir/src/widget/header_bar.rs" ] || continue
         if [ -f "$dir/src/lapin.rs" ]; then patched=1; continue; fi
-        git -C "$dir" apply "$_src"/packaging/lapin-ux-libcosmic/*.patch
+        for p in "$_src"/packaging/lapin-ux-libcosmic/*.patch; do git -C "$dir" apply "$p"; done
         patched=1
     done
     [ "$patched" = 1 ] || { echo "libcosmic not found for $1" >&2; return 1; }
