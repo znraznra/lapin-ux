@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-portal')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-settings' 'lapin-ux-portal')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -38,6 +38,9 @@ _osk_commit=3a4800a10b03efac1684817238922db5d6746403
 # Volume/brightness pop-ups and the admin prompt: cosmic-osd at its stable
 # release tag (epoch-1.10.0) plus our patch.
 _osd_commit=9b14ee017fb8fdb7d03d73da597cf17b89d890f7
+# Settings: COSMIC Settings at its stable release (epoch-1.10.0) with Lapin's
+# Windows 11 layout (packaging/lapin-ux-settings) and title bar.
+_settings_commit=58aeb65244b8830880e8b6ced89dcd25663f20b1
 # File dialogs: COSMIC's portal built against COSMIC Files plus our patch.
 _portal_commit=9d35e6300b69cf06da723a502a9a56604a022786
 _files_commit=f7679791f4fbf82ba7c9a01cf3f8ae0e21265975
@@ -45,9 +48,10 @@ source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_co
         "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}"
         "cosmic-osk::git+https://github.com/pop-os/cosmic-osk.git#commit=${_osk_commit}"
         "cosmic-osd::git+https://github.com/pop-os/cosmic-osd.git#commit=${_osd_commit}"
+        "cosmic-settings::git+https://github.com/pop-os/cosmic-settings.git#commit=${_settings_commit}"
         "xdg-desktop-portal-cosmic::git+https://github.com/pop-os/xdg-desktop-portal-cosmic.git#commit=${_portal_commit}"
         "cosmic-files::git+https://github.com/pop-os/cosmic-files.git#commit=${_files_commit}")
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 options=('!lto')
 
 _src="$startdir/../.."
@@ -83,6 +87,18 @@ prepare() {
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
 
+    # Settings builds with its own cargo home so Lapin's libcosmic patch (title
+    # bar) applies to its private libcosmic copy; the lockfile stays as is.
+    cd "$srcdir/cosmic-settings"
+    git reset -q --hard
+    local p
+    for p in "$_src"/packaging/lapin-ux-settings/*.patch; do
+        [ -e "$p" ] && git apply "$p"
+    done
+    rm -f rust-toolchain rust-toolchain.toml
+    CARGO_HOME="$srcdir/cargo-settings" cargo fetch --locked --target "$host"
+    _patch_libcosmic "$srcdir/cargo-settings"
+
     cd "$srcdir/cosmic-files"
     git reset -q --hard
     git apply "$_src"/packaging/lapin-ux-portal/*.patch
@@ -92,6 +108,17 @@ prepare() {
     rm -f rust-toolchain rust-toolchain.toml
     # Use the patched COSMIC Files for the file dialogs.
     cargo fetch --config "$_files_patch" --target "$host"
+}
+
+# Applies Lapin's libcosmic patch to every libcosmic copy in a cargo home.
+_patch_libcosmic() {
+    local dir patched=0
+    for dir in "$1"/git/checkouts/libcosmic-*/*/; do
+        [ -f "$dir/src/widget/header_bar.rs" ] || continue
+        [ -f "$dir/src/lapin.rs" ] || git -C "$dir" apply "$_src"/packaging/lapin-ux-libcosmic/*.patch
+        patched=1
+    done
+    [ "$patched" = 1 ] || { echo "libcosmic not found in $1" >&2; return 1; }
 }
 
 _files_patch='patch."https://github.com/pop-os/cosmic-files".cosmic-files.path="../cosmic-files"'
@@ -114,6 +141,9 @@ build() {
     cd "$srcdir/cosmic-osd"
     just build-release --frozen
 
+    cd "$srcdir/cosmic-settings"
+    CARGO_HOME="$srcdir/cargo-settings" just build-release --frozen
+
     cd "$srcdir/xdg-desktop-portal-cosmic"
     cargo build --release --offline --config "$_files_patch"
 }
@@ -131,7 +161,6 @@ package_lapin-ux-desktop-git() {
         # Reused, unbranded COSMIC services
         'cosmic-comp'              # fallback compositor
         'cosmic-settings-daemon'
-        'cosmic-settings'          # settings app (until Lapin UX has its own)
         'cosmic-bg'
         'cosmic-osd'
         'cosmic-idle'
@@ -262,6 +291,23 @@ package_lapin-ux-osd() {
     cd "$srcdir/cosmic-osd"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-ux-settings() {
+    pkgdesc="Settings for Lapin UX: COSMIC Settings with Windows 11's layout"
+    url="https://github.com/pop-os/cosmic-settings"
+    license=('GPL-3.0-only')
+    # Same as Arch's cosmic-settings 1:1.10.0-1.
+    depends=('accountsservice' 'adw-gtk-theme' 'cosmic-icon-theme' 'cosmic-randr'
+             'fontconfig' 'glibc' 'iso-codes' 'libgcc' 'libinput' 'libpipewire'
+             'libpulse' 'libxkbcommon' 'networkmanager' 'nm-connection-editor'
+             'pipewire-pulse' 'systemd-libs' 'ttf-opensans' 'wayland')
+    optdepends=('power-profiles-daemon: power modes')
+    provides=('cosmic-settings')
+    conflicts=('cosmic-settings')
+    cd "$srcdir/cosmic-settings"
+    CARGO_HOME="$srcdir/cargo-settings" just rootdir="$pkgdir" install
+    install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }
 
 package_lapin-ux-portal() {
