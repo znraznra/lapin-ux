@@ -214,7 +214,7 @@ restore_settings() {
     # Default X pointer.
     local ptr="$DATA/icons/default/index.theme"
     if [ -f "$ptr" ] && grep -q "Inherits=$CURSOR" "$ptr"; then
-        if have_snap && [ -f "$SNAP/default-pointer" ]; then say "  Default pointer: back to yours"; run cp -a "$SNAP/default-pointer" "$ptr"
+        if have_snap && [ -f "$SNAP/default-pointer" ] && ! grep -q "Inherits=$CURSOR" "$SNAP/default-pointer"; then say "  Default pointer: back to yours"; run cp -a "$SNAP/default-pointer" "$ptr"
         else say "  Default pointer: back to the system's"; run rm -f "$ptr"; run rmdir --ignore-fail-on-non-empty "$DATA/icons/default"; fi
         changed=1
     fi
