@@ -452,7 +452,7 @@ impl Shell {
             query: String::new(),
             page: StartPage::Home,
             selected: None,
-            recent_files: lapin_ux_core::recent::load(6),
+            recent_files: if self.config.no_recent_items { Vec::new() } else { lapin_ux_core::recent::load(6) },
             folder: None,
             pin_drag: None,
             content: None,
@@ -700,6 +700,9 @@ impl Shell {
     /// Files this app opened recently (newest first), for its taskbar menu.
     fn jump_list(&self, app: &str) -> Vec<RecentFile> {
         let Some(data) = self.catalog.data_for(app) else { return Vec::new() };
+        if self.config.no_recent_items {
+            return Vec::new();
+        }
         let all = lapin_ux_core::recent::load(300);
         lapin_ux_core::recent::jump_list(&all, &data.name, data.exec.as_deref(), 8).into_iter().cloned().collect()
     }
@@ -936,6 +939,8 @@ impl Application for Shell {
                 "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
                 "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
+                // Settings > Clipboard > Clear clipboard data (pinned items stay).
+                "clipboard-clear" => self.update(Message::Clip(crate::clipboard::ClipMsg::ClearAll)),
                 "emoji" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Emoji))),
                 "notifications" => self.update(Message::ToggleNotifications),
                 "close" => self.update(Message::System(crate::system_ui::SystemMsg::AltF4)),

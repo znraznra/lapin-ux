@@ -71,7 +71,7 @@ prepare() {
 
     cd "$srcdir/cosmic-greeter"
     git reset -q --hard
-    git apply "$_src"/packaging/lapin-ux-greeter/*.patch
+    for p in "$_src"/packaging/lapin-ux-greeter/*.patch; do git apply "$p"; done
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
 
@@ -185,7 +185,7 @@ package_lapin-ux-desktop-git() {
         'upower'                   # battery
         'wireplumber'              # volume (wpctl)
         'pipewire-audio'           # system sounds (pw-play)
-        'pacman-contrib'           # checkupdates, for Update
+        'pacman-contrib'           # checkupdates and paccache, for Update and Storage
         'wl-clipboard'             # snips go on the clipboard (wl-copy)
         'iio-sensor-proxy'         # auto-rotate on tablets and convertibles
         'python-pillow'            # lapin-ux-cursors (optional pointer pack)
@@ -196,7 +196,7 @@ package_lapin-ux-desktop-git() {
         'localsearch'              # search inside documents from Start
         'gnome-keyring'            # saved passwords and SSH keys
     )
-    optdepends=('fprintd: fingerprint sign-in (enrol with fprintd-enroll; the sign-in panel shows its prompts)')
+    optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install

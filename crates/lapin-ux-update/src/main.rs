@@ -383,5 +383,21 @@ fn main() -> cosmic::iced::Result {
         rt.block_on(check_and_notify());
         return Ok(());
     }
+    // Update lives inside Settings now (Settings > Update), as on Windows.
+    // This window stays for systems without Lapin's Settings.
+    if std::env::var_os("LAPIN_UX_UPDATE_WINDOW").is_none() && open_in_settings() {
+        return Ok(());
+    }
     cosmic::app::run::<App>(Settings::default().size(Size::new(860.0, 640.0)), ())
+}
+
+/// Opens Settings > Update, if the installed Settings is Lapin's.
+fn open_in_settings() -> bool {
+    let lapin_settings = std::process::Command::new("cosmic-settings")
+        .args(["help", "lapin"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    lapin_settings && std::process::Command::new("cosmic-settings").args(["lapin", "lapin-update"]).spawn().is_ok()
 }

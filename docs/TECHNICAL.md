@@ -169,7 +169,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
 **Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.10.0 with
-patches in `packaging/lapin-ux-settings`; in progress, stages 0–3 of 5 done)
+patches in `packaging/lapin-ux-settings`; in progress, stages 0–4 of 5 built)
 - Windows 11 layout: account card and colour category icons in the sidebar
   (Home, System, Bluetooth & devices, Network & internet, Personalization,
   Apps, Accounts, Time & language, Accessibility, Privacy & security,
@@ -193,6 +193,23 @@ patches in `packaging/lapin-ux-settings`; in progress, stages 0–3 of 5 done)
   D-Bus property). Panel and Dock are hidden; COSMIC-only pages (Window
   management, Workspaces, X11 compatibility) sit under an "Advanced"
   heading. Notifications lists apps the service has seen (`seen_apps`).
+- Pages COSMIC doesn't have (stage 4): Apps > Installed apps (`lapin/apps.rs`:
+  launchers + `pacman -Qo`/`-Qi` and `flatpak list` for version, size, date;
+  Uninstall via `pkexec pacman -Rs` or `flatpak uninstall`, desktop packages
+  protected), System > Storage (`lapin/storage.rs`: `df` + `du` per
+  category; Temporary files removes Recycle Bin, thumbnails, app caches,
+  Downloads, and old packages with `pkexec paccache -rk0`), System >
+  Clipboard (shell keys `no_clipboard_history`, action `clipboard-clear`),
+  Personalization > Lock screen (`lock_wallpaper`, `no_signin_picture`, read
+  by the greeter patch 0002), Accounts > Sign-in options (`lapin/signin.rs`:
+  fprintd enrolment/removal, password + hint through AccountsService),
+  Privacy & security (`lapin/privacy.rs`: device encryption from lsblk;
+  Recent activity; per-app Location/Camera/Microphone/Screenshot/Background
+  switches in the portal permission store), and Update (`lapin/update.rs`,
+  same checks/installs as lapin-ux-update, plus Update history from
+  pacman.log). `lapin-ux-update` without arguments now opens
+  `cosmic-settings lapin lapin-update` (`LAPIN_UX_UPDATE_WINDOW=1` keeps its
+  own window); any Lapin page opens with `cosmic-settings lapin <page-id>`.
 - All Lapin code is in `cosmic-settings/src/lapin/`; COSMIC's files get small
   hooks. The look inside pages comes from opt-in libcosmic patches
   (`packaging/lapin-ux-libcosmic` 0002–0007), turned on only by Lapin

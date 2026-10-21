@@ -1,7 +1,7 @@
 From 36a620ceaaee08ff5bcd8673fda72380eb4c3e08 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 12:40:58 +0800
-Subject: [PATCH 6/6] Lapin UX: Windows page layout (stage 3)
+Subject: [PATCH 6/7] Lapin UX: Windows page layout (stage 3)
 
 Taskbar, Start, Night light, Notifications and Multitasking pages backed by
 Lapin's shell and notification settings; Panel and Dock hidden; COSMIC-only

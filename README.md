@@ -6,7 +6,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings-in-progress) is being built in stages (3 of 5 done); File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
+> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings-in-progress) is being built in stages (3 of 5 done, stage 4 in review); File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
 >
 > Lapin UX copies how Windows 11 *behaves and looks*, not Microsoft's files. It ships no Microsoft logos, Windows artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#license)). It is an independent project, not affiliated with or endorsed by Microsoft.
 
@@ -52,13 +52,15 @@ A new Settings app in Windows 11's layout, built from COSMIC Settings so every s
 | ![Power and battery settings](docs/tour/settings-power.webp) **Power & battery** — Windows' Power mode drop-down. | ![Colors settings](docs/tour/settings-colors.webp) **Colors** — light or dark, accent colour and more. |
 | ![Taskbar settings](docs/tour/settings-taskbar.webp) **Taskbar** — Windows' taskbar settings, applied the moment you flip them. | ![Notifications settings](docs/tour/settings-notifications.webp) **Notifications** — Do not disturb, its schedule, and a switch for each app. |
 | ![Night light settings](docs/tour/settings-night-light.webp) **Night light** — warmer colours at night, with strength and a schedule. | ![Multitasking settings](docs/tour/settings-multitasking.webp) **Multitasking** — Snap windows, with COSMIC's extra options under Advanced. |
+| ![Installed apps](docs/tour/settings-installed-apps.webp) **Installed apps** — every app with its size and date; uninstall from the … menu. | ![Storage settings](docs/tour/settings-storage.webp) **Storage** — what's using your disk, and Temporary files to clean up. |
+| ![Update in Settings](docs/tour/settings-update.webp) **Update** — system, app and firmware updates, now inside Settings like Windows Update. | ![Privacy and security](docs/tour/settings-privacy.webp) **Privacy & security** — which apps may use your camera, microphone, location and more. |
 | ![About settings](docs/tour/settings-about.webp) **About** — device and system specifications with Copy, just like Windows. | ![Find a setting](docs/tour/settings-search.webp) **Find a setting** — search every page from the title bar. |
 
 - [x] **Stage 0 — groundwork:** COSMIC Settings set up as Lapin's own package, pinned to COSMIC's stable release
 - [x] **Stage 1 — the Windows 11 frame:** sidebar with your account and the Windows categories, Home, page titles like "System > Display", the System page header
 - [x] **Stage 2 — the Windows look inside pages:** setting cards with icons, On/Off switches, drop-downs and buttons in Windows' style, the About page
 - [x] **Stage 3 — Windows' page layout:** Taskbar, Start, Notifications, Night light and Multitasking pages; the old Panel and Dock pages removed; COSMIC-only options under "Advanced"
-- [ ] **Stage 4 — pages COSMIC doesn't have:** Installed apps, Storage, Sign-in options, Privacy & security, Lock screen, Clipboard, and Update moved inside Settings
+- [x] **Stage 4 — pages COSMIC doesn't have:** Installed apps, Storage, Sign-in options, Privacy & security, Lock screen, Clipboard, and Update moved inside Settings *(built, in review)*
 - [ ] **Stage 5 — joining it up:** Find a setting results in Windows' style; Start, Control Panel, quick settings and Win+I open the right page
 
 Under plain COSMIC the same app still looks like COSMIC Settings: the Windows layout switches on only in a Lapin UX session.
@@ -70,7 +72,7 @@ The work is split into four phases. Green is done, yellow is partly done, grey i
 ```mermaid
 flowchart LR
     P1["Phase 1<br/>Core desktop"]:::done --> P2["Phase 2<br/>Settings and multitasking"]:::mostly --> P3["Phase 3<br/>System apps"]:::partly --> P4["Phase 4<br/>Road to 1:1 Windows 11"]:::mostly
-    P2 -.- S["Settings app<br/>(stage 3 of 5)"]:::partly
+    P2 -.- S["Settings app<br/>(stage 4 of 5)"]:::partly
     P3 -.- FE["File Explorer"]:::todo
     P4 -.- ST["Store"]:::todo
     P4 -.- MK["Snip markup editor"]:::todo
@@ -104,7 +106,7 @@ flowchart LR
 - [x] Task view, virtual desktops, names and wallpaper per desktop
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
-- [~] **Settings app** in Windows 11's layout — *stages 0–3 of 5 done (frame, categories, Home, the Windows look inside every page, About, Windows' page layout with Taskbar, Start, Notifications, Night light and Multitasking pages); see [Settings (in progress)](#settings-in-progress)*
+- [~] **Settings app** in Windows 11's layout — *stages 0–4 of 5 built (frame, categories, Home, the Windows look inside every page, About, Windows' page layout with Taskbar, Start, Notifications, Night light and Multitasking pages; Installed apps, Storage, Clipboard, Lock screen, Sign-in options, Privacy & security and Update inside Settings); see [Settings (in progress)](#settings-in-progress)*
 - [x] Windows-style volume and brightness pop-ups
 
 ### Phase 3 — system apps (4 of 6, 1 partly)

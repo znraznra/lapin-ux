@@ -1,7 +1,7 @@
 From fee9beaf9e58c6d9d1a7fb4a36c33b7dfac6b33c Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 20:44:30 +0800
-Subject: [PATCH] Lapin UX: Windows 11-style lock and sign-in screens
+Subject: [PATCH 1/2] Lapin UX: Windows 11-style lock and sign-in screens
 
 Lock screen: big clock and date over the wallpaper; a click or key slides
 to the sign-in panel (round picture, name, password, dimmed wallpaper,

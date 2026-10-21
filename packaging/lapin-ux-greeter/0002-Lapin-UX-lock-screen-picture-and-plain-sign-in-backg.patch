@@ -1,0 +1,188 @@
+From 458a764d8a9f1ae1cca719553fdce912b5f51eb5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 12:58:40 +0800
+Subject: [PATCH 2/2] Lapin UX: lock screen picture and plain sign-in
+ background from Settings
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ daemon/src/lib.rs         | 42 +++++++++++++++++++++++++++++++++++++++
+ examples/lapin_preview.rs |  2 +-
+ src/greeter.rs            |  3 ++-
+ src/lapin.rs              | 12 +++++++++--
+ src/locker.rs             | 19 ++++++++++++++++--
+ 5 files changed, 72 insertions(+), 6 deletions(-)
+
+diff --git a/daemon/src/lib.rs b/daemon/src/lib.rs
+index c414474..2470a68 100644
+--- a/daemon/src/lib.rs
++++ b/daemon/src/lib.rs
+@@ -97,6 +97,46 @@ pub struct UserData {
+     pub time_applet_config: TimeAppletConfig,
+     pub accessibility_zoom: ZoomConfig,
+     pub kdl_output_lists: Vec<String>,
++    /// Lapin UX: Settings > Lock screen (picture, sign-in background).
++    #[serde(default)]
++    pub lapin_lock: LapinLock,
++}
++
++/// Lapin UX's lock screen settings, from the user's `dev.lapinux.Shell`
++/// config (written by Settings > Personalization > Lock screen).
++#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
++pub struct LapinLock {
++    /// The lock screen's own picture (None = the desktop background).
++    pub wallpaper: Option<PathBuf>,
++    /// "Show the lock screen background picture on the sign-in screen" off.
++    pub plain_signin: bool,
++}
++
++impl LapinLock {
++    /// Read as the user.
++    pub fn read() -> Self {
++        use cosmic_config::ConfigGet;
++        let Ok(c) = cosmic_config::Config::new("dev.lapinux.Shell", 1) else { return Self::default() };
++        let wallpaper = c
++            .get::<String>("lock_wallpaper")
++            .ok()
++            .filter(|p| !p.is_empty())
++            .map(PathBuf::from)
++            .filter(|p| p.is_file());
++        Self { wallpaper, plain_signin: c.get::<bool>("no_signin_picture").unwrap_or(false) }
++    }
++
++    /// Show the lock picture on every screen instead of the wallpaper.
++    pub fn apply(&self, bg: &mut BgState) {
++        if let Some(w) = &self.wallpaper {
++            for (_, source) in bg.wallpapers.iter_mut() {
++                *source = BgSource::Path(w.clone());
++            }
++            if bg.wallpapers.is_empty() {
++                bg.wallpapers.push((String::new(), BgSource::Path(w.clone())));
++            }
++        }
++    }
+ }
+ 
+ impl UserData {
+@@ -262,6 +302,8 @@ impl UserData {
+                 ),
+             ));
+         }
++        self.lapin_lock = LapinLock::read();
++        self.lapin_lock.apply(&mut self.bg_state);
+         self.load_wallpapers_as_user();
+ 
+         match cosmic_config::Config::new("com.system76.CosmicComp", CosmicCompConfig::VERSION) {
+diff --git a/examples/lapin_preview.rs b/examples/lapin_preview.rs
+index e020bf0..633afd5 100644
+--- a/examples/lapin_preview.rs
++++ b/examples/lapin_preview.rs
+@@ -57,7 +57,7 @@ fn face<'a>(signin: bool, value: String, bg: widget::image::Handle, scale: f32)
+                 lapin::corner_button("preferences-desktop-accessibility-symbolic", Some(Msg::Reveal)),
+                 lapin::corner_button("system-shutdown-symbolic", Some(Msg::Reveal)),
+             ]).spacing(8).align_y(cosmic::iced::Alignment::Center);
+-            lapin::sign_in(lapin::avatar(None, lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale)
++            lapin::sign_in(lapin::avatar(None, lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale, std::env::var("LAPIN_PLAIN").is_ok())
+         };
+         widget::container(
+             cosmic::iced::widget::stack![
+diff --git a/src/greeter.rs b/src/greeter.rs
+index 0f6d6c8..fb06b29 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -1001,6 +1001,7 @@ impl App {
+                 .class(crate::lapin::list_button(self.entering_name))
+                 .on_press(Message::EnterUser(true, String::new())),
+             );
++            let plain = matches!(selected, Some((d, _)) if !self.entering_name && d.lapin_lock.plain_signin);
+             let (name, picture) = match selected {
+                 Some((d, icon)) if !self.entering_name => (d.full_name.clone(), crate::lapin::avatar(icon.as_ref(), crate::lapin::PICTURE * scale)),
+                 _ => (String::new(), crate::lapin::avatar(None, crate::lapin::PICTURE * scale)),
+@@ -1017,7 +1018,7 @@ impl App {
+                 )
+                 .push(button_row)
+                 .align_y(Alignment::Center);
+-            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale)
++            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale, plain)
+         };
+         let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((id, false), menu))
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 5877d23..e347ebf 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -72,6 +72,7 @@ pub fn sign_in<'a, M: 'static>(
+     bottom_left: Element<'a, M>,
+     bottom_right: Element<'a, M>,
+     scale: f32,
++    plain: bool,
+ ) -> Element<'a, M> {
+     let box_width = 296.0 * scale;
+     let panel = widget::column::with_capacity(5)
+@@ -101,9 +102,16 @@ pub fn sign_in<'a, M: 'static>(
+     widget::container(page)
+         .width(Length::Fill)
+         .height(Length::Fill)
+-        .class(theme::Container::custom(|_| widget::container::Style {
++        .class(theme::Container::custom(move |t| widget::container::Style {
+             // Windows blurs the wallpaper here; a dark veil reads the same.
+-            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.42))),
++            // With the picture turned off for sign-in (Settings > Lock
++            // screen), a solid colour from the accent, as on Windows.
++            background: Some(Background::Color(if plain {
++                let a: Color = t.cosmic().accent_color().into();
++                Color::from_rgb(a.r * 0.35, a.g * 0.35, a.b * 0.35)
++            } else {
++                Color::from_rgba(0.0, 0.0, 0.0, 0.42)
++            })),
+             text_color: Some(Color::WHITE),
+             icon_color: Some(Color::WHITE),
+             ..Default::default()
+diff --git a/src/locker.rs b/src/locker.rs
+index b24bbad..271c089 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -554,6 +554,7 @@ impl App {
+             widget::space::horizontal().width(Length::Fixed(0.0)).into(),
+             corner.into(),
+             scale,
++            self.flags.user_data.lapin_lock.plain_signin,
+         );
+         if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((surface_id, false), menu))
+@@ -987,7 +988,10 @@ impl cosmic::Application for App {
+             Message::Channel(value_tx) => {
+                 self.value_tx_opt = Some(value_tx);
+             }
+-            Message::BackgroundState(bg_state) => {
++            Message::BackgroundState(mut bg_state) => {
++                // Lapin UX: the lock screen's own picture (Settings > Lock screen).
++                self.flags.user_data.lapin_lock = cosmic_greeter_daemon::LapinLock::read();
++                self.flags.user_data.lapin_lock.apply(&mut bg_state);
+                 self.flags.user_data.bg_state = bg_state;
+                 self.flags.user_data.load_wallpapers_as_user();
+                 self.common.surface_images.clear();
+@@ -1132,7 +1136,18 @@ impl cosmic::Application for App {
+     }
+ 
+     /// Creates a view after each update.
+-    fn view_window(&self, _surface_id: SurfaceId) -> Element<'_, Self::Message> {
++    fn view_window(&self, surface_id: SurfaceId) -> Element<'_, Self::Message> {
++        // Lapin UX: with a lock screen picture chosen in Settings, draw it
++        // (otherwise the desktop background shows through, as upstream).
++        if self.flags.user_data.lapin_lock.wallpaper.is_some()
++            && let Some(img) = self.common.surface_images.get(&surface_id)
++        {
++            return widget::image(img)
++                .content_fit(iced::ContentFit::Cover)
++                .width(Length::Fill)
++                .height(Length::Fill)
++                .into();
++        }
+         widget::space::horizontal().into()
+     }
+ 
+-- 
+2.43.0
+

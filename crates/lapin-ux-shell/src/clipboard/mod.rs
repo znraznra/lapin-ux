@@ -69,6 +69,8 @@ pub enum ClipMsg {
     Pin(u64),
     Delete(u64),
     ClearAll,
+    /// "Turn on" in the panel when clipboard history is off.
+    TurnOn,
     /// Type this into the focused app.
     Insert(String),
 }
@@ -87,6 +89,7 @@ impl std::fmt::Debug for ClipMsg {
             ClipMsg::Pin(i) => write!(f, "Pin({i})"),
             ClipMsg::Delete(i) => write!(f, "Delete({i})"),
             ClipMsg::ClearAll => write!(f, "ClearAll"),
+            ClipMsg::TurnOn => write!(f, "TurnOn"),
             ClipMsg::Insert(_) => write!(f, "Insert"),
         }
     }
@@ -163,7 +166,10 @@ impl Shell {
                 }
             }
             ClipMsg::Event(wl::Event::Copied(data)) => {
-                self.clip.history.push(data, SystemTime::now());
+                // With history off, only pinned items are kept.
+                if !self.config.no_clipboard_history {
+                    self.clip.history.push(data, SystemTime::now());
+                }
             }
             ClipMsg::Event(wl::Event::Files(f)) => self.clip.files = f,
             ClipMsg::Event(wl::Event::Unavailable(e)) => {
@@ -219,6 +225,10 @@ impl Shell {
             }
             ClipMsg::ClearAll => {
                 self.clip.history.clear();
+            }
+            ClipMsg::TurnOn => {
+                self.config.no_clipboard_history = false;
+                self.persist_config();
             }
             ClipMsg::Insert(s) => {
                 let close = self.close_panel();
@@ -342,6 +352,18 @@ fn emoji_tab<'a>(shell: &'a Shell, p: &'a ClipPanel) -> Element<'a, Message> {
 fn clipboard_tab(shell: &Shell) -> Element<'_, Message> {
     if let Some(e) = &shell.clip.unavailable {
         return container(text::body(format!("Clipboard history isn't available: {e}")).class(style::dim_text())).padding(16).into();
+    }
+    if shell.config.no_clipboard_history {
+        return container(
+            column::with_children(vec![
+                text::heading("Clipboard history is off").into(),
+                text::body("Turn it on to see the things you copy and paste them later.").class(style::dim_text()).into(),
+                lapin_ux_ui::button::standard("Turn on").on_press(Message::Clip(ClipMsg::TurnOn)).into(),
+            ])
+            .spacing(10),
+        )
+        .padding(16)
+        .into();
     }
     let items = shell.clip.history.items();
     if items.is_empty() {

@@ -1,0 +1,3009 @@
+From 11f7c73c25c1fe8b74e0133f37984c9d58448eee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 13:36:11 +0800
+Subject: [PATCH 7/7] Lapin UX: pages COSMIC doesn't have (stage 4)
+
+Installed apps, Storage and Temporary files, Clipboard, Lock screen,
+Sign-in options, Privacy & security with app permissions, Update inside
+Settings with Update history; cosmic-settings lapin <page-id> opens a page.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs                    |   9 +-
+ cosmic-settings/src/lapin/apps.rs             | 438 ++++++++++++++
+ cosmic-settings/src/lapin/categories.rs       |  48 +-
+ cosmic-settings/src/lapin/mod.rs              |  10 +-
+ cosmic-settings/src/lapin/privacy.rs          | 408 +++++++++++++
+ cosmic-settings/src/lapin/rows.rs             | 171 ++++++
+ cosmic-settings/src/lapin/settings.rs         | 249 ++++++++
+ cosmic-settings/src/lapin/signin.rs           | 354 +++++++++++
+ cosmic-settings/src/lapin/storage.rs          | 433 ++++++++++++++
+ cosmic-settings/src/lapin/update.rs           | 558 ++++++++++++++++++
+ cosmic-settings/src/lapin/view.rs             |  34 +-
+ cosmic-settings/src/main.rs                   |   2 +
+ cosmic-settings/src/pages/system/users/mod.rs |   2 +-
+ 13 files changed, 2674 insertions(+), 42 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/apps.rs
+ create mode 100644 cosmic-settings/src/lapin/privacy.rs
+ create mode 100644 cosmic-settings/src/lapin/rows.rs
+ create mode 100644 cosmic-settings/src/lapin/signin.rs
+ create mode 100644 cosmic-settings/src/lapin/storage.rs
+ create mode 100644 cosmic-settings/src/lapin/update.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index 06069b2..0ecd395 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -145,6 +145,7 @@ impl SettingsApp {
+             PageCommands::Wireless => self.pages.page_id::<networking::wifi::Page>(),
+             #[cfg(feature = "page-workspaces")]
+             PageCommands::Workspaces => self.pages.page_id::<desktop::workspaces::Page>(),
++            PageCommands::Lapin { page } => self.pages.find_page_by_id(page).map(|(e, _)| e),
+         }
+     }
+ 
+@@ -418,7 +419,11 @@ impl cosmic::Application for SettingsApp {
+                         return self.search_changed(phrase);
+                     }
+                 }
+-                crate::lapin::Msg::OpenUpdate => crate::lapin::open_update(),
++                crate::lapin::Msg::OpenUpdate => {
++                    if let Some((e, _)) = self.pages.find_page_by_id(crate::lapin::UPDATE_ID) {
++                        return self.activate_page(e);
++                    }
++                }
+             },
+ 
+             Message::None => (),
+@@ -1307,7 +1312,7 @@ impl SettingsApp {
+             self.search_view()
+         } else if page == layout.home {
+             crate::lapin::home_view(&self.pages, layout)
+-        } else if layout.categories.contains(&page) {
++        } else if layout.is_list(&self.pages, page) {
+             crate::lapin::category_view(&self.pages, &self.lapin, page)
+         } else if let Some(content) = self.pages.content(page) {
+             self.page_view(content)
+diff --git a/cosmic-settings/src/lapin/apps.rs b/cosmic-settings/src/lapin/apps.rs
+new file mode 100644
+index 0000000..9366427
+--- /dev/null
++++ b/cosmic-settings/src/lapin/apps.rs
+@@ -0,0 +1,438 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Apps > Installed apps, as on Windows: every app with its icon, version,
++//! install date and size, a search box, Sort by, and "…" > Uninstall.
++//! Apps from Arch packages are removed with pacman (through the admin
++//! prompt), Flatpak apps with flatpak. Parts of the desktop itself can't be
++//! uninstalled here, as in Start.
++
++use std::collections::HashMap;
++use std::path::{Path, PathBuf};
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, column, icon, row, text};
++use cosmic::{Apply, Element, Task};
++use cosmic_settings_page::{self as page, Section, section};
++use slotmap::SlotMap;
++
++use super::rows::{self, PMsg};
++use super::settings::Msg as SMsg;
++use super::style;
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum Kind {
++    /// An Arch package (its name, once looked up).
++    Package(Option<String>),
++    Flatpak { app_id: String, user: bool },
++    /// Put in place by hand (~/.local): nothing safe to remove it with.
++    Local,
++}
++
++#[derive(Clone, Debug)]
++pub struct App {
++    pub id: String,
++    pub name: String,
++    pub icon: String,
++    pub path: PathBuf,
++    pub kind: Kind,
++    pub version: Option<String>,
++    pub size: Option<u64>,
++    /// Seconds since 1970.
++    pub installed: Option<i64>,
++}
++
++impl App {
++    fn removable(&self) -> bool {
++        match &self.kind {
++            Kind::Package(Some(p)) => !protected(p),
++            Kind::Package(None) | Kind::Local => false,
++            Kind::Flatpak { .. } => true,
++        }
++    }
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    Loaded(Vec<App>),
++    Query(String),
++    Sort(usize),
++    /// The "…" menu of this app (None closes it).
++    Menu(Option<String>),
++    /// "Uninstall" in the menu: ask first, as Windows does.
++    Ask(String),
++    Uninstall(String),
++    Done(String, Result<(), String>),
++}
++
++const SORTS: [&str; 5] = ["Name (A to Z)", "Name (Z to A)", "Size (large to small)", "Size (small to large)", "Install date"];
++
++#[derive(Default)]
++pub struct Page {
++    entity: page::Entity,
++    loading: bool,
++    apps: Vec<App>,
++    query: String,
++    sort: usize,
++    menu: Option<String>,
++    confirm: Option<String>,
++    busy: Option<String>,
++    problem: Option<String>,
++}
++
++impl page::Page<PMsg> for Page {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-installed-apps", "view-app-grid-symbolic")
++            .title("Installed apps")
++            .description("Uninstall and manage apps")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().view::<Page>(|_, page, _| view(page)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        self.loading = self.apps.is_empty();
++        self.menu = None;
++        self.confirm = None;
++        load_task()
++    }
++}
++
++impl page::AutoBind<PMsg> for Page {}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(SMsg::Apps(msg))
++}
++
++fn load_task() -> Task<PMsg> {
++    Task::future(async { m(Msg::Loaded(load().await)) })
++}
++
++pub fn update(pages: &mut cosmic_settings_page::Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    let Some(p) = pages.page_mut::<Page>() else { return Task::none() };
++    match msg {
++        Msg::Loaded(apps) => {
++            p.loading = false;
++            p.apps = apps;
++        }
++        Msg::Query(q) => p.query = q,
++        Msg::Sort(i) => p.sort = i.min(SORTS.len() - 1),
++        Msg::Menu(id) => {
++            p.menu = id;
++            p.confirm = None;
++        }
++        Msg::Ask(id) => {
++            p.menu = None;
++            p.confirm = Some(id);
++        }
++        Msg::Uninstall(id) => {
++            p.confirm = None;
++            p.problem = None;
++            let Some(app) = p.apps.iter().find(|a| a.id == id).cloned() else { return Task::none() };
++            p.busy = Some(id.clone());
++            return cosmic::task::future(async move {
++                let r = uninstall(&app).await;
++                crate::Message::PageMessage(m(Msg::Done(id, r)))
++            });
++        }
++        Msg::Done(id, r) => {
++            p.busy = None;
++            match r {
++                Ok(()) => p.apps.retain(|a| a.id != id),
++                Err(e) => p.problem = Some(e),
++            }
++            return load_task().map(crate::Message::PageMessage).map(cosmic::Action::App);
++        }
++    }
++    Task::none()
++}
++
++fn sorted(p: &Page) -> Vec<&App> {
++    let q = p.query.to_lowercase();
++    let mut v: Vec<&App> = p.apps.iter().filter(|a| q.is_empty() || a.name.to_lowercase().contains(&q)).collect();
++    match p.sort {
++        1 => v.sort_by(|a, b| b.name.to_lowercase().cmp(&a.name.to_lowercase())),
++        2 => v.sort_by(|a, b| b.size.unwrap_or(0).cmp(&a.size.unwrap_or(0))),
++        3 => v.sort_by(|a, b| a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0))),
++        4 => v.sort_by(|a, b| b.installed.unwrap_or(0).cmp(&a.installed.unwrap_or(0))),
++        _ => v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
++    }
++    v
++}
++
++fn date(secs: i64) -> String {
++    chrono::DateTime::from_timestamp(secs, 0)
++        .map(|d| d.with_timezone(&chrono::Local).format("%-m/%-d/%Y").to_string())
++        .unwrap_or_default()
++}
++
++fn view(p: &Page) -> Element<'_, PMsg> {
++    let list = sorted(p);
++    let search = widget::search_input("Search apps", &p.query)
++        .on_input(|q| m(Msg::Query(q)))
++        .on_clear(m(Msg::Query(String::new())))
++        .width(Length::Fixed(300.0));
++    let sort = row::with_capacity(2)
++        .spacing(8)
++        .align_y(Alignment::Center)
++        .push(text::body("Sort by:"))
++        .push(widget::dropdown(&SORTS, Some(p.sort), |i| m(Msg::Sort(i))));
++    let tools = row::with_capacity(3)
++        .spacing(12)
++        .align_y(Alignment::Center)
++        .push(search)
++        .push(widget::space::horizontal())
++        .push(sort);
++    let count = if p.loading {
++        "Finding apps…".to_string()
++    } else if list.len() == 1 {
++        "1 app found".to_string()
++    } else {
++        format!("{} apps found", list.len())
++    };
++    let mut page = column::with_capacity(4).spacing(12).push(tools).push(text::caption(count).class(style::quiet()));
++    if let Some(e) = &p.problem {
++        page = page.push(text::body(format!("Couldn't uninstall: {e}")).class(cosmic::theme::Text::Accent));
++    }
++    let rows: Vec<rows::Item<'_>> = list.into_iter().map(|a| app_row(p, a)).collect();
++    if !rows.is_empty() {
++        page = page.push(rows::section("", rows));
++    }
++    page.into()
++}
++
++fn app_row<'a>(p: &'a Page, a: &'a App) -> rows::Item<'a> {
++    let mut details: Vec<String> = Vec::new();
++    if let Some(v) = &a.version {
++        details.push(v.clone());
++    }
++    details.push(match &a.kind {
++        Kind::Flatpak { .. } => "Flatpak".into(),
++        Kind::Package(_) => "System package".into(),
++        Kind::Local => "Installed for you".into(),
++    });
++    if let Some(t) = a.installed {
++        details.push(date(t));
++    }
++    let busy = p.busy.as_deref() == Some(a.id.as_str());
++    let size = text::body(if busy { "Uninstalling…".into() } else { a.size.map(rows::size).unwrap_or_default() });
++    let dots = widget::button::icon(icon::from_name("view-more-horizontal-symbolic").size(16))
++        .on_press_maybe((!busy).then(|| m(Msg::Menu(Some(a.id.clone())))));
++    let dots: Element<'a, PMsg> = if p.menu.as_deref() == Some(a.id.as_str()) {
++        let uninstall = widget::button::custom(text::body("Uninstall").apply(widget::container).padding([6, 16]))
++            .class(style::nav_item(false))
++            .width(Length::Fixed(180.0))
++            .on_press_maybe(a.removable().then(|| m(Msg::Ask(a.id.clone()))));
++        let menu = column::with_capacity(2).push(uninstall);
++        widget::popover(dots)
++            .popup(widget::container(menu).padding(4).class(style::card()))
++            .on_close(m(Msg::Menu(None)))
++            .position(widget::popover::Position::Bottom)
++            .into()
++    } else if p.confirm.as_deref() == Some(a.id.as_str()) {
++        let ask = column::with_capacity(2)
++            .spacing(12)
++            .width(Length::Fixed(300.0))
++            .push(text::body("This app and its related info will be uninstalled."))
++            .push(
++                row::with_capacity(2)
++                    .push(widget::space::horizontal())
++                    .push(widget::button::suggested("Uninstall").on_press(m(Msg::Uninstall(a.id.clone())))),
++            );
++        widget::popover(dots)
++            .popup(widget::container(ask).padding(16).class(style::card()))
++            .on_close(m(Msg::Menu(None)))
++            .position(widget::popover::Position::Bottom)
++            .into()
++    } else {
++        dots.into()
++    };
++    let control = row::with_capacity(2).spacing(16).align_y(Alignment::Center).push(size).push(dots);
++    let glyph: Element<'a, PMsg> = icon::from_name(a.icon.clone())
++        .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])))
++        .size(32)
++        .into();
++    let line = row::with_capacity(3)
++        .spacing(16)
++        .align_y(Alignment::Center)
++        .push(glyph)
++        .push(rows::words(a.name.clone(), details.join("  |  ")))
++        .push(control);
++    use cosmic::widget::list_column::IntoListItem;
++    Element::from(line).into_list_item()
++}
++
++/// Packages that must never be removed here (they'd take the desktop down).
++pub fn protected(pkg: &str) -> bool {
++    pkg.starts_with("cosmic-")
++        || pkg.starts_with("lapin-ux")
++        || matches!(pkg, "networkmanager" | "systemd" | "pacman" | "glibc" | "linux" | "bash" | "sudo" | "polkit" | "dbus" | "wireplumber" | "pipewire")
++}
++
++fn kind_of(path: &Path, home: &Path) -> Kind {
++    let p = path.to_string_lossy();
++    if p.contains("/flatpak/exports/share/applications/") {
++        let user = path.starts_with(home.join(".local/share/flatpak"));
++        let app_id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
++        return Kind::Flatpak { app_id, user };
++    }
++    if path.starts_with(home) {
++        return Kind::Local;
++    }
++    Kind::Package(None)
++}
++
++/// Every app Start shows, with what pacman and flatpak know about it.
++pub async fn load() -> Vec<App> {
++    let home = dirs::home_dir().unwrap_or_default();
++    let locales = freedesktop_desktop_entry::get_languages_from_env();
++    let mut seen = std::collections::HashSet::new();
++    let mut apps: Vec<App> = freedesktop_desktop_entry::desktop_entries(&locales)
++        .into_iter()
++        .filter(|e| e.desktop_entry("Type").is_none_or(|t| t == "Application") && !e.no_display() && !e.hidden())
++        .filter(|e| seen.insert(e.appid.clone()))
++        .map(|e| App {
++            id: e.appid.clone(),
++            name: e.name(&locales).map(|n| n.into_owned()).unwrap_or_else(|| e.appid.clone()),
++            icon: e.icon().unwrap_or("application-x-executable").to_string(),
++            kind: kind_of(&e.path, &home),
++            path: e.path.clone(),
++            version: None,
++            size: None,
++            installed: None,
++        })
++        .collect();
++
++    // Arch packages: who owns each launcher, then each package's details.
++    let files: Vec<String> = apps
++        .iter()
++        .filter(|a| matches!(a.kind, Kind::Package(_)))
++        .map(|a| a.path.to_string_lossy().into_owned())
++        .collect();
++    if !files.is_empty() {
++        let mut args = vec!["-Qo"];
++        args.extend(files.iter().map(String::as_str));
++        // pacman exits non-zero when some file has no owner; use what it said.
++        let out = tokio::process::Command::new("pacman").args(&args).env("LC_ALL", "C").output().await.ok();
++        let owners = out.map(|o| parse_owners(&String::from_utf8_lossy(&o.stdout))).unwrap_or_default();
++        let pkgs: Vec<String> = {
++            let mut v: Vec<String> = owners.values().map(|(p, _)| p.clone()).collect();
++            v.sort();
++            v.dedup();
++            v
++        };
++        let info = if pkgs.is_empty() {
++            HashMap::new()
++        } else {
++            let mut a = vec!["-Qi"];
++            a.extend(pkgs.iter().map(String::as_str));
++            rows::output("pacman", &a).await.map(|o| parse_info(&o)).unwrap_or_default()
++        };
++        for app in &mut apps {
++            if let Some((pkg, ver)) = owners.get(&*app.path.to_string_lossy()) {
++                app.kind = Kind::Package(Some(pkg.clone()));
++                app.version = Some(ver.clone());
++                if let Some((size, date)) = info.get(pkg) {
++                    app.size = *size;
++                    app.installed = *date;
++                }
++            }
++        }
++    }
++
++    // Flatpak apps.
++    if apps.iter().any(|a| matches!(a.kind, Kind::Flatpak { .. }))
++        && let Ok(out) = rows::output("flatpak", &["list", "--app", "--columns=application,version,size"]).await
++    {
++        let info: HashMap<String, (String, Option<u64>)> = out
++            .lines()
++            .filter_map(|l| {
++                let mut it = l.split('\t');
++                let id = it.next()?.trim().to_string();
++                let ver = it.next().unwrap_or_default().trim().to_string();
++                let size = it.next().and_then(rows::parse_size);
++                (!id.is_empty()).then_some((id, (ver, size)))
++            })
++            .collect();
++        for app in &mut apps {
++            if let Kind::Flatpak { app_id, user } = &app.kind {
++                if let Some((ver, size)) = info.get(app_id) {
++                    app.version = (!ver.is_empty()).then(|| ver.clone());
++                    app.size = *size;
++                }
++                let base = if *user { home.join(".local/share/flatpak/app") } else { PathBuf::from("/var/lib/flatpak/app") };
++                app.installed = std::fs::metadata(base.join(app_id))
++                    .and_then(|m| m.modified())
++                    .ok()
++                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
++                    .map(|d| d.as_secs() as i64);
++            }
++        }
++    }
++    apps
++}
++
++/// `pacman -Qo` lines: "/usr/share/applications/x.desktop is owned by pkg 1.0-1".
++pub fn parse_owners(out: &str) -> HashMap<String, (String, String)> {
++    out.lines()
++        .filter_map(|l| {
++            let (file, rest) = l.split_once(" is owned by ")?;
++            let mut it = rest.split_whitespace();
++            Some((file.trim().to_string(), (it.next()?.to_string(), it.next().unwrap_or_default().to_string())))
++        })
++        .collect()
++}
++
++/// `pacman -Qi` blocks: package → (installed size, install date).
++pub fn parse_info(out: &str) -> HashMap<String, (Option<u64>, Option<i64>)> {
++    let mut map = HashMap::new();
++    for block in out.split("\n\n") {
++        let field = |k: &str| {
++            block.lines().find_map(|l| {
++                let (key, v) = l.split_once(':')?;
++                (key.trim() == k).then(|| v.trim().to_string())
++            })
++        };
++        let Some(name) = field("Name") else { continue };
++        let size = field("Installed Size").and_then(|s| rows::parse_size(&s));
++        let date = field("Install Date").and_then(|d| {
++            chrono::NaiveDateTime::parse_from_str(&d, "%a %b %e %H:%M:%S %Y")
++                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&d, "%a %d %b %Y %I:%M:%S %p %Z"))
++                .ok()
++                .map(|t| t.and_utc().timestamp())
++        });
++        map.insert(name, (size, date));
++    }
++    map
++}
++
++async fn uninstall(app: &App) -> Result<(), String> {
++    match &app.kind {
++        Kind::Flatpak { app_id, user } => {
++            let scope = if *user { "--user" } else { "--system" };
++            rows::output("flatpak", &["uninstall", scope, "--noninteractive", "-y", app_id]).await.map(drop)
++        }
++        Kind::Package(Some(pkg)) if !protected(pkg) => {
++            // -Rs also removes dependencies nothing else needs.
++            rows::output("pkexec", &["pacman", "-Rs", "--noconfirm", pkg]).await.map(drop)
++        }
++        Kind::Package(Some(pkg)) => Err(format!("{pkg} is part of the desktop and can't be removed here.")),
++        _ => Err("This app wasn't installed by a package manager.".into()),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn pacman_output() {
++        let o = parse_owners("/usr/share/applications/firefox.desktop is owned by firefox 131.0-1\nerror: No package owns /x\n");
++        assert_eq!(o["/usr/share/applications/firefox.desktop"], ("firefox".into(), "131.0-1".into()));
++        let i = parse_info("Name            : firefox\nInstalled Size  : 245.67 MiB\nInstall Date    : Mon Oct 14 21:12:44 2024\n\nName : gimp\n");
++        assert_eq!(i["firefox"].0, Some((245.67 * 1048576.0) as u64));
++        assert!(i["firefox"].1.is_some());
++        assert_eq!(i["gimp"], (None, None));
++        assert!(protected("cosmic-files") && !protected("firefox"));
++    }
++}
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 41c742a..a9ec85c 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -64,7 +64,9 @@ const SPECS: &[Spec] = &[
+             c("sound", "audio-volume-high-symbolic", "Sound", "Volume levels, output, input, sound devices"),
+             c("lapin-notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts from apps and system, do not disturb"),
+             c("power", "battery-full-symbolic", "Power & battery", "Sleep, battery usage, power mode"),
++            c("lapin-storage", "drive-harddisk-symbolic", "Storage", "Storage space, drives, cleanup"),
+             c("lapin-multitasking", "view-grid-symbolic", "Multitasking", "Snap windows, desktops"),
++            c("lapin-clipboard", "edit-paste-symbolic", "Clipboard", "Cut and copy history"),
+             c("about", "help-about-symbolic", "About", "Device specifications, rename this PC"),
+         ],
+     },
+@@ -100,16 +102,18 @@ const SPECS: &[Spec] = &[
+         children: &[
+             c("wallpaper", "preferences-desktop-wallpaper-symbolic", "Background", "Background images, color, slideshow"),
+             c("appearance", "preferences-color-symbolic", "Colors", "Accent color, transparency effects, light and dark mode"),
++            c("lapin-lock-screen", "system-lock-screen-symbolic", "Lock screen", "Lock screen images, sign-in screen"),
++            c("lapin-start", "view-app-grid-symbolic", "Start", "Recent items, search, web results"),
+             c("lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins"),
+-            c("lapin-start", "view-app-grid-symbolic", "Start", "Search, web results"),
+         ],
+     },
+     Spec {
+         id: "lapin-apps",
+         title: "Apps",
+         icon: "applications-all",
+-        description: "Default apps, startup",
++        description: "Installed apps, default apps, startup",
+         children: &[
++            c("lapin-installed-apps", "view-app-grid-symbolic", "Installed apps", "Uninstall and manage apps"),
+             c("default-apps", "preferences-desktop-default-applications-symbolic", "Default apps", "Defaults for file and link types"),
+             c("startup-apps", "system-run-symbolic", "Startup", "Apps that start automatically when you sign in"),
+             advanced("legacy-applications", "window-new-symbolic"),
+@@ -119,8 +123,11 @@ const SPECS: &[Spec] = &[
+         id: "lapin-accounts",
+         title: "Accounts",
+         icon: "cs-user-accounts",
+-        description: "Your account, other users",
+-        children: &[c("users", "system-users-symbolic", "Users", "Your account and other people who use this PC")],
++        description: "Your account, sign-in options, other users",
++        children: &[
++            c("users", "system-users-symbolic", "Users", "Your account and other people who use this PC"),
++            c("lapin-signin", "dialog-password-symbolic", "Sign-in options", "Fingerprint, password"),
++        ],
+     },
+     Spec {
+         id: "lapin-time",
+@@ -148,6 +155,7 @@ const SPECS: &[Spec] = &[
+         title: "Privacy & security",
+         icon: "firewall",
+         description: "Security and app permissions",
++        // A page of its own (lapin/privacy.rs), not a list of rows.
+         children: &[],
+     },
+     Spec {
+@@ -155,6 +163,7 @@ const SPECS: &[Spec] = &[
+         title: "Update",
+         icon: super::view::UPDATE_ICON,
+         description: "Updates for your system, apps and firmware",
++        // A page of its own (lapin/update.rs).
+         children: &[],
+     },
+ ];
+@@ -166,6 +175,14 @@ pub const UPDATE_ID: &str = "lapin-update";
+ 
+ const NESTED: &[(&str, &str)] = &[
+     ("lapin-night-light", "display"),
++    ("lapin-storage-temp", "lapin-storage"),
++    ("lapin-update-history", UPDATE_ID),
++    ("lapin-privacy-location", PRIVACY_ID),
++    ("lapin-privacy-camera", PRIVACY_ID),
++    ("lapin-privacy-microphone", PRIVACY_ID),
++    ("lapin-privacy-screenshots", PRIVACY_ID),
++    ("lapin-privacy-background", PRIVACY_ID),
++    ("lapin-privacy-activity", PRIVACY_ID),
+     ("window-management", "lapin-multitasking"),
+     ("workspaces", "lapin-multitasking"),
+ ];
+@@ -205,6 +222,12 @@ impl Layout {
+         page
+     }
+ 
++    /// A category drawn as a list of its pages (not Privacy & security or
++    /// Update, which have content of their own).
++    pub fn is_list(&self, pages: &Binder<Message>, page: Entity) -> bool {
++        self.categories.contains(&page) && pages.content(page).is_none()
++    }
++
+     pub fn is_category(&self, page: Entity) -> bool {
+         page == self.home || self.categories.contains(&page)
+     }
+@@ -223,12 +246,17 @@ pub fn arrange(pages: &mut Binder<Message>) -> Layout {
+     });
+     let mut layout = Layout { home, categories: Vec::with_capacity(SPECS.len()), redirects: Vec::new(), advanced: Vec::new() };
+     for spec in SPECS {
+-        let cat = pages.register_page(Category {
+-            id: spec.id,
+-            title: spec.title,
+-            icon: spec.icon,
+-            description: spec.description,
+-        });
++        // Privacy & security and Update are Lapin pages of their own.
++        let cat = match pages.find_page_by_id(spec.id) {
++            Some((e, _)) => e,
++            None => pages.register_page(Category {
++                id: spec.id,
++                title: spec.title,
++                icon: spec.icon,
++                description: spec.description,
++            }),
++        };
++        pages.info[cat].icon_name = spec.icon.into();
+         let mut kids = Vec::with_capacity(spec.children.len());
+         for child in spec.children {
+             let Some((entity, _)) = pages.find_page_by_id(child.id) else { continue };
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 2f41684..2998028 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -9,15 +9,21 @@
+ //! session (or with `LAPIN_UX_SETTINGS=1`); under COSMIC the app is stock.
+ 
+ pub mod about;
++pub mod apps;
+ mod categories;
+ pub mod device;
+ pub mod icons;
+ pub mod pages;
++pub mod privacy;
++pub mod rows;
+ pub mod settings;
++pub mod signin;
++pub mod storage;
++pub mod update;
+ pub(crate) mod style;
+-mod view;
++pub(crate) mod view;
+ 
+-pub use categories::{Layout, arrange};
++pub use categories::{Layout, UPDATE_ID, arrange};
+ pub use view::{CONTENT_MAX, breadcrumb, category_view, header_center, header_start, home_view, sidebar};
+ 
+ use std::sync::OnceLock;
+diff --git a/cosmic-settings/src/lapin/privacy.rs b/cosmic-settings/src/lapin/privacy.rs
+new file mode 100644
+index 0000000..7f383f8
+--- /dev/null
++++ b/cosmic-settings/src/lapin/privacy.rs
+@@ -0,0 +1,408 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Privacy & security, as on Windows: Security (device encryption), the
++//! desktop's own permissions (recent activity), and App permissions —
++//! Location, Camera, Microphone, Screenshots and Background apps — with a
++//! switch for each app that has asked. App permissions are the ones apps
++//! ask for through the desktop portal (Flatpak apps), kept in the portal's
++//! permission store; apps installed as Arch packages aren't sandboxed and
++//! don't ask.
++
++use std::collections::HashMap;
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, column, icon, row, text};
++use cosmic::{Element, Task};
++use cosmic_settings_page::{self as page, Binder, Section, section};
++use slotmap::SlotMap;
++
++use super::rows::{self, PMsg};
++use super::settings::Msg as SMsg;
++use super::style;
++
++/// One kind of app permission and where the portal keeps it.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Perm {
++    Location,
++    Camera,
++    Microphone,
++    Screenshot,
++    Background,
++}
++
++impl Perm {
++    pub const ALL: [Perm; 5] = [Perm::Location, Perm::Camera, Perm::Microphone, Perm::Screenshot, Perm::Background];
++    pub fn id(self) -> &'static str {
++        match self {
++            Perm::Location => "lapin-privacy-location",
++            Perm::Camera => "lapin-privacy-camera",
++            Perm::Microphone => "lapin-privacy-microphone",
++            Perm::Screenshot => "lapin-privacy-screenshots",
++            Perm::Background => "lapin-privacy-background",
++        }
++    }
++    pub fn title(self) -> &'static str {
++        match self {
++            Perm::Location => "Location",
++            Perm::Camera => "Camera",
++            Perm::Microphone => "Microphone",
++            Perm::Screenshot => "Screenshots and screen recording",
++            Perm::Background => "Background apps",
++        }
++    }
++    fn icon(self) -> &'static str {
++        match self {
++            Perm::Location => "find-location-symbolic",
++            Perm::Camera => "camera-web-symbolic",
++            Perm::Microphone => "audio-input-microphone-symbolic",
++            Perm::Screenshot => "applets-screenshooter-symbolic",
++            Perm::Background => "preferences-system-windows-symbolic",
++        }
++    }
++    fn heading(self) -> &'static str {
++        match self {
++            Perm::Location => "Let apps access your location",
++            Perm::Camera => "Let apps access your camera",
++            Perm::Microphone => "Let apps access your microphone",
++            Perm::Screenshot => "Let apps take screenshots of your screen",
++            Perm::Background => "Let apps keep running in the background",
++        }
++    }
++    /// The permission store's table and entry.
++    fn store(self) -> (&'static str, &'static str) {
++        match self {
++            Perm::Location => ("location", "location"),
++            Perm::Camera => ("devices", "camera"),
++            Perm::Microphone => ("devices", "microphone"),
++            Perm::Screenshot => ("screenshot", "screenshot"),
++            Perm::Background => ("background", "background"),
++        }
++    }
++    fn allowed(self, values: &[String]) -> bool {
++        match self {
++            // Location keeps an accuracy level ("NONE" = no access).
++            Perm::Location => values.first().is_some_and(|v| v != "NONE"),
++            _ => values.first().is_some_and(|v| v == "yes"),
++        }
++    }
++    fn values(self, on: bool) -> Vec<String> {
++        match self {
++            Perm::Location => {
++                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
++                vec![if on { "EXACT" } else { "NONE" }.into(), now.to_string()]
++            }
++            _ => vec![if on { "yes" } else { "no" }.into()],
++        }
++    }
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    Loaded(Perm, Vec<(String, bool)>),
++    Set(Perm, String, bool),
++    Encryption(Option<bool>),
++    ClearActivity,
++    Cleared,
++}
++
++/// Apps that asked for one permission, and whether each is allowed.
++#[derive(Default)]
++struct Apps(Vec<(String, bool)>);
++
++macro_rules! perm_page {
++    ($name:ident, $perm:expr) => {
++        #[derive(Default)]
++        pub struct $name {
++            entity: page::Entity,
++            apps: Option<Apps>,
++        }
++        impl page::Page<PMsg> for $name {
++            fn set_id(&mut self, entity: page::Entity) {
++                self.entity = entity;
++            }
++            fn info(&self) -> page::Info {
++                page::Info::new($perm.id(), $perm.icon()).title($perm.title())
++            }
++            fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++                Some(vec![sections.insert(Section::default().view::<$name>(|_, page, _| perm_view($perm, page.apps.as_ref())))])
++            }
++            fn on_enter(&mut self) -> Task<PMsg> {
++                Task::future(async { m(Msg::Loaded($perm, lookup($perm).await)) })
++            }
++        }
++        impl page::AutoBind<PMsg> for $name {}
++    };
++}
++
++perm_page!(LocationPage, Perm::Location);
++perm_page!(CameraPage, Perm::Camera);
++perm_page!(MicrophonePage, Perm::Microphone);
++perm_page!(ScreenshotPage, Perm::Screenshot);
++perm_page!(BackgroundPage, Perm::Background);
++
++/// Privacy & security itself (the sidebar entry).
++#[derive(Default)]
++pub struct Page {
++    entity: page::Entity,
++    encrypted: Option<bool>,
++}
++
++/// Privacy & security > Recent activity.
++#[derive(Default)]
++pub struct ActivityPage {
++    entity: page::Entity,
++    cleared: bool,
++}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(SMsg::Privacy(msg))
++}
++
++impl page::Page<PMsg> for Page {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new(super::categories::PRIVACY_ID, "firewall").title("Privacy & security").description("Security and app permissions")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![
++            sections.insert(Section::default().title("Security").view::<Page>(|_, page, s| security(page, &s.title))),
++            sections.insert(Section::default().title("Lapin UX permissions").view::<Page>(|binder, _, s| {
++                let open = |id: &str| binder.find_page_by_id(id).map(|(e, _)| PMsg::Page(e));
++                rows::section(
++                    &s.title,
++                    vec![rows::nav("document-open-recent-symbolic", "Recent activity", "Recently opened files in Start and jump lists", open("lapin-privacy-activity"))],
++                )
++            })),
++            sections.insert(Section::default().title("App permissions").view::<Page>(|binder, _, s| {
++                let open = |id: &str| binder.find_page_by_id(id).map(|(e, _)| PMsg::Page(e));
++                let mut list: Vec<rows::Item<'_>> = Perm::ALL.iter().map(|p| rows::nav(p.icon(), p.title(), "", open(p.id()))).collect();
++                list.push(rows::nav("preferences-system-notifications-symbolic", "Notifications", "", open("lapin-notifications")));
++                rows::section(&s.title, list)
++            })),
++        ])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        Task::future(async { m(Msg::Encryption(root_encrypted().await)) })
++    }
++}
++impl page::AutoBind<PMsg> for Page {}
++
++impl page::Page<PMsg> for ActivityPage {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-privacy-activity", "document-open-recent-symbolic").title("Recent activity")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().view::<ActivityPage>(|binder, page, _| activity(binder, page)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        self.cleared = false;
++        Task::none()
++    }
++}
++impl page::AutoBind<PMsg> for ActivityPage {}
++
++fn security<'a>(p: &'a Page, title: &'a str) -> Element<'a, PMsg> {
++    let (status, desc) = match p.encrypted {
++        Some(true) => ("On", "Your files are protected by encrypting the disk Lapin UX runs from"),
++        Some(false) => ("Off", "The disk Lapin UX runs from isn't encrypted. Encryption is chosen when Linux is installed"),
++        None => ("", "Checking…"),
++    };
++    rows::section(
++        title,
++        vec![rows::with("security-high-symbolic", "Device encryption", desc, text::body(status).class(style::quiet()).into())],
++    )
++}
++
++fn activity<'a>(binder: &'a Binder<PMsg>, p: &'a ActivityPage) -> Element<'a, PMsg> {
++    let on = binder.resource::<super::settings::Prefs>().is_none_or(|s| s.recent_items);
++    let clear = row::with_capacity(2)
++        .spacing(12)
++        .align_y(Alignment::Center)
++        .push_maybe(p.cleared.then(|| icon::from_name("object-select-symbolic").size(16).icon()))
++        .push(widget::button::standard("Clear history").on_press(m(Msg::ClearActivity)));
++    rows::section(
++        "",
++        vec![
++            rows::switch(
++                "document-open-recent-symbolic",
++                "Store my recent files on this device",
++                "Show recently opened files in Start and in apps' jump lists",
++                on,
++                |v| PMsg::Lapin(SMsg::RecentItems(v)),
++            ),
++            rows::with("edit-clear-history-symbolic", "Clear activity history", "Forget the list of files you opened recently", clear.into()),
++        ],
++    )
++}
++
++fn perm_view(perm: Perm, apps: Option<&Apps>) -> Element<'static, PMsg> {
++    let rows_: Vec<rows::Item<'static>> = match apps {
++        None => vec![rows::note("Looking for apps…")],
++        Some(a) if a.0.is_empty() => vec![rows::note(format!(
++            "No apps have asked for this yet. Apps installed from Flatpak ask the first time they need it; other apps don't need to ask."
++        ))],
++        Some(a) => a
++            .0
++            .iter()
++            .map(|(app, on)| {
++                let (name, ic) = app_name(app);
++                let app = app.clone();
++                let on = *on;
++                let t = row::with_capacity(2)
++                    .spacing(12)
++                    .align_y(Alignment::Center)
++                    .push(text::body(if on { "On" } else { "Off" }))
++                    .push(widget::toggler(on).on_toggle(move |v| m(Msg::Set(perm, app.clone(), v))));
++                let line = row::with_capacity(3)
++                    .spacing(16)
++                    .align_y(Alignment::Center)
++                    .push(icon::from_name(ic).fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()]))).size(24))
++                    .push(text::body(name).width(Length::Fill))
++                    .push(t);
++                use cosmic::widget::list_column::IntoListItem;
++                Element::from(line).into_list_item()
++            })
++            .collect(),
++    };
++    column::with_capacity(1).push(rows::section(perm.heading(), rows_)).into()
++}
++
++/// An app's name and icon from its launcher (Flatpak ids are launcher names).
++pub(crate) fn app_name(id: &str) -> (String, String) {
++    static CACHE: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (String, String)>>> = std::sync::LazyLock::new(Default::default);
++    if let Some(v) = CACHE.lock().ok().and_then(|c| c.get(id).cloned()) {
++        return v;
++    }
++    let locales = freedesktop_desktop_entry::get_languages_from_env();
++    let found = freedesktop_desktop_entry::Iter::new(freedesktop_desktop_entry::default_paths())
++        .find(|p| p.file_stem().is_some_and(|s| s == id))
++        .and_then(|p| freedesktop_desktop_entry::DesktopEntry::from_path(p, Some(&locales)).ok())
++        .map(|e| (e.name(&locales).map(|n| n.into_owned()).unwrap_or_else(|| id.to_string()), e.icon().unwrap_or(id).to_string()))
++        .unwrap_or_else(|| (pretty(id), id.to_string()));
++    if let Ok(mut c) = CACHE.lock() {
++        c.insert(id.to_string(), found.clone());
++    }
++    found
++}
++
++/// "com.discordapp.Discord" → "Discord" when there's no launcher to ask.
++fn pretty(id: &str) -> String {
++    let last = id.rsplit('.').next().unwrap_or(id);
++    let mut c = last.chars();
++    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
++}
++
++const STORE: &str = "org.freedesktop.impl.portal.PermissionStore";
++const STORE_PATH: &str = "/org/freedesktop/impl/portal/PermissionStore";
++
++async fn lookup(perm: Perm) -> Vec<(String, bool)> {
++    let (table, id) = perm.store();
++    let Ok(conn) = zbus::Connection::session().await else { return Vec::new() };
++    let Ok(reply) = conn.call_method(Some(STORE), STORE_PATH, Some(STORE), "Lookup", &(table, id)).await else { return Vec::new() };
++    let Ok((perms, _data)) = reply.body().deserialize::<(HashMap<String, Vec<String>>, zbus::zvariant::OwnedValue)>() else {
++        return Vec::new();
++    };
++    let mut v: Vec<(String, bool)> = perms.into_iter().filter(|(app, _)| !app.is_empty()).map(|(app, vals)| {
++        let on = perm.allowed(&vals);
++        (app, on)
++    }).collect();
++    v.sort_by_key(|(app, _)| app_name(app).0.to_lowercase());
++    v
++}
++
++async fn set(perm: Perm, app: String, on: bool) {
++    let (table, id) = perm.store();
++    let Ok(conn) = zbus::Connection::session().await else { return };
++    let values = perm.values(on);
++    let _ = conn.call_method(Some(STORE), STORE_PATH, Some(STORE), "SetPermission", &(table, true, id, app.as_str(), values)).await;
++}
++
++/// Whether the disk "/" lives on is encrypted (LUKS under it).
++async fn root_encrypted() -> Option<bool> {
++    let out = rows::output("lsblk", &["-s", "-n", "-o", "TYPE", "-r", "--", &findmnt_root().await?]).await.ok()?;
++    Some(out.lines().any(|t| t.trim() == "crypt"))
++}
++
++async fn findmnt_root() -> Option<String> {
++    let out = rows::output("findmnt", &["-n", "-o", "SOURCE", "/"]).await.ok()?;
++    // btrfs shows "/dev/x[/@]".
++    Some(out.trim().split('[').next()?.to_string()).filter(|s| s.starts_with("/dev/"))
++}
++
++pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    match msg {
++        Msg::Loaded(perm, list) => {
++            let apps = Some(Apps(list));
++            match perm {
++                Perm::Location => pages.page_mut::<LocationPage>().map(|p| p.apps = apps),
++                Perm::Camera => pages.page_mut::<CameraPage>().map(|p| p.apps = apps),
++                Perm::Microphone => pages.page_mut::<MicrophonePage>().map(|p| p.apps = apps),
++                Perm::Screenshot => pages.page_mut::<ScreenshotPage>().map(|p| p.apps = apps),
++                Perm::Background => pages.page_mut::<BackgroundPage>().map(|p| p.apps = apps),
++            };
++        }
++        Msg::Set(perm, app, on) => {
++            let flip = |a: &mut Option<Apps>| {
++                if let Some(Apps(list)) = a
++                    && let Some(e) = list.iter_mut().find(|(n, _)| *n == app)
++                {
++                    e.1 = on;
++                }
++            };
++            match perm {
++                Perm::Location => pages.page_mut::<LocationPage>().map(|p| flip(&mut p.apps)),
++                Perm::Camera => pages.page_mut::<CameraPage>().map(|p| flip(&mut p.apps)),
++                Perm::Microphone => pages.page_mut::<MicrophonePage>().map(|p| flip(&mut p.apps)),
++                Perm::Screenshot => pages.page_mut::<ScreenshotPage>().map(|p| flip(&mut p.apps)),
++                Perm::Background => pages.page_mut::<BackgroundPage>().map(|p| flip(&mut p.apps)),
++            };
++            return cosmic::task::future(async move {
++                set(perm, app, on).await;
++                crate::Message::None
++            });
++        }
++        Msg::Encryption(e) => {
++            if let Some(p) = pages.page_mut::<Page>() {
++                p.encrypted = e;
++            }
++        }
++        Msg::ClearActivity => {
++            // The recently-used list every desktop shares (Start's
++            // Recommended and jump lists read it).
++            if let Some(f) = dirs::data_dir().map(|d| d.join("recently-used.xbel")) {
++                let _ = std::fs::write(
++                    f,
++                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xbel version=\"1.0\" xmlns:bookmark=\"http://www.freedesktop.org/standards/desktop-bookmarks\" xmlns:mime=\"http://www.freedesktop.org/standards/shared-mime-info\">\n</xbel>\n",
++                );
++            }
++            if let Some(p) = pages.page_mut::<ActivityPage>() {
++                p.cleared = true;
++            }
++        }
++        Msg::Cleared => {}
++    }
++    Task::none()
++}
++
++pub fn register(pages: &mut Binder<PMsg>) {
++    let _ = pages.register::<LocationPage>();
++    let _ = pages.register::<CameraPage>();
++    let _ = pages.register::<MicrophonePage>();
++    let _ = pages.register::<ScreenshotPage>();
++    let _ = pages.register::<BackgroundPage>();
++    let _ = pages.register::<ActivityPage>();
++}
++
++/// Sub-pages of Privacy & security (for nesting under it).
++pub const SUB_PAGES: [&str; 6] = [
++    "lapin-privacy-location",
++    "lapin-privacy-camera",
++    "lapin-privacy-microphone",
++    "lapin-privacy-screenshots",
++    "lapin-privacy-background",
++    "lapin-privacy-activity",
++];
+diff --git a/cosmic-settings/src/lapin/rows.rs b/cosmic-settings/src/lapin/rows.rs
+new file mode 100644
+index 0000000..8ca2e2c
+--- /dev/null
++++ b/cosmic-settings/src/lapin/rows.rs
+@@ -0,0 +1,171 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Small row builders shared by Lapin's own pages, in Windows' shape: an
++//! outline icon, a title with a grey description under it, and a control
++//! or an arrow at the right.
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, column, icon, list, settings, text};
++use cosmic::{Apply, Element};
++use cosmic::widget::list_column::{IntoListItem, ListItem};
++
++use super::style;
++
++pub type PMsg = crate::pages::Message;
++pub type Item<'a> = ListItem<'a, PMsg>;
++
++/// Title over a grey description.
++pub fn words<'a, M: 'static>(title: impl Into<String>, description: impl Into<String>) -> Element<'a, M> {
++    let d: String = description.into();
++    let mut c = column::with_capacity(2).spacing(2).push(text::body(title.into()));
++    if !d.is_empty() {
++        c = c.push(text::caption(d).class(style::quiet()));
++    }
++    c.width(Length::Fill).into()
++}
++
++fn lead<'a, M: 'static>(icon_name: &str) -> Element<'a, M> {
++    icon::from_name(icon_name.to_string()).size(20).icon().into()
++}
++
++/// A row that opens another page (or does something) when clicked.
++pub fn nav<'a>(icon_name: &str, title: impl Into<String>, description: impl Into<String>, msg: Option<PMsg>) -> Item<'a> {
++    let mut children = Vec::with_capacity(3);
++    if !icon_name.is_empty() {
++        children.push(lead(icon_name));
++    }
++    children.push(words(title, description));
++    children.push(icon::from_name("go-next-symbolic").size(16).icon().into());
++    settings::item_row(children).apply(list::button).on_press_maybe(msg).into_list_item()
++}
++
++/// A row that opens another page, with a status ("On", "3 apps") before
++/// the arrow.
++pub fn nav_with<'a>(icon_name: &str, title: impl Into<String>, description: impl Into<String>, status: impl Into<String>, msg: Option<PMsg>) -> Item<'a> {
++    let mut children = Vec::with_capacity(4);
++    if !icon_name.is_empty() {
++        children.push(lead(icon_name));
++    }
++    children.push(words(title, description));
++    children.push(text::body(status.into()).class(style::quiet()).into());
++    children.push(icon::from_name("go-next-symbolic").size(16).icon().into());
++    settings::item_row(children).apply(list::button).on_press_maybe(msg).into_list_item()
++}
++
++/// A row with any control at the right.
++pub fn with<'a>(icon_name: &str, title: impl Into<String>, description: impl Into<String>, control: Element<'a, PMsg>) -> Item<'a> {
++    let mut children = Vec::with_capacity(3);
++    if !icon_name.is_empty() {
++        children.push(lead(icon_name));
++    }
++    children.push(words(title, description));
++    children.push(control);
++    Element::from(settings::item_row(children)).into_list_item()
++}
++
++/// A row with a switch and On/Off at the right.
++pub fn switch<'a>(icon_name: &str, title: impl Into<String>, description: impl Into<String>, on: bool, f: impl Fn(bool) -> PMsg + 'a) -> Item<'a> {
++    let t = widget::row::with_capacity(2)
++        .spacing(12)
++        .align_y(Alignment::Center)
++        .push(text::body(if on { "On" } else { "Off" }))
++        .push(widget::toggler(on).on_toggle(f));
++    with(icon_name, title, description, t.into())
++}
++
++/// A row with a standard button at the right.
++pub fn button<'a>(icon_name: &str, title: impl Into<String>, description: impl Into<String>, label: impl Into<String>, msg: Option<PMsg>) -> Item<'a> {
++    with(icon_name, title, description, widget::button::standard(label.into()).on_press_maybe(msg).into())
++}
++
++/// A plain line of grey text inside a section (empty lists, notes).
++pub fn note<'a>(s: impl Into<String>) -> Item<'a> {
++    Element::from(text::body(s.into()).class(style::quiet())).into_list_item()
++}
++
++/// Folds rows into a settings section with an optional title.
++pub fn section<'a>(title: &'a str, rows: Vec<Item<'a>>) -> Element<'a, PMsg> {
++    let mut sec = settings::section();
++    if !title.is_empty() {
++        sec = sec.title(title);
++    }
++    rows.into_iter()
++        .fold(sec, |s, r| match r {
++            ListItem::Element(e) => s.add(e),
++            ListItem::Button(b) => s.add(b),
++        })
++        .into()
++}
++
++/// Bytes as Windows writes them: "512 KB", "3.4 MB", "1.25 GB".
++pub fn size(bytes: u64) -> String {
++    const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
++    let mut v = bytes as f64;
++    let mut u = 0;
++    while v >= 1024.0 && u < UNITS.len() - 1 {
++        v /= 1024.0;
++        u += 1;
++    }
++    match u {
++        0 => format!("{bytes} bytes"),
++        _ if v >= 100.0 => format!("{v:.0} {}", UNITS[u]),
++        _ if v >= 10.0 => format!("{v:.1} {}", UNITS[u]),
++        _ => format!("{v:.2} {}", UNITS[u]),
++    }
++}
++
++/// "245.67 MiB", "1.2 GB", "980 kB" → bytes.
++pub fn parse_size(s: &str) -> Option<u64> {
++    let s = s.trim().replace('\u{a0}', " ");
++    let (num, unit) = match s.find(|c: char| c.is_alphabetic()) {
++        Some(i) => (s[..i].trim(), s[i..].trim()),
++        None => (s.as_str(), "B"),
++    };
++    let n: f64 = num.replace(',', ".").parse().ok()?;
++    let mul: f64 = match unit.to_ascii_lowercase().as_str() {
++        "b" | "bytes" | "byte" => 1.0,
++        "kib" | "kb" | "k" => 1024.0,
++        "mib" | "mb" | "m" => 1024.0 * 1024.0,
++        "gib" | "gb" | "g" => 1024.0 * 1024.0 * 1024.0,
++        "tib" | "tb" | "t" => 1024.0_f64.powi(4),
++        _ => return None,
++    };
++    Some((n * mul) as u64)
++}
++
++/// Runs a command and returns its standard output, or its last error line.
++pub async fn output(cmd: &str, args: &[&str]) -> Result<String, String> {
++    let out = tokio::process::Command::new(cmd)
++        .args(args)
++        .env("LC_ALL", "C")
++        .output()
++        .await
++        .map_err(|e| format!("{cmd}: {e}"))?;
++    if out.status.success() {
++        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
++    } else {
++        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
++        // pkexec: 126 = the password prompt was dismissed, 127 = not allowed.
++        Err(match out.status.code() {
++            Some(126) => "Cancelled.".into(),
++            Some(127) => "Not authorized.".into(),
++            _ if err.is_empty() => format!("{cmd} failed"),
++            _ => err.lines().last().unwrap_or_default().to_string(),
++        })
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn sizes() {
++        assert_eq!(size(512), "512 bytes");
++        assert_eq!(size(3 * 1024 * 1024 + 400 * 1024), "3.39 MB");
++        assert_eq!(size(250 * 1024 * 1024), "250 MB");
++        assert_eq!(parse_size("245.67 MiB"), Some((245.67 * 1048576.0) as u64));
++        assert_eq!(parse_size("1.2\u{a0}GB"), Some((1.2 * 1073741824.0) as u64));
++        assert_eq!(parse_size("980 kB"), Some(980 * 1024));
++        assert_eq!(parse_size("nonsense"), None);
++    }
++}
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 7a8a7bf..57e573c 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -113,6 +113,16 @@ pub struct Prefs {
+     pub dnd_schedule: Schedule,
+     pub rules: Vec<AppRule>,
+     pub apps: Vec<String>,
++    pub recent_items: bool,
++    pub clip_history: bool,
++    pub clip_cleared: bool,
++    /// "" = the desktop background.
++    pub lock_wallpaper: String,
++    /// "Picture" chosen in the drop-down, before a picture is picked.
++    pub lock_picture_mode: bool,
++    pub signin_picture: bool,
++    /// Pictures offered for the lock screen.
++    pub pictures: Vec<String>,
+ }
+ 
+ impl Prefs {
+@@ -151,6 +161,13 @@ impl Prefs {
+             dnd_schedule: get(&notify, "dnd_schedule").unwrap_or_default(),
+             rules,
+             apps,
++            recent_items: !get::<bool>(&shell, "no_recent_items").unwrap_or(false),
++            clip_history: !get::<bool>(&shell, "no_clipboard_history").unwrap_or(false),
++            clip_cleared: false,
++            lock_picture_mode: false,
++            lock_wallpaper: get(&shell, "lock_wallpaper").unwrap_or_default(),
++            signin_picture: !get::<bool>(&shell, "no_signin_picture").unwrap_or(false),
++            pictures: pictures(),
+         }
+     }
+ 
+@@ -184,6 +201,22 @@ pub enum Msg {
+     DndFrom(usize),
+     DndTo(usize),
+     App(String, bool),
++    // Personalization > Start
++    RecentItems(bool),
++    // System > Clipboard
++    ClipHistory(bool),
++    ClipClear,
++    // Personalization > Lock screen
++    LockMode(usize),
++    LockPicture(String),
++    LockBrowse,
++    SigninPicture(bool),
++    // Pages with their own state
++    Apps(super::apps::Msg),
++    Storage(super::storage::Msg),
++    Update(super::update::Msg),
++    Privacy(super::privacy::Msg),
++    SignIn(super::signin::Msg),
+ }
+ 
+ fn save<T: Serialize>(id: &str, key: &str, value: &T) {
+@@ -214,8 +247,65 @@ fn slot(minutes: u32) -> usize {
+ /// Applies a change: remembers it and writes it where the shell or the
+ /// notification daemon will pick it up.
+ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    match msg {
++        Msg::Apps(m) => return super::apps::update(pages, m),
++        Msg::Storage(m) => return super::storage::update(pages, m),
++        Msg::Update(m) => return super::update::update(pages, m),
++        Msg::Privacy(m) => return super::privacy::update(pages, m),
++        Msg::SignIn(m) => return super::signin::update(pages, m),
++        _ => {}
++    }
+     let Some(p) = pages.resource_mut::<Prefs>() else { return cosmic::Task::none() };
+     match msg {
++        Msg::Apps(_) | Msg::Storage(_) | Msg::Update(_) | Msg::Privacy(_) | Msg::SignIn(_) => {}
++        Msg::RecentItems(v) => (p.recent_items = v, save(SHELL, "no_recent_items", &!v)).1,
++        Msg::ClipHistory(v) => (p.clip_history = v, save(SHELL, "no_clipboard_history", &!v)).1,
++        Msg::ClipClear => {
++            p.clip_cleared = true;
++            // The shell keeps the history; this asks it to forget it.
++            let _ = std::process::Command::new("lapin-ux-shell").arg("clipboard-clear").spawn();
++        }
++        Msg::LockMode(i) => {
++            if i == 0 {
++                p.lock_picture_mode = false;
++                p.lock_wallpaper.clear();
++                save(SHELL, "lock_wallpaper", &p.lock_wallpaper);
++            } else {
++                p.lock_picture_mode = true;
++                if p.lock_wallpaper.is_empty()
++                    && let Some(first) = p.pictures.first()
++                {
++                    p.lock_wallpaper = first.clone();
++                    save(SHELL, "lock_wallpaper", &p.lock_wallpaper);
++                }
++            }
++        }
++        Msg::LockPicture(path) => {
++            if !p.pictures.contains(&path) {
++                p.pictures.insert(0, path.clone());
++            }
++            p.lock_wallpaper = path;
++            save(SHELL, "lock_wallpaper", &p.lock_wallpaper);
++        }
++        Msg::LockBrowse => {
++            #[cfg(feature = "xdg-portal")]
++            return cosmic::task::future(async {
++                use cosmic::dialog::file_chooser;
++                let picked = file_chooser::open::Dialog::new()
++                    .title("Choose a picture")
++                    .accept_label("Choose picture")
++                    .modal(false)
++                    .open_file()
++                    .await
++                    .ok()
++                    .and_then(|r| r.url().to_file_path().ok());
++                match picked {
++                    Some(path) => crate::Message::PageMessage(PMsg::Lapin(Msg::LockPicture(path.to_string_lossy().into_owned()))),
++                    None => crate::Message::None,
++                }
++            });
++        }
++        Msg::SigninPicture(v) => (p.signin_picture = v, save(SHELL, "no_signin_picture", &!v)).1,
+         Msg::ShowSearch(v) => (p.show_search = v, save(SHELL, "show_search", &v)).1,
+         Msg::TouchKeyboard(v) => (p.touch_keyboard_button = v, save(SHELL, "touch_keyboard_button", &v)).1,
+         Msg::Alignment(i) => {
+@@ -424,6 +514,12 @@ fn start_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     vec![
+         toggle("Show web results in search", Some("Offer \"Search the web\" when you search from Start"), p.web_results, Msg::WebResults),
+         choice("Search engine", Some("Used for web results"), names, engine, Msg::Engine),
++        toggle(
++            "Show recently opened items in Start and jump lists",
++            None,
++            p.recent_items,
++            Msg::RecentItems,
++        ),
+     ]
+ }
+ 
+@@ -514,6 +610,147 @@ lapin_page!(Multitasking, "lapin-multitasking", "view-grid-symbolic", "Multitask
+     ("Advanced", advanced_rows),
+ ]);
+ 
++// --- System > Clipboard ------------------------------------------------------
++
++fn clipboard_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let clear = widget::row::with_capacity(2)
++        .spacing(12)
++        .align_y(cosmic::iced::Alignment::Center)
++        .push_maybe(p.clip_cleared.then(|| widget::icon::from_name("object-select-symbolic").size(16).icon()))
++        .push(widget::button::standard("Clear").on_press(m(Msg::ClipClear)));
++    vec![
++        toggle(
++            "Clipboard history",
++            Some("Save several items to the clipboard to use later. Press Super + V to see your history and paste from it."),
++            p.clip_history,
++            Msg::ClipHistory,
++        ),
++        settings::item::builder("Clear clipboard data")
++            .description("Clear everything except pinned items")
++            .control(clear)
++            .apply(Element::from)
++            .into_list_item(),
++    ]
++}
++
++lapin_page!(Clipboard, "lapin-clipboard", "edit-paste-symbolic", "Clipboard", "Cut and copy history", [("", clipboard_rows)]);
++
++// --- Personalization > Lock screen ------------------------------------------
++
++const LOCK_MODES: [&str; 2] = ["Desktop background", "Picture"];
++
++/// Pictures to offer: the system's wallpapers (Lapin's first).
++fn pictures() -> Vec<String> {
++    let mut out = Vec::new();
++    for base in ["/usr/share/backgrounds/lapin-ux", "/usr/share/backgrounds", "/usr/share/wallpapers"] {
++        let mut stack = vec![std::path::PathBuf::from(base)];
++        while let Some(dir) = stack.pop() {
++            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
++            let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
++            entries.sort();
++            for p in entries {
++                if p.is_dir() {
++                    stack.push(p);
++                } else if p.extension().is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")) {
++                    let s = p.to_string_lossy().into_owned();
++                    if !out.contains(&s) {
++                        out.push(s);
++                    }
++                }
++            }
++        }
++        if out.len() >= 10 {
++            break;
++        }
++    }
++    out.truncate(10);
++    out
++}
++
++fn lock_preview<'a>(p: &'a Prefs) -> Element<'a, PMsg> {
++    // The chosen picture with the lock screen's clock on it.
++    let path = if p.lock_wallpaper.is_empty() { super::device::Device::read().wallpaper } else { Some(p.lock_wallpaper.clone().into()) };
++    let picture: Element<'a, PMsg> = match path {
++        Some(path) => widget::image(widget::image::Handle::from_path(path))
++            .content_fit(cosmic::iced::ContentFit::Cover)
++            .width(Length::Fixed(352.0))
++            .height(Length::Fixed(220.0))
++            .border_radius(6.0)
++            .into(),
++        None => widget::Space::new().width(352).height(220).into(),
++    };
++    let now = chrono::Local::now();
++    let clock = widget::column::with_capacity(2)
++        .align_x(cosmic::iced::Alignment::Center)
++        .push(text::title1(now.format("%-I:%M").to_string()).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)))
++        .push(text::caption(now.format("%A, %B %-d").to_string()).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)));
++    let face = widget::container(clock).width(Length::Fixed(352.0)).padding([28, 0, 0, 0]).align_x(cosmic::iced::Alignment::Center);
++    let shot = cosmic::iced::widget::stack![picture, face];
++    widget::container(shot).padding(4).class(super::style::screen()).into()
++}
++
++fn lock_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let picture_mode = p.lock_picture_mode || !p.lock_wallpaper.is_empty();
++    let mut rows = vec![
++        Element::from(widget::container(lock_preview(p)).width(Length::Fill).padding([8, 0, 8, 0])).into_list_item(),
++        choice("Personalize your lock screen", None, &LOCK_MODES, usize::from(picture_mode), Msg::LockMode),
++    ];
++    if picture_mode {
++        let thumbs: Vec<Element<'a, PMsg>> = p
++            .pictures
++            .iter()
++            .take(8)
++            .map(|path| {
++                let selected = *path == p.lock_wallpaper;
++                widget::button::custom(
++                    widget::image(widget::image::Handle::from_path(path))
++                        .content_fit(cosmic::iced::ContentFit::Cover)
++                        .width(Length::Fixed(96.0))
++                        .height(Length::Fixed(60.0))
++                        .border_radius(4.0),
++                )
++                .padding(2)
++                .selected(selected)
++                .class(cosmic::theme::Button::Image)
++                .on_press(m(Msg::LockPicture(path.clone())))
++                .into()
++            })
++            .collect();
++        let picker = widget::column::with_capacity(2)
++            .spacing(12)
++            .push(text::body("Recent images"))
++            .push(widget::flex_row(thumbs).row_spacing(8).column_spacing(8))
++            .push(
++                widget::row::with_capacity(2)
++                    .spacing(16)
++                    .align_y(cosmic::iced::Alignment::Center)
++                    .push(text::body("Choose a photo").width(Length::Fill))
++                    .push(widget::button::standard("Browse photos").on_press(m(Msg::LockBrowse))),
++            );
++        rows.push(Element::from(widget::container(picker).padding([8, 0])).into_list_item());
++    }
++    rows.push(toggle(
++        "Show the lock screen background picture on the sign-in screen",
++        None,
++        p.signin_picture,
++        Msg::SigninPicture,
++    ));
++    rows
++}
++
++fn lock_related<'a>(binder: &'a Binder<PMsg>, _: &'a Prefs) -> Vec<Item<'a>> {
++    binder
++        .find_page_by_id("power")
++        .map(|(e, _)| super::rows::nav("video-display-symbolic", "Screen timeout", "Turn off the screen and sleep after a while", Some(PMsg::Page(e))))
++        .into_iter()
++        .collect()
++}
++
++lapin_page!(LockScreen, "lapin-lock-screen", "system-lock-screen-symbolic", "Lock screen", "Lock screen images, sign-in screen", [
++    ("", lock_rows),
++    ("Related settings", lock_related),
++]);
++
+ /// Registers the pages and the shared settings; returns them by id.
+ pub fn register(pages: &mut Binder<PMsg>) {
+     pages.resource_register::<Prefs>();
+@@ -525,13 +762,25 @@ pub fn register(pages: &mut Binder<PMsg>) {
+     let _ = pages.register::<NightLight>();
+     let _ = pages.register::<Notifications>();
+     let _ = pages.register::<Multitasking>();
++    let _ = pages.register::<Clipboard>();
++    let _ = pages.register::<LockScreen>();
++    let _ = pages.register::<super::apps::Page>();
++    let _ = pages.register::<super::storage::Page>();
++    let _ = pages.register::<super::storage::TempPage>();
++    let _ = pages.register::<super::update::Page>();
++    let _ = pages.register::<super::update::HistoryPage>();
++    let _ = pages.register::<super::privacy::Page>();
++    super::privacy::register(pages);
++    let _ = pages.register::<super::signin::Page>();
+ }
+ 
+ /// Re-reads the settings (when a Lapin page opens), in case the shell or
+ /// the notification centre changed them.
+ pub fn reload(pages: &mut Binder<PMsg>) {
+     if let Some(p) = pages.resource_mut::<Prefs>() {
++        let mode = p.lock_picture_mode;
+         *p = Prefs::load();
++        p.lock_picture_mode = mode;
+     }
+ }
+ 
+diff --git a/cosmic-settings/src/lapin/signin.rs b/cosmic-settings/src/lapin/signin.rs
+new file mode 100644
+index 0000000..43b55ae
+--- /dev/null
++++ b/cosmic-settings/src/lapin/signin.rs
+@@ -0,0 +1,354 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Accounts > Sign-in options, as on Windows: "Ways to sign in" with
++//! Fingerprint recognition (through fprintd, when the PC has a reader) and
++//! Password (Change). The new password is set through AccountsService; the
++//! admin prompt asks for the current one first.
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, column, row, text};
++use cosmic::{Element, Task};
++use cosmic_settings_page::{self as page, Binder, Section, section};
++use futures::StreamExt;
++use slotmap::SlotMap;
++
++use super::rows::{self, PMsg};
++use super::settings::Msg as SMsg;
++
++const FPRINT: &str = "net.reactivated.Fprint";
++
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub struct Reader {
++    /// The reader's D-Bus path.
++    pub device: String,
++    pub name: String,
++    pub enrolled: Vec<String>,
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    Reader(Option<Reader>),
++    // Password
++    ChangePassword,
++    New(String),
++    Confirm(String),
++    Hint(String),
++    Reveal,
++    Save,
++    Saved(Result<(), String>),
++    Cancel,
++    // Fingerprint
++    SetUp,
++    Enroll(String, bool),
++    RemoveFingers,
++    Removed,
++}
++
++#[derive(Clone, Debug, PartialEq)]
++enum Dialog {
++    Password { new: String, confirm: String, hint: String, reveal: bool, saving: bool, problem: Option<String> },
++    Fingerprint { stage: u32, message: String, done: bool },
++}
++
++#[derive(Default)]
++pub struct Page {
++    entity: page::Entity,
++    reader: Option<Reader>,
++    looked: bool,
++    dialog: Option<Dialog>,
++    changed: bool,
++}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(SMsg::SignIn(msg))
++}
++
++fn login() -> String {
++    std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| super::view::Account::default().name)
++}
++
++impl page::Page<PMsg> for Page {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-signin", "dialog-password-symbolic").title("Sign-in options").description("Fingerprint, password")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().title("Ways to sign in").view::<Page>(|_, page, s| view(page, &s.title)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        self.changed = false;
++        Task::future(async { m(Msg::Reader(reader().await)) })
++    }
++    fn dialog(&self) -> Option<Element<'_, PMsg>> {
++        match self.dialog.as_ref()? {
++            Dialog::Password { new, confirm, hint, reveal, saving, problem } => {
++                let mismatch = !new.is_empty() && !confirm.is_empty() && new != confirm;
++                let ok = !new.is_empty() && new == confirm && !saving;
++                let mut body = column::with_capacity(5)
++                    .spacing(12)
++                    .push(widget::secure_input("New password", new.as_str(), Some(m(Msg::Reveal)), !reveal).on_input(|v| m(Msg::New(v))))
++                    .push(widget::secure_input("Confirm password", confirm.as_str(), Some(m(Msg::Reveal)), !reveal).on_input(|v| m(Msg::Confirm(v))))
++                    .push(widget::text_input("Password hint", hint.as_str()).on_input(|v| m(Msg::Hint(v))));
++                if mismatch {
++                    body = body.push(text::caption("The passwords don't match.").class(cosmic::theme::Text::Accent));
++                }
++                if let Some(e) = problem {
++                    body = body.push(text::caption(e.clone()).class(cosmic::theme::Text::Accent));
++                }
++                Some(
++                    widget::dialog()
++                        .title("Change your password")
++                        .body("You'll be asked for your current password before the new one is saved.")
++                        .control(body)
++                        .primary_action(widget::button::suggested(if *saving { "Saving…" } else { "Save" }).on_press_maybe(ok.then(|| m(Msg::Save))))
++                        .secondary_action(widget::button::standard("Cancel").on_press(m(Msg::Cancel)))
++                        .into(),
++                )
++            }
++            Dialog::Fingerprint { stage, message, done } => {
++                let body = column::with_capacity(2)
++                    .spacing(12)
++                    .push(text::body(message.clone()))
++                    .push(widget::progress_bar::determinate_linear(if *done { 1.0 } else { (*stage as f32 / 10.0).min(0.95) }).girth(6).width(Length::Fill));
++                Some(
++                    widget::dialog()
++                        .title("Fingerprint setup")
++                        .control(body)
++                        .primary_action(widget::button::suggested(if *done { "Done" } else { "Cancel" }).on_press(m(Msg::Cancel)))
++                        .into(),
++                )
++            }
++        }
++    }
++}
++impl page::AutoBind<PMsg> for Page {}
++
++fn view<'a>(p: &'a Page, title: &'a str) -> Element<'a, PMsg> {
++    let finger: rows::Item<'a> = match &p.reader {
++        Some(r) if r.enrolled.is_empty() => rows::button("fingerprint-symbolic", "Fingerprint recognition", "Sign in with your fingerprint reader", "Set up", Some(m(Msg::SetUp))),
++        Some(r) => {
++            let n = r.enrolled.len();
++            let buttons = row::with_capacity(2)
++                .spacing(8)
++                .push(widget::button::standard("Add another finger").on_press(m(Msg::SetUp)))
++                .push(widget::button::standard("Remove").on_press(m(Msg::RemoveFingers)));
++            rows::with(
++                "fingerprint-symbolic",
++                "Fingerprint recognition",
++                if n == 1 { "You can sign in with 1 fingerprint".to_string() } else { format!("You can sign in with {n} fingerprints") },
++                buttons.into(),
++            )
++        }
++        None => rows::with(
++            "fingerprint-symbolic",
++            "Fingerprint recognition",
++            if p.looked { "This option is currently unavailable" } else { "Looking for a fingerprint reader…" },
++            widget::Space::new().width(0).into(),
++        ),
++    };
++    let password = rows::with(
++        "dialog-password-symbolic",
++        "Password",
++        if p.changed { "Your password was changed" } else { "Sign in with your account's password" },
++        row::with_capacity(2)
++            .spacing(12)
++            .align_y(Alignment::Center)
++            .push_maybe(p.changed.then(|| cosmic::widget::icon::from_name("object-select-symbolic").size(16).icon()))
++            .push(widget::button::standard("Change").on_press(m(Msg::ChangePassword)))
++            .into(),
++    );
++    column::with_capacity(1).width(Length::Fill).push(rows::section(title, vec![finger, password])).into()
++}
++
++pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    let Some(p) = pages.page_mut::<Page>() else { return Task::none() };
++    match msg {
++        Msg::Reader(r) => {
++            p.reader = r;
++            p.looked = true;
++        }
++        Msg::ChangePassword => {
++            p.dialog = Some(Dialog::Password { new: String::new(), confirm: String::new(), hint: String::new(), reveal: false, saving: false, problem: None })
++        }
++        Msg::New(v) => {
++            if let Some(Dialog::Password { new, problem, .. }) = &mut p.dialog {
++                *new = v;
++                *problem = None;
++            }
++        }
++        Msg::Confirm(v) => {
++            if let Some(Dialog::Password { confirm, problem, .. }) = &mut p.dialog {
++                *confirm = v;
++                *problem = None;
++            }
++        }
++        Msg::Hint(v) => {
++            if let Some(Dialog::Password { hint, .. }) = &mut p.dialog {
++                *hint = v;
++            }
++        }
++        Msg::Reveal => {
++            if let Some(Dialog::Password { reveal, .. }) = &mut p.dialog {
++                *reveal = !*reveal;
++            }
++        }
++        Msg::Save => {
++            if let Some(Dialog::Password { new, hint, saving, .. }) = &mut p.dialog {
++                *saving = true;
++                let (new, hint) = (new.clone(), hint.clone());
++                return cosmic::task::future(async move {
++                    let r = set_password(&new, &hint).await;
++                    crate::Message::PageMessage(m(Msg::Saved(r)))
++                });
++            }
++        }
++        Msg::Saved(Ok(())) => {
++            p.dialog = None;
++            p.changed = true;
++        }
++        Msg::Saved(Err(e)) => {
++            if let Some(Dialog::Password { saving, problem, .. }) = &mut p.dialog {
++                *saving = false;
++                *problem = Some(e);
++            }
++        }
++        Msg::Cancel => {
++            p.dialog = None;
++            return cosmic::task::future(async { crate::Message::PageMessage(m(Msg::Reader(reader().await))) });
++        }
++        Msg::SetUp => {
++            let Some(r) = p.reader.clone() else { return Task::none() };
++            p.dialog = Some(Dialog::Fingerprint { stage: 0, message: "Touch the fingerprint reader with the finger you want to use.".into(), done: false });
++            return enroll(r);
++        }
++        Msg::Enroll(status, done) => {
++            if let Some(Dialog::Fingerprint { stage, message, done: d }) = &mut p.dialog {
++                *message = enroll_text(&status).to_string();
++                if status == "enroll-stage-passed" {
++                    *stage += 1;
++                }
++                *d = done && status == "enroll-completed";
++                if done && status != "enroll-completed" {
++                    *message = format!("{} Select Cancel and try again.", enroll_text(&status));
++                }
++            }
++        }
++        Msg::RemoveFingers => {
++            let Some(r) = p.reader.clone() else { return Task::none() };
++            return cosmic::task::future(async move {
++                let _ = remove_fingers(&r).await;
++                crate::Message::PageMessage(m(Msg::Removed))
++            });
++        }
++        Msg::Removed => return cosmic::task::future(async { crate::Message::PageMessage(m(Msg::Reader(reader().await))) }),
++    }
++    Task::none()
++}
++
++fn enroll_text(status: &str) -> &'static str {
++    match status {
++        "enroll-stage-passed" => "Lift your finger, then touch the reader again.",
++        "enroll-completed" => "All set! You can now use your fingerprint to sign in.",
++        "enroll-retry-scan" => "Try again.",
++        "enroll-swipe-too-short" => "That was too short. Try again.",
++        "enroll-finger-not-centered" => "Center your finger on the reader and try again.",
++        "enroll-remove-and-retry" => "Lift your finger and try again.",
++        "enroll-data-full" => "The reader can't store more fingerprints.",
++        "enroll-duplicate" => "That fingerprint is already set up.",
++        _ => "The fingerprint couldn't be read.",
++    }
++}
++
++/// The default fingerprint reader and the fingers already set up.
++async fn reader() -> Option<Reader> {
++    let conn = zbus::Connection::system().await.ok()?;
++    let reply = conn
++        .call_method(Some(FPRINT), "/net/reactivated/Fprint/Manager", Some("net.reactivated.Fprint.Manager"), "GetDefaultDevice", &())
++        .await
++        .ok()?;
++    let device: zbus::zvariant::OwnedObjectPath = reply.body().deserialize().ok()?;
++    let proxy = zbus::Proxy::new(&conn, FPRINT, device.clone(), "net.reactivated.Fprint.Device").await.ok()?;
++    let name: String = proxy.get_property("name").await.unwrap_or_default();
++    let enrolled: Vec<String> = proxy.call("ListEnrolledFingers", &(login(),)).await.unwrap_or_default();
++    Some(Reader { device: device.to_string(), name, enrolled })
++}
++
++/// Which finger to set up next: Windows doesn't ask, so the first unused.
++fn next_finger(enrolled: &[String]) -> &'static str {
++    const FINGERS: [&str; 10] = [
++        "right-index-finger", "left-index-finger", "right-thumb", "left-thumb", "right-middle-finger",
++        "left-middle-finger", "right-ring-finger", "left-ring-finger", "right-little-finger", "left-little-finger",
++    ];
++    FINGERS.into_iter().find(|f| !enrolled.iter().any(|e| e == f)).unwrap_or(FINGERS[0])
++}
++
++fn enroll(r: Reader) -> cosmic::app::Task<crate::Message> {
++    let s = cosmic::iced::stream::channel(16, move |mut out: futures::channel::mpsc::Sender<PMsg>| async move {
++        use futures::SinkExt;
++        let fail = |e: &str| (e.to_string(), true);
++        let result: Result<(), (String, bool)> = async {
++            let conn = zbus::Connection::system().await.map_err(|_| fail("enroll-failed"))?;
++            let proxy = zbus::Proxy::new(&conn, FPRINT, r.device.as_str(), "net.reactivated.Fprint.Device").await.map_err(|_| fail("enroll-failed"))?;
++            let mut signals = proxy.receive_signal("EnrollStatus").await.map_err(|_| fail("enroll-failed"))?;
++            proxy.call_method("Claim", &(login(),)).await.map_err(|_| fail("enroll-failed"))?;
++            let started = proxy.call_method("EnrollStart", &(next_finger(&r.enrolled),)).await;
++            if started.is_err() {
++                let _ = proxy.call_method("Release", &()).await;
++                return Err(fail("enroll-failed"));
++            }
++            while let Some(sig) = signals.next().await {
++                let Ok((status, done)) = sig.body().deserialize::<(String, bool)>() else { continue };
++                let _ = out.send(m(Msg::Enroll(status, done))).await;
++                if done {
++                    break;
++                }
++            }
++            let _ = proxy.call_method("EnrollStop", &()).await;
++            let _ = proxy.call_method("Release", &()).await;
++            Ok(())
++        }
++        .await;
++        if let Err((status, done)) = result {
++            let _ = out.send(m(Msg::Enroll(status, done))).await;
++        }
++    });
++    Task::run(s, |msg| cosmic::Action::App(crate::Message::PageMessage(msg)))
++}
++
++async fn remove_fingers(r: &Reader) -> Result<(), zbus::Error> {
++    let conn = zbus::Connection::system().await?;
++    let proxy = zbus::Proxy::new(&conn, FPRINT, r.device.as_str(), "net.reactivated.Fprint.Device").await?;
++    proxy.call_method("Claim", &(login(),)).await?;
++    let r = proxy.call_method("DeleteEnrolledFingers2", &()).await;
++    let _ = proxy.call_method("Release", &()).await;
++    r.map(drop)
++}
++
++async fn set_password(new: &str, hint: &str) -> Result<(), String> {
++    let conn = zbus::Connection::system().await.map_err(|e| e.to_string())?;
++    let user: zbus::zvariant::OwnedObjectPath = conn
++        .call_method(Some("org.freedesktop.Accounts"), "/org/freedesktop/Accounts", Some("org.freedesktop.Accounts"), "FindUserByName", &(login(),))
++        .await
++        .map_err(|e| e.to_string())?
++        .body()
++        .deserialize()
++        .map_err(|e| e.to_string())?;
++    let hashed = crate::pages::system::users::hash_password(new);
++    conn.call_method(Some("org.freedesktop.Accounts"), user.as_str(), Some("org.freedesktop.Accounts.User"), "SetPassword", &(hashed, hint))
++        .await
++        .map(drop)
++        .map_err(|e| match &e {
++            zbus::Error::MethodError(name, _, _) if name.as_str().ends_with("PermissionDenied") => "Your password wasn't changed.".into(),
++            _ => "Your password couldn't be changed.".to_string(),
++        })
++}
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn fingers() {
++        assert_eq!(super::next_finger(&[]), "right-index-finger");
++        assert_eq!(super::next_finger(&["right-index-finger".into()]), "left-index-finger");
++    }
++}
+diff --git a/cosmic-settings/src/lapin/storage.rs b/cosmic-settings/src/lapin/storage.rs
+new file mode 100644
+index 0000000..de36210
+--- /dev/null
++++ b/cosmic-settings/src/lapin/storage.rs
+@@ -0,0 +1,433 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! System > Storage, as on Windows: the disk's used and free space, then
++//! what is using it (apps, temporary files, documents, pictures…), each
++//! with a bar. Temporary files opens a page to clean them up.
++
++use std::path::PathBuf;
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, column, icon, row, text};
++use cosmic::{Apply, Element, Task};
++use cosmic_settings_page::{self as page, Binder, Section, section};
++use slotmap::SlotMap;
++
++use super::rows::{self, PMsg};
++use super::settings::Msg as SMsg;
++use super::style;
++
++#[derive(Clone, Debug, Default)]
++pub struct Usage {
++    pub total: u64,
++    pub used: u64,
++    pub free: u64,
++    /// (name, icon, bytes, what clicking opens)
++    pub categories: Vec<Category>,
++}
++
++#[derive(Clone, Debug)]
++pub struct Category {
++    pub name: &'static str,
++    pub icon: &'static str,
++    pub bytes: u64,
++    pub open: Open,
++}
++
++#[derive(Clone, Debug)]
++pub enum Open {
++    Folder(PathBuf),
++    Page(&'static str),
++    Nothing,
++}
++
++/// The temporary files Windows offers to remove, Linux's version of each.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Temp {
++    RecycleBin,
++    Thumbnails,
++    AppCache,
++    PackageCache,
++    Downloads,
++}
++
++impl Temp {
++    pub const ALL: [Temp; 5] = [Temp::PackageCache, Temp::RecycleBin, Temp::Thumbnails, Temp::AppCache, Temp::Downloads];
++    fn title(self) -> &'static str {
++        match self {
++            Temp::RecycleBin => "Recycle Bin",
++            Temp::Thumbnails => "Thumbnails",
++            Temp::AppCache => "Temporary app files",
++            Temp::PackageCache => "Update cleanup",
++            Temp::Downloads => "Downloads",
++        }
++    }
++    fn description(self) -> &'static str {
++        match self {
++            Temp::RecycleBin => "The Recycle Bin holds files you've deleted. They're removed for good when you empty it.",
++            Temp::Thumbnails => "Small pictures of your files that are made again when they're needed.",
++            Temp::AppCache => "Files apps keep to start and load faster. Apps make them again as needed.",
++            Temp::PackageCache => "Downloaded copies of system updates that are already installed. You'll be asked for your password.",
++            Temp::Downloads => "Everything in your Downloads folder. Make sure you don't need these files first.",
++        }
++    }
++    /// Checked when the page opens, as on Windows (Downloads isn't).
++    fn default_on(self) -> bool {
++        !matches!(self, Temp::Downloads)
++    }
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    Measured(Usage),
++    Temps(Vec<(Temp, u64)>),
++    Check(Temp, bool),
++    Remove,
++    Removed(Result<(), String>),
++    Open(Open),
++}
++
++#[derive(Default)]
++pub struct Page {
++    entity: page::Entity,
++    usage: Option<Usage>,
++}
++
++#[derive(Default)]
++pub struct TempPage {
++    entity: page::Entity,
++    sizes: Option<Vec<(Temp, u64)>>,
++    checked: Vec<Temp>,
++    removing: bool,
++    problem: Option<String>,
++}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(SMsg::Storage(msg))
++}
++
++impl page::Page<PMsg> for Page {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-storage", "drive-harddisk-symbolic").title("Storage").description("Storage space, drives, cleanup")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().view::<Page>(|binder, page, _| view(binder, page)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        Task::future(async { m(Msg::Measured(measure().await)) })
++    }
++}
++impl page::AutoBind<PMsg> for Page {}
++
++impl page::Page<PMsg> for TempPage {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-storage-temp", "user-trash-symbolic").title("Temporary files").description("Files you can remove to free up space")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().view::<TempPage>(|_, page, _| temp_view(page)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        self.sizes = None;
++        self.problem = None;
++        self.checked = Temp::ALL.iter().copied().filter(|t| t.default_on()).collect();
++        Task::future(async { m(Msg::Temps(temp_sizes().await)) })
++    }
++}
++impl page::AutoBind<PMsg> for TempPage {}
++
++pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    match msg {
++        Msg::Measured(u) => {
++            if let Some(p) = pages.page_mut::<Page>() {
++                p.usage = Some(u);
++            }
++        }
++        Msg::Temps(t) => {
++            if let Some(p) = pages.page_mut::<TempPage>() {
++                p.sizes = Some(t);
++                p.removing = false;
++            }
++        }
++        Msg::Check(t, on) => {
++            if let Some(p) = pages.page_mut::<TempPage>() {
++                p.checked.retain(|c| *c != t);
++                if on {
++                    p.checked.push(t);
++                }
++            }
++        }
++        Msg::Remove => {
++            let Some(p) = pages.page_mut::<TempPage>() else { return Task::none() };
++            p.removing = true;
++            p.problem = None;
++            let which = p.checked.clone();
++            return cosmic::task::future(async move {
++                let r = remove(&which).await;
++                crate::Message::PageMessage(m(Msg::Removed(r)))
++            });
++        }
++        Msg::Removed(r) => {
++            if let Some(p) = pages.page_mut::<TempPage>() {
++                p.problem = r.err();
++            }
++            return cosmic::task::future(async { crate::Message::PageMessage(m(Msg::Temps(temp_sizes().await))) });
++        }
++        Msg::Open(Open::Folder(path)) => {
++            let _ = std::process::Command::new("xdg-open").arg(path).spawn();
++        }
++        Msg::Open(Open::Page(id)) => {
++            if let Some((e, _)) = pages.find_page_by_id(id) {
++                return cosmic::task::message(crate::Message::Page(e));
++            }
++        }
++        Msg::Open(Open::Nothing) => {}
++    }
++    Task::none()
++}
++
++fn bar<'a>(fraction: f32, height: f32) -> Element<'a, PMsg> {
++    widget::progress_bar::determinate_linear(fraction.clamp(0.0, 1.0)).girth(height).width(Length::Fill).into()
++}
++
++fn view<'a>(_binder: &'a Binder<PMsg>, p: &'a Page) -> Element<'a, PMsg> {
++    let Some(u) = &p.usage else {
++        return column::with_capacity(2)
++            .spacing(12)
++            .push(text::body("Looking at what's using space…").class(style::quiet()))
++            .push(widget::progress_bar::indeterminate_linear().girth(4).width(Length::Fill))
++            .into();
++    };
++    let used_frac = if u.total > 0 { u.used as f32 / u.total as f32 } else { 0.0 };
++    let disk = column::with_capacity(3)
++        .spacing(8)
++        .push(
++            row::with_capacity(3)
++                .align_y(Alignment::Center)
++                .push(text::title4("Local Disk (/)").width(Length::Fill))
++                .push(text::body(format!("{} used", rows::size(u.used)))),
++        )
++        .push(bar(used_frac, 8.0))
++        .push(text::caption(format!("{} free of {}", rows::size(u.free), rows::size(u.total))).class(style::quiet()));
++    let disk = widget::container(disk).padding([16, 16]).width(Length::Fill).class(style::card());
++
++    let biggest = u.categories.iter().map(|c| c.bytes).max().unwrap_or(1).max(1);
++    let cats: Vec<rows::Item<'a>> = u
++        .categories
++        .iter()
++        .map(|c| {
++            let line = row::with_capacity(4)
++                .spacing(16)
++                .align_y(Alignment::Center)
++                .push(icon::from_name(c.icon).size(20).icon())
++                .push(
++                    column::with_capacity(2)
++                        .spacing(6)
++                        .push(
++                            row::with_capacity(2)
++                                .push(text::body(c.name).width(Length::Fill))
++                                .push(text::body(rows::size(c.bytes))),
++                        )
++                        .push(bar(c.bytes as f32 / u.used.max(biggest) as f32, 4.0))
++                        .width(Length::Fill),
++                )
++                .push(icon::from_name("go-next-symbolic").size(16).icon());
++            let msg = match &c.open {
++                Open::Nothing => None,
++                o => Some(m(Msg::Open(o.clone()))),
++            };
++            use cosmic::widget::list_column::IntoListItem;
++            widget::settings::item_row(vec![line.into()]).apply(widget::list::button).on_press_maybe(msg).into_list_item()
++        })
++        .collect();
++    column::with_capacity(3)
++        .spacing(24)
++        .push(disk)
++        .push(rows::section("", cats))
++        .into()
++}
++
++fn temp_view(p: &TempPage) -> Element<'_, PMsg> {
++    let Some(sizes) = &p.sizes else {
++        return column::with_capacity(2)
++            .spacing(12)
++            .push(text::body("Scanning…").class(style::quiet()))
++            .push(widget::progress_bar::indeterminate_linear().girth(4).width(Length::Fill))
++            .into();
++    };
++    let selected: u64 = sizes.iter().filter(|(t, _)| p.checked.contains(t)).map(|(_, s)| *s).sum();
++    let top = row::with_capacity(3)
++        .spacing(16)
++        .align_y(Alignment::Center)
++        .push(
++            column::with_capacity(2)
++                .spacing(2)
++                .push(text::body(format!("Total selected: {}", rows::size(selected))))
++                .push(text::caption("Files you can remove to free up space").class(style::quiet()))
++                .width(Length::Fill),
++        )
++        .push(
++            widget::button::suggested(if p.removing { "Removing…" } else { "Remove files" })
++                .on_press_maybe((!p.removing && selected > 0).then(|| m(Msg::Remove))),
++        );
++    let items: Vec<rows::Item<'_>> = sizes
++        .iter()
++        .map(|(t, s)| {
++            let t = *t;
++            let line = row::with_capacity(3)
++                .spacing(16)
++                .align_y(Alignment::Start)
++                .push(widget::checkbox(p.checked.contains(&t)).on_toggle(move |on| m(Msg::Check(t, on))))
++                .push(rows::words(t.title(), t.description()))
++                .push(text::body(rows::size(*s)));
++            use cosmic::widget::list_column::IntoListItem;
++            Element::from(line).into_list_item()
++        })
++        .collect();
++    let mut c = column::with_capacity(3).spacing(16).push(top);
++    if let Some(e) = &p.problem {
++        c = c.push(text::body(format!("Some files couldn't be removed: {e}")).class(cosmic::theme::Text::Accent));
++    }
++    c.push(rows::section("", items)).into()
++}
++
++/// Bytes used by a folder (0 if it's missing).
++async fn du(path: &std::path::Path) -> u64 {
++    if !path.exists() {
++        return 0;
++    }
++    tokio::process::Command::new("du")
++        .args(["-sb", "--one-file-system"])
++        .arg(path)
++        .output()
++        .await
++        .ok()
++        .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().and_then(|n| n.parse().ok()))
++        .unwrap_or(0)
++}
++
++fn user_dir(kind: fn() -> Option<PathBuf>, fallback: &str) -> PathBuf {
++    kind().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(fallback))
++}
++
++async fn measure() -> Usage {
++    let home = dirs::home_dir().unwrap_or_default();
++    let (mut total, mut used, mut free) = (0, 0, 0);
++    if let Ok(out) = rows::output("df", &["-B1", "--output=size,used,avail", "/"]).await
++        && let Some(line) = out.lines().nth(1)
++    {
++        let v: Vec<u64> = line.split_whitespace().filter_map(|n| n.parse().ok()).collect();
++        if v.len() == 3 {
++            (total, used, free) = (v[0], v[1], v[2]);
++        }
++    }
++    let apps = du(std::path::Path::new("/usr")).await
++        + du(std::path::Path::new("/opt")).await
++        + du(std::path::Path::new("/var/lib/flatpak")).await
++        + du(&home.join(".local/share/flatpak")).await;
++    let temp = temp_sizes().await.iter().filter(|(t, _)| *t != Temp::Downloads).map(|(_, s)| *s).sum::<u64>();
++    let mut cats = vec![
++        Category { name: "Installed apps", icon: "view-app-grid-symbolic", bytes: apps, open: Open::Page("lapin-installed-apps") },
++        Category { name: "Temporary files", icon: "user-trash-symbolic", bytes: temp, open: Open::Page("lapin-storage-temp") },
++    ];
++    for (name, ic, dir) in [
++        ("Documents", "folder-documents-symbolic", user_dir(dirs::document_dir, "Documents")),
++        ("Pictures", "folder-pictures-symbolic", user_dir(dirs::picture_dir, "Pictures")),
++        ("Videos", "folder-videos-symbolic", user_dir(dirs::video_dir, "Videos")),
++        ("Music", "folder-music-symbolic", user_dir(dirs::audio_dir, "Music")),
++        ("Downloads", "folder-download-symbolic", user_dir(dirs::download_dir, "Downloads")),
++        ("Desktop", "user-desktop-symbolic", user_dir(dirs::desktop_dir, "Desktop")),
++    ] {
++        let bytes = du(&dir).await;
++        cats.push(Category { name, icon: ic, bytes, open: Open::Folder(dir) });
++    }
++    let counted: u64 = cats.iter().map(|c| c.bytes).sum();
++    cats.push(Category { name: "System & other", icon: "drive-harddisk-system-symbolic", bytes: used.saturating_sub(counted), open: Open::Nothing });
++    cats.sort_by(|a, b| b.bytes.cmp(&a.bytes));
++    Usage { total, used, free, categories: cats }
++}
++
++fn temp_path(t: Temp) -> Vec<PathBuf> {
++    let home = dirs::home_dir().unwrap_or_default();
++    let cache = dirs::cache_dir().unwrap_or_else(|| home.join(".cache"));
++    let data = dirs::data_dir().unwrap_or_else(|| home.join(".local/share"));
++    match t {
++        Temp::RecycleBin => vec![data.join("Trash/files"), data.join("Trash/info")],
++        Temp::Thumbnails => vec![cache.join("thumbnails")],
++        Temp::AppCache => vec![cache],
++        Temp::PackageCache => vec![PathBuf::from("/var/cache/pacman/pkg")],
++        Temp::Downloads => vec![user_dir(dirs::download_dir, "Downloads")],
++    }
++}
++
++async fn temp_sizes() -> Vec<(Temp, u64)> {
++    let mut out = Vec::new();
++    for t in Temp::ALL {
++        let mut s = 0;
++        for p in temp_path(t) {
++            s += du(&p).await;
++        }
++        // App files are counted without the thumbnails, which have their own row.
++        if t == Temp::AppCache {
++            for p in temp_path(Temp::Thumbnails) {
++                s = s.saturating_sub(du(&p).await);
++            }
++        }
++        out.push((t, s));
++    }
++    out
++}
++
++/// Empties a folder without removing the folder itself.
++async fn empty(dir: &std::path::Path, keep: &[&str]) -> Result<(), String> {
++    let Ok(mut rd) = tokio::fs::read_dir(dir).await else { return Ok(()) };
++    let mut problem = None;
++    while let Ok(Some(e)) = rd.next_entry().await {
++        if keep.iter().any(|k| e.file_name() == *k) {
++            continue;
++        }
++        let p = e.path();
++        let r = if e.file_type().await.is_ok_and(|t| t.is_dir()) { tokio::fs::remove_dir_all(&p).await } else { tokio::fs::remove_file(&p).await };
++        if let Err(err) = r {
++            problem = Some(format!("{}: {err}", p.display()));
++        }
++    }
++    problem.map_or(Ok(()), Err)
++}
++
++async fn remove(which: &[Temp]) -> Result<(), String> {
++    let mut problem = None;
++    for t in which {
++        let r = match t {
++            // Old package files need the admin prompt; paccache (pacman-contrib,
++            // which Update already uses) keeps nothing that's installed.
++            Temp::PackageCache => rows::output("pkexec", &["paccache", "-rk0"]).await.map(drop),
++            Temp::AppCache => {
++                let mut r = Ok(());
++                for p in temp_path(*t) {
++                    // Thumbnails are their own choice.
++                    if let Err(e) = empty(&p, &["thumbnails"]).await {
++                        r = Err(e);
++                    }
++                }
++                r
++            }
++            _ => {
++                let mut r = Ok(());
++                for p in temp_path(*t) {
++                    if let Err(e) = empty(&p, &[]).await {
++                        r = Err(e);
++                    }
++                }
++                r
++            }
++        };
++        if let Err(e) = r {
++            problem = Some(e);
++        }
++    }
++    problem.map_or(Ok(()), Err)
++}
+diff --git a/cosmic-settings/src/lapin/update.rs b/cosmic-settings/src/lapin/update.rs
+new file mode 100644
+index 0000000..1110891
+--- /dev/null
++++ b/cosmic-settings/src/lapin/update.rs
+@@ -0,0 +1,558 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Update, inside Settings as on Windows: checks Arch packages (pacman),
++//! Flatpak apps and device firmware (fwupd), installs them all with one
++//! button (the admin prompt asks for your password), shows each update's
++//! progress, Update history, and offers a restart when needed. The same
++//! checks as Lapin's Update app, which now opens this page.
++
++use cosmic::iced::{Alignment, Length, stream};
++use cosmic::widget::{self, column, icon, row, text};
++use cosmic::{Apply, Element, Task};
++use cosmic_settings_page::{self as page, Binder, Section, section};
++use slotmap::SlotMap;
++use tokio::io::{AsyncBufReadExt, BufReader};
++
++use super::rows::{self, PMsg};
++use super::settings::Msg as SMsg;
++use super::style;
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Update {
++    pub name: String,
++    pub from: String,
++    pub to: String,
++    pub kind: Kind,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Kind {
++    System,
++    App,
++    Firmware,
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub enum State {
++    Checking,
++    UpToDate,
++    Available,
++    Installing,
++    /// Finished; whether a restart is needed.
++    Done(bool),
++    Failed(String),
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    Check,
++    Checked(Vec<Update>, Option<String>),
++    Install,
++    Line(String),
++    Installed(Result<(), String>),
++    Restart,
++    Details(bool),
++    History(Vec<String>),
++}
++
++pub struct Page {
++    entity: page::Entity,
++    pub state: State,
++    updates: Vec<Update>,
++    checked_at: Option<i64>,
++    log: Vec<String>,
++    details: bool,
++    started: bool,
++}
++
++impl Default for Page {
++    fn default() -> Self {
++        Page { entity: page::Entity::default(), state: State::UpToDate, updates: Vec::new(), checked_at: None, log: Vec::new(), details: false, started: false }
++    }
++}
++
++#[derive(Default)]
++pub struct HistoryPage {
++    entity: page::Entity,
++    lines: Option<Vec<String>>,
++}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(SMsg::Update(msg))
++}
++
++impl page::Page<PMsg> for Page {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new(super::categories::UPDATE_ID, super::view::UPDATE_ICON)
++            .title("Update")
++            .description("Updates for your system, apps and firmware")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![
++            sections.insert(Section::default().view::<Page>(|_, page, _| hero(page))),
++            sections.insert(Section::default().view::<Page>(|binder, page, _| more(binder, page))),
++        ])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        self.checked_at = last_check();
++        // Check once when the page first opens, as Windows does.
++        if !self.started {
++            self.started = true;
++            self.state = State::Checking;
++            return Task::future(async {
++                let (list, problem) = check().await;
++                m(Msg::Checked(list, problem))
++            });
++        }
++        Task::none()
++    }
++}
++impl page::AutoBind<PMsg> for Page {}
++
++impl page::Page<PMsg> for HistoryPage {
++    fn set_id(&mut self, entity: page::Entity) {
++        self.entity = entity;
++    }
++    fn info(&self) -> page::Info {
++        page::Info::new("lapin-update-history", "document-open-recent-symbolic").title("Update history").description("What was updated and when")
++    }
++    fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++        Some(vec![sections.insert(Section::default().view::<HistoryPage>(|_, page, _| history_view(page)))])
++    }
++    fn on_enter(&mut self) -> Task<PMsg> {
++        Task::future(async { m(Msg::History(tokio::task::spawn_blocking(history).await.unwrap_or_default())) })
++    }
++}
++impl page::AutoBind<PMsg> for HistoryPage {}
++
++pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    if let Msg::History(lines) = msg {
++        if let Some(h) = pages.page_mut::<HistoryPage>() {
++            h.lines = Some(lines);
++        }
++        return Task::none();
++    }
++    let Some(p) = pages.page_mut::<Page>() else { return Task::none() };
++    match msg {
++        Msg::Check => {
++            p.state = State::Checking;
++            return cosmic::task::future(async {
++                let (list, problem) = check().await;
++                crate::Message::PageMessage(m(Msg::Checked(list, problem)))
++            });
++        }
++        Msg::Checked(list, problem) => {
++            p.checked_at = last_check().or(p.checked_at);
++            p.updates = list;
++            p.state = match problem {
++                Some(e) if p.updates.is_empty() => State::Failed(e),
++                _ if p.updates.is_empty() => State::UpToDate,
++                _ => State::Available,
++            };
++        }
++        Msg::Install => {
++            p.state = State::Installing;
++            p.log.clear();
++            let system = p.updates.iter().any(|u| u.kind == Kind::System);
++            let apps = p.updates.iter().any(|u| u.kind == Kind::App);
++            let firmware = p.updates.iter().any(|u| u.kind == Kind::Firmware);
++            return install(system, apps, firmware);
++        }
++        Msg::Line(l) => {
++            p.log.push(l);
++            if p.log.len() > 2000 {
++                p.log.drain(..500);
++            }
++        }
++        Msg::Installed(r) => {
++            p.state = match r {
++                Ok(()) => State::Done(needs_restart(&p.updates)),
++                Err(e) => State::Failed(e),
++            };
++            if matches!(p.state, State::Done(_)) {
++                p.updates.clear();
++            }
++        }
++        Msg::Restart => {
++            let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
++        }
++        Msg::Details(on) => p.details = on,
++        Msg::History(_) => {}
++    }
++    Task::none()
++}
++
++fn last_checked(at: Option<i64>) -> String {
++    let Some(t) = at else { return String::new() };
++    let Some(when) = chrono::DateTime::from_timestamp(t, 0).map(|d| d.with_timezone(&chrono::Local)) else { return String::new() };
++    let today = chrono::Local::now().date_naive();
++    let day = if when.date_naive() == today {
++        "today".to_string()
++    } else if Some(when.date_naive()) == today.pred_opt() {
++        "yesterday".to_string()
++    } else {
++        when.format("%-m/%-d/%Y").to_string()
++    };
++    format!("Last checked: {day}, {}", when.format("%-I:%M %p"))
++}
++
++fn hero(p: &Page) -> Element<'_, PMsg> {
++    let (title, sub): (String, String) = match &p.state {
++        State::Checking => ("Checking for updates…".into(), last_checked(p.checked_at)),
++        State::UpToDate => ("You're up to date".into(), last_checked(p.checked_at)),
++        State::Available => (
++            "Updates available".into(),
++            format!("{}  ·  {}", if p.updates.len() == 1 { "1 update is ready".to_string() } else { format!("{} updates are ready", p.updates.len()) }, last_checked(p.checked_at)),
++        ),
++        State::Installing => ("Installing updates".into(), p.log.last().cloned().unwrap_or_else(|| "Getting things ready…".into())),
++        State::Done(true) => ("Restart required".into(), "Restart your PC to finish installing updates.".into()),
++        State::Done(false) => ("You're up to date".into(), "Updates were installed.".into()),
++        State::Failed(e) => ("Updates couldn't be installed".into(), e.clone()),
++    };
++    let glyph = match &p.state {
++        State::Done(true) => "system-reboot-symbolic",
++        State::Failed(_) => "dialog-warning-symbolic",
++        _ => "",
++    };
++    let picture: Element<'_, PMsg> = if glyph.is_empty() {
++        icon(super::view::colour_icon_handle(super::view::UPDATE_ICON)).size(64).into()
++    } else {
++        icon::from_name(glyph).size(48).apply(widget::container).center_x(64).into()
++    };
++    let action: Element<'_, PMsg> = match &p.state {
++        State::Checking | State::Installing => widget::Space::new().width(0).into(),
++        State::Available => widget::button::suggested("Download & install all").on_press(m(Msg::Install)).into(),
++        State::Done(true) => widget::button::suggested("Restart now").on_press(m(Msg::Restart)).into(),
++        _ => widget::button::suggested("Check for updates").on_press(m(Msg::Check)).into(),
++    };
++    let top = row::with_capacity(3)
++        .spacing(20)
++        .align_y(Alignment::Center)
++        .push(picture)
++        .push(
++            column::with_capacity(2)
++                .spacing(4)
++                .push(text::title3(title))
++                .push(text::body(sub).class(style::quiet()))
++                .width(Length::Fill),
++        )
++        .push(action);
++    let mut c = column::with_capacity(4).spacing(16).push(top.apply(widget::container).padding([0, 0, 8, 0]));
++    if matches!(p.state, State::Checking | State::Installing) {
++        c = c.push(widget::progress_bar::indeterminate_linear().girth(4).width(Length::Fill));
++    }
++    if matches!(p.state, State::Available | State::Installing) && !p.updates.is_empty() {
++        let status = if p.state == State::Installing { "Installing" } else { "Pending install" };
++        let list: Vec<rows::Item<'_>> = p
++            .updates
++            .iter()
++            .map(|u| {
++                let version = if u.from.is_empty() { u.to.clone() } else { format!("{} → {}", u.from, u.to) };
++                let what = match u.kind {
++                    Kind::System => "System update",
++                    Kind::App => "App update",
++                    Kind::Firmware => "Firmware",
++                };
++                let name = if u.kind == Kind::App { super::privacy::app_name(&u.name).0 } else { u.name.clone() };
++                rows::with("", name, format!("{what}  ·  {version}"), text::body(status).class(style::quiet()).into())
++            })
++            .collect();
++        c = c.push(rows::section("", list));
++    }
++    if !p.log.is_empty() {
++        c = c.push(widget::button::text(if p.details { "Hide details" } else { "Show details" }).on_press(m(Msg::Details(!p.details))));
++        if p.details {
++            let lines: Vec<Element<'_, PMsg>> = p.log.iter().rev().take(200).rev().map(|l| text::caption(l.clone()).into()).collect();
++            c = c.push(widget::container(column::with_children(lines).spacing(2)).padding(16).width(Length::Fill).class(style::card()));
++        }
++    }
++    c.into()
++}
++
++fn more<'a>(binder: &'a Binder<PMsg>, _p: &'a Page) -> Element<'a, PMsg> {
++    let history = binder.find_page_by_id("lapin-update-history").map(|(e, _)| PMsg::Page(e));
++    rows::section(
++        "More options",
++        vec![rows::nav("document-open-recent-symbolic", "Update history", "What was updated and when", history)],
++    )
++}
++
++fn history_view(p: &HistoryPage) -> Element<'_, PMsg> {
++    match &p.lines {
++        None => text::body("Reading update history…").class(style::quiet()).into(),
++        Some(l) if l.is_empty() => rows::section("", vec![rows::note("No updates yet.")]),
++        Some(lines) => {
++            // Grouped by day, newest first, like Windows' "Update history".
++            let mut groups: Vec<(String, Vec<rows::Item<'_>>)> = Vec::new();
++            for l in lines {
++                let (day, what) = l.split_once("  ").unwrap_or(("", l.as_str()));
++                let (verb, rest) = what.split_once(' ').unwrap_or((what, ""));
++                let name = rest.split_whitespace().next().unwrap_or(rest).to_string();
++                let detail = rest.trim_start_matches(&name).trim().trim_matches(|c| c == '(' || c == ')').replace(" -> ", " → ");
++                let label = match verb {
++                    "upgraded" => "Successfully updated",
++                    "installed" => "Successfully installed",
++                    _ => verb,
++                };
++                let item = rows::with("", name, detail, text::caption(label).class(style::quiet()).into());
++                match groups.last_mut() {
++                    Some((d, items)) if d == day => items.push(item),
++                    _ => groups.push((day.to_string(), vec![item])),
++                }
++            }
++            let mut c = column::with_capacity(groups.len()).spacing(24);
++            for (day, items) in groups.into_iter().take(60) {
++                let title = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d").map(|d| d.format("%-m/%-d/%Y").to_string()).unwrap_or(day);
++                c = c.push(column::with_capacity(2).spacing(8).push(text::heading(title)).push(rows::section("", items)));
++            }
++            c.into()
++        }
++    }
++}
++
++// --- Checking and installing (same as lapin-ux-update) -------------------------
++
++/// `checkupdates` lines: "linux 6.11.1-1 -> 6.11.2-1".
++pub fn parse_checkupdates(out: &str) -> Vec<Update> {
++    out.lines()
++        .filter_map(|l| {
++            let v: Vec<&str> = l.split_whitespace().collect();
++            (v.len() == 4 && v[2] == "->").then(|| Update { name: v[0].into(), from: v[1].into(), to: v[3].into(), kind: Kind::System })
++        })
++        .collect()
++}
++
++/// `flatpak remote-ls --updates --columns=application,version` lines.
++pub fn parse_flatpak(out: &str) -> Vec<Update> {
++    out.lines()
++        .filter(|l| !l.trim().is_empty() && !l.starts_with("Application"))
++        .filter_map(|l| {
++            let mut it = l.split('\t');
++            let name = it.next()?.trim().to_string();
++            let to = it.next().unwrap_or_default().trim().to_string();
++            (!name.is_empty()).then_some(Update { name, from: String::new(), to, kind: Kind::App })
++        })
++        .collect()
++}
++
++/// `fwupdmgr get-updates --json`: one update per device, to its newest
++/// release. A small reader for fwupd's regular JSON: for each object in
++/// "Devices", its own "Name" and "Version", and the first "Version" inside
++/// its "Releases".
++pub fn parse_fwupd(json: &str) -> Vec<Update> {
++    let Some(start) = json.find("\"Devices\"").and_then(|i| json[i..].find('[').map(|j| i + j + 1)) else { return Vec::new() };
++    let b = json.as_bytes();
++    let mut out = Vec::new();
++    let (mut i, mut depth) = (start, 0usize);
++    // Per device: (name, version, newest release), the key last read, and
++    // whether we're inside its "Releases".
++    let mut dev: (String, String, Option<String>) = Default::default();
++    let mut key = String::new();
++    let mut in_releases = false;
++    let mut releases_depth = 0usize;
++    while i < b.len() {
++        match b[i] {
++            b'"' => {
++                let mut j = i + 1;
++                let mut s = String::new();
++                while j < b.len() && b[j] != b'"' {
++                    if b[j] == b'\\' {
++                        j += 1;
++                    }
++                    if j < b.len() {
++                        s.push(b[j] as char);
++                    }
++                    j += 1;
++                }
++                let is_key = json[j + 1..].trim_start().starts_with(':');
++                if is_key {
++                    key = s;
++                    if depth == 1 && key == "Releases" {
++                        in_releases = true;
++                        releases_depth = depth;
++                    }
++                } else if depth == 1 && !in_releases {
++                    match key.as_str() {
++                        "Name" => dev.0 = s,
++                        "Version" => dev.1 = s,
++                        _ => {}
++                    }
++                } else if in_releases && depth == releases_depth + 1 && key == "Version" && dev.2.is_none() {
++                    dev.2 = Some(s);
++                }
++                i = j;
++            }
++            b'{' => depth += 1,
++            b'}' => {
++                depth = depth.saturating_sub(1);
++                if depth == 0 {
++                    let (name, from, to) = std::mem::take(&mut dev);
++                    if let Some(to) = to.filter(|t| !t.is_empty()) {
++                        out.push(Update { name, from, to, kind: Kind::Firmware });
++                    }
++                    in_releases = false;
++                }
++            }
++            b']' if in_releases && depth == releases_depth => in_releases = false,
++            b']' if depth == 0 => break,
++            _ => {}
++        }
++        i += 1;
++    }
++    out
++}
++
++/// Updates that only take effect after a restart.
++pub fn needs_restart(updates: &[Update]) -> bool {
++    const CORE: &[&str] = &["linux", "linux-lts", "linux-zen", "linux-hardened", "systemd", "glibc", "mesa", "nvidia", "amd-ucode", "intel-ucode", "lapin-ux-comp", "cosmic-comp"];
++    updates.iter().any(|u| {
++        u.kind == Kind::Firmware || u.kind == Kind::System && (CORE.contains(&u.name.as_str()) || u.name.starts_with("linux-firmware") || u.name.starts_with("nvidia"))
++    })
++}
++
++fn last_check_file() -> Option<std::path::PathBuf> {
++    let state = std::env::var_os("XDG_STATE_HOME")
++        .map(std::path::PathBuf::from)
++        .filter(|p| p.is_absolute())
++        .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))?;
++    Some(state.join("lapin-ux/update-last-check"))
++}
++
++fn last_check() -> Option<i64> {
++    std::fs::read_to_string(last_check_file()?).ok()?.trim().parse().ok()
++}
++
++fn record_check() {
++    let Some(file) = last_check_file() else { return };
++    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
++    if let Some(dir) = file.parent() {
++        let _ = std::fs::create_dir_all(dir);
++    }
++    let _ = std::fs::write(file, secs.to_string());
++}
++
++async fn check() -> (Vec<Update>, Option<String>) {
++    let mut list = Vec::new();
++    let mut problem = None;
++    match tokio::process::Command::new("checkupdates").output().await {
++        // checkupdates exits 2 when there's nothing to update.
++        Ok(o) if o.status.success() || o.status.code() == Some(2) => list.extend(parse_checkupdates(&String::from_utf8_lossy(&o.stdout))),
++        Ok(o) => problem = Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
++        Err(_) => problem = Some("checkupdates isn't installed (pacman-contrib).".into()),
++    }
++    if let Ok(o) = tokio::process::Command::new("flatpak").args(["remote-ls", "--updates", "--columns=application,version"]).output().await
++        && o.status.success()
++    {
++        list.extend(parse_flatpak(&String::from_utf8_lossy(&o.stdout)));
++    }
++    if let Ok(o) = tokio::process::Command::new("fwupdmgr")
++        .args(["get-updates", "--json", "--no-unreported-check", "--no-metadata-check"])
++        .output()
++        .await
++    {
++        list.extend(parse_fwupd(&String::from_utf8_lossy(&o.stdout)));
++    }
++    if problem.is_none() {
++        record_check();
++    }
++    (list, problem)
++}
++
++async fn run_streamed(out: &mut futures::channel::mpsc::Sender<PMsg>, cmd: &str, args: &[&str]) -> Result<(), String> {
++    use futures::SinkExt;
++    let mut child = tokio::process::Command::new(cmd)
++        .args(args)
++        .stdout(std::process::Stdio::piped())
++        .stderr(std::process::Stdio::piped())
++        .spawn()
++        .map_err(|e| format!("{cmd}: {e}"))?;
++    let stdout = child.stdout.take().ok_or("no output")?;
++    let stderr = child.stderr.take().ok_or("no output")?;
++    let mut lines = BufReader::new(stdout).lines();
++    let mut errs = BufReader::new(stderr).lines();
++    let mut last_err = String::new();
++    loop {
++        tokio::select! {
++            l = lines.next_line() => match l {
++                Ok(Some(l)) => { let _ = out.send(m(Msg::Line(l))).await; }
++                _ => break,
++            },
++            e = errs.next_line() => if let Ok(Some(e)) = e {
++                last_err = e.clone();
++                let _ = out.send(m(Msg::Line(e))).await;
++            },
++        }
++    }
++    let status = child.wait().await.map_err(|e| e.to_string())?;
++    if status.success() {
++        Ok(())
++    } else if matches!(status.code(), Some(126 | 127)) {
++        Err("The update wasn't authorised.".into())
++    } else {
++        Err(if last_err.is_empty() { format!("{cmd} failed") } else { last_err })
++    }
++}
++
++fn install(system: bool, apps: bool, firmware: bool) -> cosmic::app::Task<crate::Message> {
++    let s = stream::channel(64, move |mut out: futures::channel::mpsc::Sender<PMsg>| async move {
++        use futures::SinkExt;
++        let mut result = Ok(());
++        if system {
++            result = run_streamed(&mut out, "pkexec", &["pacman", "-Syu", "--noconfirm"]).await;
++        }
++        if result.is_ok() && apps {
++            result = run_streamed(&mut out, "flatpak", &["update", "-y", "--noninteractive"]).await;
++        }
++        if result.is_ok() && firmware {
++            result = run_streamed(&mut out, "fwupdmgr", &["update", "-y", "--no-reboot-check", "--no-unreported-check", "--no-metadata-check"]).await;
++        }
++        let _ = out.send(m(Msg::Installed(result))).await;
++    });
++    Task::run(s, |msg| cosmic::Action::App(crate::Message::PageMessage(msg)))
++}
++
++/// pacman's log, newest first: "2026-10-21  upgraded firefox (131.0-1 -> 131.0.2-1)".
++fn history() -> Vec<String> {
++    let log = std::fs::read_to_string("/var/log/pacman.log").unwrap_or_default();
++    let mut v: Vec<String> = log
++        .lines()
++        .filter(|l| l.contains("[ALPM] upgraded ") || l.contains("[ALPM] installed "))
++        .map(|l| {
++            let date = l.get(1..11).unwrap_or_default();
++            let what = l.split("[ALPM] ").nth(1).unwrap_or(l);
++            format!("{date}  {what}")
++        })
++        .collect();
++    v.reverse();
++    v.truncate(300);
++    v
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses() {
++        let u = parse_checkupdates("linux 6.11.1.arch1-1 -> 6.11.2.arch1-1\nfirefox 131.0-1 -> 131.0.2-1\n\n");
++        assert_eq!(u.len(), 2);
++        assert!(needs_restart(&u));
++        let f = parse_flatpak("org.gimp.GIMP\t2.10.38\n");
++        assert_eq!(f[0].kind, Kind::App);
++        assert!(!needs_restart(&f));
++    }
++
++    #[test]
++    fn firmware() {
++        let json = r#"{"Devices":[
++            {"Name":"System Firmware","DeviceId":"a","Version":"1.20","Releases":[{"Version":"1.22","Summary":"UEFI"},{"Version":"1.21"}]},
++            {"Name":"Dock","DeviceId":"b","Version":"3","Releases":[]},
++            {"Name":"SSD","Version":"2.0"}]}"#;
++        let u = parse_fwupd(json);
++        assert_eq!(u.len(), 1, "{u:?}");
++        assert_eq!((u[0].name.as_str(), u[0].from.as_str(), u[0].to.as_str()), ("System Firmware", "1.20", "1.22"));
++        assert!(parse_fwupd("No updates").is_empty());
++    }
++}
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index a5cf379..a915582 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -10,7 +10,7 @@ use cosmic::widget::{self, button, column, container, icon, row, text};
+ use cosmic::{Apply, Element};
+ use cosmic_settings_page::{Binder, Entity};
+ 
+-use super::categories::{Layout, PRIVACY_ID, SYSTEM_ID, UPDATE_ID};
++use super::categories::{Layout, SYSTEM_ID, UPDATE_ID};
+ use super::{Msg, State, style};
+ use crate::app::Message;
+ 
+@@ -54,6 +54,11 @@ impl Default for Account {
+     }
+ }
+ 
++/// For Lapin's pages: the same full-colour icon.
++pub fn colour_icon_handle(name: &str) -> icon::Handle {
++    colour_icon(name)
++}
++
+ /// A full-colour icon from the Win11 icon theme, falling back to the
+ /// system icon of that name.
+ fn colour_icon(name: &str) -> icon::Handle {
+@@ -241,32 +246,7 @@ fn page_frame<'a>(head: Element<'a, Message>, body: Element<'a, Message>) -> Ele
+ /// A category: its pages as rows, as on Windows' System page.
+ pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, page: Entity) -> Element<'a, Message> {
+     let info = &pages.info[page];
+-    let body: Element<'a, Message> = if info.id == UPDATE_ID {
+-        let card = row::with_capacity(3)
+-            .spacing(16)
+-            .align_y(Alignment::Center)
+-            .push(icon(colour_icon(UPDATE_ICON)).size(40))
+-            .push(
+-                column::with_capacity(2)
+-                    .spacing(2)
+-                    .push(text::title4("Check for updates"))
+-                    .push(text::caption("System, app and firmware updates. Update moves into Settings in a later stage.").class(style::quiet()))
+-                    .width(Length::Fill),
+-            )
+-            .push(button::suggested("Open Update").on_press(Message::Lapin(Msg::OpenUpdate)));
+-        container(card).padding(20).width(Length::Fill).class(style::card()).into()
+-    } else if info.id == PRIVACY_ID {
+-        container(
+-            column::with_capacity(2)
+-                .spacing(4)
+-                .push(text::body("Security and app permissions"))
+-                .push(text::caption("These settings arrive in a later stage (Privacy & security).").class(style::quiet())),
+-        )
+-        .padding(20)
+-        .width(Length::Fill)
+-        .class(style::card())
+-        .into()
+-    } else {
++    let body: Element<'a, Message> = {
+         let kids = pages.sub_pages(page).unwrap_or_default();
+         let mut list = column::with_capacity(kids.len() + 1).spacing(4);
+         if info.id == SYSTEM_ID {
+diff --git a/cosmic-settings/src/main.rs b/cosmic-settings/src/main.rs
+index 92749a7..f757265 100644
+--- a/cosmic-settings/src/main.rs
++++ b/cosmic-settings/src/main.rs
+@@ -158,6 +158,8 @@ pub enum PageCommands {
+     /// WiFi settings page
+     #[cfg(feature = "page-networking")]
+     Wireless,
++    /// Lapin UX: a page by its id (lapin-update, lapin-installed-apps…)
++    Lapin { page: String },
+     /// Workspaces settings page
+     #[cfg(feature = "page-workspaces")]
+     Workspaces,
+diff --git a/cosmic-settings/src/pages/system/users/mod.rs b/cosmic-settings/src/pages/system/users/mod.rs
+index 2e48195..a996807 100644
+--- a/cosmic-settings/src/pages/system/users/mod.rs
++++ b/cosmic-settings/src/pages/system/users/mod.rs
+@@ -997,7 +997,7 @@ fn permission_was_denied(result: &zbus::Error) -> bool {
+ }
+ 
+ // TODO: Should we allow deprecated methods?
+-fn hash_password(password_plain: &str) -> String {
++pub(crate) fn hash_password(password_plain: &str) -> String {
+     #[allow(deprecated)]
+     match get_encrypt_method().as_str() {
+         "SHA512" => sha512_crypt::hash(password_plain).unwrap(),
+-- 
+2.43.0
+

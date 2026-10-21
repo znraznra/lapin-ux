@@ -1,7 +1,7 @@
 From 801c705ab9eb373744ec36e28640c6b63c862e55 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 21:01:06 +0800
-Subject: [PATCH 4/6] Lapin UX stage 2: Windows rows (icons, On/Off, combo
+Subject: [PATCH 4/7] Lapin UX stage 2: Windows rows (icons, On/Off, combo
  boxes), Power mode and mouse button drop-downs, buttons inside rows
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

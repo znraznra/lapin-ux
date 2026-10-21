@@ -85,6 +85,17 @@ pub struct ShellConfig {
     /// Settings > Multitasking: "When I snap a window, suggest what I can
     /// snap next to it" turned off.
     pub no_snap_assist: bool,
+    /// Settings > Clipboard: "Clipboard history" turned off.
+    pub no_clipboard_history: bool,
+    /// Settings > Start: "Show recently opened items in Start, Jump Lists,
+    /// and File Explorer" turned off.
+    pub no_recent_items: bool,
+    /// Settings > Lock screen: the lock screen's picture ("" = the desktop
+    /// background). Read by the lock and sign-in screens (lapin-ux-greeter).
+    pub lock_wallpaper: String,
+    /// Settings > Lock screen: "Show the lock screen background picture on
+    /// the sign-in screen" turned off.
+    pub no_signin_picture: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
