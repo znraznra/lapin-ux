@@ -56,6 +56,14 @@ options=('!lto')
 
 _src="$startdir/../.."
 
+# Version from the Lapin UX checkout, so a rebuild after `git pull` is a new
+# version: makepkg builds and pacman installs it instead of reusing the old
+# package.
+pkgver() {
+    cd "$_src"
+    printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
 prepare() {
     export RUSTUP_TOOLCHAIN=stable
     local host
