@@ -1,4 +1,4 @@
-From e533d74e095e40ea175b0780e7919909407ceb6c Mon Sep 17 00:00:00 2001
+From 85983fb2f7b7575c39c2d3fbfc7dc296310860ad Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 21:34:36 +0800
 Subject: [PATCH] Lapin UX: Windows-style file dialog footer
@@ -6,11 +6,14 @@ Subject: [PATCH] Lapin UX: Windows-style file dialog footer
 File name / Save as type rows with the type filter beside the name,
 Open/Save then Cancel at the bottom right; folders first; no preview pane
 by default.
+
+Only in a Lapin UX session (XDG_CURRENT_DESKTOP has LapinUX, or
+LAPIN_UX_DIALOG=1); in COSMIC's own session the dialog is COSMIC's.
 ---
  examples/dialog.rs |   7 ++
- src/config.rs      |   4 +-
- src/dialog.rs      | 250 +++++++++++++++++++++++++++++----------------
- 3 files changed, 171 insertions(+), 90 deletions(-)
+ src/config.rs      |  15 +++-
+ src/dialog.rs      | 207 ++++++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 223 insertions(+), 6 deletions(-)
 
 diff --git a/examples/dialog.rs b/examples/dialog.rs
 index df77069..d2ab124 100644
@@ -38,23 +41,38 @@ index df77069..d2ab124 100644
                          vec![
                              DialogFilter {
 diff --git a/src/config.rs b/src/config.rs
-index 617c459..a761a38 100644
+index 617c459..3f01a77 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -324,9 +324,9 @@ pub struct DialogConfig {
+@@ -324,9 +324,10 @@ pub struct DialogConfig {
  impl Default for DialogConfig {
      fn default() -> Self {
          Self {
 -            folders_first: false,
-+            folders_first: true,
++            // Lapin UX: folders first, no details pane (COSMIC: the opposite).
++            folders_first: lapin_session(),
              icon_sizes: IconSizes::default(),
 -            show_details: true,
-+            show_details: false,
++            show_details: !lapin_session(),
              show_hidden: false,
              view: View::List,
          }
+@@ -487,3 +488,13 @@ mod tests {
+         );
+     }
+ }
++
++/// Lapin UX: its file dialog look only in a Lapin UX session
++/// (XDG_CURRENT_DESKTOP has LapinUX, or LAPIN_UX_DIALOG=1); COSMIC keeps its own.
++pub fn lapin_session() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++            || std::env::var("LAPIN_UX_DIALOG").is_ok_and(|v| v == "1")
++    })
++}
 diff --git a/src/dialog.rs b/src/dialog.rs
-index d0037d2..575bd64 100644
+index d0037d2..9df183a 100644
 --- a/src/dialog.rs
 +++ b/src/dialog.rs
 @@ -319,6 +319,13 @@ impl<M: Send + 'static> Dialog<M> {
@@ -89,7 +107,7 @@ index d0037d2..575bd64 100644
      choices: Vec<DialogChoice>,
      context_page: ContextPage,
      dialog_pages: VecDeque<DialogPage>,
-@@ -571,8 +582,27 @@ struct App {
+@@ -571,8 +582,33 @@ struct App {
      type_select_last_key: Option<Instant>,
  }
  
@@ -111,97 +129,46 @@ index d0037d2..575bd64 100644
 +
  impl App {
      fn button_view(&self) -> Element<'_, Message> {
-+        // Lapin UX: Windows-style bottom of the dialog:
-+        //   File name: [ name ............ ] [ type filter v ]
-+        //                                     [ Open ] [ Cancel ]
++        if crate::config::lapin_session() {
++            self.lapin_button_view()
++        } else {
++            self.cosmic_button_view()
++        }
++    }
++
++    /// COSMIC's own dialog footer, outside Lapin UX.
++    fn cosmic_button_view(&self) -> Element<'_, Message> {
          let cosmic_theme::Spacing {
              space_xxxs,
              space_xxs,
-@@ -581,107 +611,123 @@ impl App {
-             space_l,
-             ..
-         } = theme::spacing();
--        let is_condensed = self.core().is_condensed();
--
--        let mut col = widget::column::with_capacity(2).spacing(space_xxs);
--        if let DialogKind::SaveFile { filename } = &self.flags.kind {
--            col = col.push(
--                widget::text_input("", filename)
--                    .id(self.filename_id.clone())
--                    .double_click_select_delimiter('.')
--                    .on_input(Message::Filename)
--                    .on_submit(|_| Message::Save(false)),
--            );
--        }
--
--        let mut row = widget::row::with_capacity(
--            usize::from(!self.filters.is_empty())
--                + self.choices.len() * 2
--                + if is_condensed { 0 } else { 3 },
--        )
--        .align_y(Alignment::Center)
--        .spacing(space_xxs);
--        if !self.filters.is_empty() {
--            row = row.push(widget::dropdown(
--                &self.filters,
--                self.filter_selected,
--                Message::Filter,
--            ));
--        }
--        for (choice_i, choice) in self.choices.iter().enumerate() {
--            match choice {
--                DialogChoice::CheckBox { label, value, .. } => {
--                    row = row.push(
--                        widget::checkbox(*value)
--                            .label(label)
--                            .on_toggle(move |checked| {
--                                Message::Choice(choice_i, usize::from(checked))
--                            }),
--                    );
--                }
--                DialogChoice::ComboBox {
--                    label,
--                    options,
--                    selected,
--                    ..
--                } => {
--                    row = row.push(widget::text::heading(label));
--                    row = row.push(widget::dropdown(options, *selected, move |option_i| {
--                        Message::Choice(choice_i, option_i)
--                    }));
--                }
--            }
--        }
--
--        if is_condensed {
--            col = col.push(row);
--            row = widget::row::with_capacity(3)
--                .align_y(Alignment::Center)
--                .spacing(space_xxs);
--        }
--        row = row.push(widget::space::horizontal());
--        row = row.push(widget::button::standard(fl!("cancel")).on_press(Message::Cancel));
-+        let label_width = Length::Fixed(110.0);
+@@ -685,6 +721,138 @@ impl App {
+             .into()
+     }
  
-         let mut has_selected = false;
++    fn lapin_button_view(&self) -> Element<'_, Message> {
++        // Lapin UX: Windows-style bottom of the dialog:
++        //   File name: [ name ............ ] [ type filter v ]
++        //                                     [ Open ] [ Cancel ]
++        let cosmic_theme::Spacing {
++            space_xxxs,
++            space_xxs,
++            space_xs,
++            space_s,
++            space_l,
++            ..
++        } = theme::spacing();
++        let label_width = Length::Fixed(110.0);
++
++        let mut has_selected = false;
 +        let mut selected_names = Vec::new();
-         if let Some(items) = self.tab.items_opt() {
-             for item in items {
-                 if item.selected {
-                     has_selected = true;
--                    break;
++        if let Some(items) = self.tab.items_opt() {
++            for item in items {
++                if item.selected {
++                    has_selected = true;
 +                    selected_names.push(item.name.clone());
-                 }
-             }
-         }
--        row = row.push(
--            //TODO: easier way to create buttons with rich text
--            widget::button::custom(
--                widget::row::with_children([Element::from(&self.accept_label)])
--                    .padding([0, space_s])
--                    .width(Length::Shrink)
--                    .height(space_l)
--                    .spacing(space_xxxs)
++                }
++            }
++        }
 +
 +        let mut col = widget::column::with_capacity(4).spacing(space_xs);
 +
@@ -238,14 +205,7 @@ index d0037d2..575bd64 100644
 +        if !self.filters.is_empty() && save {
 +            col = col.push(
 +                widget::row::with_capacity(2)
-                     .align_y(Alignment::Center)
--            )
--            .padding(0)
--            .on_press_maybe(if self.flags.kind.save() {
--                if let DialogKind::SaveFile { filename } = &self.flags.kind {
--                    (!filename.is_empty()).then_some(Message::Save(false))
--                } else {
--                    None
++                    .align_y(Alignment::Center)
 +                    .spacing(space_xxs)
 +                    .push(widget::text::body("Save as type:").width(label_width))
 +                    .push(widget::container(widget::dropdown(&self.filters, self.filter_selected, Message::Filter).width(Length::Fill)).width(Length::Fill)),
@@ -270,9 +230,7 @@ index d0037d2..575bd64 100644
 +                        row = row.push(widget::text::heading(label));
 +                        row = row.push(widget::dropdown(options, *selected, move |option_i| Message::Choice(choice_i, option_i)));
 +                    }
-                 }
--            } else if has_selected || self.flags.kind.is_dir() {
--                Some(Message::Open)
++                }
 +            }
 +            col = col.push(row);
 +        }
@@ -289,11 +247,8 @@ index d0037d2..575bd64 100644
 +        .on_press_maybe(if save {
 +            if let DialogKind::SaveFile { filename } = &self.flags.kind {
 +                (!filename.is_empty()).then_some(Message::Save(false))
-             } else {
-                 None
--            })
--            .class(widget::button::ButtonClass::Suggested)
--            /*TODO: a11y feature: .label(&self.accept_label.text)*/
++            } else {
++                None
 +            }
 +        } else if has_selected || self.flags.kind.is_dir() {
 +            Some(Message::Open)
@@ -314,28 +269,28 @@ index d0037d2..575bd64 100644
 +                        .width(Length::Fixed(110.0))
 +                        .class(lapin_button(|| widget::button::ButtonClass::Standard)),
 +                ),
-         );
- 
--        col = col.push(row);
--
-         widget::layer_container(col)
-             .layer(cosmic_theme::Layer::Primary)
--            .padding([8, space_xs])
++        );
++
++        widget::layer_container(col)
++            .layer(cosmic_theme::Layer::Primary)
 +            .padding([space_xs, space_s])
-             .into()
-     }
- 
-@@ -938,7 +984,8 @@ impl App {
++            .into()
++    }
++
+     fn preview<'a>(&'a self, kind: &'a PreviewKind) -> Element<'a, tab::Message> {
+         let military_time = self.tab.config.military_time;
+         let mut children = Vec::with_capacity(1);
+@@ -938,7 +1106,8 @@ impl App {
      }
  
      fn update_title(&mut self) -> Task<Message> {
 -        self.set_header_title(self.title.clone());
 +        // Lapin UX: the title goes at the left (header_start), as in Windows.
-+        self.set_header_title(String::new());
++        self.set_header_title(if crate::config::lapin_session() { String::new() } else { self.title.clone() });
          self.set_window_title(self.title.clone(), self.flags.window_id)
      }
  
-@@ -1044,6 +1091,7 @@ impl Application for App {
+@@ -1044,6 +1213,7 @@ impl Application for App {
              flags,
              title,
              accept_label: DialogLabel::from(accept_label),
@@ -343,12 +298,15 @@ index d0037d2..575bd64 100644
              choices: Vec::new(),
              context_page: ContextPage::Preview(None, PreviewKind::Selected),
              dialog_pages: VecDeque::new(),
-@@ -1204,6 +1252,16 @@ impl Application for App {
+@@ -1204,6 +1374,19 @@ impl Application for App {
          Some(self.button_view())
      }
  
 +    fn header_start(&self) -> Vec<Element<'_, Message>> {
 +        // Lapin UX: the asking app's icon, then the title, at the left.
++        if !crate::config::lapin_session() {
++            return Vec::new();
++        }
 +        let mut row = widget::row::with_capacity(2).spacing(10).align_y(Alignment::Center);
 +        if let Some(icon) = &self.lapin_icon {
 +            row = row.push(widget::icon::from_name(icon.as_str()).size(16));
@@ -360,28 +318,28 @@ index d0037d2..575bd64 100644
      fn header_end(&self) -> Vec<Element<'_, Message>> {
          let mut elements = Vec::with_capacity(3);
  
-@@ -1256,7 +1314,9 @@ impl Application for App {
+@@ -1256,7 +1439,9 @@ impl Application for App {
      }
  
      fn nav_bar(&self) -> Option<Element<'_, cosmic::Action<Self::Message>>> {
 -        if !self.core().nav_bar_active() {
 +        // Lapin UX: the dialog draws its sidebar itself (see `view`), so
 +        // libcosmic adds no sidebar toggle in front of the title.
-+        if true {
++        if crate::config::lapin_session() || !self.core().nav_bar_active() {
              return None;
          }
  
-@@ -1283,7 +1343,8 @@ impl Application for App {
+@@ -1283,7 +1468,8 @@ impl Application for App {
      }
  
      fn nav_model(&self) -> Option<&segmented_button::SingleSelectModel> {
 -        Some(&self.nav_model)
 +        // Lapin UX: see `nav_bar`.
-+        None
++        (!crate::config::lapin_session()).then_some(&self.nav_model)
      }
  
      fn on_app_exit(&mut self) -> Option<Message> {
-@@ -1350,6 +1411,7 @@ impl Application for App {
+@@ -1350,6 +1536,7 @@ impl Application for App {
      fn update(&mut self, message: Message) -> Task<Message> {
          match message {
              Message::None => {}
@@ -389,13 +347,13 @@ index d0037d2..575bd64 100644
              Message::Cancel => {
                  self.result_opt = Some(DialogResult::Cancel);
                  return window::close(self.flags.window_id);
-@@ -1958,7 +2020,19 @@ impl Application for App {
+@@ -1958,7 +2145,19 @@ impl Application for App {
                  .map(Message::TabMessage),
          );
  
 -        col.into()
 +        // Lapin UX: the places sidebar, drawn here rather than by libcosmic.
-+        if self.core.is_condensed() {
++        if !crate::config::lapin_session() || self.core.is_condensed() {
 +            return col.into();
 +        }
 +        let nav = cosmic::widget::nav_bar(&self.nav_model, Message::LapinNavSelect)

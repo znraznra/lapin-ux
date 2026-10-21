@@ -182,7 +182,7 @@ cd lapin-ux
 
 1. The script installs everything it needs; there is nothing to install by hand.
 2. Log out, pick **Lapin UX** on the sign-in screen, and sign in.
-3. To remove it, sign out of Lapin UX, log into your other desktop and run `lapin-ux-uninstall` (or `./uninstall.sh` from this folder). While it's installed, Lapin UX's font, icons and pointer only apply inside the Lapin UX session; your other desktops keep their own. Uninstalling puts your fonts, icons, pointer, wallpaper and shortcuts back the way they were before Lapin UX, removes its packages and files, and makes sure you still have a login screen. Add `--dry-run` to see what it would do first.
+3. To remove it, sign out of Lapin UX, log into your other desktop and run `lapin-ux-uninstall` (or `./uninstall.sh` from this folder). While it's installed, Lapin UX's look (font, icons, pointer, wallpaper, colours, shortcuts, pop-ups, dialogs) only applies inside the Lapin UX session; your other desktops, real COSMIC included, keep their own settings. Uninstalling puts your fonts, icons, pointer, wallpaper and shortcuts back the way they were before Lapin UX, removes its packages and files, brings back COSMIC's own parts if you use COSMIC, and always leaves you a working login screen (even if you remove it with plain pacman). Add `--dry-run` to see what it would do first.
 
 Want to try it first without installing? See [Try it without installing](docs/TECHNICAL.md#try-it-without-installing). Found something that doesn't work? The [test checklist](TESTING.md) lists what to check.
 

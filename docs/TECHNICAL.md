@@ -333,20 +333,32 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   for every app, even ones that ask for Noto Color Emoji or Segoe UI Emoji.
 - **Other desktops are left alone.** The font rule isn't enabled
   system-wide: `start-lapin-ux` sets `FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf`
-  (the system's setup plus Lapin's rule) for its own session only. The GTK
-  font, icon and pointer settings and COSMIC's font and icon theme are
-  swapped: `lapin-ux-desktop-settings enter` (session start) remembers what
-  other desktops use and puts Lapin's back; `leave` (session end) hands
-  them back and drops `FONTCONFIG_FILE` from the systemd user session. If a
-  session didn't end cleanly, `/etc/xdg/autostart/lapin-ux-other-desktops.desktop`
-  (NotShowIn=LapinUX) runs `leave` when you sign into GNOME, KDE, COSMIC…,
-  and the `lapin-ux-desktop-settings.service` user unit (enabled for
-  everyone, `default.target` + `graphical-session.target`) runs it at every
-  login, including Sway, Hyprland, other window managers and text consoles.
-  It does nothing while Lapin UX runs or starts (`lapin-ux-shell` running,
-  or `$XDG_RUNTIME_DIR/lapin-ux-session.pid` alive). A setting
-  you change inside Lapin UX to something that isn't Lapin's applies
-  everywhere, as before.
+  (the system's setup plus Lapin's rule) for its own session only. Settings
+  Lapin UX shares with other desktops are kept per session: GTK font,
+  document font, icons and pointer; COSMIC's font, icons, light/dark mode,
+  wallpaper, colours and corners (the four theme folders), keyboard
+  shortcuts, Super key and focus policy; the default X pointer.
+  `lapin-ux-desktop-settings enter` (session start) stores the other
+  desktops' copy in `~/.local/state/lapin-ux/other-desktops` and puts
+  Lapin's (`lapin-desktop`) in place; `leave` (session end) does the
+  reverse and drops `FONTCONFIG_FILE` from the systemd user session. A
+  change made in COSMIC stays in COSMIC, one made in Lapin UX stays in
+  Lapin UX. `lapin-active` marks Lapin's copy as the live one, so a missed
+  `leave` is caught later: `/etc/xdg/autostart/lapin-ux-other-desktops.desktop`
+  (NotShowIn=LapinUX) and the `lapin-ux-desktop-settings.service` user unit
+  (enabled for everyone, `default.target` + `graphical-session.target`, so
+  Sway, Hyprland and text consoles too) run `leave` at every login. It does
+  nothing while Lapin UX runs or starts (`lapin-ux-shell` running, or
+  `$XDG_RUNTIME_DIR/lapin-ux-session.pid` alive). Accounts set up before
+  this existed: on the first `enter`, values that look like Lapin's stay
+  Lapin's, and the other desktops get the restore point or their default.
+- **Lapin's versions of COSMIC parts only look like Lapin inside Lapin UX.**
+  The volume/brightness pop-ups and admin prompt (cosmic-osd fork), the
+  touch keyboard (cosmic-osk fork), the Open/Save dialogs (cosmic-files
+  patch in the portal), COSMIC Settings and COSMIC apps' title bars check
+  `XDG_CURRENT_DESKTOP` for `LapinUX`; in COSMIC's own session they are
+  COSMIC's. Force on for checks with `LAPIN_UX_OSD=1`, `LAPIN_UX_OSK=1`,
+  `LAPIN_UX_DIALOG=1`, `LAPIN_UX_SETTINGS=1`, `LAPIN_UX_TITLEBAR=1`.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
   Apps, files, folders, shortcuts and desktop items use the full-colour
   Win11 icon theme; everything else (menus, tray, quick settings, buttons)
@@ -473,15 +485,25 @@ plan; `--settings-only` only restores settings (for someone who already ran
   `~/.cache/lapin-ux`, the pointer pack and `~/.local/state/lapin-ux` are
   deleted; `~/.config/cosmic` too (after asking) when no COSMIC program is
   left. Other accounts that used Lapin UX are restored the same way.
-- **System.** Removes Lapin UX's Howdy line from the PAM files; if greetd
-  runs Lapin UX's sign-in screen and COSMIC isn't staying, switches to
-  another installed login manager (refuses if there is none); swaps a Lapin
-  package back to stock COSMIC when something outside Lapin needs it
-  (e.g. `cosmic-session` needs `cosmic-greeter`); `pacman -Rn` the Lapin
-  packages, then COSMIC parts that became orphans. Other new orphans
-  (NetworkManager, Bluetooth, PipeWire…) are only listed, never removed.
-- Plain `pacman -R` still works; the package's `pre_remove` then reminds
-  you to run `./uninstall.sh --settings-only`.
+- **System.** Removes Lapin UX's Howdy line from the PAM files. Login
+  screen: if greetd runs Lapin UX's sign-in screen, COSMIC's own
+  (`cosmic-greeter`) goes back in its place, so the same login setup keeps
+  working and lists every installed desktop. With COSMIC installed, every
+  COSMIC part Lapin stood in for comes back (greeter, Settings, OSD, OSK,
+  portal); otherwise those wanted by something outside Lapin. All of them
+  must be installable first (`pacman -Si`), or nothing is changed; if the
+  install fails, Lapin's packages stay. Then `pacman -Rn` the Lapin
+  packages, and (without COSMIC) COSMIC parts that became orphans. Other new
+  orphans (NetworkManager, Bluetooth, PipeWire…) are only listed.
+- **Plain `pacman -R` is covered too.** The desktop package's `pre_remove`
+  runs `lapin-ux-uninstall --settings-only --yes` for every account that
+  used Lapin UX (skipping one still signed in, with a note). The greeter
+  package's `post_remove` waits for pacman to finish; if no `cosmic-greeter`
+  arrived and greetd would be left without a greeter, it switches to an
+  installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
+  else sets greetd to a text login (`agreety`, old config kept as
+  `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
+- Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf).
 
 ## Try it without installing
 

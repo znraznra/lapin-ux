@@ -16,12 +16,31 @@ post_upgrade() {
 }
 
 pre_remove() {
-    # lapin-ux-uninstall leaves this mark while it removes the packages.
+    # lapin-ux-uninstall leaves this mark and does all this itself.
     [ -e /run/lapin-ux-uninstall ] && return 0
-    echo ":: Removing Lapin UX with pacman alone leaves your GTK and COSMIC settings"
-    echo "   pointing at its fonts, icons and shortcuts. To put them back, run"
-    echo "   ./uninstall.sh --settings-only from the Lapin UX source folder"
-    echo "   (next time, use lapin-ux-uninstall instead of pacman)."
+    # Removed with plain pacman: give every account that used Lapin UX its own
+    # desktop settings back, the way lapin-ux-uninstall does.
+    echo ":: Lapin UX: giving each account its own desktop settings back..."
+    local u uid home
+    getent passwd | while IFS=: read -r u _ uid _ _ home _; do
+        [ "$uid" -ge 1000 ] 2>/dev/null && [ "$uid" -lt 60000 ] || continue
+        [ -d "$home/.local/state/lapin-ux" ] || [ -d "$home/.config/cosmic/dev.lapinux.Shell" ] || continue
+        if pgrep -u "$uid" -x lapin-ux-shell >/dev/null 2>&1; then
+            echo "   $u is still signed in to Lapin UX. Afterwards, sign out and run"
+            echo "   ./uninstall.sh --settings-only from the Lapin UX source folder as $u."
+            continue
+        fi
+        echo "   $u:"
+        if [ -S "/run/user/$uid/bus" ]; then
+            runuser -u "$u" -- env -i HOME="$home" USER="$u" LOGNAME="$u" PATH=/usr/bin:/bin \
+                XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+                /usr/bin/lapin-ux-uninstall --settings-only --yes 2>&1 | grep -v 'dbus-daemon\[' | sed 's/^/   /'
+        else
+            runuser -u "$u" -- env -i HOME="$home" USER="$u" LOGNAME="$u" PATH=/usr/bin:/bin \
+                dbus-run-session -- /usr/bin/lapin-ux-uninstall --settings-only --yes 2>&1 | grep -v 'dbus-daemon\[' | sed 's/^/   /'
+        fi
+    done
+    return 0
 }
 
 post_remove() {

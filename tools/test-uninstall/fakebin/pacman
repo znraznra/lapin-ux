@@ -1,0 +1,4 @@
+#!/bin/sh
+# pacman stand-in: COSMIC Files still installed
+[ "$1" = -Qq ] && [ -z "$2" ] && { echo cosmic-files; exit 0; }
+exit 1

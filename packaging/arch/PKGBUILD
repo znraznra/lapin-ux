@@ -295,6 +295,7 @@ package_lapin-ux-greeter() {
     depends=('cosmic-comp' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
     provides=('cosmic-greeter')
     conflicts=('cosmic-greeter')
+    install=lapin-ux-greeter.install
     cd "$srcdir/cosmic-greeter"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

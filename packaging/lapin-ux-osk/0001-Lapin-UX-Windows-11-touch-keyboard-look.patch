@@ -1,4 +1,4 @@
-From a520083999c88e1d846de097458ac7a84c3a5b85 Mon Sep 17 00:00:00 2001
+From 650a31d80e4faf958cf83fb86711df575c09305b Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 21:25:45 +0800
 Subject: [PATCH] Lapin UX: Windows 11 touch keyboard look
@@ -6,12 +6,15 @@ Subject: [PATCH] Lapin UX: Windows 11 touch keyboard look
 Raised rounded key tiles (letters lighter than function keys, pressed in
 the accent colour), tighter gaps, and emoji and clipboard buttons that
 open Lapin UX's panels.
+
+Only in a Lapin UX session (XDG_CURRENT_DESKTOP has LapinUX, or
+LAPIN_UX_OSK=1); COSMIC's own session keeps COSMIC's keyboard.
 ---
- src/lib.rs | 101 ++++++++++++++++++++++++++---------------------------
- 1 file changed, 49 insertions(+), 52 deletions(-)
+ src/lib.rs | 86 +++++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 79 insertions(+), 7 deletions(-)
 
 diff --git a/src/lib.rs b/src/lib.rs
-index d54d665..f9c9c60 100644
+index d54d665..e6ff63d 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -244,6 +244,8 @@ pub enum Message {
@@ -28,7 +31,7 @@ index d54d665..f9c9c60 100644
              ime_timeout: None,
              key_binds: HashMap::new(),
 -            key_padding: 4,
-+            key_padding: 3,
++            key_padding: if lapin() { 3 } else { 4 },
              key_size: 64,
              layouts: None,
              group: 0,
@@ -42,32 +45,19 @@ index d54d665..f9c9c60 100644
              Message::Hide => {
                  return self.hide(true);
              }
-@@ -1321,60 +1326,46 @@ impl Application for App {
+@@ -1321,8 +1326,48 @@ impl Application for App {
                          }
                      }
  
 -                    //TODO: adjust to match design
+-                    let style = {
 +                    // Lapin UX: Windows 11 touch keyboard keys: raised rounded
 +                    // tiles, letters lighter than the function keys, the
 +                    // pressed key in the accent colour.
 +                    let special = matches!(key_level.kind, layout::KeyKind::Mod { .. })
 +                        || key_level.icon.is_some()
 +                        || key_level.name.chars().count() > 1;
-                     let style = {
--                        use widget::button::Catalog;
--
--                        fn adjust(
--                            theme: &cosmic::Theme,
--                            selected: bool,
--                            mut style: widget::button::Style,
--                        ) -> widget::button::Style {
--                            let cosmic = theme.cosmic();
--                            if selected {
--                                style.overlay = Some(cosmic::iced::Background::Color(
--                                    cosmic.button.selected_state_color().into(),
--                                ));
--                                style.text_color = Some(cosmic.accent_text_color().into());
--                                style.icon_color = style.text_color;
++                    let style = if lapin() {
 +                        fn tile(theme: &cosmic::Theme, special: bool, selected: bool, hover: bool, down: bool) -> widget::button::Style {
 +                            let c = theme.cosmic();
 +                            let ink: cosmic::iced::Color = if c.is_dark { cosmic::iced::Color::WHITE } else { cosmic::iced::Color::BLACK };
@@ -94,67 +84,71 @@ index d54d665..f9c9c60 100644
 +                                text_color: Some(if down || selected { cosmic::iced::Color::WHITE } else { fg }),
 +                                icon_color: Some(if down || selected { cosmic::iced::Color::WHITE } else { fg }),
 +                                ..Default::default()
-                             }
--                            style.border_radius = cosmic.radius_s().into();
--                            style
-                         }
--
-                         theme::Button::Custom {
--                            active: Box::new(move |focused, theme| {
--                                adjust(
--                                    theme,
--                                    selected,
--                                    if pressed {
--                                        theme.pressed(focused, selected, &theme::Button::MenuItem)
--                                    } else {
--                                        theme.active(focused, selected, &theme::Button::MenuItem)
--                                    },
--                                )
--                            }),
--                            disabled: Box::new(move |theme| {
--                                adjust(theme, selected, theme.disabled(&theme::Button::MenuItem))
--                            }),
--                            hovered: Box::new(move |focused, theme| {
--                                adjust(
--                                    theme,
--                                    selected,
--                                    if pressed {
--                                        theme.pressed(focused, selected, &theme::Button::MenuItem)
--                                    } else {
--                                        theme.hovered(focused, selected, &theme::Button::MenuItem)
--                                    },
--                                )
--                            }),
--                            pressed: Box::new(move |focused, theme| {
--                                adjust(
--                                    theme,
--                                    selected,
--                                    theme.pressed(focused, selected, &theme::Button::MenuItem),
--                                )
--                            }),
++                            }
++                        }
++                        theme::Button::Custom {
 +                            active: Box::new(move |_, theme| tile(theme, special, selected, false, pressed)),
 +                            disabled: Box::new(move |theme| tile(theme, special, selected, false, false)),
 +                            hovered: Box::new(move |_, theme| tile(theme, special, selected, true, pressed)),
 +                            pressed: Box::new(move |_, theme| tile(theme, special, selected, false, true)),
-                         }
-                     };
++                        }
++                    } else {
+                         use widget::button::Catalog;
  
-@@ -1454,8 +1445,14 @@ impl Application for App {
+                         fn adjust(
+@@ -1453,9 +1498,25 @@ impl Application for App {
+         };
  
          let mut column = widget::column::with_capacity(2);
-         column = column.push(widget::row::with_children(vec![
+-        column = column.push(widget::row::with_children(vec![
 -            menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
-+            widget::button::icon(widget::icon::from_name("face-smile-symbolic"))
-+                .on_press(Message::Run("emoji"))
-+                .into(),
-+            widget::button::icon(widget::icon::from_name("edit-paste-symbolic"))
-+                .on_press(Message::Run("clipboard"))
-+                .into(),
-             widget::space().width(Length::Fill).into(),
-+            menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
+-            widget::space().width(Length::Fill).into(),
++        // Lapin UX: emoji and clipboard buttons at the left, menu at the right.
++        let mut top = if lapin() {
++            vec![
++                widget::button::icon(widget::icon::from_name("face-smile-symbolic"))
++                    .on_press(Message::Run("emoji"))
++                    .into(),
++                widget::button::icon(widget::icon::from_name("edit-paste-symbolic"))
++                    .on_press(Message::Run("clipboard"))
++                    .into(),
++                widget::space().width(Length::Fill).into(),
++                menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
++            ]
++        } else {
++            vec![
++                menu::menu_bar(&self.core, &self.config, &self.key_binds).into(),
++                widget::space().width(Length::Fill).into(),
++            ]
++        };
++        top.extend([
              if self.docked {
                  widget::button::icon(
                      widget::icon::from_svg_bytes(include_bytes!("../res/keyboard-undock.svg"))
+@@ -1474,7 +1535,8 @@ impl Application for App {
+             widget::button::icon(widget::icon::from_name("window-close-symbolic"))
+                 .on_press(Message::Hide)
+                 .into(),
+-        ]));
++        ]);
++        column = column.push(widget::row::with_children(top));
+ 
+         let surface_rect = if self.drag.dragging {
+             self.drag.surface_rect
+@@ -1650,3 +1712,13 @@ impl Application for App {
+         ])
+     }
+ }
++
++/// Lapin UX's touch keyboard look only in a Lapin UX session
++/// (XDG_CURRENT_DESKTOP has LapinUX, or LAPIN_UX_OSK=1); COSMIC keeps its own.
++fn lapin() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++            || std::env::var("LAPIN_UX_OSK").is_ok_and(|v| v == "1")
++    })
++}
 -- 
 2.43.0
 

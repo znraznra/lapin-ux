@@ -1,0 +1,41 @@
+# Lapin UX's sign-in screen is greetd's greeter (it stands in for cosmic-greeter).
+# If it's removed and nothing takes its place, greetd would have nothing to
+# show. lapin-ux-uninstall puts COSMIC's greeter back itself; this covers a
+# plain pacman -R.
+
+_dms="sddm gdm plasmalogin lightdm lxdm ly"
+
+post_remove() {
+    [ -e /run/lapin-ux-uninstall ] && return 0
+    systemctl is-enabled greetd >/dev/null 2>&1 || return 0
+    grep -q cosmic-greeter /etc/greetd/config.toml 2>/dev/null || return 0
+    local dm="" d
+    for d in $_dms; do [ -f "/usr/lib/systemd/system/$d.service" ] && { dm=$d; break; }; done
+    echo ":: Lapin UX's sign-in screen was your login screen (greetd)."
+    if [ -n "$dm" ]; then
+        echo "   Unless COSMIC's own (cosmic-greeter) is installed in this same pacman run,"
+        echo "   your login screen switches to $dm when pacman finishes."
+    else
+        echo "   Unless COSMIC's own (cosmic-greeter) is installed in this same pacman run,"
+        echo "   greetd shows a text login when pacman finishes, so you can still sign in."
+        echo "   For a graphical one again: sudo pacman -S cosmic-greeter"
+    fi
+    # Decide once this pacman run is over (cosmic-greeter may be on its way in).
+    setsid -f sh -c '
+        i=0
+        while [ -e /var/lib/pacman/db.lck ] && [ $i -lt 3600 ]; do sleep 2; i=$((i + 2)); done
+        command -v cosmic-greeter >/dev/null 2>&1 && exit 0
+        for d in '"$_dms"'; do
+            if [ -f "/usr/lib/systemd/system/$d.service" ]; then
+                systemctl disable greetd.service && systemctl enable "$d.service"
+                echo "Lapin UX: login screen switched from greetd to $d" | systemd-cat -t lapin-ux
+                exit 0
+            fi
+        done
+        c=/etc/greetd/config.toml
+        cp -a "$c" "$c.lapin-ux-bak"
+        sed -i "s|^user *=.*|user = \"greeter\"|" "$c"
+        sed -i "s|^command *=.*|command = \"agreety --cmd '"'"'bash -l'"'"'\"|" "$c"
+        echo "Lapin UX: greetd set to a text login (agreety); old config in $c.lapin-ux-bak" | systemd-cat -t lapin-ux
+    ' >/dev/null 2>&1 </dev/null
+}

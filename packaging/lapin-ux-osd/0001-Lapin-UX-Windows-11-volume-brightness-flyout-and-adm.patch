@@ -1,4 +1,4 @@
-From 76986fde6447e8d9053d78cfacce3ab9ccc64b5d Mon Sep 17 00:00:00 2001
+From f9bdce4603fd02918a885387bb57ed396c9aed75 Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Tue, 20 Oct 2026 11:34:17 +0800
 Subject: [PATCH] Lapin UX: Windows 11 volume/brightness flyout and admin
@@ -10,17 +10,19 @@ All drawing lives in src/lapin.rs; COSMIC's files only gain call sites:
 - polkit_dialog: full-screen dimmed prompt via lapin::admin_prompt, with
   Show more details, Yes / No
 - LAPIN_OSD_PREVIEW=volume|brightness|admin shows one at start for checks
+- Only in a Lapin UX session (XDG_CURRENT_DESKTOP has LapinUX, or
+  LAPIN_UX_OSD=1): COSMIC's own session keeps COSMIC's pop-ups and prompt
 ---
- src/components/app.rs           |  22 +++-
+ src/components/app.rs           |  23 ++-
  src/components/osd_indicator.rs |  14 ++
- src/components/polkit_dialog.rs |  69 +++++-----
- src/lapin.rs                    | 227 ++++++++++++++++++++++++++++++++
+ src/components/polkit_dialog.rs |  53 ++++++-
+ src/lapin.rs                    | 239 ++++++++++++++++++++++++++++++++
  src/main.rs                     |   1 +
- 5 files changed, 292 insertions(+), 41 deletions(-)
+ 5 files changed, 325 insertions(+), 5 deletions(-)
  create mode 100644 src/lapin.rs
 
 diff --git a/src/components/app.rs b/src/components/app.rs
-index edc50c7..b8dbc3a 100644
+index edc50c7..d7bc7de 100644
 --- a/src/components/app.rs
 +++ b/src/components/app.rs
 @@ -195,6 +195,8 @@ pub enum DisplayMode {
@@ -32,16 +34,17 @@ index edc50c7..b8dbc3a 100644
      Action(OsdTask),
      AudioClient(super::audio::Message),
      Confirm,
-@@ -364,7 +366,7 @@ impl App {
+@@ -364,7 +366,8 @@ impl App {
              let (mut top, mut left, mut bottom, mut right) = if is_display_number {
                  (0, 0, 48, 0) // Top margin for display numbers
              } else {
 -                (0, 0, 48, 0) // Bottom margin for other OSDs
-+                (0, 0, crate::lapin::POPUP_GAP, 0) // Lapin UX: 12 px above the taskbar
++                // Lapin UX: 12 px above the taskbar (COSMIC: 48 px).
++                (0, 0, if crate::lapin::enabled() { crate::lapin::POPUP_GAP } else { 48 }, 0)
              };
              for overlap in self.overlap.values() {
                  let tl = tl.intersects(overlap);
-@@ -617,6 +619,14 @@ impl cosmic::Application for App {
+@@ -617,6 +620,14 @@ impl cosmic::Application for App {
              have_source_volume: false,
          };
          let t = app.create_dummy_layer_surface();
@@ -56,7 +59,7 @@ index edc50c7..b8dbc3a 100644
          (app, t)
      }
  
-@@ -698,6 +708,11 @@ impl cosmic::Application for App {
+@@ -698,6 +709,11 @@ impl cosmic::Application for App {
                  }
                  iced::Task::none()
              }
@@ -68,7 +71,7 @@ index edc50c7..b8dbc3a 100644
              Msg::PolkitAgent(event) => match event {
                  polkit_agent::Event::CreateDialog(params) => {
                      log::trace!("create polkit dialog: {}", params.cookie);
-@@ -868,7 +883,10 @@ impl cosmic::Application for App {
+@@ -868,7 +884,10 @@ impl cosmic::Application for App {
                          logical_rect,
                          exclusive,
                          ..
@@ -81,7 +84,7 @@ index edc50c7..b8dbc3a 100644
                          return self.handle_overlap();
                      }
 diff --git a/src/components/osd_indicator.rs b/src/components/osd_indicator.rs
-index 47a9233..c4f3c47 100644
+index 47a9233..f1953ee 100644
 --- a/src/components/osd_indicator.rs
 +++ b/src/components/osd_indicator.rs
 @@ -324,6 +324,20 @@ impl State {
@@ -89,7 +92,7 @@ index 47a9233..c4f3c47 100644
          }
  
 +        // Lapin UX: Windows 11's volume / brightness flyout (src/lapin.rs).
-+        if let Some(value) = self.params.value() {
++        if let Some(value) = self.params.value().filter(|_| crate::lapin::enabled()) {
 +            return widget::autosize::autosize(
 +                widget::container(crate::lapin::value_osd(self.params.icon_name(), value, self.max_value()))
 +                    .align_x(Alignment::Center)
@@ -106,7 +109,7 @@ index 47a9233..c4f3c47 100644
  
          // Use large radius on value-OSD to enforce pill-shape with "Round" system style
 diff --git a/src/components/polkit_dialog.rs b/src/components/polkit_dialog.rs
-index 1239599..ea3fa62 100644
+index 1239599..4610c08 100644
 --- a/src/components/polkit_dialog.rs
 +++ b/src/components/polkit_dialog.rs
 @@ -7,7 +7,7 @@ use crate::subscriptions::polkit_agent::PolkitError;
@@ -136,19 +139,27 @@ index 1239599..ea3fa62 100644
      // TODO: Better way to use fluent with iced?
      msg_cancel: String,
      msg_authenticate: String,
-@@ -76,7 +80,10 @@ impl State {
+@@ -76,8 +80,17 @@ impl State {
                  keyboard_interactivity: KeyboardInteractivity::Exclusive,
                  namespace: "osd".into(),
                  layer: Layer::Overlay,
 -                size: None,
-+                // Lapin UX: the whole screen, dimmed behind the prompt.
-+                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-+                exclusive_zone: -1,
-+                size: Some((None, None)),
-                 ..Default::default()
+-                ..Default::default()
++                ..if crate::lapin::enabled() {
++                    // Lapin UX: the whole screen, dimmed behind the prompt.
++                    SctkLayerSurfaceSettings {
++                        anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
++                        exclusive_zone: -1,
++                        size: Some((None, None)),
++                        ..Default::default()
++                    }
++                } else {
++                    SctkLayerSurfaceSettings { size: None, ..Default::default() }
++                }
              },
              None::<fn() -> Element<'static, cosmic::Action<T>>>,
-@@ -94,6 +101,7 @@ impl State {
+         ));
+@@ -94,6 +107,7 @@ impl State {
                  text_input_id,
                  sensitive: true,
                  retries: 0,
@@ -156,7 +167,7 @@ index 1239599..ea3fa62 100644
                  msg_cancel: fl!("cancel"),
                  msg_authenticate: fl!("authenticate"),
                  msg_authentication_required: fl!("authentication-required"),
-@@ -127,6 +135,8 @@ impl State {
+@@ -127,6 +141,8 @@ impl State {
                  polkit_agent_helper::Event::Responder(responder) => {
                      self.responder = Some(responder);
                  }
@@ -165,7 +176,7 @@ index 1239599..ea3fa62 100644
                  polkit_agent_helper::Event::Failed => {
                      return (None, self.respond(Err(PolkitError::Failed)));
                  }
-@@ -171,6 +181,7 @@ impl State {
+@@ -171,6 +187,7 @@ impl State {
              Msg::Password(password) => {
                  self.password = password;
              }
@@ -173,57 +184,23 @@ index 1239599..ea3fa62 100644
              Msg::TogglePasswordVisibility => {
                  self.password_visible = !self.password_visible;
              }
-@@ -201,49 +212,29 @@ impl State {
+@@ -201,6 +218,36 @@ impl State {
          } else {
              widget::text_input(placeholder, &self.password).id(self.text_input_id.clone())
          };
--        let mut cancel_button = widget::button::standard(&self.msg_cancel);
--        let mut authenticate_button = widget::button::suggested(&self.msg_authenticate);
 +        // Lapin UX: Windows' admin permission prompt (src/lapin.rs).
++        if !crate::lapin::enabled() {
++            return self.cosmic_view(password_input);
++        }
 +        let (mut yes, mut no) = (None, None);
-         if self.sensitive {
-             password_input = password_input.on_input(Msg::Password);
--            cancel_button = cancel_button.on_press(Msg::Cancel);
--
++        if self.sensitive {
++            password_input = password_input.on_input(Msg::Password);
 +            no = Some(Msg::Cancel);
-             if self.responder.is_some() {
-                 password_input = password_input.on_submit(|_| Msg::Authenticate);
--                authenticate_button = authenticate_button.on_press(Msg::Authenticate);
++            if self.responder.is_some() {
++                password_input = password_input.on_submit(|_| Msg::Authenticate);
 +                yes = Some(Msg::Authenticate);
-             }
-         }
--        let mut right_column: Vec<cosmic::Element<_>> = vec![password_input.into()];
--        if self.retries > 0 {
--            right_column.push(
--                widget::text::body(&self.msg_invalid_password)
--                    .class(cosmic::theme::Text::Color(iced::Color::from_rgb(
--                        1.0, 0.0, 0.0,
--                    )))
--                    .into(),
--            );
--        } else {
--            right_column.push(widget::text::body("").into())
--        }
--        let icon = widget::icon::from_name(
--            self.params
--                .icon_name
--                .as_deref()
--                .unwrap_or("dialog-authentication"),
--        )
--        .size(64);
--        widget::autosize::autosize(
--            widget::dialog::dialog()
--                .title(&self.msg_authentication_required)
--                .body(&self.params.message)
--                .control(widget::column::with_children(right_column).spacing(4))
--                .icon(icon)
--                .primary_action(authenticate_button)
--                .secondary_action(cancel_button),
--            POLKIT_DIALOG_ID.clone(),
--        )
--        .min_width(1.)
--        .min_height(1.)
--        .into()
++            }
++        }
 +        crate::lapin::admin_prompt(crate::lapin::AdminPrompt {
 +            message: &self.params.message,
 +            icon_name: self.params.icon_name.as_deref(),
@@ -237,15 +214,19 @@ index 1239599..ea3fa62 100644
 +            yes,
 +            no,
 +        })
-     }
- 
-     pub fn subscription(&self) -> Subscription<Msg> {
++    }
++
++    /// COSMIC's own prompt, outside Lapin UX.
++    fn cosmic_view<'a>(&'a self, mut password_input: widget::TextInput<'a, Msg>) -> cosmic::Element<'a, Msg> {
+         let mut cancel_button = widget::button::standard(&self.msg_cancel);
+         let mut authenticate_button = widget::button::suggested(&self.msg_authenticate);
+         if self.sensitive {
 diff --git a/src/lapin.rs b/src/lapin.rs
 new file mode 100644
-index 0000000..584a6f1
+index 0000000..7ab9796
 --- /dev/null
 +++ b/src/lapin.rs
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,239 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +//! Lapin UX: Windows 11 looks for cosmic-osd's pop-ups.
 +//!
@@ -258,6 +239,18 @@ index 0000000..584a6f1
 +
 +use cosmic::iced::{self, Alignment, Background, Border, Color, Length};
 +use cosmic::{Element, theme, widget};
++
++/// Lapin UX's look only in a Lapin UX session (XDG_CURRENT_DESKTOP has
++/// LapinUX), so COSMIC's own session keeps COSMIC's pop-ups and prompt.
++/// LAPIN_UX_OSD=1 forces it on (and the preview switch implies it).
++pub fn enabled() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++            || std::env::var("LAPIN_UX_OSD").is_ok_and(|v| v == "1")
++            || std::env::var_os("LAPIN_OSD_PREVIEW").is_some()
++    })
++}
 +
 +/// Gap between the taskbar and a pop-up, as for Start and quick settings.
 +pub const POPUP_GAP: i32 = 12;
