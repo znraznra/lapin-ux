@@ -220,6 +220,10 @@ package_lapin-ux-desktop-git() {
     install -Dm755 tools/lapin-ux-cursors           "$pkgdir/usr/bin/lapin-ux-cursors"
     # Clean removal: restores desktop settings, then removes the packages.
     install -Dm755 tools/lapin-ux-uninstall         "$pkgdir/usr/bin/lapin-ux-uninstall"
+    # Lapin UX's font/icon/pointer settings only while it runs (same script).
+    ln -s lapin-ux-uninstall                        "$pkgdir/usr/bin/lapin-ux-desktop-settings"
+    install -Dm644 data/autostart/lapin-ux-other-desktops.desktop \
+        "$pkgdir/etc/xdg/autostart/lapin-ux-other-desktops.desktop"
     # Settings > Sign-in options > Facial recognition (Howdy, optional).
     install -Dm755 tools/lapin-ux-howdy             "$pkgdir/usr/bin/lapin-ux-howdy"
     install -Dm644 data/polkit/dev.lapinux.howdy.policy "$pkgdir/usr/share/polkit-1/actions/dev.lapinux.howdy.policy"
@@ -230,8 +234,10 @@ package_lapin-ux-desktop-git() {
     cp -a data/sounds/borealis "$pkgdir/usr/share/sounds/borealis"
     install -Dm644 data/sounds/borealis/COPYING "$pkgdir/usr/share/licenses/$pkgname/Borealis-sounds.txt"
 
-    # The one system font: Selawik (OFL-1.1, Microsoft), unmodified, plus the
+    # The one interface font: Selawik (OFL-1.1, Microsoft), unmodified, plus the
     # fontconfig rule that makes it the font for sans-serif/serif/system-ui.
+    # The rule is NOT enabled system-wide: only the Lapin UX session reads it
+    # (FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf), so other desktops keep theirs.
     install -Dm644 -t "$pkgdir/usr/share/fonts/lapin-ux-selawik" data/fonts/selawik/*.ttf
     install -Dm644 data/fonts/selawik/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/Selawik-OFL.txt"
     install -Dm644 data/fontconfig/50-lapin-ux-selawik.conf "$pkgdir/usr/share/fontconfig/conf.avail/50-lapin-ux-selawik.conf"
@@ -239,8 +245,7 @@ package_lapin-ux-desktop-git() {
     # tools/make-fluent-emoji.py; the fontconfig rule above makes it the emoji font.
     install -Dm644 data/fonts/fluent-emoji/LapinFluentEmoji.ttf "$pkgdir/usr/share/fonts/lapin-ux-fluent-emoji/LapinFluentEmoji.ttf"
     install -Dm644 data/fonts/fluent-emoji/LICENSE-fluentui-emoji "$pkgdir/usr/share/licenses/$pkgname/Fluent-Emoji-MIT.txt"
-    install -dm755 "$pkgdir/usr/share/fontconfig/conf.default"
-    ln -s ../conf.avail/50-lapin-ux-selawik.conf "$pkgdir/usr/share/fontconfig/conf.default/50-lapin-ux-selawik.conf"
+    install -Dm644 data/fontconfig/lapin-ux-session.conf "$pkgdir/usr/share/lapin-ux/fonts.conf"
 
     # Symbolic icons: Fluent UI System Icons (MIT, Microsoft), see tools/make-fluent-icons.py.
     mkdir -p "$pkgdir/usr/share/icons"

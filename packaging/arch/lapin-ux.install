@@ -1,8 +1,10 @@
 _fc=50-lapin-ux-selawik.conf
 
 post_install() {
-    # Selawik is the system font (see the README's "One system font").
-    ln -sf "/usr/share/fontconfig/conf.avail/$_fc" "/etc/fonts/conf.d/$_fc"
+    # Selawik is only the font inside the Lapin UX session (start-lapin-ux
+    # sets FONTCONFIG_FILE). Earlier versions enabled the rule system-wide,
+    # which changed other desktops' fonts too: take that out.
+    rm -f "/etc/fonts/conf.d/$_fc"
     fc-cache -s >/dev/null 2>&1 || true
     for t in Lapin-UX Lapin-UX-dark Win11 Win11-dark; do
         gtk-update-icon-cache -q -t -f "/usr/share/icons/$t" >/dev/null 2>&1 || true

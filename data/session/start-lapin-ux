@@ -56,8 +56,16 @@ if [ -d "$XDG_RUNTIME_DIR/keyring" ] && command -v gnome-keyring-daemon >/dev/nu
     fi
 fi
 
+# Selawik as the interface font (and Fluent Emoji for emoji) only in this
+# session: the system's font setup plus Lapin UX's rule. Other desktops never
+# see it.
+if [ -f /usr/share/lapin-ux/fonts.conf ] && [ -z "${FONTCONFIG_FILE:-}" ]; then
+    export FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf
+fi
+
 if command -v systemctl >/dev/null; then
     systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
+    [ -n "${FONTCONFIG_FILE:-}" ] && systemctl --user import-environment FONTCONFIG_FILE
 fi
 
 # Keep a log of this session (and the previous one) for bug reports:
@@ -72,9 +80,17 @@ echo "=== Lapin UX session start $(date -Iseconds) ==="
 # Before Lapin UX changes any desktop setting the first time, remember the
 # originals so lapin-ux-uninstall can put them back (does nothing afterwards).
 lapin-ux-uninstall --snapshot || true
+# Remember the GTK/COSMIC font, icon and pointer other desktops use; they get
+# them back when this session ends (and, if it didn't end cleanly, when one of
+# them starts: /etc/xdg/autostart/lapin-ux-other-desktops.desktop).
+lapin-ux-desktop-settings enter || true
 
+status=0
 if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
-    exec dbus-run-session -- lapin-ux-session
+    dbus-run-session -- lapin-ux-session || status=$?
 else
-    exec lapin-ux-session
+    lapin-ux-session || status=$?
 fi
+echo "=== Lapin UX session end $(date -Iseconds) (status $status) ==="
+lapin-ux-desktop-settings leave || true
+exit "$status"

@@ -370,7 +370,9 @@ fn font_installed(family: &str) -> bool {
 /// settings change, so a font switched by COSMIC Settings, another desktop or
 /// an update is put straight back. GTK/GNOME apps get the same font through
 /// gsettings, and everything else through the fontconfig rule Lapin UX
-/// installs (`data/fontconfig/50-lapin-ux-selawik.conf`).
+/// installs (`data/fontconfig/50-lapin-ux-selawik.conf`), which only the
+/// Lapin UX session reads (FONTCONFIG_FILE). Other desktops get their own
+/// GTK/COSMIC font back when the session ends (lapin-ux-desktop-settings).
 pub fn enforce_font() -> Result<bool, cosmic_config::Error> {
     use cosmic::config::CosmicTk;
     let family = if font_installed(UI_FONT) {

@@ -319,9 +319,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
-- Font: Selawik is the one system font. COSMIC and GTK apps are set to it at
-  every login and put straight back if anything changes it, and a
-  fontconfig rule makes it the font for `sans-serif`, `serif`, `system-ui`
+- Font: Selawik is the one interface font *inside Lapin UX*. COSMIC and GTK
+  apps are set to it at every login and put straight back if anything
+  changes it, and a fontconfig rule (read only by the Lapin UX session, see
+  "Other desktops" below) makes it the font for `sans-serif`, `serif`, `system-ui`
   and the interface fonts other desktops default to (Inter, Cantarell, Noto
   Sans, DejaVu Sans…). Monospace (terminals, code) keeps a fixed-width font;
   characters Selawik doesn't have (Japanese, Chinese, Korean, other scripts)
@@ -330,6 +331,18 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   *Lapin Fluent Emoji*. The emoji panel draws only with it (and lists only
   emoji Fluent Emoji has), and the fontconfig rule makes it the emoji font
   for every app, even ones that ask for Noto Color Emoji or Segoe UI Emoji.
+- **Other desktops are left alone.** The font rule isn't enabled
+  system-wide: `start-lapin-ux` sets `FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf`
+  (the system's setup plus Lapin's rule) for its own session only. The GTK
+  font, icon and pointer settings and COSMIC's font and icon theme are
+  swapped: `lapin-ux-desktop-settings enter` (session start) remembers what
+  other desktops use and puts Lapin's back; `leave` (session end) hands
+  them back and drops `FONTCONFIG_FILE` from the systemd user session. If a
+  session didn't end cleanly, `/etc/xdg/autostart/lapin-ux-other-desktops.desktop`
+  (NotShowIn=LapinUX) runs `leave` when you sign into GNOME, KDE, COSMIC…;
+  window managers without XDG autostart can call it themselves. A setting
+  you change inside Lapin UX to something that isn't Lapin's applies
+  everywhere, as before.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
   Apps, files, folders, shortcuts and desktop items use the full-colour
   Win11 icon theme; everything else (menus, tray, quick settings, buttons)
@@ -464,8 +477,7 @@ plan; `--settings-only` only restores settings (for someone who already ran
   packages, then COSMIC parts that became orphans. Other new orphans
   (NetworkManager, Bluetooth, PipeWire…) are only listed, never removed.
 - Plain `pacman -R` still works; the package's `pre_remove` then reminds
-  you to run `./uninstall.sh --settings-only`. The system-wide fontconfig
-  rule always goes with the package.
+  you to run `./uninstall.sh --settings-only`.
 
 ## Try it without installing
 

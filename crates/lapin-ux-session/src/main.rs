@@ -214,6 +214,11 @@ fn on_path(exec: &str) -> bool {
 async fn export_environment(env: &HashMap<String, String>) {
     let mut names: Vec<&str> = env.keys().map(String::as_str).collect();
     names.extend(["XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_SESSION_DESKTOP"]);
+    // Lapin UX's own font setup (start-lapin-ux); taken out again when the
+    // session ends so other desktops' apps don't get it.
+    if std::env::var_os("FONTCONFIG_FILE").is_some() {
+        names.push("FONTCONFIG_FILE");
+    }
     let mut args = vec!["import-environment"];
     args.extend(&names);
     systemctl(&args).await;

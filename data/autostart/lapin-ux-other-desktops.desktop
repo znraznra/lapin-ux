@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Lapin UX: give back desktop settings
+Comment=If a Lapin UX session didn't end cleanly, puts this desktop's font, icons and pointer back
+Exec=lapin-ux-desktop-settings leave
+NotShowIn=LapinUX;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Initialization
+X-KDE-autostart-phase=0
