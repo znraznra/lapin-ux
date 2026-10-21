@@ -79,10 +79,15 @@ echo "=== Lapin UX session start $(date -Iseconds) ==="
 
 # Before Lapin UX changes any desktop setting the first time, remember the
 # originals so lapin-ux-uninstall can put them back (does nothing afterwards).
+# While this session runs, the clean-up service leaves its settings alone.
+MARK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lapin-ux-session.pid"
+echo $$ > "$MARK" 2>/dev/null || true
+
 lapin-ux-uninstall --snapshot || true
 # Remember the GTK/COSMIC font, icon and pointer other desktops use; they get
 # them back when this session ends (and, if it didn't end cleanly, when one of
-# them starts: /etc/xdg/autostart/lapin-ux-other-desktops.desktop).
+# them starts: the lapin-ux-desktop-settings user service at every login, and
+# /etc/xdg/autostart/lapin-ux-other-desktops.desktop).
 lapin-ux-desktop-settings enter || true
 
 status=0
@@ -92,5 +97,6 @@ else
     lapin-ux-session || status=$?
 fi
 echo "=== Lapin UX session end $(date -Iseconds) (status $status) ==="
+rm -f "$MARK"
 lapin-ux-desktop-settings leave || true
 exit "$status"

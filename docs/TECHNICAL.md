@@ -339,8 +339,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   other desktops use and puts Lapin's back; `leave` (session end) hands
   them back and drops `FONTCONFIG_FILE` from the systemd user session. If a
   session didn't end cleanly, `/etc/xdg/autostart/lapin-ux-other-desktops.desktop`
-  (NotShowIn=LapinUX) runs `leave` when you sign into GNOME, KDE, COSMIC…;
-  window managers without XDG autostart can call it themselves. A setting
+  (NotShowIn=LapinUX) runs `leave` when you sign into GNOME, KDE, COSMIC…,
+  and the `lapin-ux-desktop-settings.service` user unit (enabled for
+  everyone, `default.target` + `graphical-session.target`) runs it at every
+  login, including Sway, Hyprland, other window managers and text consoles.
+  It does nothing while Lapin UX runs or starts (`lapin-ux-shell` running,
+  or `$XDG_RUNTIME_DIR/lapin-ux-session.pid` alive). A setting
   you change inside Lapin UX to something that isn't Lapin's applies
   everywhere, as before.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).

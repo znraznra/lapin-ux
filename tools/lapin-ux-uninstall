@@ -10,8 +10,9 @@
 #                                      this before Lapin UX changes anything)
 #
 #   lapin-ux-desktop-settings enter    (start-lapin-ux, when Lapin UX starts)
-#   lapin-ux-desktop-settings leave    (when it ends, and at sign-in to any other
-#                                      desktop through XDG autostart)
+#   lapin-ux-desktop-settings leave    (when it ends, at every login through the
+#                                      lapin-ux-desktop-settings user service, and
+#                                      in other desktops through XDG autostart)
 #     Keeps Lapin UX's look inside Lapin UX: "enter" remembers the GTK font,
 #     icon and pointer settings (and COSMIC's font and icons) other desktops
 #     use; "leave" puts them back if they're still Lapin UX's and drops
@@ -515,6 +516,10 @@ enter) enter_session; exit 0 ;;
 leave)
     # Not while Lapin UX runs for this user (its shell would put them straight back).
     pgrep -u "$(id -u)" -x lapin-ux-shell >/dev/null 2>&1 && exit 0
+    # Nor while a Lapin UX session is starting up (start-lapin-ux leaves its
+    # PID here until it has handed everything back).
+    mark="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lapin-ux-session.pid"
+    if [ -f "$mark" ] && kill -0 "$(cat "$mark" 2>/dev/null)" 2>/dev/null; then exit 0; fi
     leave_session >/dev/null; exit 0 ;;
 esac
 if [ "$(id -u)" = 0 ]; then

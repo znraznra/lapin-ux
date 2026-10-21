@@ -224,6 +224,14 @@ package_lapin-ux-desktop-git() {
     ln -s lapin-ux-uninstall                        "$pkgdir/usr/bin/lapin-ux-desktop-settings"
     install -Dm644 data/autostart/lapin-ux-other-desktops.desktop \
         "$pkgdir/etc/xdg/autostart/lapin-ux-other-desktops.desktop"
+    # ...and at every login, for window managers without XDG autostart.
+    install -Dm644 data/systemd/lapin-ux-desktop-settings.service \
+        "$pkgdir/usr/lib/systemd/user/lapin-ux-desktop-settings.service"
+    local t
+    for t in default.target graphical-session.target; do
+        install -dm755 "$pkgdir/usr/lib/systemd/user/$t.wants"
+        ln -s ../lapin-ux-desktop-settings.service "$pkgdir/usr/lib/systemd/user/$t.wants/lapin-ux-desktop-settings.service"
+    done
     # Settings > Sign-in options > Facial recognition (Howdy, optional).
     install -Dm755 tools/lapin-ux-howdy             "$pkgdir/usr/bin/lapin-ux-howdy"
     install -Dm644 data/polkit/dev.lapinux.howdy.policy "$pkgdir/usr/share/polkit-1/actions/dev.lapinux.howdy.policy"

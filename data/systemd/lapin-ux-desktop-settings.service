@@ -1,0 +1,13 @@
+[Unit]
+Description=Give other desktops their own font, icons and pointer back after Lapin UX
+Documentation=man:systemd.special(7)
+# Runs at every login (any desktop, window manager or text console) and every
+# time a graphical session starts, so a Lapin UX session that didn't end
+# cleanly never leaves its look behind. Does nothing while Lapin UX runs.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/lapin-ux-desktop-settings leave
+
+[Install]
+WantedBy=default.target graphical-session.target
