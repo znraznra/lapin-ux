@@ -11,6 +11,9 @@ members = [
     "crates/lapin-ux-update",
     "crates/lapin-ux-welcome",
 ]
+# makepkg checks the COSMIC forks out under packaging/*/src; some of them
+# (cosmic-osd) have no [workspace] table of their own.
+exclude = ["packaging"]
 
 [workspace.package]
 version = "0.1.0"

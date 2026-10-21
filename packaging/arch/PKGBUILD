@@ -64,25 +64,25 @@ prepare() {
     cargo fetch --locked --target "$host"
 
     cd "$srcdir/cosmic-comp"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq   # also drop files our patches added
     git apply "$_src"/packaging/lapin-ux-comp/*.patch
     rm -f rust-toolchain rust-toolchain.toml   # build with the system's stable toolchain
     cargo fetch --locked --target "$host"
 
     cd "$srcdir/cosmic-greeter"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     for p in "$_src"/packaging/lapin-ux-greeter/*.patch; do git apply "$p"; done
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
 
     cd "$srcdir/cosmic-osk"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-osk/*.patch
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
 
     cd "$srcdir/cosmic-osd"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-osd/*.patch
     rm -f rust-toolchain rust-toolchain.toml
     cargo fetch --locked --target "$host"
@@ -90,7 +90,7 @@ prepare() {
     # Settings builds with its own cargo home so Lapin's libcosmic patch (title
     # bar) applies to its private libcosmic copy; the lockfile stays as is.
     cd "$srcdir/cosmic-settings"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     local p
     for p in "$_src"/packaging/lapin-ux-settings/*.patch; do
         [ -e "$p" ] && git apply "$p"
@@ -100,10 +100,10 @@ prepare() {
     _patch_libcosmic "$srcdir/cargo-settings"
 
     cd "$srcdir/cosmic-files"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-portal/*.patch
     cd "$srcdir/xdg-desktop-portal-cosmic"
-    git reset -q --hard
+    git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-portal/portal/*.patch
     rm -f rust-toolchain rust-toolchain.toml
     # Use the patched COSMIC Files for the file dialogs.
