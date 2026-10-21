@@ -12,8 +12,8 @@
 #   cd packaging/lapin-ux-comp && makepkg -si
 
 pkgname=lapin-ux-comp
-_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
-pkgver=1.0.0.r0.742b800
+_commit=8cb1802caada438bb5cc7670dfabdaca5fad0502
+pkgver=1.11.0.r0.8cb1802
 pkgrel=1
 pkgdesc="COSMIC compositor with Lapin UX's additions (snap layouts, peek, night light, gestures)"
 arch=('x86_64' 'aarch64')
