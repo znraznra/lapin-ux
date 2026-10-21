@@ -46,3 +46,4 @@ fi
 
 echo
 echo "Done. Log out, choose \"Lapin UX\" in the session list and log in."
+echo "To remove it later and get your old settings back: lapin-ux-uninstall (or ./uninstall.sh)."

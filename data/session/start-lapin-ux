@@ -69,6 +69,10 @@ if mkdir -p "$LOG_DIR" 2>/dev/null; then
 fi
 echo "=== Lapin UX session start $(date -Iseconds) ==="
 
+# Before Lapin UX changes any desktop setting the first time, remember the
+# originals so lapin-ux-uninstall can put them back (does nothing afterwards).
+lapin-ux-uninstall --snapshot || true
+
 if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
     exec dbus-run-session -- lapin-ux-session
 else

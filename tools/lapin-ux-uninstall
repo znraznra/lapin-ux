@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+# Removes Lapin UX and puts your desktop settings back the way they were.
+#
+#   lapin-ux-uninstall                 remove Lapin UX (asks before each step)
+#   lapin-ux-uninstall --dry-run       only show what it would do
+#   lapin-ux-uninstall --settings-only only restore this account's settings
+#                                      (e.g. after removing the packages with pacman)
+#   lapin-ux-uninstall --snapshot      save the restore point (start-lapin-ux does
+#                                      this before Lapin UX changes anything)
+#
+# Also in the source folder as ./uninstall.sh, so it still works after the
+# packages are gone.
+#
+# What Lapin UX changes outside its own files, and how it's undone:
+#  * GTK font, icon and pointer settings (org.gnome.desktop.interface), read
+#    by GNOME and by GTK apps in every desktop.
+#  * COSMIC settings: interface font, icon theme, wallpaper, colours and
+#    corners, Super key and other shortcuts, focus policy.
+#  * The default X pointer (~/.local/share/icons/default).
+# A value is only touched while it still is Lapin UX's (Selawik, Lapin-UX/
+# Win11 icons, Lapin's pointers, wallpaper or shortcuts), so anything you
+# changed yourself since stays as it is. With a restore point it goes back to
+# what you had before Lapin UX; without one it goes back to the desktop's
+# default.
+set -uo pipefail
+
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}"
+COSMIC="$CFG/cosmic"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+STATE="$STATE_HOME/lapin-ux"
+SNAP="$STATE/restore"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
+
+CURSOR=Cursor-Concept-W11-Tail-HDPi-by-JepriCreations
+WALLPAPERS=/usr/share/backgrounds/lapin-ux
+SHORTCUTS_MARK="// Managed by Lapin UX. Delete this line to keep your own edits from being replaced."
+HOWDY_MARK="# Lapin UX: face sign-in (Howdy)"
+HOWDY_PAM=(/etc/pam.d/greetd /etc/pam.d/cosmic-greeter)
+RUN_MARK=/run/lapin-ux-uninstall
+
+# COSMIC theme folders Lapin UX rewrites as a whole (colours, corners, gaps).
+THEME_DIRS=(com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Dark.Builder
+            com.system76.CosmicTheme.Light com.system76.CosmicTheme.Light.Builder)
+# Single COSMIC settings Lapin UX sets.
+KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_theme
+      com.system76.CosmicBackground/all com.system76.CosmicBackground/same-on-all
+      com.system76.CosmicSettings.Shortcuts/custom com.system76.CosmicSettings.Shortcuts/system_actions
+      com.system76.CosmicComp/activation_policy)
+GKEYS=(font-name document-font-name icon-theme cursor-theme)
+GPATH=/org/gnome/desktop/interface
+
+# Packages, and the stock COSMIC package each one stands in for.
+LAPIN_PKGS=(lapin-ux-desktop-git lapin-ux-comp lapin-ux-greeter lapin-ux-osk lapin-ux-osd
+            lapin-ux-settings lapin-ux-portal lapin-ux-cosmic-files lapin-ux-cosmic-term
+            lapin-ux-cosmic-edit lapin-ux-cosmic-store)
+declare -A STOCK=([lapin-ux-greeter]=cosmic-greeter [lapin-ux-osk]=cosmic-osk
+                  [lapin-ux-osd]=cosmic-osd [lapin-ux-settings]=cosmic-settings
+                  [lapin-ux-portal]=xdg-desktop-portal-cosmic [lapin-ux-cosmic-files]=cosmic-files
+                  [lapin-ux-cosmic-term]=cosmic-terminal [lapin-ux-cosmic-edit]=cosmic-text-editor
+                  [lapin-ux-cosmic-store]=cosmic-store)
+
+DRY=0 YES=0 MODE=full
+for a in "$@"; do
+    case "$a" in
+    --dry-run) DRY=1 ;;
+    --yes) YES=1 ;;
+    --settings-only) MODE=settings ;;
+    --snapshot) MODE=snapshot ;;
+    -h|--help) sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $a (see --help)" >&2; exit 2 ;;
+    esac
+done
+
+say() { printf '%s\n' "$*"; }
+run() {
+    if [ "$DRY" = 1 ]; then say "    would run: $*"; else "$@"; fi
+}
+# ask "question" y|n  -> 0 for yes
+ask() {
+    local q=$1 def=$2 ans hint="[y/N]"
+    [ "$def" = y ] && hint="[Y/n]"
+    if [ "$YES" = 1 ] || [ "$DRY" = 1 ] || [ ! -t 0 ]; then
+        say "$q $hint ${def} (default)"
+        [ "$def" = y ]; return
+    fi
+    read -r -p "$q $hint " ans
+    ans=${ans:-$def}
+    [[ $ans == [yY]* ]]
+}
+dconf_ok() { command -v dconf >/dev/null 2>&1; }
+# dconf writes go through its D-Bus service; give it a bus when there's none.
+dconf_do() {
+    if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then run dconf "$@"
+    else run dbus-run-session -- dconf "$@"; fi
+}
+
+# ---------------------------------------------------------------- restore point
+
+snapshot() {
+    [ -e "$SNAP" ] && return 0
+    mkdir -p "$SNAP" || return 0
+    # Lapin UX already ran before restore points existed: what's there now is
+    # partly Lapin's, so there are no originals to keep.
+    if [ -e "$COSMIC/dev.lapinux.Shell/v1/defaults_version" ]; then
+        say "Lapin UX already set this account up before restore points existed." > "$SNAP/late"
+        return 0
+    fi
+    local d k id key
+    mkdir -p "$SNAP/cosmic-dir" "$SNAP/cosmic-key" "$SNAP/dconf"
+    for d in "${THEME_DIRS[@]}"; do
+        if [ -d "$COSMIC/$d" ]; then cp -a "$COSMIC/$d" "$SNAP/cosmic-dir/$d"
+        else : > "$SNAP/cosmic-dir/$d.absent"; fi
+    done
+    for k in "${KEYS[@]}"; do
+        id=${k%/*} key=${k#*/}
+        mkdir -p "$SNAP/cosmic-key/$id"
+        if [ -f "$COSMIC/$id/v1/$key" ]; then cp -a "$COSMIC/$id/v1/$key" "$SNAP/cosmic-key/$id/$key"
+        else : > "$SNAP/cosmic-key/$id/$key.absent"; fi
+    done
+    if dconf_ok; then
+        for k in "${GKEYS[@]}"; do dconf read "$GPATH/$k" > "$SNAP/dconf/$k" 2>/dev/null || :; done
+    fi
+    if [ -f "$DATA/icons/default/index.theme" ]; then cp -a "$DATA/icons/default/index.theme" "$SNAP/default-pointer"
+    else : > "$SNAP/default-pointer.absent"; fi
+    date -Iseconds > "$SNAP/complete"
+}
+
+# ---------------------------------------------------------------- settings
+
+have_snap() { [ -f "$SNAP/complete" ]; }
+
+key_is_lapins() {   # id key file
+    local f=$3
+    [ -f "$f" ] || return 1
+    case "$2" in
+    interface_font) grep -q Selawik "$f" ;;
+    icon_theme) grep -Eq 'Lapin-UX|Win11' "$f" ;;
+    all) grep -q "$WALLPAPERS" "$f" ;;
+    same-on-all) grep -q "$WALLPAPERS" "$COSMIC/$1/v1/all" 2>/dev/null ;;
+    custom) [ "$(head -n1 "$f")" = "$SHORTCUTS_MARK" ] ;;
+    system_actions) grep -q lapin-ux-shell "$f" ;;
+    activation_policy) [ "$(tr -d '[:space:]' < "$f")" = FocusIfActiveWorkspace ] ;;
+    *) return 1 ;;
+    esac
+}
+value_is_lapins() { [[ $1 =~ Selawik|Lapin-UX|Win11|$CURSOR ]]; }
+
+cosmic_session() { [ -f /usr/share/wayland-sessions/cosmic.desktop ]; }
+# Any COSMIC program still installed (COSMIC Files, Terminal…) keeps its settings there.
+cosmic_left() { command -v pacman >/dev/null && pacman -Qq 2>/dev/null | grep -Eq '^(cosmic-|lapin-ux-)'; }
+offer_cosmic_cleanup() {
+    [ -d "$COSMIC" ] || return 0
+    if cosmic_left; then return 0; fi
+    ask "  No COSMIC program is installed any more, so nothing uses $COSMIC. Delete it?" y && run rm -rf "$COSMIC"
+}
+
+restore_settings() {
+    local k id key cur saved v d changed=0
+    if have_snap; then say "Restoring your settings from the restore point ($(cat "$SNAP/complete"))."
+    else say "No restore point for this account: Lapin UX's settings go back to the desktops' defaults."; fi
+
+    # COSMIC single settings. Decide everything before changing anything:
+    # same-on-all looks at the wallpaper setting.
+    local -a todo=()
+    for k in "${KEYS[@]}"; do
+        id=${k%/*} key=${k#*/}
+        key_is_lapins "$id" "$key" "$COSMIC/$id/v1/$key" && todo+=("$k")
+    done
+    for k in "${todo[@]}"; do
+        id=${k%/*} key=${k#*/} cur="$COSMIC/$id/v1/$key" saved="$SNAP/cosmic-key/$id/$key"
+        if have_snap && [ -f "$saved" ]; then say "  COSMIC $key: back to yours"; run cp -a "$saved" "$cur"
+        else say "  COSMIC $key: back to COSMIC's default"; run rm -f "$cur"; fi
+        changed=1
+    done
+
+    # COSMIC colours and corners.
+    if have_snap; then
+        for d in "${THEME_DIRS[@]}"; do
+            if [ -f "$SNAP/cosmic-dir/$d.absent" ]; then
+                [ -e "$COSMIC/$d" ] && { say "  COSMIC theme ($d): back to COSMIC's default"; run rm -rf "$COSMIC/$d"; changed=1; }
+            elif [ -d "$SNAP/cosmic-dir/$d" ]; then
+                say "  COSMIC theme ($d): back to yours"
+                run rm -rf "$COSMIC/$d"; run cp -a "$SNAP/cosmic-dir/$d" "$COSMIC/$d"; changed=1
+            fi
+        done
+    elif cosmic_session && ls -d "$COSMIC"/com.system76.CosmicTheme.* >/dev/null 2>&1; then
+        if ask "  COSMIC still has Lapin UX's colours and corners. Reset them to COSMIC's default?" n; then
+            for d in "${THEME_DIRS[@]}"; do run rm -rf "$COSMIC/$d"; done; changed=1
+        fi
+    fi
+
+    # GTK / GNOME.
+    if dconf_ok; then
+        for k in "${GKEYS[@]}"; do
+            v=$(dconf read "$GPATH/$k" 2>/dev/null) || continue
+            value_is_lapins "$v" || continue
+            saved="$SNAP/dconf/$k"
+            if have_snap && [ -s "$saved" ] && ! value_is_lapins "$(cat "$saved")"; then
+                say "  GTK $k: back to $(cat "$saved")"; dconf_do write "$GPATH/$k" "$(cat "$saved")"
+            else
+                say "  GTK $k: back to the default"; dconf_do reset "$GPATH/$k"
+            fi
+            changed=1
+        done
+    elif command -v gsettings >/dev/null 2>&1; then
+        for k in "${GKEYS[@]}"; do
+            v=$(gsettings get org.gnome.desktop.interface "$k" 2>/dev/null) || continue
+            value_is_lapins "$v" && { say "  GTK $k: back to the default"; run gsettings reset org.gnome.desktop.interface "$k"; changed=1; }
+        done
+    fi
+
+    # Default X pointer.
+    local ptr="$DATA/icons/default/index.theme"
+    if [ -f "$ptr" ] && grep -q "Inherits=$CURSOR" "$ptr"; then
+        if have_snap && [ -f "$SNAP/default-pointer" ]; then say "  Default pointer: back to yours"; run cp -a "$SNAP/default-pointer" "$ptr"
+        else say "  Default pointer: back to the system's"; run rm -f "$ptr"; run rmdir --ignore-fail-on-non-empty "$DATA/icons/default"; fi
+        changed=1
+    fi
+    [ "$changed" = 1 ] || say "  Nothing of Lapin UX's left in your desktop settings."
+
+    # Lapin UX's own files.
+    local -a own=()
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
+    if [ ${#own[@]} -gt 0 ]; then
+        say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
+        run rm -rf "${own[@]}"
+    fi
+    # Only COSMIC programs read ~/.config/cosmic; with none left it's leftovers.
+    if [ "$MODE" = settings ]; then offer_cosmic_cleanup; fi
+    if [ -e "$STATE" ]; then
+        say "  Removing $STATE (restore point and session logs)."
+        run rm -rf "$STATE"
+    fi
+}
+
+# ---------------------------------------------------------------- whole system
+
+installed() { pacman -Qq "$1" >/dev/null 2>&1; }
+required_by() { LC_ALL=C pacman -Qi "$1" 2>/dev/null | sed -n 's/^Required By *: //p'; }
+
+full_uninstall() {
+    command -v pacman >/dev/null || { say "pacman was not found; use --settings-only." >&2; exit 1; }
+    local -a pkgs=() swap=()
+    local p dep
+    for p in "${LAPIN_PKGS[@]}"; do installed "$p" && pkgs+=("$p"); done
+
+    say "Lapin UX uninstaller"
+    say ""
+    if [ "$DRY" = 0 ]; then
+        say "It needs your password for pacman and for the system files it fixes."
+        sudo -v || exit 1
+    fi
+    if [ ${#pkgs[@]} -eq 0 ]; then
+        say "No Lapin UX packages are installed; only restoring settings."
+        restore_settings; return
+    fi
+    say "Packages to remove: ${pkgs[*]}"
+
+    # A Lapin package that something outside Lapin needs (e.g. COSMIC needs
+    # cosmic-greeter) is swapped back to the stock COSMIC package first.
+    for p in "${pkgs[@]}"; do
+        [ -n "${STOCK[$p]:-}" ] || continue
+        for dep in $(required_by "$p"); do
+            [ "$dep" = None ] && continue
+            [[ " ${LAPIN_PKGS[*]} " == *" $dep "* ]] && continue
+            swap+=("${STOCK[$p]}"); break
+        done
+    done
+    [ ${#swap[@]} -gt 0 ] && say "Put back for your COSMIC desktop: ${swap[*]}"
+
+    # Login screen: Lapin's sign-in screen runs under greetd. Make sure
+    # something will still let you log in.
+    local greeter_swapped=0 dm="" d
+    [[ " ${swap[*]} " == *" cosmic-greeter "* ]] && greeter_swapped=1
+    if installed lapin-ux-greeter && systemctl is-enabled greetd >/dev/null 2>&1 \
+        && grep -q cosmic-greeter /etc/greetd/config.toml 2>/dev/null && [ "$greeter_swapped" = 0 ]; then
+        for d in sddm gdm plasmalogin lightdm lxdm ly; do
+            [ -f "/usr/lib/systemd/system/$d.service" ] && { dm=$d; break; }
+        done
+        if [ -z "$dm" ]; then
+            say ""
+            say "Your login screen is greetd with Lapin UX's sign-in screen, and no other"
+            say "login screen is installed, so you couldn't log in after this. Install one"
+            say "first (e.g. sudo pacman -S sddm), then run this again."
+            exit 1
+        fi
+        say "Login screen: switch from greetd (Lapin UX's sign-in screen) to $dm"
+    fi
+    local howdy=0 f
+    for f in "${HOWDY_PAM[@]}"; do grep -qF "$HOWDY_MARK" "$f" 2>/dev/null && howdy=1; done
+    [ "$howdy" = 1 ] && say "Face sign-in: remove Lapin UX's Howdy line from ${HOWDY_PAM[*]}"
+
+    # Other accounts that used Lapin UX.
+    local -a others=()
+    local u uid home
+    while IFS=: read -r u _ uid _ _ home _; do
+        [ "$uid" -ge 1000 ] 2>/dev/null && [ "$uid" -lt 60000 ] && [ "$u" != "$(id -un)" ] || continue
+        # Homes are private: look with sudo (no prompt during a dry run).
+        if sudo -n test -d "$home/.config/cosmic/dev.lapinux.Shell" -o -d "$home/.local/state/lapin-ux"; then others+=("$u"); fi
+    done < <(getent passwd)
+    [ ${#others[@]} -gt 0 ] && say "Other accounts that used Lapin UX (their settings get restored too): ${others[*]}"
+    say "Your settings: restored (shown below)."
+    say ""
+    ask "Go ahead?" y || exit 0
+
+    say ""; say "== Your settings"
+    restore_settings
+    for u in "${others[@]}"; do
+        say ""; say "== Settings for $u"
+        local tmp; tmp=$(mktemp /tmp/lapin-ux-uninstall.XXXXXX); cp "$0" "$tmp"; chmod 755 "$tmp"
+        local -a extra=(--settings-only --yes); [ "$DRY" = 1 ] && extra+=(--dry-run)
+        run sudo -u "$u" -H env -i HOME="$(getent passwd "$u" | cut -d: -f6)" USER="$u" PATH=/usr/bin:/bin \
+            dbus-run-session -- bash "$tmp" "${extra[@]}"
+        rm -f "$tmp"
+    done
+
+    if [ "$howdy" = 1 ]; then
+        say ""; say "== Face sign-in"
+        for f in "${HOWDY_PAM[@]}"; do
+            grep -qF "$HOWDY_MARK" "$f" 2>/dev/null || continue
+            run sudo awk -v mark="$HOWDY_MARK" -i inplace 'skip { skip=0; next } $0 == mark { skip=1; next } { print }' "$f"
+            run sudo rm -f "$f.lapin-ux-bak"
+        done
+    fi
+
+    if [ -n "$dm" ]; then
+        say ""; say "== Login screen"
+        run sudo systemctl disable greetd.service
+        run sudo systemctl enable "$dm.service"
+    fi
+
+    say ""; say "== Packages"
+    run sudo touch "$RUN_MARK"
+    if [ ${#swap[@]} -gt 0 ]; then
+        # --ask=4: yes to replacing the conflicting Lapin package.
+        run sudo pacman -S --needed --asdeps --ask=4 "${swap[@]}"
+    fi
+    local -a left=()
+    for p in "${pkgs[@]}"; do installed "$p" && left+=("$p"); done
+    local before after new
+    before=$(pacman -Qdtq 2>/dev/null | sort)
+    [ ${#left[@]} -gt 0 ] && run sudo pacman -Rn "${left[@]}"
+    # COSMIC services only Lapin UX needed. Other things it pulled in
+    # (NetworkManager, Bluetooth, PipeWire…) are left: your system may rely on them.
+
+    for _ in 1 2 3 4 5; do
+        [ "$DRY" = 1 ] && break
+        after=$(pacman -Qdtq 2>/dev/null | sort)
+        new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep -E '^(cosmic-|xdg-desktop-portal-cosmic$)' || true)
+        [ -n "$new" ] || break
+        say "COSMIC parts nothing needs any more: $(echo $new)"
+        # shellcheck disable=SC2086
+        sudo pacman -Rn $new || break
+    done
+    run sudo rm -f "$RUN_MARK"
+    if [ "$DRY" = 0 ]; then
+        after=$(pacman -Qdtq 2>/dev/null | sort)
+        new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true)
+        if [ -n "$new" ]; then
+            say ""
+            say "Kept, though nothing depends on them any more (your system may use them):"
+            say "  $(echo $new)"
+            say "Remove any you don't need with: sudo pacman -Rns <name>"
+        fi
+    fi
+    [ "$DRY" = 1 ] || { say ""; offer_cosmic_cleanup; }
+    say ""
+    say "Done. Lapin UX is removed; log out and back in so every app picks up your settings."
+}
+
+# ---------------------------------------------------------------- main
+
+if [ "$MODE" = snapshot ]; then snapshot; exit 0; fi
+if [ "$(id -u)" = 0 ]; then
+    say "Run this as your normal user; it asks for your password when it needs it." >&2; exit 1
+fi
+if [[ ${XDG_CURRENT_DESKTOP:-} == *LapinUX* ]] || pgrep -u "$(id -u)" -x lapin-ux-shell >/dev/null 2>&1; then
+    say "Lapin UX is running. Sign out, log into another desktop (or a text console)" >&2
+    say "and run this again; otherwise Lapin UX would put its settings straight back." >&2
+    exit 1
+fi
+[ "$DRY" = 1 ] && say "(Dry run: nothing is changed.)"
+if [ "$MODE" = settings ]; then restore_settings; else full_uninstall; fi

@@ -432,7 +432,40 @@ pinned cosmic-comp source. The package replaces any separately installed
 `sh tools/preflight.sh` shows what's already installed (optional).
 
 Log out, pick **Lapin UX** in your display manager's session list, log in.
-Uninstall with `sudo pacman -R lapin-ux-desktop-git`.
+### Uninstall
+
+Sign out of Lapin UX, log into another desktop (or a text console) and run
+`lapin-ux-uninstall` (`./uninstall.sh` in the source folder is the same
+script and still works once the packages are gone). `--dry-run` shows the
+plan; `--settings-only` only restores settings (for someone who already ran
+`pacman -R`).
+
+- **Restore point.** `start-lapin-ux` (and `lapin-ux-cursors`) run
+  `lapin-ux-uninstall --snapshot` before Lapin UX first changes anything:
+  GTK `org.gnome.desktop.interface` font-name, document-font-name,
+  icon-theme, cursor-theme (dconf); COSMIC's interface font, icon theme,
+  wallpaper, shortcuts (`custom`, `system_actions`), focus policy and the
+  four theme folders; `~/.local/share/icons/default/index.theme`. Saved once
+  in `~/.local/state/lapin-ux/restore`. Accounts set up before this existed
+  get a `late` marker instead (no originals).
+- **Restore.** A value is only changed while it is still Lapin UX's
+  (Selawik, Lapin-UX/Win11 icons, Lapin's pointer, wallpaper or shortcuts),
+  so later choices made elsewhere stay. With a restore point it goes back to
+  the saved value, otherwise to the desktop's default. Then
+  `~/.config/cosmic/dev.lapinux.*`, `~/.local/state/cosmic/dev.lapinux.*`,
+  `~/.cache/lapin-ux`, the pointer pack and `~/.local/state/lapin-ux` are
+  deleted; `~/.config/cosmic` too (after asking) when no COSMIC program is
+  left. Other accounts that used Lapin UX are restored the same way.
+- **System.** Removes Lapin UX's Howdy line from the PAM files; if greetd
+  runs Lapin UX's sign-in screen and COSMIC isn't staying, switches to
+  another installed login manager (refuses if there is none); swaps a Lapin
+  package back to stock COSMIC when something outside Lapin needs it
+  (e.g. `cosmic-session` needs `cosmic-greeter`); `pacman -Rn` the Lapin
+  packages, then COSMIC parts that became orphans. Other new orphans
+  (NetworkManager, Bluetooth, PipeWire…) are only listed, never removed.
+- Plain `pacman -R` still works; the package's `pre_remove` then reminds
+  you to run `./uninstall.sh --settings-only`. The system-wide fontconfig
+  rule always goes with the package.
 
 ## Try it without installing
 

@@ -154,6 +154,15 @@ def main():
         import PIL  # noqa: F401
     except ImportError:
         sys.exit("Pillow is needed: sudo pacman -S python-pillow")
+    # Save the restore point before changing the pointer settings, so the
+    # uninstaller can put the old pointer back (this may run before the first
+    # Lapin UX sign-in).
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lapin-ux-uninstall")
+    tool = here if os.path.exists(here) else "lapin-ux-uninstall"
+    try:
+        subprocess.run([tool, "--snapshot"], check=False)
+    except OSError:
+        pass
 
     with tempfile.TemporaryDirectory() as tmp:
         assets = args.src

@@ -13,6 +13,15 @@ post_upgrade() {
     post_install
 }
 
+pre_remove() {
+    # lapin-ux-uninstall leaves this mark while it removes the packages.
+    [ -e /run/lapin-ux-uninstall ] && return 0
+    echo ":: Removing Lapin UX with pacman alone leaves your GTK and COSMIC settings"
+    echo "   pointing at its fonts, icons and shortcuts. To put them back, run"
+    echo "   ./uninstall.sh --settings-only from the Lapin UX source folder"
+    echo "   (next time, use lapin-ux-uninstall instead of pacman)."
+}
+
 post_remove() {
     rm -f "/etc/fonts/conf.d/$_fc"
     fc-cache -s >/dev/null 2>&1 || true
