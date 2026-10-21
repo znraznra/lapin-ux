@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Tests lapin-ux-uninstall / lapin-ux-desktop-settings in throwaway homes.
 # Needs dconf and dbus-run-session. Run as a normal user:
-#   ln -sf lapin-ux-uninstall tools/lapin-ux-desktop-settings   # once
 #   bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"
 # Test lapin-ux-uninstall in fake homes. Usage: uninst-test.sh /path/to/lapin-ux-uninstall
 set -u
