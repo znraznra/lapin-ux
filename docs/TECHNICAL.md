@@ -203,7 +203,10 @@ patches in `packaging/lapin-ux-settings`; in progress, stages 0–4 of 5 built)
   Personalization > Lock screen (`lock_wallpaper`, `no_signin_picture`, read
   by the greeter patch 0002; greeter patch 0003 draws the lock and sign-in
   screens in Selawik by name, since the sign-in screen's own user has no
-  font setting), Accounts > Sign-in options (`lapin/signin.rs`: facial
+  font setting; patch 0004 gives the sign-in screen Windows-style corner
+  buttons — accessibility, keyboard layout, a gear to pick the desktop
+  session (every installed Wayland/X11 session, so you can switch back to
+  KDE, GNOME…) and power, each with a flyout), Accounts > Sign-in options (`lapin/signin.rs`: facial
   recognition with Howdy through `tools/lapin-ux-howdy` — camera choice,
   `howdy -U user -y add/clear`, and Howdy's PAM line added first to
   /etc/pam.d/greetd and cosmic-greeter as `sufficient`, so the password

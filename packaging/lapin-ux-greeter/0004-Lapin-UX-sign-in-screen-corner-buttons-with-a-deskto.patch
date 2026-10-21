@@ -1,0 +1,234 @@
+From 6b9210dc616c7544ab1dd1e6a99efaac8cc812bc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:57:48 +0800
+Subject: [PATCH] Lapin UX: sign-in screen corner buttons with a desktop
+ session gear
+
+Accessibility, keyboard layout (with several), a gear to choose the desktop
+session (any installed Wayland or X11 session) and power, each opening a
+flyout above it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ examples/lapin_preview.rs | 13 +++++--
+ src/greeter.rs            | 76 ++++++++++++++++++++++++++++++++++++++-
+ src/lapin.rs              | 61 +++++++++++++++++++++++++++++++
+ 3 files changed, 147 insertions(+), 3 deletions(-)
+
+diff --git a/examples/lapin_preview.rs b/examples/lapin_preview.rs
+index 633afd5..b645fe8 100644
+--- a/examples/lapin_preview.rs
++++ b/examples/lapin_preview.rs
+@@ -52,10 +52,19 @@ fn face<'a>(signin: bool, value: String, bg: widget::image::Handle, scale: f32)
+             lapin::lock_face("8:42".into(), "Monday, October 19".into(), widget::container(status).class(cosmic::theme::Container::custom(|_| widget::container::Style { text_color: Some(cosmic::iced::Color::WHITE), icon_color: Some(cosmic::iced::Color::WHITE), ..Default::default() })).into(), Msg::Reveal, scale)
+         } else {
+             let input = widget::secure_input("Password", value, None, true).on_input(Msg::Input).password();
++            // LAPIN_MENU=session|power|a11y shows that flyout open.
++            let menu = std::env::var("LAPIN_MENU").unwrap_or_default();
++            let sessions: Vec<(String, Option<bool>, Msg)> = ["COSMIC", "GNOME", "Lapin UX", "Plasma (Wayland)", "Plasma (X11)"]
++                .iter()
++                .map(|s| (s.to_string(), Some(*s == "Lapin UX"), Msg::Reveal))
++                .collect();
++            let power = vec![("Sleep".to_string(), None, Msg::Reveal), ("Shut down".into(), None, Msg::Reveal), ("Restart".into(), None, Msg::Reveal)];
++            let a11y = vec![("Screen reader".to_string(), Some(false), Msg::Reveal), ("Magnifier".into(), Some(false), Msg::Reveal), ("High contrast".into(), Some(false), Msg::Reveal), ("Invert colors".into(), Some(false), Msg::Reveal), ("On-screen keyboard".into(), None, Msg::Reveal)];
+             let corner = widget::row::with_children(vec![
+                 status,
+-                lapin::corner_button("preferences-desktop-accessibility-symbolic", Some(Msg::Reveal)),
+-                lapin::corner_button("system-shutdown-symbolic", Some(Msg::Reveal)),
++                lapin::corner_flyout("preferences-desktop-accessibility-symbolic", menu == "a11y", Msg::Reveal, Some("Accessibility"), a11y),
++                lapin::corner_flyout("emblem-system-symbolic", menu == "session", Msg::Reveal, Some("Desktop session"), sessions),
++                lapin::corner_flyout("system-shutdown-symbolic", menu == "power", Msg::Reveal, None, power),
+             ]).spacing(8).align_y(cosmic::iced::Alignment::Center);
+             lapin::sign_in(lapin::avatar(None, lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale, std::env::var("LAPIN_PLAIN").is_ok())
+         };
+diff --git a/src/greeter.rs b/src/greeter.rs
+index f142e13..1256a2a 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -366,6 +366,8 @@ pub enum Dropdown {
+     Keyboard,
+     User,
+     Session,
++    /// Lapin UX: the power button's flyout.
++    Power,
+ }
+ 
+ struct NameIndexPair {
+@@ -783,7 +785,12 @@ impl App {
+                         widget::tooltip::Position::Top,
+                     ));
+             }
+-            let button_row = button_row.spacing(4.0).align_y(Alignment::Center);
++            // Lapin UX: Windows' corner buttons instead of COSMIC's row:
++            // accessibility, keyboard layout (with several), the desktop
++            // session (gear: Lapin UX, Plasma, GNOME…, whatever is
++            // installed, so testers can always get back) and power.
++            let _ = button_row;
++            let button_row = self.lapin_corner();
+             let _ = menu_width;
+             (status_row, button_row)
+         };
+@@ -1119,6 +1126,71 @@ impl App {
+     }
+ }
+ 
++impl App {
++    fn lapin_corner(&self) -> iced::widget::Row<'_, Message, cosmic::Theme> {
++        let open = |d: Dropdown| self.dropdown_opt == Some(d);
++        let a11y = vec![
++            (fl!("accessibility", "screen-reader"), Some(self.accessibility.screen_reader.is_some()), Message::ScreenReader(self.accessibility.screen_reader.is_none())),
++            (fl!("accessibility", "magnifier"), Some(self.accessibility.magnifier), Message::Magnifier(!self.accessibility.magnifier)),
++            (fl!("accessibility", "high-contrast"), Some(self.accessibility.high_contrast), Message::HighContrast(!self.accessibility.high_contrast)),
++            (fl!("accessibility", "invert-colors"), Some(self.accessibility.invert_colors), Message::InvertColors(!self.accessibility.invert_colors)),
++            (fl!("on-screen-keyboard"), None, Message::Common(common::Message::OnScreenKeyboard)),
++        ];
++        let mut row = iced::widget::row![crate::lapin::corner_flyout(
++            "preferences-desktop-accessibility-symbolic",
++            open(Dropdown::Accessibility),
++            Message::DropdownToggle(Dropdown::Accessibility),
++            Some("Accessibility"),
++            a11y,
++        )];
++        if self.common.active_layouts.len() > 1 {
++            let layouts = self
++                .common
++                .active_layouts
++                .iter()
++                .enumerate()
++                .map(|(i, l)| (l.description.clone(), Some(i == self.common.current_keyboard_layout), Message::KeyboardLayout(i)))
++                .collect();
++            row = row.push(crate::lapin::corner_flyout(
++                "input-keyboard-symbolic",
++                open(Dropdown::Keyboard),
++                Message::DropdownToggle(Dropdown::Keyboard),
++                Some("Keyboard layout"),
++                layouts,
++            ));
++        }
++        if !self.session_names.is_empty() {
++            let sessions = self
++                .session_names
++                .iter()
++                .map(|n| (n.clone(), Some(*n == self.selected_session), Message::Session(n.clone())))
++                .collect();
++            row = row.push(crate::lapin::corner_flyout(
++                "emblem-system-symbolic",
++                open(Dropdown::Session),
++                Message::DropdownToggle(Dropdown::Session),
++                Some("Desktop session"),
++                sessions,
++            ));
++        }
++        if self.flags.logind_available {
++            let power = vec![
++                ("Sleep".to_string(), None, Message::Suspend),
++                (fl!("shutdown"), None, Message::Shutdown),
++                (fl!("restart"), None, Message::Restart),
++            ];
++            row = row.push(crate::lapin::corner_flyout(
++                "system-shutdown-symbolic",
++                open(Dropdown::Power),
++                Message::DropdownToggle(Dropdown::Power),
++                None,
++                power,
++            ));
++        }
++        row.spacing(4.0).align_y(Alignment::Center)
++    }
++}
++
+ /// Implement [`cosmic::Application`] to integrate with COSMIC.
+ impl cosmic::Application for App {
+     /// Default async executor to use with the app.
+@@ -1660,6 +1732,7 @@ impl cosmic::Application for App {
+                 }
+             }
+             Message::Suspend => {
++                self.dropdown_opt = None;
+                 #[cfg(feature = "logind")]
+                 return cosmic::task::future::<(), ()>(async move {
+                     match crate::logind::suspend().await {
+@@ -1672,6 +1745,7 @@ impl cosmic::Application for App {
+                 .discard();
+             }
+             Message::Restart | Message::Shutdown => {
++                self.dropdown_opt = None;
+                 let instant = Instant::now();
+ 
+                 self.dialog_page_opt = Some(if matches!(message, Message::Restart) {
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 2db1dd4..5330371 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -141,6 +141,67 @@ pub fn corner_button<'a, M: Clone + 'static>(icon: &'static str, msg: Option<M>)
+         .into()
+ }
+ 
++/// A corner button that opens a flyout above it (accessibility, the
++/// desktop session, power), as on Windows' sign-in screen. `items` are
++/// (label, checked, message); `toggle` opens and closes it.
++pub fn corner_flyout<'a, M: Clone + 'static>(
++    icon: &'static str,
++    open: bool,
++    toggle: M,
++    title: Option<&'a str>,
++    items: Vec<(String, Option<bool>, M)>,
++) -> Element<'a, M> {
++    let button = widget::button::custom(widget::icon::from_name(icon).size(20))
++        .padding(10.0)
++        .class(theme::Button::Custom {
++            active: Box::new(move |_, _| bg_style(if open { 0.2 } else { 0.0 })),
++            disabled: Box::new(|_| bg_style(0.0)),
++            hovered: Box::new(|_, _| bg_style(0.15)),
++            pressed: Box::new(|_, _| bg_style(0.25)),
++        })
++        .on_press(toggle.clone());
++    if !open {
++        return button.into();
++    }
++    let mut list = widget::column::with_capacity(items.len() + 1).spacing(2);
++    if let Some(t) = title {
++        list = list.push(widget::container(widget::text::caption(t.to_string()).font(font(iced::font::Weight::Semibold))).padding([6, 12, 4, 12]));
++    }
++    for (label, checked, msg) in items {
++        let check: Element<'a, M> = match checked {
++            Some(true) => widget::icon::from_name("object-select-symbolic").size(16).into(),
++            _ => widget::space::horizontal().width(Length::Fixed(16.0)).into(),
++        };
++        let row = widget::row::with_capacity(2)
++            .spacing(10)
++            .align_y(Alignment::Center)
++            .push_maybe(checked.is_some().then_some(check))
++            .push(widget::text::body(label).font(font(iced::font::Weight::Normal)));
++        list = list.push(
++            widget::button::custom(row)
++                .padding([8, 12])
++                .width(Length::Fill)
++                .class(list_button(false))
++                .on_press(msg),
++        );
++    }
++    let flyout = widget::container(list)
++        .padding(4)
++        .width(Length::Fixed(260.0))
++        .class(theme::Container::custom(|_| widget::container::Style {
++            background: Some(Background::Color(Color::from_rgba(0.13, 0.13, 0.14, 0.96))),
++            border: Border { radius: 8.0.into(), width: 1.0, color: Color::from_rgba(1.0, 1.0, 1.0, 0.1) },
++            text_color: Some(Color::WHITE),
++            icon_color: Some(Color::WHITE),
++            ..Default::default()
++        }));
++    widget::popover(button)
++        .popup(widget::container(flyout).padding([0, 0, 8, 0]))
++        .position(widget::popover::Position::Top)
++        .on_close(toggle)
++        .into()
++}
++
+ fn bg_style(alpha: f32) -> widget::button::Style {
+     widget::button::Style {
+         background: (alpha > 0.0).then_some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, alpha))),
+-- 
+2.43.0
+
