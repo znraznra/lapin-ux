@@ -29,13 +29,13 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | ![Snap layouts](docs/tour/snap-layouts.webp) **Snap layouts** — Win+Z arranges windows in halves, thirds or quarters. | ![Task view with two desktops](docs/tour/task-view.webp) **Task view** — all windows at a glance, plus virtual desktops. |
 | ![Alt+Tab switcher](docs/tour/alt-tab.webp) **Alt+Tab** — live window thumbnails, most recent first. | ![Emoji panel](docs/tour/emoji-panel.webp) **Emoji and clipboard** — Win+. and Win+V, as on Windows. |
 | ![Snipping overlay](docs/tour/snipping.webp) **Snipping** — Win+Shift+S for a rectangle, window or full-screen snip. | ![Task Manager](docs/tour/task-manager.webp) **Task Manager** — Ctrl+Shift+Esc: processes, performance, startup apps. |
-| ![Control Panel](docs/tour/control-panel.webp) **Control Panel** — the classic categories, opening the right settings. | ![Update](docs/tour/update.webp) **Update** — system and app updates with one button. |
-| ![Lock screen](docs/tour/lock-screen.webp) **Lock screen** — big clock over your wallpaper. | ![Sign-in panel](docs/tour/sign-in.webp) **Sign-in** — picture, name and password, centred. |
+| ![Control Panel](docs/tour/control-panel.webp) **Control Panel** — the classic categories, opening the right settings. | ![Update in Settings](docs/tour/update.webp) **Update** — system, app and firmware updates with one button, inside Settings like Windows Update. |
+| ![Lock screen](docs/tour/lock-screen.webp) **Lock screen** — big clock over your wallpaper. | ![Sign-in panel](docs/tour/sign-in.webp) **Sign-in** — picture, name and password, centred; the gear picks which desktop to start. |
 | ![Get Started](docs/tour/get-started.webp) **Get Started** — first-sign-in setup: Wi-Fi, light or dark. | ![Open file dialog](docs/tour/file-dialog.webp) **Open and Save dialogs** — Windows-style for every app. |
 | ![Volume pop-up above the taskbar](docs/tour/volume-popup.webp) **Volume and brightness pop-ups** — a small box above the taskbar when you press the keys. | ![Admin permission prompt](docs/tour/admin-prompt.webp) **Admin prompt** — the screen dims and asks before an app changes your system. |
 | ![Search preview of a text file](docs/tour/search-preview.webp) **Search preview** — see a file's first lines or picture before opening it. | ![Task Manager Services tab](docs/tour/task-manager-services.webp) **Task Manager: Users and Services** — who's signed in, and every background service. |
 | ![Ctrl+Alt+Del screen](docs/tour/ctrl-alt-del.webp) **Ctrl+Alt+Del** — Lock, Sign out, Change a password, Task Manager. | ![Shut Down dialog](docs/tour/shut-down.webp) **Shut Down** — Alt+F4 on the desktop, with your Linux's name and logo. |
-| ![Win+X menu](docs/tour/winx-menu.webp) **Win+X menu** — the power-user menu by the Start button. | ![Run dialog](docs/tour/run.webp) **Run** — Win+R opens programs, folders and websites. |
+| ![Win+X menu](docs/tour/winx-menu.webp) **Win+X menu** — the power-user menu; Installed apps, Power Options and System open Settings, as on Windows 11. | ![Run dialog](docs/tour/run.webp) **Run** — Win+R opens programs, folders and websites. |
 | ![Taskbar jump list](docs/tour/jump-list.webp) **Jump lists** — right-click a taskbar app for recent files and actions. | ![Snap assist](docs/tour/snap-assist.webp) **Snap assist** — after snapping a window, pick what fills the rest. |
 | ![Snap group on the taskbar](docs/tour/snap-group.webp) **Snap groups** — windows snapped together come back together. | ![Windows-style title bars](docs/tour/title-bars.webp) **Title bars** — the app's icon and name on the left. |
 | ![Touch keyboard](docs/tour/touch-keyboard.webp) **Touch keyboard** — for tablets and touch screens. | ![Clipboard history](docs/tour/clipboard-history.webp) **Clipboard history** — Win+V brings back what you copied earlier. |
@@ -54,7 +54,9 @@ A new Settings app in Windows 11's layout, built from COSMIC Settings so every s
 | ![Night light settings](docs/tour/settings-night-light.webp) **Night light** — warmer colours at night, with strength and a schedule. | ![Multitasking settings](docs/tour/settings-multitasking.webp) **Multitasking** — Snap windows, with COSMIC's extra options under Advanced. |
 | ![Installed apps](docs/tour/settings-installed-apps.webp) **Installed apps** — every app with its size and date; uninstall from the … menu. | ![Storage settings](docs/tour/settings-storage.webp) **Storage** — what's using your disk, and Temporary files to clean up. |
 | ![Update in Settings](docs/tour/settings-update.webp) **Update** — system, app and firmware updates, now inside Settings like Windows Update. | ![Privacy and security](docs/tour/settings-privacy.webp) **Privacy & security** — which apps may use your camera, microphone, location and more. |
-| ![About settings](docs/tour/settings-about.webp) **About** — device and system specifications with Copy, just like Windows. | ![Find a setting](docs/tour/settings-search.webp) **Find a setting** — search every page from the title bar. |
+| ![Lock screen settings](docs/tour/settings-lock-screen.webp) **Lock screen** — your own lock screen picture, previewed with the clock. | ![Sign-in options](docs/tour/settings-signin.webp) **Sign-in options** — face (Howdy), fingerprint and password. |
+| ![Find a setting](docs/tour/settings-search.webp) **Find a setting** — suggestions as you type, right under the box. | ![Search results](docs/tour/settings-search-results.webp) **Search results** — every match, with where it lives. |
+| ![About settings](docs/tour/settings-about.webp) **About** — device and system specifications with Copy, just like Windows. | |
 
 - [x] **Stage 0 — groundwork:** COSMIC Settings set up as Lapin's own package, pinned to COSMIC's stable release
 - [x] **Stage 1 — the Windows 11 frame:** sidebar with your account and the Windows categories, Home, page titles like "System > Display", the System page header
@@ -113,9 +115,9 @@ flowchart LR
 - [ ] **File Explorer** in Windows 11's layout — *COSMIC Files fills in for now*
 - [~] Open and Save dialogs — *Windows-style bottom row and title bar done; the side pane is still COSMIC's*
 - [x] "How do you want to open this file?" picker
-- [x] Update: system and Flatpak apps, history, restart prompt, background check
+- [x] Update (inside Settings, like Windows Update): system and Flatpak apps, history, restart prompt, background check
 - [x] Firmware updates (BIOS, SSDs, docks) *(not yet tried with real firmware)*
-- [x] Control Panel
+- [x] Control Panel — every item opens the matching Settings page
 
 ### Phase 4 — road to a 1:1 Windows 11 (16 of 19, 1 partly)
 
