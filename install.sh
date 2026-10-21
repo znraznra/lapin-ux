@@ -27,6 +27,21 @@ echo "Installing build tools: ${tools[*]}"
 sudo pacman -S --needed --noconfirm "${tools[@]}"
 
 echo "Building Lapin UX (the first build takes a while)…"
+# Icon themes Lapin UX ships that may already be on the system from a manual
+# install (no package owns them, so pacman would refuse to overwrite them).
+# Move those aside; lapin-ux-uninstall puts them back.
+backup=/var/lib/lapin-ux/backup/icons
+for theme in Win11 Win11-dark; do
+    dir=/usr/share/icons/$theme
+    [[ -d $dir ]] || continue
+    pacman -Qqo "$dir" >/dev/null 2>&1 && continue
+    echo "$dir was installed by hand (no package owns it); Lapin UX ships the same theme."
+    echo "Moving it to $backup (uninstalling Lapin UX puts it back)."
+    sudo mkdir -p "$backup"
+    sudo rm -rf "${backup:?}/$theme"
+    sudo mv "$dir" "$backup/"
+done
+
 cd packaging/arch
 makepkg -si --noconfirm --needed
 

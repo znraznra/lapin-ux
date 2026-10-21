@@ -508,6 +508,15 @@ full_uninstall() {
         sudo pacman -Rn $new || break
     done
     run sudo rm -f "$RUN_MARK"
+    # Icon themes install.sh moved aside because they were installed by hand.
+    local t bk=/var/lib/lapin-ux/backup/icons
+    for t in Win11 Win11-dark; do
+        if [ -d "$bk/$t" ] && [ ! -e "/usr/share/icons/$t" ]; then
+            say "Putting back your own $t icon theme."
+            run sudo mv "$bk/$t" "/usr/share/icons/$t"
+        fi
+    done
+    [ -d /var/lib/lapin-ux ] && run sudo rmdir -p --ignore-fail-on-non-empty "$bk" 2>/dev/null
     if [ "$DRY" = 0 ]; then
         after=$(pacman -Qdtq 2>/dev/null | sort)
         new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true)
