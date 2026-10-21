@@ -196,7 +196,8 @@ package_lapin-ux-desktop-git() {
         'localsearch'              # search inside documents from Start
         'gnome-keyring'            # saved passwords and SSH keys
     )
-    optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)')
+    optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)'
+                'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install
@@ -215,6 +216,9 @@ package_lapin-ux-desktop-git() {
     install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
     install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm755 tools/lapin-ux-cursors           "$pkgdir/usr/bin/lapin-ux-cursors"
+    # Settings > Sign-in options > Facial recognition (Howdy, optional).
+    install -Dm755 tools/lapin-ux-howdy             "$pkgdir/usr/bin/lapin-ux-howdy"
+    install -Dm644 data/polkit/dev.lapinux.howdy.policy "$pkgdir/usr/share/polkit-1/actions/dev.lapinux.howdy.policy"
     install -Dm644 -t "$pkgdir/usr/share/applications" data/apps/*.desktop
 
     # System sounds: Borealis by Ivica Ico Bukvic (Artistic; see its COPYING).

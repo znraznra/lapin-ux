@@ -1,0 +1,76 @@
+From 6226e977ab5c9e30819a4eaefdd7714b2e45304d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:27:00 +0800
+Subject: [PATCH] Lapin UX: Selawik on the lock and sign-in screens
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/greeter.rs |  2 +-
+ src/lapin.rs   | 14 +++++++++++---
+ src/locker.rs  |  2 +-
+ 3 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/src/greeter.rs b/src/greeter.rs
+index fb06b29..f142e13 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -312,7 +312,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
+         logind_available: false,
+     };
+ 
+-    let settings = Settings::default().no_main_window(true);
++    let settings = Settings::default().no_main_window(true).default_font(crate::lapin::font(cosmic::iced::font::Weight::Normal));
+ 
+     cosmic::app::run::<App>(settings, flags)?;
+ 
+diff --git a/src/lapin.rs b/src/lapin.rs
+index e347ebf..2db1dd4 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -22,10 +22,18 @@ pub fn scale(screen_height: f32) -> f32 {
+ pub const PICTURE: f32 = 192.0;
+ 
+ /// The lock screen: time and date, top centre.
++/// Lapin UX's one system font, Selawik, by name: the sign-in screen runs
++/// as the greeter's own user, whose desktop settings don't choose a font.
++pub const FONT_NAME: &str = "Selawik";
++
++pub fn font(weight: iced::font::Weight) -> iced::Font {
++    iced::Font { family: iced::font::Family::Name(FONT_NAME), weight, ..iced::Font::DEFAULT }
++}
++
+ pub fn lock_face<'a, M: Clone + 'static>(time: String, date: String, status: Element<'a, M>, reveal: M, scale: f32) -> Element<'a, M> {
+     let clock = widget::column::with_capacity(2)
+-        .push(widget::text(time).size(112.0 * scale).font(cosmic::font::semibold()).class(on_wallpaper()))
+-        .push(widget::text(date).size(24.0 * scale).class(on_wallpaper()))
++        .push(widget::text(time).size(112.0 * scale).font(font(iced::font::Weight::Semibold)).class(on_wallpaper()))
++        .push(widget::text(date).size(24.0 * scale).font(font(iced::font::Weight::Normal)).class(on_wallpaper()))
+         .align_x(Alignment::Center)
+         .spacing(0.0);
+     let page = widget::column::with_capacity(4)
+@@ -77,7 +85,7 @@ pub fn sign_in<'a, M: 'static>(
+     let box_width = 296.0 * scale;
+     let panel = widget::column::with_capacity(5)
+         .push(picture)
+-        .push(widget::text(name).size(28.0 * scale).class(on_wallpaper()))
++        .push(widget::text(name).size(28.0 * scale).font(font(iced::font::Weight::Normal)).class(on_wallpaper()))
+         .push(widget::space::vertical().height(Length::Fixed(4.0 * scale)))
+         .push(widget::container(prompt).width(Length::Fixed(box_width)))
+         .push(widget::container(message).width(Length::Fixed(box_width)).align_x(Alignment::Center))
+diff --git a/src/locker.rs b/src/locker.rs
+index 271c089..0859caf 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -94,7 +94,7 @@ pub fn main(user: pwd::Passwd) -> Result<(), Box<dyn std::error::Error>> {
+         logind_available: false,
+     };
+ 
+-    let settings = Settings::default().no_main_window(true);
++    let settings = Settings::default().no_main_window(true).default_font(crate::lapin::font(cosmic::iced::font::Weight::Normal));
+ 
+     cosmic::app::run::<App>(settings, flags)?;
+ 
+-- 
+2.43.0
+

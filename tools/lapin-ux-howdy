@@ -1,0 +1,119 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-only
+# Face sign-in with Howdy (https://github.com/boltgolt/howdy), for Lapin UX's
+# Settings > Accounts > Sign-in options > Facial recognition.
+#
+#   lapin-ux-howdy status USER            what Settings shows (no root needed)
+#   lapin-ux-howdy setup USER CAMERA      root: pick the camera, add a face,
+#                                         turn face sign-in on
+#   lapin-ux-howdy add USER               root: add another look of the face
+#   lapin-ux-howdy remove USER            root: forget the face; turn face
+#                                         sign-in off if nobody else uses it
+#
+# Root commands run through pkexec (dev.lapinux.howdy policy). Face sign-in
+# is added to the sign-in screen (greetd) and the lock screen
+# (cosmic-greeter) as "sufficient": if your face isn't recognised, the
+# password still works.
+set -u
+
+CONFIGS=(/etc/howdy/config.ini /lib/security/howdy/config.ini /usr/lib/security/howdy/config.ini /usr/local/etc/howdy/config.ini)
+PAM_FILES=(/etc/pam.d/greetd /etc/pam.d/cosmic-greeter)
+MARK="# Lapin UX: face sign-in (Howdy)"
+
+config() {
+    for c in "${CONFIGS[@]}"; do [ -f "$c" ] && { echo "$c"; return 0; }; done
+    return 1
+}
+
+models_dir() {
+    local c; c=$(config) || return 1
+    echo "$(dirname "$c")/models"
+}
+
+# The PAM line for the installed Howdy (3.x has a native module, 2.x a
+# pam_python script).
+pam_line() {
+    for m in /lib/security/pam_howdy.so /usr/lib/security/pam_howdy.so /lib64/security/pam_howdy.so; do
+        [ -f "$m" ] && { echo "auth sufficient pam_howdy.so"; return 0; }
+    done
+    for p in /lib/security/howdy/pam.py /usr/lib/security/howdy/pam.py; do
+        [ -f "$p" ] && { echo "auth sufficient pam_python.so $p"; return 0; }
+    done
+    return 1
+}
+
+# Cameras: "path<TAB>name", infrared ones first (Howdy needs one).
+cameras() {
+    local p dev name
+    for p in /dev/v4l/by-path/*-video-index0; do
+        [ -e "$p" ] || continue
+        dev=$(basename "$(readlink -f "$p")")
+        name=$(cat "/sys/class/video4linux/$dev/name" 2>/dev/null || echo "$dev")
+        if [[ "${name,,}" == *ir* ]]; then echo -e "0\t$p\t$name"; else echo -e "1\t$p\t$name"; fi
+    done | sort | cut -f2-
+}
+
+status() {
+    local user=$1 c dev models=0 file
+    command -v howdy >/dev/null 2>&1 || { echo "installed=no"; return; }
+    echo "installed=yes"
+    c=$(config) && dev=$(sed -n 's/^device_path *= *//p' "$c" | head -1) || dev=""
+    echo "camera=${dev/#none/}"
+    file="$(models_dir 2>/dev/null)/$user.dat"
+    [ -r "$file" ] && models=$(grep -o '"label"' "$file" | wc -l)
+    echo "faces=$models"
+    local on=no f
+    for f in "${PAM_FILES[@]}"; do grep -q "$MARK" "$f" 2>/dev/null && on=yes; done
+    echo "pam=$on"
+    cameras | sed 's/^/cam=/'
+}
+
+pam_on() {
+    local line f; line=$(pam_line) || { echo "Howdy's sign-in module wasn't found." >&2; return 1; }
+    for f in "${PAM_FILES[@]}"; do
+        [ -f "$f" ] || continue
+        grep -q "$MARK" "$f" && continue
+        cp -a "$f" "$f.lapin-ux-bak"
+        # First in the auth stack, so the face is tried before the password.
+        awk -v mark="$MARK" -v line="$line" '
+            !done && /^[[:space:]]*auth/ { print mark; print line; done=1 }
+            { print }
+            END { if (!done) { print mark; print line } }' "$f.lapin-ux-bak" > "$f"
+    done
+}
+
+pam_off() {
+    local f
+    for f in "${PAM_FILES[@]}"; do
+        [ -f "$f" ] || continue
+        grep -q "$MARK" "$f" || continue
+        awk -v mark="$MARK" 'skip { skip=0; next } $0 == mark { skip=1; next } { print }' "$f" > "$f.tmp" && cat "$f.tmp" > "$f" && rm -f "$f.tmp"
+    done
+}
+
+need_root() { [ "$(id -u)" = 0 ] || { echo "Run this through pkexec." >&2; exit 1; }; }
+valid_user() { id -u "$1" >/dev/null 2>&1 || { echo "No such user: $1" >&2; exit 1; }; }
+
+case "${1:-}" in
+status)
+    valid_user "${2:-}"; status "$2" ;;
+setup)
+    need_root; valid_user "${2:-}"
+    cam=${3:-}
+    [ -e "$cam" ] || { echo "That camera isn't connected." >&2; exit 1; }
+    c=$(config) || { echo "Howdy's settings file wasn't found." >&2; exit 1; }
+    sed -i "s|^device_path *=.*|device_path = $cam|" "$c"
+    # Don't keep photos of sign-in attempts.
+    sed -i 's/^capture_failed *=.*/capture_failed = false/; s/^capture_successful *=.*/capture_successful = false/' "$c"
+    howdy -U "$2" -y add || exit 1
+    pam_on ;;
+add)
+    need_root; valid_user "${2:-}"
+    howdy -U "$2" -y add ;;
+remove)
+    need_root; valid_user "${2:-}"
+    howdy -U "$2" -y clear
+    d=$(models_dir) && ls "$d"/*.dat >/dev/null 2>&1 || pam_off ;;
+*)
+    sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

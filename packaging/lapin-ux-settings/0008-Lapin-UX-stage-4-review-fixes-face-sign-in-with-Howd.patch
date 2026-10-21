@@ -1,0 +1,318 @@
+From 9b93237235e99f39020eb8bb576e819dbca0048c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:22:02 +0800
+Subject: [PATCH] Lapin UX: stage 4 review fixes (face sign-in with Howdy,
+ Selawik on the lock screen preview)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/lapin/categories.rs |   2 +-
+ cosmic-settings/src/lapin/settings.rs   |   9 +-
+ cosmic-settings/src/lapin/signin.rs     | 175 +++++++++++++++++++++++-
+ 3 files changed, 178 insertions(+), 8 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index a9ec85c..50de015 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -126,7 +126,7 @@ const SPECS: &[Spec] = &[
+         description: "Your account, sign-in options, other users",
+         children: &[
+             c("users", "system-users-symbolic", "Users", "Your account and other people who use this PC"),
+-            c("lapin-signin", "dialog-password-symbolic", "Sign-in options", "Fingerprint, password"),
++            c("lapin-signin", "dialog-password-symbolic", "Sign-in options", "Facial recognition, fingerprint, password"),
+         ],
+     },
+     Spec {
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 57e573c..b5061ab 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -667,6 +667,10 @@ fn pictures() -> Vec<String> {
+     out
+ }
+ 
++fn selawik(weight: cosmic::iced::font::Weight) -> cosmic::iced::Font {
++    cosmic::iced::Font { family: cosmic::iced::font::Family::Name("Selawik"), weight, ..cosmic::iced::Font::DEFAULT }
++}
++
+ fn lock_preview<'a>(p: &'a Prefs) -> Element<'a, PMsg> {
+     // The chosen picture with the lock screen's clock on it.
+     let path = if p.lock_wallpaper.is_empty() { super::device::Device::read().wallpaper } else { Some(p.lock_wallpaper.clone().into()) };
+@@ -682,8 +686,9 @@ fn lock_preview<'a>(p: &'a Prefs) -> Element<'a, PMsg> {
+     let now = chrono::Local::now();
+     let clock = widget::column::with_capacity(2)
+         .align_x(cosmic::iced::Alignment::Center)
+-        .push(text::title1(now.format("%-I:%M").to_string()).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)))
+-        .push(text::caption(now.format("%A, %B %-d").to_string()).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)));
++        // The lock screen's own font, Selawik, as the lock screen draws it.
++        .push(text::title1(now.format("%-I:%M").to_string()).font(selawik(cosmic::iced::font::Weight::Semibold)).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)))
++        .push(text::caption(now.format("%A, %B %-d").to_string()).font(selawik(cosmic::iced::font::Weight::Normal)).class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)));
+     let face = widget::container(clock).width(Length::Fixed(352.0)).padding([28, 0, 0, 0]).align_x(cosmic::iced::Alignment::Center);
+     let shot = cosmic::iced::widget::stack![picture, face];
+     widget::container(shot).padding(4).class(super::style::screen()).into()
+diff --git a/cosmic-settings/src/lapin/signin.rs b/cosmic-settings/src/lapin/signin.rs
+index 43b55ae..851d1e9 100644
+--- a/cosmic-settings/src/lapin/signin.rs
++++ b/cosmic-settings/src/lapin/signin.rs
+@@ -1,7 +1,8 @@
+ // SPDX-License-Identifier: GPL-3.0-only
+ //! Accounts > Sign-in options, as on Windows: "Ways to sign in" with
+-//! Fingerprint recognition (through fprintd, when the PC has a reader) and
+-//! Password (Change). The new password is set through AccountsService; the
++//! Facial recognition (through Howdy, Windows Hello's open-source
++//! counterpart, with an infrared camera), Fingerprint recognition (through
++//! fprintd, when the PC has a reader) and Password (Change). The new password is set through AccountsService; the
+ //! admin prompt asks for the current one first.
+ 
+ use cosmic::iced::{Alignment, Length};
+@@ -41,12 +42,56 @@ pub enum Msg {
+     Enroll(String, bool),
+     RemoveFingers,
+     Removed,
++    // Face (Howdy)
++    Face(Face),
++    FaceSetUp,
++    FaceCamera(usize),
++    FaceStart,
++    FaceAdd,
++    FaceRemove,
++    FaceDone(Result<(), String>),
++    LearnHowdy,
++}
++
++/// What `lapin-ux-howdy status` reports.
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub struct Face {
++    pub installed: bool,
++    pub faces: usize,
++    pub on: bool,
++    /// (device path, name), infrared cameras first.
++    pub cameras: Vec<(String, String)>,
++    /// The cameras' names, for the drop-down.
++    pub names: Vec<String>,
++}
++
++impl Face {
++    pub fn parse(out: &str) -> Face {
++        let mut f = Face::default();
++        for l in out.lines() {
++            let Some((k, v)) = l.split_once('=') else { continue };
++            match k {
++                "installed" => f.installed = v == "yes",
++                "faces" => f.faces = v.trim().parse().unwrap_or(0),
++                "pam" => f.on = v == "yes",
++                "cam" => {
++                    let (path, name) = v.split_once('\t').unwrap_or((v, v));
++                    f.cameras.push((path.to_string(), name.to_string()));
++                    f.names.push(name.to_string());
++                }
++                _ => {}
++            }
++        }
++        f
++    }
+ }
+ 
+ #[derive(Clone, Debug, PartialEq)]
+ enum Dialog {
+     Password { new: String, confirm: String, hint: String, reveal: bool, saving: bool, problem: Option<String> },
+     Fingerprint { stage: u32, message: String, done: bool },
++    /// Choose the camera, then look at it while Howdy learns your face.
++    Face { camera: usize, busy: bool, result: Option<Result<(), String>> },
+ }
+ 
+ #[derive(Default)]
+@@ -56,6 +101,7 @@ pub struct Page {
+     looked: bool,
+     dialog: Option<Dialog>,
+     changed: bool,
++    face: Option<Face>,
+ }
+ 
+ fn m(msg: Msg) -> PMsg {
+@@ -71,14 +117,17 @@ impl page::Page<PMsg> for Page {
+         self.entity = entity;
+     }
+     fn info(&self) -> page::Info {
+-        page::Info::new("lapin-signin", "dialog-password-symbolic").title("Sign-in options").description("Fingerprint, password")
++        page::Info::new("lapin-signin", "dialog-password-symbolic").title("Sign-in options").description("Face, fingerprint, password")
+     }
+     fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
+         Some(vec![sections.insert(Section::default().title("Ways to sign in").view::<Page>(|_, page, s| view(page, &s.title)))])
+     }
+     fn on_enter(&mut self) -> Task<PMsg> {
+         self.changed = false;
+-        Task::future(async { m(Msg::Reader(reader().await)) })
++        Task::batch([
++            Task::future(async { m(Msg::Reader(reader().await)) }),
++            Task::future(async { m(Msg::Face(face_status().await)) }),
++        ])
+     }
+     fn dialog(&self) -> Option<Element<'_, PMsg>> {
+         match self.dialog.as_ref()? {
+@@ -106,6 +155,32 @@ impl page::Page<PMsg> for Page {
+                         .into(),
+                 )
+             }
++            Dialog::Face { camera, busy, result } => {
++                let cams = self.face.as_ref().map(|f| f.cameras.as_slice()).unwrap_or_default();
++                let labels: &[String] = self.face.as_ref().map(|f| f.names.as_slice()).unwrap_or_default();
++                let message = match result {
++                    Some(Ok(())) => "All set! You can now sign in by looking at your camera.".to_string(),
++                    Some(Err(e)) => format!("Facial recognition couldn't be set up. {e}"),
++                    None if *busy => "Look at the camera. Keep your face in view until this finishes.".into(),
++                    None => "Choose the infrared camera Howdy should use, then select Start and look at it.".into(),
++                };
++                let mut body = column::with_capacity(3).spacing(12).push(text::body(message));
++                if result.is_none() && !busy {
++                    body = body.push(widget::dropdown(labels, Some(*camera), |i| m(Msg::FaceCamera(i))));
++                }
++                if *busy {
++                    body = body.push(widget::progress_bar::indeterminate_linear().girth(4).width(Length::Fill));
++                }
++                let primary = match result {
++                    Some(_) => widget::button::suggested("Done").on_press(m(Msg::Cancel)),
++                    None => widget::button::suggested("Start").on_press_maybe((!busy && !cams.is_empty()).then(|| m(Msg::FaceStart))),
++                };
++                let mut d = widget::dialog().title("Facial recognition setup").control(body).primary_action(primary);
++                if result.is_none() {
++                    d = d.secondary_action(widget::button::standard("Cancel").on_press_maybe((!busy).then(|| m(Msg::Cancel))));
++                }
++                Some(d.into())
++            }
+             Dialog::Fingerprint { stage, message, done } => {
+                 let body = column::with_capacity(2)
+                     .spacing(12)
+@@ -124,7 +199,32 @@ impl page::Page<PMsg> for Page {
+ }
+ impl page::AutoBind<PMsg> for Page {}
+ 
++fn face_row(p: &Page) -> rows::Item<'_> {
++    const TITLE: &str = "Facial recognition (Howdy)";
++    const ICON: &str = "camera-web-symbolic";
++    match &p.face {
++        None => rows::with(ICON, TITLE, "Looking for Howdy…", widget::Space::new().width(0).into()),
++        Some(f) if !f.installed => rows::button(
++            ICON,
++            TITLE,
++            "Sign in by looking at an infrared camera, like Windows Hello. Needs Howdy (howdy-git from the AUR)",
++            "Learn more",
++            Some(m(Msg::LearnHowdy)),
++        ),
++        Some(f) if f.cameras.is_empty() => rows::with(ICON, TITLE, "This option is currently unavailable (no camera found)", widget::Space::new().width(0).into()),
++        Some(f) if f.faces == 0 || !f.on => rows::button(ICON, TITLE, "Sign in by looking at your camera", "Set up", Some(m(Msg::FaceSetUp))),
++        Some(_) => {
++            let buttons = row::with_capacity(2)
++                .spacing(8)
++                .push(widget::button::standard("Improve recognition").on_press(m(Msg::FaceAdd)))
++                .push(widget::button::standard("Remove").on_press(m(Msg::FaceRemove)));
++            rows::with(ICON, TITLE, "You can sign in by looking at your camera", buttons.into())
++        }
++    }
++}
++
+ fn view<'a>(p: &'a Page, title: &'a str) -> Element<'a, PMsg> {
++    let face = face_row(p);
+     let finger: rows::Item<'a> = match &p.reader {
+         Some(r) if r.enrolled.is_empty() => rows::button("fingerprint-symbolic", "Fingerprint recognition", "Sign in with your fingerprint reader", "Set up", Some(m(Msg::SetUp))),
+         Some(r) => {
+@@ -158,7 +258,7 @@ fn view<'a>(p: &'a Page, title: &'a str) -> Element<'a, PMsg> {
+             .push(widget::button::standard("Change").on_press(m(Msg::ChangePassword)))
+             .into(),
+     );
+-    column::with_capacity(1).width(Length::Fill).push(rows::section(title, vec![finger, password])).into()
++    column::with_capacity(1).width(Length::Fill).push(rows::section(title, vec![face, finger, password])).into()
+ }
+ 
+ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
+@@ -241,6 +341,45 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+                 crate::Message::PageMessage(m(Msg::Removed))
+             });
+         }
++        Msg::Face(f) => p.face = Some(f),
++        Msg::FaceSetUp => p.dialog = Some(Dialog::Face { camera: 0, busy: false, result: None }),
++        Msg::FaceCamera(i) => {
++            if let Some(Dialog::Face { camera, .. }) = &mut p.dialog {
++                *camera = i;
++            }
++        }
++        Msg::FaceStart => {
++            let Some(Dialog::Face { camera, busy, .. }) = &mut p.dialog else { return Task::none() };
++            let Some((path, _)) = p.face.as_ref().and_then(|f| f.cameras.get(*camera)).cloned() else { return Task::none() };
++            *busy = true;
++            return cosmic::task::future(async move {
++                let r = howdy_root(&["setup", &login(), &path]).await;
++                crate::Message::PageMessage(m(Msg::FaceDone(r)))
++            });
++        }
++        Msg::FaceAdd => {
++            p.dialog = Some(Dialog::Face { camera: 0, busy: true, result: None });
++            return cosmic::task::future(async move {
++                let r = howdy_root(&["add", &login()]).await;
++                crate::Message::PageMessage(m(Msg::FaceDone(r)))
++            });
++        }
++        Msg::FaceRemove => {
++            return cosmic::task::future(async move {
++                let _ = howdy_root(&["remove", &login()]).await;
++                crate::Message::PageMessage(m(Msg::Face(face_status().await)))
++            });
++        }
++        Msg::FaceDone(r) => {
++            if let Some(Dialog::Face { busy, result, .. }) = &mut p.dialog {
++                *busy = false;
++                *result = Some(r);
++            }
++            return cosmic::task::future(async { crate::Message::PageMessage(m(Msg::Face(face_status().await))) });
++        }
++        Msg::LearnHowdy => {
++            let _ = std::process::Command::new("xdg-open").arg("https://wiki.archlinux.org/title/Howdy").spawn();
++        }
+         Msg::Removed => return cosmic::task::future(async { crate::Message::PageMessage(m(Msg::Reader(reader().await))) }),
+     }
+     Task::none()
+@@ -325,6 +464,23 @@ async fn remove_fingers(r: &Reader) -> Result<(), zbus::Error> {
+     r.map(drop)
+ }
+ 
++/// Howdy's state for this user (lapin-ux-howdy ships with Lapin UX).
++async fn face_status() -> Face {
++    match rows::output("lapin-ux-howdy", &["status", &login()]).await {
++        Ok(out) => Face::parse(&out),
++        Err(_) => Face::default(),
++    }
++}
++
++/// Runs a lapin-ux-howdy command as root (the admin prompt asks first).
++async fn howdy_root(args: &[&str]) -> Result<(), String> {
++    let helper = which::which("lapin-ux-howdy").map_err(|_| "lapin-ux-howdy is missing.".to_string())?;
++    let helper = helper.to_string_lossy().into_owned();
++    let mut all = vec![helper.as_str()];
++    all.extend_from_slice(args);
++    rows::output("pkexec", &all).await.map(drop)
++}
++
+ async fn set_password(new: &str, hint: &str) -> Result<(), String> {
+     let conn = zbus::Connection::system().await.map_err(|e| e.to_string())?;
+     let user: zbus::zvariant::OwnedObjectPath = conn
+@@ -346,6 +502,15 @@ async fn set_password(new: &str, hint: &str) -> Result<(), String> {
+ 
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn face_status() {
++        let f = super::Face::parse("installed=yes\ncamera=/dev/x\nfaces=2\npam=yes\ncam=/dev/v4l/by-path/a\tIntegrated IR Camera\n");
++        assert!(f.installed && f.on);
++        assert_eq!(f.faces, 2);
++        assert_eq!(f.cameras[0].1, "Integrated IR Camera");
++        assert!(!super::Face::parse("installed=no\n").installed);
++    }
++
+     #[test]
+     fn fingers() {
+         assert_eq!(super::next_finger(&[]), "right-index-finger");
+-- 
+2.43.0
+

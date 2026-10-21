@@ -201,8 +201,14 @@ patches in `packaging/lapin-ux-settings`; in progress, stages 0–4 of 5 built)
   Downloads, and old packages with `pkexec paccache -rk0`), System >
   Clipboard (shell keys `no_clipboard_history`, action `clipboard-clear`),
   Personalization > Lock screen (`lock_wallpaper`, `no_signin_picture`, read
-  by the greeter patch 0002), Accounts > Sign-in options (`lapin/signin.rs`:
-  fprintd enrolment/removal, password + hint through AccountsService),
+  by the greeter patch 0002; greeter patch 0003 draws the lock and sign-in
+  screens in Selawik by name, since the sign-in screen's own user has no
+  font setting), Accounts > Sign-in options (`lapin/signin.rs`: facial
+  recognition with Howdy through `tools/lapin-ux-howdy` — camera choice,
+  `howdy -U user -y add/clear`, and Howdy's PAM line added first to
+  /etc/pam.d/greetd and cosmic-greeter as `sufficient`, so the password
+  still works — run with pkexec under the dev.lapinux.howdy polkit action;
+  fprintd enrolment/removal; password + hint through AccountsService),
   Privacy & security (`lapin/privacy.rs`: device encryption from lsblk;
   Recent activity; per-app Location/Camera/Microphone/Screenshot/Background
   switches in the portal permission store), and Update (`lapin/update.rs`,
