@@ -10,7 +10,7 @@ use cosmic::{ApplicationExt, Core, Element, theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
-    /// A page of COSMIC Settings (`cosmic-settings <page>`).
+    /// A page of Settings: a COSMIC page or a Lapin page id (`lapin-…`).
     Settings(&'static str),
     /// A program, run if it's installed.
     Run(&'static str),
@@ -40,14 +40,14 @@ const CATEGORIES: &[Category] = &[
     Category {
         title: "System and Security",
         icon: "preferences-system",
-        target: Target::Settings("system"),
+        target: Target::Settings("lapin-system"),
         tasks: &[s("Review your computer's status", "about"), s("Power options", "power"), r("Task Manager", "lapin-ux-taskmgr")],
     },
     Category {
         title: "Network and Internet",
         icon: "preferences-system-network",
-        target: Target::Settings("network"),
-        tasks: &[s("View network status and tasks", "network"), s("Wi-Fi", "wireless"), s("VPN", "vpn")],
+        target: Target::Settings("lapin-network"),
+        tasks: &[s("View network status and tasks", "lapin-network"), s("Wi-Fi", "wireless"), s("VPN", "vpn")],
     },
     Category {
         title: "Hardware and Sound",
@@ -58,31 +58,31 @@ const CATEGORIES: &[Category] = &[
     Category {
         title: "Programs",
         icon: "system-software-install",
-        target: Target::Settings("applications"),
-        tasks: &[r("Uninstall a program", "cosmic-store"), r("Check for updates", "lapin-ux-update"), s("Default programs", "default-apps"), s("Startup apps", "startup-apps")],
+        target: Target::Settings("lapin-apps"),
+        tasks: &[s("Uninstall a program", "lapin-installed-apps"), s("Check for updates", "lapin-update"), s("Default programs", "default-apps"), s("Startup apps", "startup-apps")],
     },
     Category {
         title: "User Accounts",
         icon: "system-users",
-        target: Target::Settings("users"),
+        target: Target::Settings("lapin-accounts"),
         tasks: &[s("Change account type", "users")],
     },
     Category {
         title: "Appearance and Personalization",
         icon: "preferences-desktop-theme",
-        target: Target::Settings("appearance"),
-        tasks: &[s("Change the theme", "appearance"), s("Change desktop background", "wallpaper"), s("Window management", "window-management")],
+        target: Target::Settings("lapin-personalization"),
+        tasks: &[s("Change the theme", "appearance"), s("Change desktop background", "wallpaper"), s("Taskbar and navigation", "lapin-taskbar")],
     },
     Category {
         title: "Clock and Region",
         icon: "preferences-system-time",
-        target: Target::Settings("time"),
+        target: Target::Settings("lapin-time"),
         tasks: &[s("Change date, time, or number formats", "region-language"), s("Set the time and date", "date-time")],
     },
     Category {
         title: "Ease of Access",
         icon: "preferences-desktop-accessibility",
-        target: Target::Settings("accessibility"),
+        target: Target::Settings("lapin-accessibility"),
         tasks: &[s("Optimize visual display", "accessibility"), s("Magnifier", "accessibility-magnifier"), s("On-screen keyboard", "accessibility-osk")],
     },
 ];
@@ -97,11 +97,11 @@ const ITEMS: &[(&str, &str, Target)] = &[
     ("File Explorer", "system-file-manager", Target::Run("cosmic-files")),
     ("Keyboard", "preferences-desktop-keyboard", Target::Settings("keyboard")),
     ("Mouse", "preferences-desktop-peripherals", Target::Settings("mouse")),
-    ("Network and Sharing Center", "preferences-system-network", Target::Settings("network")),
-    ("Personalization", "preferences-desktop-theme", Target::Settings("appearance")),
+    ("Network and Sharing Center", "preferences-system-network", Target::Settings("lapin-network")),
+    ("Personalization", "preferences-desktop-theme", Target::Settings("lapin-personalization")),
     ("Power Options", "preferences-system-power", Target::Settings("power")),
-    ("Programs and Features", "system-software-install", Target::Run("cosmic-store")),
-    ("Update", "system-software-update", Target::Run("lapin-ux-update")),
+    ("Programs and Features", "system-software-install", Target::Settings("lapin-installed-apps")),
+    ("Update", "system-software-update", Target::Settings("lapin-update")),
     ("Region", "preferences-desktop-locale", Target::Settings("region-language")),
     ("Sound", "audio-card", Target::Settings("sound")),
     ("Startup Apps", "system-run", Target::Settings("startup-apps")),
@@ -111,7 +111,8 @@ const ITEMS: &[(&str, &str, Target)] = &[
     ("User Accounts", "system-users", Target::Settings("users")),
     ("Wallpaper", "preferences-desktop-wallpaper", Target::Settings("wallpaper")),
     ("Wi-Fi", "network-wireless", Target::Settings("wireless")),
-    ("Windows and Desktops", "preferences-system-windows", Target::Settings("window-management")),
+    ("Taskbar and Navigation", "user-desktop", Target::Settings("lapin-taskbar")),
+    ("Windows and Desktops", "preferences-system-windows", Target::Settings("lapin-multitasking")),
 ];
 
 #[derive(Debug, Clone)]
@@ -134,7 +135,11 @@ fn installed(bin: &str) -> bool {
 
 fn open(t: Target) {
     let result = match t {
-        Target::Settings(page) => std::process::Command::new("cosmic-settings").arg(page).spawn(),
+        Target::Settings(page) => {
+            // Lapin pages (lapin-…) open with `cosmic-settings lapin <id>`.
+            let argv = lapin_ux_core::system::settings_command(page, lapin_ux_core::system::lapin_settings_installed());
+            std::process::Command::new(&argv[0]).args(&argv[1..]).spawn()
+        }
         Target::Run(cmd) => std::process::Command::new(cmd).spawn(),
     };
     if let Err(e) = result {

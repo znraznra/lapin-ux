@@ -234,6 +234,8 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Super], key: "e"): System(HomeFolder),"#.to_string(),
         r#"(modifiers: [Super], key: "d"): Spawn("lapin-ux-shell desktop"),"#.to_string(),
         r#"(modifiers: [Super], key: "x"): Spawn("lapin-ux-shell winx"),"#.to_string(),
+        // Win+I: Settings (Home).
+        r#"(modifiers: [Super], key: "i"): Spawn("cosmic-settings"),"#.to_string(),
         r#"(modifiers: [Super], key: "r"): Spawn("lapin-ux-shell run"),"#.to_string(),
         r#"(modifiers: [Super], key: "n"): Spawn("lapin-ux-shell notifications"),"#.to_string(),
         r#"(modifiers: [Super], key: "a"): Spawn("lapin-ux-shell quick"),"#.to_string(),

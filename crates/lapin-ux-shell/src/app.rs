@@ -168,8 +168,10 @@ pub enum Message {
     CloseStart,
     /// A named key pressed in one of our surfaces.
     KeyNamed(window::Id, Named, bool),
-    /// Open Start on a given page (Win+X "Installed apps", "Search").
+    /// Open Start on a given page (Win+X "Search").
     OpenStartAt(StartPage),
+    /// Open Settings on a page ("" = Home; `lapin-…` ids or COSMIC pages).
+    OpenSettings(&'static str),
     Panel(crate::panels::PanelMsg),
     /// Super+1…9.
     TaskbarItem(usize),
@@ -1550,6 +1552,11 @@ impl Shell {
                 {
                     s.content = Some((q, hits));
                 }
+            }
+            Message::OpenSettings(page) => {
+                let close = self.close_panel();
+                let popup = self.close_popup();
+                return Task::batch([close, popup, self.open_settings(page)]);
             }
             Message::ShowDesktop => {
                 let _ = self.set_peek(false);

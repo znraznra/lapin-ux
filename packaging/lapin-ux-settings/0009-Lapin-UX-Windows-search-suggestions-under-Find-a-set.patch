@@ -1,0 +1,439 @@
+From 53bfca337a981156d704e18553739481600f07a9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 16:45:02 +0800
+Subject: [PATCH] Lapin UX: Windows search (suggestions under Find a setting,
+ Search results page) (stage 5)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs              |  33 +++-
+ cosmic-settings/src/lapin/categories.rs |   6 +
+ cosmic-settings/src/lapin/mod.rs        |  14 +-
+ cosmic-settings/src/lapin/search.rs     | 231 ++++++++++++++++++++++++
+ cosmic-settings/src/lapin/style.rs      |  15 ++
+ cosmic-settings/src/lapin/view.rs       |  16 +-
+ 6 files changed, 301 insertions(+), 14 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/search.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index 0ecd395..d5ec581 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -271,7 +271,7 @@ impl cosmic::Application for SettingsApp {
+ 
+     fn header_center(&self) -> Vec<Element<'_, Self::Message>> {
+         if crate::lapin::enabled() {
+-            return crate::lapin::header_center(&self.search_input);
++            return crate::lapin::header_center(&self.search_input, &self.lapin);
+         }
+         Vec::new()
+     }
+@@ -410,15 +410,30 @@ impl cosmic::Application for SettingsApp {
+                         return self.activate_page(page);
+                     }
+                 }
++                // Windows' search: suggestions under the box, results page
++                // on Enter; COSMIC's in-page search isn't used.
+                 crate::lapin::Msg::Search(phrase) => {
+-                    if phrase.is_empty() {
+-                        self.search_active = false;
+-                        self.search_clear();
+-                    } else {
+-                        self.search_active = true;
+-                        return self.search_changed(phrase);
++                    if self.lapin.index.is_empty() {
++                        self.lapin.index = crate::lapin::search::build(&self.pages, self.lapin.layout.home);
++                    }
++                    self.lapin.show_results = false;
++                    self.lapin.hide_suggestions = false;
++                    self.search_input = phrase;
++                }
++                crate::lapin::Msg::ShowResults => {
++                    if !self.search_input.trim().is_empty() {
++                        if self.lapin.index.is_empty() {
++                            self.lapin.index = crate::lapin::search::build(&self.pages, self.lapin.layout.home);
++                        }
++                        self.lapin.show_results = true;
+                     }
+                 }
++                crate::lapin::Msg::HideSuggestions => self.lapin.hide_suggestions = true,
++                crate::lapin::Msg::Pick(page) => {
++                    self.lapin.show_results = false;
++                    self.search_input.clear();
++                    return self.activate_page(page);
++                }
+                 crate::lapin::Msg::OpenUpdate => {
+                     if let Some((e, _)) = self.pages.find_page_by_id(crate::lapin::UPDATE_ID) {
+                         return self.activate_page(e);
+@@ -1308,8 +1323,8 @@ impl SettingsApp {
+     fn lapin_view(&self) -> Element<'_, Message> {
+         let layout = &self.lapin.layout;
+         let page = self.active_page;
+-        let body = if !self.search_input.is_empty() {
+-            self.search_view()
++        let body = if self.lapin.show_results && !self.search_input.trim().is_empty() {
++            crate::lapin::search::results(&self.lapin.index, &self.search_input)
+         } else if page == layout.home {
+             crate::lapin::home_view(&self.pages, layout)
+         } else if layout.is_list(&self.pages, page) {
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 50de015..480c857 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -294,6 +294,12 @@ pub fn arrange(pages: &mut Binder<Message>) -> Layout {
+             list.retain(|e| *e != c);
+         }
+         pages.info[c].parent = Some(p);
++        // Fluent icons for COSMIC's pages moved here (search shows them).
++        match *child {
++            "window-management" => pages.info[c].icon_name = "preferences-system-windows-symbolic".into(),
++            "workspaces" => pages.info[c].icon_name = "view-grid-symbolic".into(),
++            _ => {}
++        }
+     }
+     super::settings::add_night_light_row(pages);
+     for (from, to) in REDIRECTS {
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 2998028..6e742db 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -16,6 +16,7 @@ pub mod icons;
+ pub mod pages;
+ pub mod privacy;
+ pub mod rows;
++pub mod search;
+ pub mod settings;
+ pub mod signin;
+ pub mod storage;
+@@ -49,8 +50,14 @@ pub const TITLE: &str = "Settings";
+ pub enum Msg {
+     /// The title bar's back arrow.
+     Back,
+-    /// Typing in the sidebar's "Find a setting" box.
++    /// Typing in "Find a setting".
+     Search(String),
++    /// Enter in the box, or "Show all results".
++    ShowResults,
++    /// A suggestion or result: open its page.
++    Pick(cosmic_settings_page::Entity),
++    /// Clicked away from the suggestions.
++    HideSuggestions,
+     /// Open the Update app (until Update moves into Settings, stage 4).
+     OpenUpdate,
+ }
+@@ -66,6 +73,11 @@ pub struct State {
+     pub going_back: bool,
+     /// The top of the System page; re-read whenever System opens.
+     pub device: device::Device,
++    /// Everything "Find a setting" can find (built on first use).
++    pub index: Vec<search::Entry>,
++    /// The "Search results" page is showing.
++    pub show_results: bool,
++    pub hide_suggestions: bool,
+ }
+ 
+ impl State {
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+new file mode 100644
+index 0000000..33a2196
+--- /dev/null
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -0,0 +1,231 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! "Find a setting", as on Windows: typing shows suggestions in a list under
++//! the box (each opens its page); Enter or "Show all results" shows every
++//! match as rows on a "Search results" page. Matches come from every page's
++//! name and description, every searchable line of COSMIC's pages, and the
++//! names of the settings on Lapin's own pages.
++
++use cosmic::iced::{Alignment, Length};
++use cosmic::widget::{self, button, column, container, icon, row, text};
++use cosmic::{Apply, Element};
++use cosmic_settings_page::{Binder, Entity};
++
++use super::{Msg, style};
++use crate::app::Message;
++
++/// One thing that can be found.
++#[derive(Clone, Debug)]
++pub struct Entry {
++    pub label: String,
++    /// "System > Display" (where it lives).
++    pub path: String,
++    pub icon: String,
++    pub page: Entity,
++    /// Extra words that find it (the page's description).
++    pub keywords: String,
++}
++
++/// Settings on Lapin's own pages, by page id: (page, setting name).
++const LAPIN_ROWS: &[(&str, &str)] = &[
++    ("lapin-taskbar", "Taskbar alignment"),
++    ("lapin-taskbar", "Automatically hide the taskbar"),
++    ("lapin-taskbar", "Combine taskbar buttons and hide labels"),
++    ("lapin-taskbar", "Show smaller taskbar buttons"),
++    ("lapin-taskbar", "Show my taskbar on all displays"),
++    ("lapin-taskbar", "Show the Search box on the taskbar"),
++    ("lapin-taskbar", "Touch keyboard button"),
++    ("lapin-taskbar", "Show desktop corner"),
++    ("lapin-taskbar", "Show seconds in system tray clock"),
++    ("lapin-start", "Show web results in search"),
++    ("lapin-start", "Search engine"),
++    ("lapin-start", "Show recently opened items in Start and jump lists"),
++    ("lapin-night-light", "Night light strength"),
++    ("lapin-night-light", "Schedule night light"),
++    ("lapin-notifications", "Do not disturb"),
++    ("lapin-notifications", "Turn on do not disturb automatically"),
++    ("lapin-notifications", "Notifications from apps"),
++    ("lapin-multitasking", "Snap windows"),
++    ("lapin-multitasking", "Snap assist"),
++    ("lapin-clipboard", "Clipboard history"),
++    ("lapin-clipboard", "Clear clipboard data"),
++    ("lapin-lock-screen", "Personalize your lock screen"),
++    ("lapin-lock-screen", "Lock screen picture"),
++    ("lapin-lock-screen", "Show the lock screen background picture on the sign-in screen"),
++    ("lapin-storage", "Free up space"),
++    ("lapin-storage-temp", "Temporary files"),
++    ("lapin-storage-temp", "Empty Recycle Bin"),
++    ("lapin-installed-apps", "Uninstall an app"),
++    ("lapin-signin", "Facial recognition"),
++    ("lapin-signin", "Fingerprint recognition"),
++    ("lapin-signin", "Change your password"),
++    ("lapin-privacy", "Device encryption"),
++    ("lapin-privacy-location", "Location permissions"),
++    ("lapin-privacy-camera", "Camera permissions"),
++    ("lapin-privacy-microphone", "Microphone permissions"),
++    ("lapin-privacy-screenshots", "Screenshot permissions"),
++    ("lapin-privacy-background", "Background apps"),
++    ("lapin-privacy-activity", "Clear activity history"),
++    ("lapin-update", "Check for updates"),
++    ("lapin-update", "Firmware updates"),
++    ("lapin-update-history", "Update history"),
++    ("about", "Rename this PC"),
++    ("about", "Device specifications"),
++];
++
++fn path(pages: &Binder<crate::pages::Message>, page: Entity, include_self: bool) -> String {
++    let mut chain = Vec::new();
++    let mut at = if include_self { Some(page) } else { pages.info.get(page).and_then(|i| i.parent) };
++    while let Some(p) = at {
++        let Some(info) = pages.info.get(p) else { break };
++        chain.push(info.title.clone());
++        at = info.parent;
++    }
++    chain.reverse();
++    chain.join(" > ")
++}
++
++/// Everything findable, built once the pages are in place.
++pub fn build(pages: &Binder<crate::pages::Message>, home: Entity) -> Vec<Entry> {
++    let mut out = Vec::new();
++    for (page, info) in pages.info.iter() {
++        if page == home || info.title.is_empty() {
++            continue;
++        }
++        // Only pages reachable from the sidebar (placed in a category).
++        let mut top = page;
++        while let Some(p) = pages.info.get(top).and_then(|i| i.parent) {
++            top = p;
++        }
++        let in_sidebar = pages.info.get(top).is_some_and(|i| i.id.starts_with("lapin-")) || top == page && info.id.starts_with("lapin-");
++        if !in_sidebar {
++            continue;
++        }
++        out.push(Entry {
++            label: info.title.clone(),
++            path: path(pages, page, false),
++            icon: info.icon_name.to_string(),
++            page,
++            keywords: info.description.to_lowercase(),
++        });
++        // COSMIC's searchable lines on this page.
++        if let Some(content) = pages.content(page) {
++            for &s in content {
++                let Some(section) = pages.sections.get(s) else { continue };
++                if section.search_ignore {
++                    continue;
++                }
++                // Section titles, and the setting names among its lines
++                // (single words there are mostly choices like "Slow").
++                let lines = std::iter::once((true, section.title.clone())).chain(section.descriptions.iter().map(|(_, d)| (false, d.clone())));
++                for (is_title, line) in lines {
++                    let line = line.trim().trim_end_matches(':').trim().to_string();
++                    if line.len() < 3 || line.len() > 70 || line.eq_ignore_ascii_case(&info.title) {
++                        continue;
++                    }
++                    if !is_title && line.split_whitespace().count() < 2 {
++                        continue;
++                    }
++                    out.push(Entry { label: line, path: path(pages, page, true), icon: info.icon_name.to_string(), page, keywords: String::new() });
++                }
++            }
++        }
++    }
++    for (id, label) in LAPIN_ROWS {
++        if let Some((page, info)) = pages.find_page_by_id(id) {
++            out.push(Entry { label: label.to_string(), path: path(pages, page, true), icon: info.icon_name.to_string(), page, keywords: String::new() });
++        }
++    }
++    // One entry per name and page.
++    let mut seen = std::collections::HashSet::new();
++    out.retain(|e| seen.insert((e.label.to_lowercase(), e.page)));
++    out
++}
++
++/// Matches for `query`, best first: names starting with it, then names with
++/// a word starting with it, then names containing it, then descriptions.
++pub fn find<'a>(index: &'a [Entry], query: &str) -> Vec<&'a Entry> {
++    let q = query.trim().to_lowercase();
++    if q.is_empty() {
++        return Vec::new();
++    }
++    let mut hits: Vec<(u8, &Entry)> = index
++        .iter()
++        .filter_map(|e| {
++            let l = e.label.to_lowercase();
++            let rank = if l.starts_with(&q) {
++                0
++            } else if l.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&q)) {
++                1
++            } else if l.contains(&q) {
++                2
++            } else if e.keywords.contains(&q) {
++                3
++            } else {
++                return None;
++            };
++            Some((rank, e))
++        })
++        .collect();
++    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.len().cmp(&b.1.label.len())).then(a.1.label.cmp(&b.1.label)));
++    hits.into_iter().map(|(_, e)| e).collect()
++}
++
++/// How many suggestions the list under the box shows.
++pub const SUGGESTIONS: usize = 8;
++
++/// The list under "Find a setting".
++pub fn suggestions<'a>(index: &'a [Entry], query: &str) -> Element<'a, Message> {
++    let hits = find(index, query);
++    let mut list = column::with_capacity(SUGGESTIONS + 1).spacing(2);
++    if hits.is_empty() {
++        list = list.push(container(text::body("No results").class(style::quiet())).padding([10, 12]));
++    }
++    for e in hits.iter().take(SUGGESTIONS) {
++        list = list.push(
++            button::custom(
++                row::with_capacity(2)
++                    .spacing(12)
++                    .align_y(Alignment::Center)
++                    .push(icon::from_name(e.icon.clone()).size(16))
++                    .push(text::body(e.label.clone()).width(Length::Fill)),
++            )
++            .padding([8, 12])
++            .width(Length::Fill)
++            .class(style::nav_item(false))
++            .on_press(Message::Lapin(Msg::Pick(e.page))),
++        );
++    }
++    if hits.len() > SUGGESTIONS {
++        list = list.push(
++            button::custom(text::body("Show all results").class(cosmic::theme::Text::Accent))
++                .padding([8, 12])
++                .width(Length::Fill)
++                .class(style::nav_item(false))
++                .on_press(Message::Lapin(Msg::ShowResults)),
++        );
++    }
++    container(list).padding(4).width(Length::Fixed(400.0)).class(style::flyout()).into()
++}
++
++/// The "Search results" page (Enter, or "Show all results").
++pub fn results<'a>(index: &'a [Entry], query: &'a str) -> Element<'a, Message> {
++    let hits = find(index, query);
++    let head = container(text::title2(format!("Search results for \u{201C}{}\u{201D}", query.trim()))).padding([4, 0, 20, 0]);
++    let mut list = column::with_capacity(hits.len() + 1).spacing(4);
++    if hits.is_empty() {
++        list = list.push(text::body("No results. Try different words.").class(style::quiet()));
++    }
++    for e in hits {
++        list = list.push(super::view::page_row(&e.icon, e.label.as_str(), e.path.as_str(), Message::Lapin(Msg::Pick(e.page))));
++    }
++    column::with_capacity(2)
++        .push(head)
++        .push(list)
++        .max_width(super::CONTENT_MAX)
++        .width(Length::Fill)
++        .padding([8, 40, 32, 24])
++        .apply(widget::scrollable)
++        .height(Length::Fill)
++        .width(Length::Fill)
++        .into()
++}
+diff --git a/cosmic-settings/src/lapin/style.rs b/cosmic-settings/src/lapin/style.rs
+index 9effdfc..1ca2d3f 100644
+--- a/cosmic-settings/src/lapin/style.rs
++++ b/cosmic-settings/src/lapin/style.rs
+@@ -132,3 +132,18 @@ pub fn link_strip() -> theme::Container<'static> {
+         ..Default::default()
+     })
+ }
++
++/// The suggestions list under "Find a setting": a raised card.
++pub fn flyout() -> theme::Container<'static> {
++    theme::Container::custom(|t| {
++        let c = t.cosmic();
++        widget::container::Style {
++            background: Some(Color::from(c.background(t.transparent).component.base).into()),
++            border: Border { radius: 8.0.into(), width: 1.0, color: c.bg_divider().into() },
++            shadow: cosmic::iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: cosmic::iced::Vector::new(0.0, 8.0), blur_radius: 24.0 },
++            text_color: Some(on_bg(t)),
++            icon_color: Some(on_bg(t)),
++            ..Default::default()
++        }
++    })
++}
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index a915582..b39bad7 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -160,15 +160,23 @@ pub fn sidebar<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a State, a
+         .into()
+ }
+ 
+-/// "Find a setting", in the middle of the title bar.
+-pub fn header_center(query: &str) -> Vec<Element<'_, Message>> {
++/// "Find a setting", in the middle of the title bar, with Windows' list of
++/// suggestions under it while you type.
++pub fn header_center<'a>(query: &'a str, state: &'a State) -> Vec<Element<'a, Message>> {
+     let mut search = widget::search_input("Find a setting", query)
+         .on_input(|s| Message::Lapin(Msg::Search(s)))
++        .on_submit(|_| Message::Lapin(Msg::ShowResults))
+         .width(Length::Fixed(400.0));
+     if !query.is_empty() {
+         search = search.on_clear(Message::Lapin(Msg::Search(String::new())));
+     }
+-    vec![search.into()]
++    // Always inside the popover, so the box keeps its focus and text
++    // when the list appears.
++    let mut pop = widget::popover(search).position(widget::popover::Position::Bottom).on_close(Message::Lapin(Msg::HideSuggestions));
++    if !(query.trim().is_empty() || state.show_results || state.hide_suggestions) {
++        pop = pop.popup(container(super::search::suggestions(&state.index, query)).padding([4, 0, 0, 0]));
++    }
++    vec![pop.into()]
+ }
+ 
+ /// Title bar: Windows' back arrow and "Settings" at the left.
+@@ -213,7 +221,7 @@ pub fn breadcrumb<'a>(pages: &'a Binder<crate::pages::Message>, page: Entity, ow
+ }
+ 
+ /// A Windows row: icon, title, grey description, and an arrow at the end.
+-fn page_row<'a>(icon_name: &str, title: &'a str, description: &'a str, msg: Message) -> Element<'a, Message> {
++pub(crate) fn page_row<'a>(icon_name: &str, title: &'a str, description: &'a str, msg: Message) -> Element<'a, Message> {
+     let mut words = column::with_capacity(2).spacing(2).push(text::body(title));
+     if !description.is_empty() {
+         words = words.push(text::caption(description).class(style::quiet()));
+-- 
+2.43.0
+

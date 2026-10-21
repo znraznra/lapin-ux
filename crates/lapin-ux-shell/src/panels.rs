@@ -96,10 +96,13 @@ pub fn winx_items(shell: &Shell, power: bool) -> Vec<Option<Item>> {
         ];
     }
     let app = |role| find_app(&shell.catalog, role);
-    let mut v = vec![Some(item("view-app-grid-symbolic", "Installed apps", Message::OpenStartAt(StartPage::AllApps)))];
-    if let Some(id) = app(Role::Settings) {
-        v.push(Some(item("preferences-system-symbolic", "System", Message::Launch(id))));
-    }
+    // As on Windows 11: these open the matching Settings pages.
+    let mut v = vec![
+        Some(item("view-app-grid-symbolic", "Installed apps", Message::OpenSettings("lapin-installed-apps"))),
+        Some(item("battery-symbolic", "Power Options", Message::OpenSettings("power"))),
+        Some(item("preferences-system-symbolic", "System", Message::OpenSettings("about"))),
+        Some(item("network-wired-symbolic", "Network Connections", Message::OpenSettings("lapin-network"))),
+    ];
     if let Some(id) = app(Role::Disks) {
         v.push(Some(item("drive-harddisk-symbolic", "Disk Management", Message::Launch(id))));
     }
@@ -110,9 +113,7 @@ pub fn winx_items(shell: &Shell, power: bool) -> Vec<Option<Item>> {
     if let Some(id) = app(Role::TaskManager) {
         v.push(Some(item("utilities-system-monitor-symbolic", "Task Manager", Message::Launch(id))));
     }
-    if let Some(id) = app(Role::Settings) {
-        v.push(Some(item("emblem-system-symbolic", "Settings", Message::Launch(id))));
-    }
+    v.push(Some(item("emblem-system-symbolic", "Settings", Message::OpenSettings(""))));
     if let Some(id) = app(Role::Files) {
         v.push(Some(item("system-file-manager-symbolic", "File Explorer", Message::Launch(id))));
     }

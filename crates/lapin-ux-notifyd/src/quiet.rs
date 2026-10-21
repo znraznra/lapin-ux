@@ -22,6 +22,8 @@ pub enum QuietMsg {
     /// Every half minute: schedule and focus timers.
     Minute,
     OpenSettings(bool),
+    /// "More notification settings": Settings > System > Notifications.
+    OpenSystemSettings,
     Schedule(bool),
     ScheduleStart(i32),
     ScheduleEnd(i32),
@@ -195,6 +197,11 @@ impl App {
         match msg {
             QuietMsg::Minute => return self.refresh_dnd(),
             QuietMsg::OpenSettings(on) => self.quiet.settings_open = on,
+            QuietMsg::OpenSystemSettings => {
+                let argv = lapin_ux_core::system::settings_command("lapin-notifications", lapin_ux_core::system::lapin_settings_installed());
+                let _ = std::process::Command::new(&argv[0]).args(&argv[1..]).spawn();
+                self.quiet.settings_open = false;
+            }
             QuietMsg::Schedule(on) => {
                 self.quiet.dnd.schedule.enabled = on;
                 save(cfg.as_ref(), "dnd_schedule", &self.quiet.dnd.schedule);
@@ -463,6 +470,7 @@ pub fn settings(app: &App) -> Element<'_, Message> {
     column::with_children(vec![
         header.into(),
         scrollable(column::with_children(vec![sched.into(), list.into(), cals.into()]).spacing(20).padding([0, 8, 0, 0])).height(Length::Fill).into(),
+        lapin_ux_ui::button::text("More notification settings").on_press(Message::Quiet(QuietMsg::OpenSystemSettings)).into(),
     ])
     .spacing(12)
     .into()

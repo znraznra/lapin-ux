@@ -645,10 +645,10 @@ impl Shell {
 
     /// Open the system settings app, on a page if it supports that.
     pub(crate) fn open_settings(&mut self, page: &str) -> Task<Message> {
-        let mut cmd = std::process::Command::new("cosmic-settings");
-        if !page.is_empty() {
-            cmd.arg(page);
-        }
+        // Lapin pages (lapin-…) open with `cosmic-settings lapin <id>`.
+        let argv = lapin_ux_core::system::settings_command(page, lapin_ux_core::system::lapin_settings_installed());
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]);
         Task::future(async move {
             if cosmic::process::spawn(cmd).await.is_none() {
                 tracing::warn!("could not start cosmic-settings");
@@ -1407,7 +1407,7 @@ fn hotspot_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         );
     }
     c = c.push(container(text::caption("Shares this computer's internet connection over Wi-Fi.").class(style::dim_text())).padding([0, 10]));
-    page("Mobile hotspot", c, Some(("More hotspot settings", "wireless")))
+    page("Mobile hotspot", c, Some(("More hotspot settings", "lapin-network")))
 }
 
 fn vpn_page<'a>(shell: &'a Shell) -> Element<'a, Message> {

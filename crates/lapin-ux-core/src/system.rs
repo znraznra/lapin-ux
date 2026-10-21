@@ -10,7 +10,8 @@ use crate::search::{Searchable, score};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SettingsPage {
     pub title: &'static str,
-    /// Argument for `cosmic-settings <page>` (its clap subcommand names).
+    /// The Settings page: a COSMIC page name (`cosmic-settings <page>`) or
+    /// a Lapin page id (`lapin-…`, opened with `cosmic-settings lapin <id>`).
     pub page: &'static str,
     pub icon: &'static str,
     pub keywords: &'static [&'static str],
@@ -21,27 +22,39 @@ const fn page(title: &'static str, page: &'static str, icon: &'static str, keywo
 }
 
 pub const SETTINGS_PAGES: &[SettingsPage] = &[
-    page("Wi-Fi", "wireless", "network-wireless-symbolic", &["wifi", "wireless", "network", "internet", "hotspot"]),
+    page("Wi-Fi", "wireless", "network-wireless-symbolic", &["wifi", "wireless", "network", "internet"]),
     page("Ethernet", "wired", "network-wired-symbolic", &["wired", "lan", "cable", "network"]),
     page("VPN", "vpn", "network-vpn-symbolic", &["vpn", "wireguard", "openvpn", "proxy"]),
-    page("Bluetooth", "bluetooth", "bluetooth-active-symbolic", &["bluetooth", "pair", "headphones", "devices"]),
-    page("Display", "displays", "preferences-desktop-display-symbolic", &["display", "monitor", "screen", "resolution", "scale", "refresh rate", "night light"]),
+    page("Network & internet", "lapin-network", "preferences-system-network-symbolic", &["network", "internet", "hotspot", "connections"]),
+    page("Bluetooth & devices", "bluetooth", "bluetooth-active-symbolic", &["bluetooth", "pair", "headphones", "devices"]),
+    page("Display", "displays", "preferences-desktop-display-symbolic", &["display", "monitor", "screen", "resolution", "scale", "refresh rate", "brightness"]),
+    page("Night light", "lapin-night-light", "night-light-symbolic", &["night light", "blue light", "warm", "night"]),
     page("Sound", "sound", "audio-speakers-symbolic", &["sound", "audio", "volume", "speakers", "microphone", "output", "input"]),
-    page("Power & battery", "power", "battery-symbolic", &["power", "battery", "sleep", "energy", "screen off", "lid"]),
-    page("Personalization", "appearance", "preferences-desktop-appearance-symbolic", &["theme", "dark mode", "light mode", "accent", "colors", "appearance", "font"]),
+    page("Notifications", "lapin-notifications", "preferences-system-notifications-symbolic", &["notifications", "do not disturb", "focus", "alerts", "banners"]),
+    page("Power & battery", "power", "battery-symbolic", &["power", "battery", "sleep", "energy", "screen off", "lid", "power mode"]),
+    page("Storage", "lapin-storage", "drive-harddisk-symbolic", &["storage", "disk space", "free up space", "cleanup", "temporary files", "drive"]),
+    page("Multitasking", "lapin-multitasking", "view-grid-symbolic", &["multitasking", "snap", "snap layouts", "virtual desktops", "desktops", "workspaces", "alt tab"]),
+    page("Clipboard", "lapin-clipboard", "edit-paste-symbolic", &["clipboard", "clipboard history", "copy", "paste"]),
+    page("About", "about", "help-about-symbolic", &["about", "system info", "computer name", "rename this pc", "hostname", "version", "specs"]),
+    page("Personalization", "lapin-personalization", "preferences-desktop-appearance-symbolic", &["personalize", "personalization", "look"]),
+    page("Colors", "appearance", "preferences-color-symbolic", &["theme", "dark mode", "light mode", "accent", "colors", "appearance", "transparency"]),
     page("Background", "wallpaper", "preferences-desktop-wallpaper-symbolic", &["wallpaper", "background", "desktop picture"]),
-    page("Mouse", "mouse", "input-mouse-symbolic", &["mouse", "pointer", "cursor speed", "scroll"]),
+    page("Lock screen", "lapin-lock-screen", "system-lock-screen-symbolic", &["lock screen", "lock picture", "sign-in screen"]),
+    page("Start", "lapin-start", "view-app-grid-symbolic", &["start menu", "recent", "recommended", "web results", "search engine"]),
+    page("Taskbar", "lapin-taskbar", "user-desktop-symbolic", &["taskbar", "alignment", "auto-hide", "hide taskbar", "combine", "system tray"]),
+    page("Mouse", "mouse", "input-mouse-symbolic", &["mouse", "pointer", "cursor speed", "scroll", "primary button"]),
     page("Touchpad", "touchpad", "input-touchpad-symbolic", &["touchpad", "trackpad", "tap to click", "gestures"]),
-    page("Keyboard", "keyboard", "input-keyboard-symbolic", &["keyboard", "layout", "input method", "shortcuts", "language"]),
-    page("Date & time", "date-time", "preferences-system-time-symbolic", &["date", "time", "clock", "time zone", "timezone"]),
-    page("Language & region", "region-language", "preferences-desktop-locale-symbolic", &["language", "region", "locale", "formats"]),
-    page("Accounts", "users", "system-users-symbolic", &["users", "accounts", "password", "sign-in", "family"]),
+    page("Keyboard", "keyboard", "input-keyboard-symbolic", &["keyboard", "layout", "input method", "shortcuts"]),
+    page("Installed apps", "lapin-installed-apps", "view-app-grid-symbolic", &["installed apps", "uninstall", "remove app", "programs", "apps & features"]),
     page("Default apps", "default-apps", "preferences-desktop-default-applications-symbolic", &["default apps", "browser", "email", "open with"]),
     page("Startup apps", "startup-apps", "system-run-symbolic", &["startup", "autostart", "login"]),
-    page("Accessibility", "accessibility", "preferences-desktop-accessibility-symbolic", &["accessibility", "magnifier", "high contrast", "screen reader"]),
-    page("Window management", "window-management", "preferences-system-windows-symbolic", &["windows", "snap", "focus", "title bar", "super key"]),
-    page("Workspaces", "workspaces", "view-paged-symbolic", &["workspaces", "virtual desktops", "desktops"]),
-    page("About", "about", "help-about-symbolic", &["about", "system info", "computer name", "hostname", "version", "specs"]),
+    page("Accounts", "users", "system-users-symbolic", &["users", "accounts", "your info", "other users", "family"]),
+    page("Sign-in options", "lapin-signin", "dialog-password-symbolic", &["sign-in", "password", "change password", "fingerprint", "face", "facial recognition", "howdy"]),
+    page("Date & time", "date-time", "preferences-system-time-symbolic", &["date", "time", "clock", "time zone", "timezone"]),
+    page("Language & region", "region-language", "preferences-desktop-locale-symbolic", &["language", "region", "locale", "formats"]),
+    page("Accessibility", "accessibility", "preferences-desktop-accessibility-symbolic", &["accessibility", "magnifier", "high contrast", "screen reader", "narrator", "color filters"]),
+    page("Privacy & security", "lapin-privacy", "security-high-symbolic", &["privacy", "security", "permissions", "camera", "microphone", "location", "encryption"]),
+    page("Update", "lapin-update", "software-update-available-symbolic", &["update", "updates", "upgrade", "firmware", "check for updates", "windows update"]),
 ];
 
 /// Settings pages matching `query`, best first. Keywords only count for
@@ -60,6 +73,58 @@ pub fn search_settings(query: &str) -> Vec<&'static SettingsPage> {
         .collect();
     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.title.cmp(b.1.title)));
     hits.into_iter().map(|h| h.1).collect()
+}
+
+/// The command that opens Settings on `page` ("" = Home). Lapin pages
+/// (`lapin-…`) need Lapin's Settings; with COSMIC's own Settings they fall
+/// back to the nearest COSMIC page.
+pub fn settings_command(page: &str, lapin_settings: bool) -> Vec<String> {
+    let mut cmd = vec!["cosmic-settings".to_string()];
+    if page.is_empty() {
+        return cmd;
+    }
+    if page.starts_with("lapin-") {
+        if lapin_settings {
+            cmd.extend(["lapin".to_string(), page.to_string()]);
+        } else if let Some(p) = cosmic_fallback(page) {
+            cmd.push(p.to_string());
+        }
+    } else {
+        cmd.push(page.to_string());
+    }
+    cmd
+}
+
+/// The closest COSMIC Settings page for a Lapin page.
+pub fn cosmic_fallback(page: &str) -> Option<&'static str> {
+    Some(match page {
+        "lapin-network" => "network",
+        "lapin-night-light" | "lapin-system" => "displays",
+        "lapin-notifications" | "lapin-storage" | "lapin-clipboard" => "system",
+        "lapin-multitasking" => "window-management",
+        "lapin-personalization" | "lapin-lock-screen" => "appearance",
+        "lapin-start" | "lapin-taskbar" => "panel",
+        "lapin-installed-apps" | "lapin-apps" => "applications",
+        "lapin-signin" | "lapin-accounts" => "users",
+        "lapin-time" => "time",
+        "lapin-devices" => "input",
+        "lapin-accessibility" => "accessibility",
+        _ => return None,
+    })
+}
+
+/// Whether the installed Settings is Lapin's (it knows `cosmic-settings
+/// lapin <page>`). Checked once.
+pub fn lapin_settings_installed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::process::Command::new("cosmic-settings")
+            .args(["help", "lapin"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
 }
 
 /// How an installed app can be removed.
@@ -119,6 +184,12 @@ mod tests {
         assert_eq!(search_settings("bluetooth")[0].page, "bluetooth");
         let dark: Vec<_> = search_settings("dark mode").iter().map(|p| p.page).collect();
         assert_eq!(dark, vec!["appearance"]);
+        assert_eq!(search_settings("uninstall")[0].page, "lapin-installed-apps");
+        assert_eq!(search_settings("taskbar")[0].page, "lapin-taskbar");
+        assert_eq!(settings_command("lapin-update", true), ["cosmic-settings", "lapin", "lapin-update"]);
+        assert_eq!(settings_command("lapin-taskbar", false), ["cosmic-settings", "panel"]);
+        assert_eq!(settings_command("sound", true), ["cosmic-settings", "sound"]);
+        assert_eq!(settings_command("", true), ["cosmic-settings"]);
         assert!(search_settings("resolution").iter().any(|p| p.page == "displays"));
         assert!(search_settings("xyzzy").is_empty());
     }

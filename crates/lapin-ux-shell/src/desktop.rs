@@ -1408,7 +1408,7 @@ pub fn menu<'a>(shell: &'a Shell, on: &'a Option<PathBuf>, page: &MenuPage) -> E
                 parent_entry(shell, pid, "desk-new", Lead::Icon("list-add-symbolic"), "New", m(DesktopMsg::Menu(MenuPage::New))),
                 leaf(menu_divider()),
                 leaf(entry(Lead::Icon("preferences-desktop-display-symbolic"), "Display settings", None, Some(m(DesktopMsg::Settings("displays"))))),
-                leaf(entry(Lead::Icon("preferences-desktop-wallpaper-symbolic"), "Personalize", None, Some(m(DesktopMsg::Settings("wallpaper"))))),
+                leaf(entry(Lead::Icon("preferences-desktop-wallpaper-symbolic"), "Personalize", None, Some(m(DesktopMsg::Settings("lapin-personalization"))))),
                 leaf(entry(Lead::Icon("utilities-terminal-symbolic"), "Open in Terminal", None, Some(m(DesktopMsg::Terminal)))),
             ]
         }

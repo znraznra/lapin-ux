@@ -535,6 +535,9 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
             Message::TaskbarOption(O::DisplaysMenu),
         ));
     }
+    // Windows' own taskbar menu item.
+    items.push(crate::submenu::leaf(menu_divider()));
+    items.push(crate::submenu::leaf(menu_item("emblem-system-symbolic", "Taskbar settings", Message::OpenSettings("lapin-taskbar"))));
     panel(column::with_children(items).spacing(2), 320.0)
 }
 

@@ -177,7 +177,6 @@ pub const DISKS: &[&str] = &["org.gnome.DiskUtility", "gnome-disks", "org.kde.pa
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Files,
-    Settings,
     Terminal,
     TaskManager,
     Disks,
@@ -188,7 +187,6 @@ pub enum Role {
 pub fn find_app(catalog: &Catalog, role: Role) -> Option<String> {
     let (ids, cats): (&[&str], &[&str]) = match role {
         Role::Files => (FILES, &["FileManager"]),
-        Role::Settings => (SETTINGS, &["DesktopSettings"]),
         Role::Terminal => (TERMINAL, &["TerminalEmulator"]),
         Role::TaskManager => (TASK_MANAGER, &["Monitor"]),
         Role::Disks => (DISKS, &["DiskTool"]),

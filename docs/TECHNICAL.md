@@ -169,7 +169,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
 **Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.10.0 with
-patches in `packaging/lapin-ux-settings`; in progress, stages 0–4 of 5 done)
+patches in `packaging/lapin-ux-settings`; in progress, all 5 stages built)
 - Windows 11 layout: account card and colour category icons in the sidebar
   (Home, System, Bluetooth & devices, Network & internet, Personalization,
   Apps, Accounts, Time & language, Accessibility, Privacy & security,
@@ -219,6 +219,19 @@ patches in `packaging/lapin-ux-settings`; in progress, stages 0–4 of 5 done)
   pacman.log). `lapin-ux-update` without arguments now opens
   `cosmic-settings lapin lapin-update` (`LAPIN_UX_UPDATE_WINDOW=1` keeps its
   own window); any Lapin page opens with `cosmic-settings lapin <page-id>`.
+- Stage 5: "Find a setting" (`lapin/search.rs`) shows up to 8 suggestions
+  in a list under the box as you type (page names and descriptions,
+  COSMIC's section titles and multi-word lines, Lapin's own setting names)
+  and a "Search results" page on Enter or "Show all results"; COSMIC's
+  in-page search isn't used in Lapin mode. Everything that opens Settings
+  goes through `lapin_ux_core::system::settings_command(page)`: Lapin pages
+  (`lapin-…`) open with `cosmic-settings lapin <id>`, falling back to the
+  nearest COSMIC page when COSMIC's own Settings is installed. Start search,
+  Control Panel, Win+X (Installed apps, Power Options, System, Network
+  Connections, Settings), the taskbar menu's "Taskbar settings", desktop
+  Display settings / Personalize, quick settings links, the notification
+  centre's "More notification settings" and Win+I (Settings Home) all open
+  the matching page.
 - All Lapin code is in `cosmic-settings/src/lapin/`; COSMIC's files get small
   hooks. The look inside pages comes from opt-in libcosmic patches
   (`packaging/lapin-ux-libcosmic` 0002–0007), turned on only by Lapin
