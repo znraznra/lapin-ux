@@ -23,6 +23,14 @@ tools=(base-devel git)
 if ! command -v cargo >/dev/null; then
     tools+=(rust)
 fi
+# Ask for the password once, now, and keep it fresh for the whole build, so
+# the install at the end doesn't stop and time out waiting for it.
+echo "Lapin UX needs your password to install packages (asked once)."
+sudo -v
+( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null; sleep 50; done ) &
+keepalive=$!
+trap 'kill $keepalive 2>/dev/null' EXIT
+
 echo "Installing build tools: ${tools[*]}"
 sudo pacman -S --needed --noconfirm "${tools[@]}"
 
