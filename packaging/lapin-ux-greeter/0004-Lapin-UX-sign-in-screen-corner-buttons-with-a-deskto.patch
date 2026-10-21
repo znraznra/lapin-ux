@@ -1,7 +1,7 @@
-From 6b9210dc616c7544ab1dd1e6a99efaac8cc812bc Mon Sep 17 00:00:00 2001
+From 88e187678880823573d11b2f197b9f84f56035b0 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 14:57:48 +0800
-Subject: [PATCH] Lapin UX: sign-in screen corner buttons with a desktop
+Subject: [PATCH 4/4] Lapin UX: sign-in screen corner buttons with a desktop
  session gear
 
 Accessibility, keyboard layout (with several), a gear to choose the desktop

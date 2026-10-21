@@ -1,7 +1,7 @@
-From 6226e977ab5c9e30819a4eaefdd7714b2e45304d Mon Sep 17 00:00:00 2001
+From d2ed9519e9be037d2f53d6f8ee3a652185962005 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 14:27:00 +0800
-Subject: [PATCH] Lapin UX: Selawik on the lock and sign-in screens
+Subject: [PATCH 3/4] Lapin UX: Selawik on the lock and sign-in screens
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1

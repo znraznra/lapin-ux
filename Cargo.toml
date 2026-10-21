@@ -34,7 +34,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 dirs = "6"
 
 # Pinned to a known commit so builds are reproducible. Bump deliberately.
-libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "e1f2cd2e52226aa50d59bb2cd6d43ffe290106ed", default-features = false, features = [
+libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "430f3d48a97d8779f9c1985473912e594ccca1ae", default-features = false, features = [
     "autosize",
     "dbus-config",
     "desktop",

@@ -16,7 +16,7 @@
 
 pkgbase=lapin-ux-cosmic-apps
 pkgname=('lapin-ux-cosmic-files' 'lapin-ux-cosmic-term' 'lapin-ux-cosmic-edit' 'lapin-ux-cosmic-store')
-pkgver=1.10.0
+pkgver=1.11.0
 pkgrel=1
 pkgdesc="COSMIC apps with Windows 11 title bars for Lapin UX"
 arch=('x86_64' 'aarch64')
@@ -25,12 +25,12 @@ license=('GPL-3.0-only')
 makedepends=('cargo' 'git' 'just' 'clang' 'mold')
 options=('!lto')
 
-# COSMIC epoch-1.10.0
+# COSMIC epoch-1.11.0
 _apps=(cosmic-files cosmic-term cosmic-edit cosmic-store)
-_commits=(ac5cef76fa60b5a329bfda3d30825489ec28af53   # cosmic-files
-          3bfca1eb804de2f069e62d0709982beca908cb01   # cosmic-term
-          5ddf5115995e02fd71851a42bf0e6a9c9b5a1ce5   # cosmic-edit
-          c7b36a2fdccf1ce88944793af67c3664413ee560)  # cosmic-store
+_commits=(3cc4b8003e8d08349c7ced8a9cdd10cdfa45d38c   # cosmic-files
+          699ac42384b917029082d45a01a9261a4ba75c45   # cosmic-term
+          4ac1cc84f784d4f89327f3d3459af2633ceb4f12   # cosmic-edit
+          16b1667e43c634318a99995c8eb77c23603ae560)  # cosmic-store
 source=()
 for _i in "${!_apps[@]}"; do
     source+=("${_apps[$_i]}::git+https://github.com/pop-os/${_apps[$_i]}.git#commit=${_commits[$_i]}")

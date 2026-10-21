@@ -1,4 +1,4 @@
-From 9d1b1880e4b9a9e6c3278e92e64b489fe2761851 Mon Sep 17 00:00:00 2001
+From f6006585f57de6e33d2a46b1d8d13653ffc3ebab Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 23:00:51 +0800
 Subject: [PATCH 7/7] Lapin UX: 4 px push buttons (opt-in)

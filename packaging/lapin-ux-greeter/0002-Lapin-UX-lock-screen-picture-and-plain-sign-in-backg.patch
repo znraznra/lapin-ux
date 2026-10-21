@@ -1,7 +1,7 @@
-From 458a764d8a9f1ae1cca719553fdce912b5f51eb5 Mon Sep 17 00:00:00 2001
+From f4cb44f8ab51c4cd3cd279376fda82f215777a54 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 12:58:40 +0800
-Subject: [PATCH 2/2] Lapin UX: lock screen picture and plain sign-in
+Subject: [PATCH 2/4] Lapin UX: lock screen picture and plain sign-in
  background from Settings
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

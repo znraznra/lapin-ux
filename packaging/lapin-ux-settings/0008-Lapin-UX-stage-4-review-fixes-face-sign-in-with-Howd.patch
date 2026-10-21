@@ -1,8 +1,8 @@
-From 9b93237235e99f39020eb8bb576e819dbca0048c Mon Sep 17 00:00:00 2001
+From 9f88ec7b73be7ef7d6f12ab268d9b5c9414258e6 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 14:22:02 +0800
-Subject: [PATCH] Lapin UX: stage 4 review fixes (face sign-in with Howdy,
- Selawik on the lock screen preview)
+Subject: [PATCH 08/10] Lapin UX: stage 4 review fixes (face sign-in with
+ Howdy, Selawik on the lock screen preview)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1

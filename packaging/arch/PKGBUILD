@@ -29,21 +29,21 @@ makedepends=(
     # lapin-ux-portal build
     'pipewire'
 )
-# Lapin UX's compositor: upstream cosmic-comp at a pinned commit plus our patches.
-_comp_commit=742b800b518f0dafd89d0c1ace4de4935334ed18
+# Everything below is pinned to COSMIC's stable release epoch-1.11.0.
+# Lapin UX's compositor: upstream cosmic-comp plus our patches.
+_comp_commit=8cb1802caada438bb5cc7670dfabdaca5fad0502
 # The lock and sign-in screens: upstream cosmic-greeter plus our patches.
-_greeter_commit=5b912ba331af1f6c1cb0cb53fa9366c8f54662c1
+_greeter_commit=80e8a104b75a01ab8df52bca7b8bde6dbcdb8133
 # The touch keyboard: upstream cosmic-osk plus our patches.
-_osk_commit=3a4800a10b03efac1684817238922db5d6746403
-# Volume/brightness pop-ups and the admin prompt: cosmic-osd at its stable
-# release tag (epoch-1.10.0) plus our patch.
-_osd_commit=9b14ee017fb8fdb7d03d73da597cf17b89d890f7
-# Settings: COSMIC Settings at its stable release (epoch-1.10.0) with Lapin's
+_osk_commit=6b146a2b0a23d88ae84223ad06c6813bda5a9386
+# Volume/brightness pop-ups and the admin prompt: cosmic-osd plus our patch.
+_osd_commit=4f96e98981712f02b98f704a6f19c4c6a58b378b
+# Settings: COSMIC Settings with Lapin's
 # Windows 11 layout (packaging/lapin-ux-settings) and title bar.
-_settings_commit=58aeb65244b8830880e8b6ced89dcd25663f20b1
+_settings_commit=f1d00fc06e18203e880771617657067c10c43321
 # File dialogs: COSMIC's portal built against COSMIC Files plus our patch.
-_portal_commit=9d35e6300b69cf06da723a502a9a56604a022786
-_files_commit=f7679791f4fbf82ba7c9a01cf3f8ae0e21265975
+_portal_commit=f448ddfb296bf7bb23517b24b2f532559a334a1c
+_files_commit=3cc4b8003e8d08349c7ced8a9cdd10cdfa45d38c
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}"
         "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}"
         "cosmic-osk::git+https://github.com/pop-os/cosmic-osk.git#commit=${_osk_commit}"
@@ -305,7 +305,7 @@ package_lapin-ux-settings() {
     pkgdesc="Settings for Lapin UX: COSMIC Settings with Windows 11's layout"
     url="https://github.com/pop-os/cosmic-settings"
     license=('GPL-3.0-only')
-    # Same as Arch's cosmic-settings 1:1.10.0-1.
+    # Same as Arch's cosmic-settings 1:1.10.0-1 (unchanged in 1.11.0).
     depends=('accountsservice' 'adw-gtk-theme' 'cosmic-icon-theme' 'cosmic-randr'
              'fontconfig' 'glibc' 'iso-codes' 'libgcc' 'libinput' 'libpipewire'
              'libpulse' 'libxkbcommon' 'networkmanager' 'nm-connection-editor'

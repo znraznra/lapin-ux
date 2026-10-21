@@ -1,7 +1,7 @@
-From 11f7c73c25c1fe8b74e0133f37984c9d58448eee Mon Sep 17 00:00:00 2001
+From adc4856aeefed14ba22c94e7c984dfd5f587733e Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 13:36:11 +0800
-Subject: [PATCH 7/7] Lapin UX: pages COSMIC doesn't have (stage 4)
+Subject: [PATCH 07/10] Lapin UX: pages COSMIC doesn't have (stage 4)
 
 Installed apps, Storage and Temporary files, Clipboard, Lock screen,
 Sign-in options, Privacy & security with app permissions, Update inside

@@ -1,8 +1,8 @@
-From cc776678b8bae0c5f77ddb3db0aa2c4cb42d35c4 Mon Sep 17 00:00:00 2001
+From d0bb6bdc04b479d135a24f984372016e7bcfc7fd Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 16:34:29 +0800
-Subject: [PATCH 1/7] Lapin UX: Windows 11 Settings frame (sidebar, categories,
- breadcrumb, Home)
+Subject: [PATCH 01/10] Lapin UX: Windows 11 Settings frame (sidebar,
+ categories, breadcrumb, Home)
 
 All Lapin code is in cosmic-settings/src/lapin/; app.rs/main.rs get small
 hooks. Active only in a Lapin UX session (or LAPIN_UX_SETTINGS=1).

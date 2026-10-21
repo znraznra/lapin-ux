@@ -47,6 +47,8 @@ pub struct QuickState {
     pub backlight: Option<(String, Brightness)>,
     /// Last time a slider sent a value to the system (throttling).
     last_set: Option<Instant>,
+    /// Touchpad scrolling over the volume icon, gathered into whole steps.
+    scroll_acc: f32,
     /// Ignore volume reports briefly after the user moved the slider,
     /// so the knob doesn't jump back while the system catches up.
     hold_volume_until: Option<Instant>,
@@ -425,8 +427,19 @@ impl Shell {
                 if !q.volume.available || dy == 0.0 {
                     return Task::none();
                 }
-                let step = if dy > 0.0 { 0.02 } else { -0.02 };
-                let v = (q.volume.level + step).clamp(0.0, 1.0);
+                // A wheel notch is one 2% step; touchpads send many small
+                // amounts, gathered into whole steps (as COSMIC 1.11 does for
+                // its volume applet). Nothing happens past 0% or 100%.
+                q.scroll_acc += dy;
+                let steps = q.scroll_acc.trunc();
+                if steps == 0.0 {
+                    return Task::none();
+                }
+                q.scroll_acc -= steps;
+                let v = (q.volume.level + 0.02 * steps).clamp(0.0, 1.0);
+                if (v - q.volume.level).abs() < f32::EPSILON {
+                    return Task::none();
+                }
                 return self.update_quick(QuickMsg::Volume(v));
             }
             QuickMsg::Mute => {

@@ -1,7 +1,7 @@
-From 8a5441f299eade9585d2e2673f1449a380adda07 Mon Sep 17 00:00:00 2001
+From cff6c16b0806c96337cc61ad87d496e0ce513423 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 18:28:59 +0800
-Subject: [PATCH 3/7] Lapin UX: Update uses the Win11 theme's refresh icon
+Subject: [PATCH 03/10] Lapin UX: Update uses the Win11 theme's refresh icon
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1

@@ -1,4 +1,4 @@
-From 8b7dd292f4bff43712a2009df648e47c92594082 Mon Sep 17 00:00:00 2001
+From 957d20ff9d87b217c58532f0a3197bebe9e5dfbf Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 22:37:02 +0800
 Subject: [PATCH 6/7] Lapin UX: round slider thumbs (opt-in)

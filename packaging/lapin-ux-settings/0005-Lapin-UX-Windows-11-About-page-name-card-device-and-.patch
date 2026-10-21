@@ -1,8 +1,8 @@
-From 6329e98456928236c96b6399d1d952289b695e42 Mon Sep 17 00:00:00 2001
+From fbff318d12495d0c6ea36d561b076138461af634 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 23:20:24 +0800
-Subject: [PATCH 5/7] Lapin UX: Windows 11 About page (name card, device and OS
- specification cards with Copy and links)
+Subject: [PATCH 05/10] Lapin UX: Windows 11 About page (name card, device and
+ OS specification cards with Copy and links)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1

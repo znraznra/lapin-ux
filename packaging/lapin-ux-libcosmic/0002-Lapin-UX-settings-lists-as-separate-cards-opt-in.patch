@@ -1,4 +1,4 @@
-From a94e249c1ea1dfae59485ee300c1f08f009ced75 Mon Sep 17 00:00:00 2001
+From d1a2fba1095f7da66f538005bc74f3e093a969a9 Mon Sep 17 00:00:00 2001
 From: Lapin UX <lapin@localhost>
 Date: Tue, 20 Oct 2026 17:34:16 +0800
 Subject: [PATCH 2/7] Lapin UX: settings lists as separate cards (opt-in)

@@ -1,4 +1,4 @@
-From 5c8ee19cc9b15595ff719d5b05e69ba0f18927bf Mon Sep 17 00:00:00 2001
+From e533d74e095e40ea175b0780e7919909407ceb6c Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 21:34:36 +0800
 Subject: [PATCH] Lapin UX: Windows-style file dialog footer

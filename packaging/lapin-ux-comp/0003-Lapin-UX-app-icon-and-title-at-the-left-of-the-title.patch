@@ -1,8 +1,8 @@
-From 032044cf46951a7fd40b4754af87c1d65ad256ec Mon Sep 17 00:00:00 2001
+From 6b8320b8f6213c149e273d6344118e273580d8e4 Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Tue, 20 Oct 2026 09:15:42 +0800
-Subject: [PATCH] Lapin UX: app icon and title at the left of the title bar, as
- in Windows
+Subject: [PATCH 3/3] Lapin UX: app icon and title at the left of the title
+ bar, as in Windows
 
 ---
  src/shell/element/window.rs | 17 ++++++++++++++++-

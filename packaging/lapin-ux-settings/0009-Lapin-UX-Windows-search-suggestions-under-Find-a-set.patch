@@ -1,8 +1,8 @@
-From 53bfca337a981156d704e18553739481600f07a9 Mon Sep 17 00:00:00 2001
+From 07761e29e066009eb6bb1535729b3bc1d0a31a29 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 21 Oct 2026 16:45:02 +0800
-Subject: [PATCH] Lapin UX: Windows search (suggestions under Find a setting,
- Search results page) (stage 5)
+Subject: [PATCH 09/10] Lapin UX: Windows search (suggestions under Find a
+ setting, Search results page) (stage 5)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1

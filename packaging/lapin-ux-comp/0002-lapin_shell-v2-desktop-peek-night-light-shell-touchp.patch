@@ -1,7 +1,7 @@
-From 593caae78694363d7de866b2a2fe978b41afd1c8 Mon Sep 17 00:00:00 2001
+From 04e728ef72d0400de1e9ffac0ae95fa028eaff63 Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Mon, 19 Oct 2026 19:37:52 +0800
-Subject: [PATCH 2/2] lapin_shell v2: desktop peek, night light, shell touchpad
+Subject: [PATCH 2/3] lapin_shell v2: desktop peek, night light, shell touchpad
  swipes; window open animation
 
 ---
@@ -188,10 +188,10 @@ index be509e7..805dad6 100644
      }
  
 diff --git a/src/input/mod.rs b/src/input/mod.rs
-index 2aa1692..329cac1 100644
+index d51dd8a..1403efd 100644
 --- a/src/input/mod.rs
 +++ b/src/input/mod.rs
-@@ -1283,6 +1283,20 @@ impl State {
+@@ -1294,6 +1294,20 @@ impl State {
                              };
  
                              gesture_state.action = activate_action;

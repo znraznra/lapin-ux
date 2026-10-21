@@ -1,0 +1,34 @@
+From 3a424328cb596cd0ba6d55c2de15b49e59be5d73 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 17:32:26 +0800
+Subject: [PATCH 10/10] Lapin UX: icons for COSMIC 1.11's touchpad drag rows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/lapin/icons.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/cosmic-settings/src/lapin/icons.rs b/cosmic-settings/src/lapin/icons.rs
+index 6fa2d46..eb03b57 100644
+--- a/cosmic-settings/src/lapin/icons.rs
++++ b/cosmic-settings/src/lapin/icons.rs
+@@ -44,6 +44,7 @@ const RULES: &[(&str, &str)] = &[
+     ("mouse", "input-mouse-symbolic"),
+     ("acceleration", "input-mouse-symbolic"),
+     ("tap", "input-touchpad-symbolic"),
++    ("drag", "input-touchpad-symbolic"),
+     ("touchpad", "input-touchpad-symbolic"),
+     ("disable while typing", "input-touchpad-symbolic"),
+     ("scroll", "input-mouse-symbolic"),
+@@ -137,6 +138,7 @@ mod tests {
+         assert_eq!(row_icon("Refresh rate"), Some("view-refresh-symbolic"));
+         assert_eq!(row_icon("Time zone"), Some("web-browser-symbolic"));
+         assert_eq!(row_icon("Automatically switch between light and dark modes"), Some("preferences-desktop-theme-symbolic"));
++        assert_eq!(row_icon("Drag lock"), Some("input-touchpad-symbolic"));
+         assert_eq!(row_icon("Something else"), None);
+     }
+ }
+-- 
+2.43.0
+

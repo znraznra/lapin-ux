@@ -1,4 +1,4 @@
-From 9c579860d96849f86de93845a90ee4ef187b8923 Mon Sep 17 00:00:00 2001
+From fe0a1466e21e5b4e14646155dec6a8640c6bb206 Mon Sep 17 00:00:00 2001
 From: Lapin UX <arnz.lee16@gmail.com>
 Date: Tue, 20 Oct 2026 09:26:41 +0800
 Subject: [PATCH] Lapin UX: show the asking app's icon in the file dialog's
