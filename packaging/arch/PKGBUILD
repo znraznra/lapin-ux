@@ -197,7 +197,9 @@ package_lapin-ux-desktop-git() {
         'gnome-keyring'            # saved passwords and SSH keys
     )
     optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)'
-                'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)')
+                'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)'
+                'flatpak: Flatpak apps in Update, Installed apps and app permissions'
+                'fwupd: firmware updates in Settings > Update')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install
@@ -307,8 +309,16 @@ package_lapin-ux-settings() {
     depends=('accountsservice' 'adw-gtk-theme' 'cosmic-icon-theme' 'cosmic-randr'
              'fontconfig' 'glibc' 'iso-codes' 'libgcc' 'libinput' 'libpipewire'
              'libpulse' 'libxkbcommon' 'networkmanager' 'nm-connection-editor'
-             'pipewire-pulse' 'systemd-libs' 'ttf-opensans' 'wayland')
-    optdepends=('power-profiles-daemon: power modes')
+             'pipewire-pulse' 'systemd-libs' 'ttf-opensans' 'wayland'
+             # Lapin's pages: admin prompts (uninstall, cleanup, updates,
+             # face sign-in), checkupdates/paccache, lsblk/findmnt.
+             'polkit' 'pacman-contrib' 'util-linux')
+    optdepends=('power-profiles-daemon: power modes'
+                'fprintd: Fingerprint recognition in Sign-in options'
+                'howdy-git: Facial recognition in Sign-in options (AUR)'
+                'flatpak: Flatpak apps in Installed apps and Update'
+                'fwupd: firmware updates in Update'
+                'xdg-desktop-portal: app permissions in Privacy & security')
     provides=('cosmic-settings')
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"
