@@ -6,7 +6,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings-in-progress) is being built in stages (5 of 5 built, last stage in review); File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
+> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings) in Windows 11's layout is finished; File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
 >
 > Lapin UX copies how Windows 11 *behaves and looks*, not Microsoft's files. It ships no Microsoft logos, Windows artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#license)). It is an independent project, not affiliated with or endorsed by Microsoft.
 
@@ -15,11 +15,11 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | Phase | What it covers | Progress |
 |---|---|---|
 | 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
-| 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `█████████░` 8 of 9, 1 partly |
+| 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `██████████` 9 of 9 |
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 20 October 2026 (build `70108c5`).*
+*Last updated: 21 October 2026 (build `1f159de`).*
 
 ## Take the tour
 
@@ -41,9 +41,9 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | ![Touch keyboard](docs/tour/touch-keyboard.webp) **Touch keyboard** — for tablets and touch screens. | ![Clipboard history](docs/tour/clipboard-history.webp) **Clipboard history** — Win+V brings back what you copied earlier. |
 | ![Task Manager performance](docs/tour/task-manager-performance.webp) **Task Manager: Performance** — live CPU, memory, disk and network graphs. | |
 
-## Settings (in progress)
+## Settings
 
-A new Settings app in Windows 11's layout, built from COSMIC Settings so every setting keeps working the same way underneath. It is being made in stages, each one reviewed screen by screen before the next starts.
+A new Settings app in Windows 11's layout, built from COSMIC Settings so every setting keeps working the same way underneath. It was made in five stages, each one reviewed screen by screen before the next started.
 
 | | |
 |---|---|
@@ -61,7 +61,7 @@ A new Settings app in Windows 11's layout, built from COSMIC Settings so every s
 - [x] **Stage 2 — the Windows look inside pages:** setting cards with icons, On/Off switches, drop-downs and buttons in Windows' style, the About page
 - [x] **Stage 3 — Windows' page layout:** Taskbar, Start, Notifications, Night light and Multitasking pages; the old Panel and Dock pages removed; COSMIC-only options under "Advanced"
 - [x] **Stage 4 — pages COSMIC doesn't have:** Installed apps, Storage, Sign-in options, Privacy & security, Lock screen, Clipboard, and Update moved inside Settings
-- [x] **Stage 5 — joining it up:** Find a setting shows suggestions as you type and a Search results page; Start, Control Panel, Win+X, the taskbar menu, quick settings, the notification centre and Win+I open the right page *(built, in review)*
+- [x] **Stage 5 — joining it up:** Find a setting shows suggestions as you type and a Search results page; Start, Control Panel, Win+X, the taskbar menu, quick settings, the notification centre and Win+I open the right page
 
 Under plain COSMIC the same app still looks like COSMIC Settings: the Windows layout switches on only in a Lapin UX session.
 
@@ -71,8 +71,7 @@ The work is split into four phases. Green is done, yellow is partly done, grey i
 
 ```mermaid
 flowchart LR
-    P1["Phase 1<br/>Core desktop"]:::done --> P2["Phase 2<br/>Settings and multitasking"]:::mostly --> P3["Phase 3<br/>System apps"]:::partly --> P4["Phase 4<br/>Road to 1:1 Windows 11"]:::mostly
-    P2 -.- S["Settings app<br/>(stage 5 of 5 in review)"]:::partly
+    P1["Phase 1<br/>Core desktop"]:::done --> P2["Phase 2<br/>Settings and multitasking"]:::done --> P3["Phase 3<br/>System apps"]:::partly --> P4["Phase 4<br/>Road to 1:1 Windows 11"]:::mostly
     P3 -.- FE["File Explorer"]:::todo
     P4 -.- ST["Store"]:::todo
     P4 -.- MK["Snip markup editor"]:::todo
@@ -97,7 +96,7 @@ flowchart LR
 - [x] Session: starts everything and restarts anything that crashes
 - [x] Arch package and one-step installer *(built, not yet tried on a real Arch machine)*
 
-### Phase 2 — settings and multitasking (8 of 9, 1 partly)
+### Phase 2 — settings and multitasking (9 of 9)
 
 - [x] Quick settings: Wi-Fi, Bluetooth, sound and per-app volume, media, brightness, Energy saver, hotspot, VPN, accessibility
 - [x] Edit quick settings, Night light with a schedule, rotation lock
@@ -106,7 +105,7 @@ flowchart LR
 - [x] Task view, virtual desktops, names and wallpaper per desktop
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
-- [~] **Settings app** in Windows 11's layout — *all 5 stages built, the last in review (frame, categories, Home, the Windows look inside every page, About, Windows' page layout with Taskbar, Start, Notifications, Night light and Multitasking pages; Installed apps, Storage, Clipboard, Lock screen, Sign-in options, Privacy & security and Update inside Settings; Windows-style search and links from everywhere); see [Settings (in progress)](#settings-in-progress)*
+- [x] **Settings app** in Windows 11's layout — *all 5 stages done (frame, categories, Home, the Windows look inside every page, About, Windows' page layout with Taskbar, Start, Notifications, Night light and Multitasking pages; Installed apps, Storage, Clipboard, Lock screen, Sign-in options, Privacy & security and Update inside Settings; Windows-style search and links from everywhere); see [Settings](#settings)*
 - [x] Windows-style volume and brightness pop-ups
 
 ### Phase 3 — system apps (4 of 6, 1 partly)

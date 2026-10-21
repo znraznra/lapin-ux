@@ -169,7 +169,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
 **Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.10.0 with
-patches in `packaging/lapin-ux-settings`; in progress, all 5 stages built)
+patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - Windows 11 layout: account card and colour category icons in the sidebar
   (Home, System, Bluetooth & devices, Network & internet, Personalization,
   Apps, Accounts, Time & language, Accessibility, Privacy & security,
