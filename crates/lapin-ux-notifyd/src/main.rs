@@ -61,6 +61,8 @@ pub enum Message {
     CalendarPrev,
     CalendarNext,
     Quiet(quiet::QuietMsg),
+    /// Schedule or app rules changed in Settings.
+    Prefs(Box<quiet::Prefs>),
     Noop,
 }
 
@@ -346,6 +348,12 @@ impl Application for App {
                 <cosmic::config::CosmicTk as cosmic::cosmic_config::CosmicConfigEntry>::VERSION,
             )
             .map(|u| Message::Toolkit(Box::new(u.config))),
+            cosmic::cosmic_config::config_subscription::<_, quiet::Prefs>(
+                std::any::TypeId::of::<quiet::Prefs>(),
+                std::borrow::Cow::Borrowed(lapin_ux_core::ids::NOTIFYD_APP_ID),
+                1,
+            )
+            .map(|u| Message::Prefs(Box::new(u.config))),
             cosmic::iced::event::listen_raw(|e, _, window| match e {
                 // The pointer can leave the surface without crossing a widget
                 // edge (e.g. the toast under it closes); treat that as un-hover.
@@ -369,6 +377,7 @@ impl Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         let now = Instant::now();
         match message {
+            Message::Prefs(p) => return self.prefs_changed(*p),
             Message::Toolkit(tk) => {
                 if cosmic::icon_theme::default() != tk.icon_theme {
                     cosmic::icon_theme::set_default(tk.icon_theme.clone());
@@ -385,6 +394,11 @@ impl Application for App {
                 dbus::Event::Notify(n) => {
                     if !n.app_name.is_empty() && !self.quiet.seen_apps.contains(&n.app_name) {
                         self.quiet.seen_apps.push(n.app_name.clone());
+                        // Remembered for Settings > Notifications' app list.
+                        if let Some(cfg) = &self.settings {
+                            use cosmic::cosmic_config::ConfigSet;
+                            let _ = cfg.set("seen_apps", &self.quiet.seen_apps);
+                        }
                     }
                     match lapin_ux_core::dnd::delivery(&self.quiet.rules, &n.app_name) {
                         lapin_ux_core::dnd::Delivery::Drop => return Task::none(),

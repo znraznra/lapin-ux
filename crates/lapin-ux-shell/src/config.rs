@@ -82,6 +82,9 @@ pub struct ShellConfig {
     pub welcomed: bool,
     /// Taskbar button that shows / hides the touch keyboard.
     pub touch_keyboard_button: bool,
+    /// Settings > Multitasking: "When I snap a window, suggest what I can
+    /// snap next to it" turned off.
+    pub no_snap_assist: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -93,8 +93,12 @@ impl Shell {
                 p.layout = Some(layout);
                 p.filled = vec![zone];
                 self.request(WaylandRequest::Snap(target, LAYOUTS[layout][zone]));
-                // Nothing left to fill (or nothing to fill it with): done.
-                if next_zone(layout, &[zone]).is_none() || self.assist_candidates(&[target]).is_empty() {
+                // Nothing left to fill (or nothing to fill it with, or Snap
+                // assist turned off in Settings): done.
+                if self.config.no_snap_assist
+                    || next_zone(layout, &[zone]).is_none()
+                    || self.assist_candidates(&[target]).is_empty()
+                {
                     return self.finish_snap(target);
                 }
             }

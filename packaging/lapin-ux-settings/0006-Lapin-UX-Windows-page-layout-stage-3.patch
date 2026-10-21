@@ -1,0 +1,804 @@
+From 36a620ceaaee08ff5bcd8673fda72380eb4c3e08 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 12:40:58 +0800
+Subject: [PATCH 6/6] Lapin UX: Windows page layout (stage 3)
+
+Taskbar, Start, Night light, Notifications and Multitasking pages backed by
+Lapin's shell and notification settings; Panel and Dock hidden; COSMIC-only
+pages under an Advanced heading; Night light row on Display.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/app.rs              |   7 +
+ cosmic-settings/src/lapin/categories.rs |  45 +-
+ cosmic-settings/src/lapin/mod.rs        |   1 +
+ cosmic-settings/src/lapin/settings.rs   | 575 ++++++++++++++++++++++++
+ cosmic-settings/src/lapin/view.rs       |  12 +-
+ cosmic-settings/src/pages/mod.rs        |   3 +
+ 6 files changed, 633 insertions(+), 10 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/settings.rs
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index db8bdd6..06069b2 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -453,6 +453,9 @@ impl cosmic::Application for SettingsApp {
+                         return page.update(message).map(Into::into);
+                     }
+                 }
++                crate::pages::Message::Lapin(msg) => {
++                    return crate::lapin::settings::update(&mut self.pages, msg);
++                }
+                 #[cfg(feature = "page-about")]
+                 crate::pages::Message::About(message) => {
+                     if let Some(page) = self.pages.page_mut::<system::about::Page>() {
+@@ -1015,6 +1018,10 @@ impl SettingsApp {
+         let current_page = self.active_page;
+         self.active_page = page;
+         self.lapin.visit(current_page, page);
++        if crate::lapin::enabled() {
++            // The shell or notification centre may have changed them.
++            crate::lapin::settings::reload(&mut self.pages);
++        }
+ 
+         let mut leave_task = iced::Task::none();
+         let mut close_context_drawer_task = iced::Task::none();
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index dd66bf9..41c742a 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -28,14 +28,17 @@ struct Child {
+     icon: &'static str,
+     title: Option<&'static str>,
+     description: Option<&'static str>,
++    advanced: bool,
+ }
+ 
+ const fn c(id: &'static str, icon: &'static str, title: &'static str, description: &'static str) -> Child {
+-    Child { id, icon, title: Some(title), description: Some(description) }
++    Child { id, icon, title: Some(title), description: Some(description), advanced: false }
+ }
+ 
+-const fn keep(id: &'static str, icon: &'static str) -> Child {
+-    Child { id, icon, title: None, description: None }
++/// A COSMIC-only page Windows doesn't have: listed under "Advanced" at the
++/// bottom of its category, with COSMIC's own name.
++const fn advanced(id: &'static str, icon: &'static str) -> Child {
++    Child { id, icon, title: None, description: None, advanced: true }
+ }
+ 
+ struct Spec {
+@@ -59,9 +62,9 @@ const SPECS: &[Spec] = &[
+         children: &[
+             c("display", "preferences-desktop-display-symbolic", "Display", "Monitors, brightness, night light, display profile"),
+             c("sound", "audio-volume-high-symbolic", "Sound", "Volume levels, output, input, sound devices"),
++            c("lapin-notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts from apps and system, do not disturb"),
+             c("power", "battery-full-symbolic", "Power & battery", "Sleep, battery usage, power mode"),
+-            keep("window-management", "preferences-system-windows-symbolic"),
+-            keep("workspaces", "view-grid-symbolic"),
++            c("lapin-multitasking", "view-grid-symbolic", "Multitasking", "Snap windows, desktops"),
+             c("about", "help-about-symbolic", "About", "Device specifications, rename this PC"),
+         ],
+     },
+@@ -97,8 +100,8 @@ const SPECS: &[Spec] = &[
+         children: &[
+             c("wallpaper", "preferences-desktop-wallpaper-symbolic", "Background", "Background images, color, slideshow"),
+             c("appearance", "preferences-color-symbolic", "Colors", "Accent color, transparency effects, light and dark mode"),
+-            keep("panel", "user-desktop-symbolic"),
+-            keep("dock", "view-app-grid-symbolic"),
++            c("lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins"),
++            c("lapin-start", "view-app-grid-symbolic", "Start", "Search, web results"),
+         ],
+     },
+     Spec {
+@@ -109,7 +112,7 @@ const SPECS: &[Spec] = &[
+         children: &[
+             c("default-apps", "preferences-desktop-default-applications-symbolic", "Default apps", "Defaults for file and link types"),
+             c("startup-apps", "system-run-symbolic", "Startup", "Apps that start automatically when you sign in"),
+-            keep("legacy-applications", "window-new-symbolic"),
++            advanced("legacy-applications", "window-new-symbolic"),
+         ],
+     },
+     Spec {
+@@ -161,6 +164,12 @@ pub const SYSTEM_ID: &str = "lapin-system";
+ pub const PRIVACY_ID: &str = "lapin-privacy";
+ pub const UPDATE_ID: &str = "lapin-update";
+ 
++const NESTED: &[(&str, &str)] = &[
++    ("lapin-night-light", "display"),
++    ("window-management", "lapin-multitasking"),
++    ("workspaces", "lapin-multitasking"),
++];
++
+ /// COSMIC's group pages and the category that replaces each, so links to
+ /// them (`cosmic-settings system`, Control Panel…) open the right place.
+ const REDIRECTS: &[(&str, &str)] = &[
+@@ -178,6 +187,8 @@ pub struct Layout {
+     pub home: Entity,
+     pub categories: Vec<Entity>,
+     redirects: Vec<(Entity, Entity)>,
++    /// Pages listed under "Advanced" at the bottom of their category.
++    pub advanced: Vec<Entity>,
+ }
+ 
+ impl Layout {
+@@ -203,13 +214,14 @@ impl Layout {
+ /// Pages COSMIC doesn't have on this machine (no touchpad support compiled,
+ /// say) are simply skipped.
+ pub fn arrange(pages: &mut Binder<Message>) -> Layout {
++    super::settings::register(pages);
+     let home = pages.register_page(Category {
+         id: HOME_ID,
+         title: "Home",
+         icon: "home",
+         description: "Recommended settings",
+     });
+-    let mut layout = Layout { home, categories: Vec::with_capacity(SPECS.len()), redirects: Vec::new() };
++    let mut layout = Layout { home, categories: Vec::with_capacity(SPECS.len()), redirects: Vec::new(), advanced: Vec::new() };
+     for spec in SPECS {
+         let cat = pages.register_page(Category {
+             id: spec.id,
+@@ -236,11 +248,26 @@ pub fn arrange(pages: &mut Binder<Message>) -> Layout {
+                 info.description = d.to_string();
+             }
+             info.icon_name = child.icon.into();
++            if child.advanced {
++                layout.advanced.push(entity);
++            }
+             kids.push(entity);
+         }
+         pages.sub_pages.insert(cat, kids);
+         layout.categories.push(cat);
+     }
++    // Pages inside other pages: Night light inside Display, COSMIC's window
++    // and workspace pages under Multitasking's "Advanced".
++    for (child, parent) in NESTED {
++        let (Some((c, _)), Some((p, _))) = (pages.find_page_by_id(child), pages.find_page_by_id(parent)) else { continue };
++        if let Some(old) = pages.info[c].parent
++            && let Some(list) = pages.sub_pages.get_mut(old)
++        {
++            list.retain(|e| *e != c);
++        }
++        pages.info[c].parent = Some(p);
++    }
++    super::settings::add_night_light_row(pages);
+     for (from, to) in REDIRECTS {
+         if let (Some((f, _)), Some((t, _))) = (pages.find_page_by_id(from), pages.find_page_by_id(to)) {
+             layout.redirects.push((f, t));
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 695022f..2f41684 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -13,6 +13,7 @@ mod categories;
+ pub mod device;
+ pub mod icons;
+ pub mod pages;
++pub mod settings;
+ pub(crate) mod style;
+ mod view;
+ 
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+new file mode 100644
+index 0000000..7a8a7bf
+--- /dev/null
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -0,0 +1,575 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Windows pages for settings Lapin UX already has: Personalization >
++//! Taskbar and Start, System > Display > Night light, System > Notifications
++//! and System > Multitasking. They read and write the same settings stores
++//! the Lapin shell and notification daemon watch (`dev.lapinux.Shell`,
++//! `dev.lapinux.Notifications`), so changes apply at once.
++
++use cosmic::{Apply, Element};
++use cosmic::widget::list_column::IntoListItem;
++use cosmic::iced::Length;
++use cosmic::widget::{self, settings, text};
++use cosmic_config::{Config, ConfigGet, ConfigSet};
++use cosmic_settings_page::{self as page, Binder, Section, section};
++use serde::{Deserialize, Serialize};
++use slotmap::SlotMap;
++
++type PMsg = crate::pages::Message;
++
++const SHELL: &str = "dev.lapinux.Shell";
++const NOTIFY: &str = "dev.lapinux.Notifications";
++
++// The shell's own value types, by name (RON stores enum variants by name).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum Alignment {
++    #[default]
++    Center,
++    Left,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum Combine {
++    #[default]
++    Always,
++    WhenFull,
++    Never,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum SmallButtons {
++    Always,
++    #[default]
++    WhenFull,
++    Never,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum MultiDisplay {
++    #[default]
++    AllTaskbars,
++    WhereOpen,
++    MainAndWhereOpen,
++}
++
++/// The notification daemon's schedule and per-app rules (same field names).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
++pub struct Schedule {
++    pub enabled: bool,
++    pub start: u32,
++    pub end: u32,
++}
++impl Default for Schedule {
++    fn default() -> Self {
++        Schedule { enabled: false, start: 22 * 60, end: 7 * 60 }
++    }
++}
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++pub struct AppRule {
++    pub app: String,
++    pub enabled: bool,
++    pub banners: bool,
++}
++
++/// Web search engines offered in Start (`{}` is the query).
++const ENGINES: [(&str, &str); 6] = [
++    ("DuckDuckGo", ""),
++    ("Google", "https://www.google.com/search?q={}"),
++    ("Bing", "https://www.bing.com/search?q={}"),
++    ("Startpage", "https://www.startpage.com/do/search?q={}"),
++    ("Brave Search", "https://search.brave.com/search?q={}"),
++    ("Ecosia", "https://www.ecosia.org/search?q={}"),
++];
++
++/// Night light's range, as in Lapin's shell (warmest to coolest).
++const WARMEST: u32 = 1200;
++const COOLEST: u32 = 6500;
++const DEFAULT_KELVIN: u32 = 4000;
++
++pub fn strength_from_kelvin(k: u32) -> u8 {
++    let k = if k == 0 { DEFAULT_KELVIN } else { k.clamp(WARMEST, COOLEST) };
++    (((COOLEST - k) * 100 + (COOLEST - WARMEST) / 2) / (COOLEST - WARMEST)) as u8
++}
++pub fn kelvin_from_strength(s: u8) -> u32 {
++    COOLEST - (COOLEST - WARMEST) * u32::from(s.min(100)) / 100
++}
++
++/// Every setting these pages show.
++#[derive(Debug, Default)]
++pub struct Prefs {
++    pub show_search: bool,
++    pub touch_keyboard_button: bool,
++    pub alignment: Alignment,
++    pub auto_hide: bool,
++    pub combine: Combine,
++    pub small: SmallButtons,
++    pub multi_display: MultiDisplay,
++    pub desktop_corner: bool,
++    pub peek: bool,
++    pub seconds: bool,
++    pub web_results: bool,
++    pub web_search: String,
++    pub night_on: bool,
++    pub night_strength: u8,
++    pub night_schedule: Option<(u16, u16)>,
++    pub snap_assist: bool,
++    pub dnd: bool,
++    pub dnd_schedule: Schedule,
++    pub rules: Vec<AppRule>,
++    pub apps: Vec<String>,
++}
++
++impl Prefs {
++    pub fn load() -> Prefs {
++        let shell = Config::new(SHELL, 1).ok();
++        let notify = Config::new(NOTIFY, 1).ok();
++        fn get<T: serde::de::DeserializeOwned>(c: &Option<Config>, key: &str) -> Option<T> {
++            c.as_ref()?.get::<T>(key).ok()
++        }
++        let rules: Vec<AppRule> = get(&notify, "app_rules").unwrap_or_default();
++        let mut apps: Vec<String> = get(&notify, "seen_apps").unwrap_or_default();
++        for r in &rules {
++            if !apps.contains(&r.app) {
++                apps.push(r.app.clone());
++            }
++        }
++        apps.sort_by_key(|a| a.to_lowercase());
++        Prefs {
++            show_search: get(&shell, "show_search").unwrap_or(true),
++            touch_keyboard_button: get(&shell, "touch_keyboard_button").unwrap_or(false),
++            alignment: get(&shell, "alignment").unwrap_or_default(),
++            auto_hide: get(&shell, "auto_hide").unwrap_or(false),
++            combine: get(&shell, "combine_buttons").unwrap_or_default(),
++            small: get(&shell, "small_buttons").unwrap_or_default(),
++            multi_display: get(&shell, "multi_display").unwrap_or_default(),
++            desktop_corner: get(&shell, "show_desktop_corner").unwrap_or(true),
++            peek: !get::<bool>(&shell, "no_desktop_peek").unwrap_or(false),
++            seconds: get(&shell, "clock_seconds").unwrap_or(false),
++            web_results: !get::<bool>(&shell, "hide_web_search").unwrap_or(false),
++            web_search: get(&shell, "web_search").unwrap_or_default(),
++            night_on: get(&shell, "night_light").unwrap_or(false),
++            night_strength: strength_from_kelvin(get(&shell, "night_light_kelvin").unwrap_or(0)),
++            night_schedule: get(&shell, "night_light_schedule").unwrap_or(None),
++            snap_assist: !get::<bool>(&shell, "no_snap_assist").unwrap_or(false),
++            dnd: get(&notify, "do_not_disturb").unwrap_or(false),
++            dnd_schedule: get(&notify, "dnd_schedule").unwrap_or_default(),
++            rules,
++            apps,
++        }
++    }
++
++    fn app_enabled(&self, app: &str) -> bool {
++        self.rules.iter().find(|r| r.app == app).is_none_or(|r| r.enabled)
++    }
++}
++
++#[derive(Clone, Debug)]
++pub enum Msg {
++    ShowSearch(bool),
++    TouchKeyboard(bool),
++    Alignment(usize),
++    AutoHide(bool),
++    Combine(usize),
++    Small(usize),
++    MultiDisplay(usize),
++    DesktopCorner(bool),
++    Peek(bool),
++    Seconds(bool),
++    WebResults(bool),
++    Engine(usize),
++    NightOn(bool),
++    NightStrength(u8),
++    NightSchedule(bool),
++    NightFrom(usize),
++    NightTo(usize),
++    SnapAssist(bool),
++    Dnd(bool),
++    DndSchedule(bool),
++    DndFrom(usize),
++    DndTo(usize),
++    App(String, bool),
++}
++
++fn save<T: Serialize>(id: &str, key: &str, value: &T) {
++    if let Ok(c) = Config::new(id, 1)
++        && let Err(e) = c.set(key, value)
++    {
++        tracing::warn!("Lapin Settings: saving {id}/{key}: {e}");
++    }
++}
++
++/// Times offered for schedules: every half hour.
++fn time_labels() -> &'static [String] {
++    static T: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
++    T.get_or_init(|| {
++        (0..48)
++            .map(|i| {
++                let (h, m) = (i / 2, (i % 2) * 30);
++                let h12 = if h % 12 == 0 { 12 } else { h % 12 };
++                format!("{h12}:{m:02} {}", if h < 12 { "AM" } else { "PM" })
++            })
++            .collect()
++    })
++}
++fn slot(minutes: u32) -> usize {
++    ((minutes / 30) as usize).min(47)
++}
++
++/// Applies a change: remembers it and writes it where the shell or the
++/// notification daemon will pick it up.
++pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Message> {
++    let Some(p) = pages.resource_mut::<Prefs>() else { return cosmic::Task::none() };
++    match msg {
++        Msg::ShowSearch(v) => (p.show_search = v, save(SHELL, "show_search", &v)).1,
++        Msg::TouchKeyboard(v) => (p.touch_keyboard_button = v, save(SHELL, "touch_keyboard_button", &v)).1,
++        Msg::Alignment(i) => {
++            p.alignment = if i == 1 { Alignment::Left } else { Alignment::Center };
++            save(SHELL, "alignment", &p.alignment);
++        }
++        Msg::AutoHide(v) => (p.auto_hide = v, save(SHELL, "auto_hide", &v)).1,
++        Msg::Combine(i) => {
++            p.combine = [Combine::Always, Combine::WhenFull, Combine::Never][i.min(2)];
++            save(SHELL, "combine_buttons", &p.combine);
++        }
++        Msg::Small(i) => {
++            p.small = [SmallButtons::Always, SmallButtons::WhenFull, SmallButtons::Never][i.min(2)];
++            save(SHELL, "small_buttons", &p.small);
++        }
++        Msg::MultiDisplay(i) => {
++            p.multi_display = [MultiDisplay::AllTaskbars, MultiDisplay::MainAndWhereOpen, MultiDisplay::WhereOpen][i.min(2)];
++            save(SHELL, "multi_display", &p.multi_display);
++        }
++        Msg::DesktopCorner(v) => (p.desktop_corner = v, save(SHELL, "show_desktop_corner", &v)).1,
++        Msg::Peek(v) => (p.peek = v, save(SHELL, "no_desktop_peek", &!v)).1,
++        Msg::Seconds(v) => (p.seconds = v, save(SHELL, "clock_seconds", &v)).1,
++        Msg::WebResults(v) => (p.web_results = v, save(SHELL, "hide_web_search", &!v)).1,
++        Msg::Engine(i) => {
++            p.web_search = ENGINES[i.min(ENGINES.len() - 1)].1.to_string();
++            save(SHELL, "web_search", &p.web_search);
++        }
++        Msg::NightOn(v) => (p.night_on = v, save(SHELL, "night_light", &v)).1,
++        Msg::NightStrength(s) => {
++            p.night_strength = s;
++            save(SHELL, "night_light_kelvin", &kelvin_from_strength(s));
++        }
++        Msg::NightSchedule(on) => {
++            p.night_schedule = on.then_some(p.night_schedule.unwrap_or((21 * 60, 7 * 60)));
++            save(SHELL, "night_light_schedule", &p.night_schedule);
++        }
++        Msg::NightFrom(i) | Msg::NightTo(i) => {
++            let (mut from, mut to) = p.night_schedule.unwrap_or((21 * 60, 7 * 60));
++            if matches!(msg, Msg::NightFrom(_)) {
++                from = (i * 30) as u16;
++            } else {
++                to = (i * 30) as u16;
++            }
++            p.night_schedule = Some((from, to));
++            save(SHELL, "night_light_schedule", &p.night_schedule);
++        }
++        Msg::SnapAssist(v) => (p.snap_assist = v, save(SHELL, "no_snap_assist", &!v)).1,
++        Msg::Dnd(on) => {
++            p.dnd = on;
++            // The daemon applies it at once over D-Bus (and saves it).
++            return cosmic::task::future(async move {
++                set_dnd(on).await;
++                crate::Message::None
++            });
++        }
++        Msg::DndSchedule(on) => {
++            p.dnd_schedule.enabled = on;
++            save(NOTIFY, "dnd_schedule", &p.dnd_schedule);
++        }
++        Msg::DndFrom(i) => {
++            p.dnd_schedule.start = (i * 30) as u32;
++            save(NOTIFY, "dnd_schedule", &p.dnd_schedule);
++        }
++        Msg::DndTo(i) => {
++            p.dnd_schedule.end = (i * 30) as u32;
++            save(NOTIFY, "dnd_schedule", &p.dnd_schedule);
++        }
++        Msg::App(app, on) => {
++            match p.rules.iter_mut().find(|r| r.app == app) {
++                Some(r) => r.enabled = on,
++                None => p.rules.push(AppRule { app, enabled: on, banners: true }),
++            }
++            save(NOTIFY, "app_rules", &p.rules);
++        }
++    }
++    cosmic::Task::none()
++}
++
++async fn set_dnd(on: bool) {
++    let Ok(conn) = zbus::Connection::session().await else { return };
++    if let Ok(proxy) = zbus::Proxy::new(&conn, NOTIFY, "/dev/lapinux/Notifications", NOTIFY).await {
++        let _ = proxy.set_property("DoNotDisturb", on).await;
++    }
++}
++
++fn m(msg: Msg) -> PMsg {
++    PMsg::Lapin(msg)
++}
++
++fn toggle<'a>(title: &'a str, description: Option<&'a str>, on: bool, f: fn(bool) -> Msg) -> Item<'a> {
++    let mut item = settings::item::builder(title);
++    if let Some(d) = description {
++        item = item.description(d);
++    }
++    item.toggler(on, move |v| m(f(v))).into_list_item()
++}
++
++fn choice<'a>(title: &'a str, description: Option<&'a str>, options: &'static [&'static str], selected: usize, f: fn(usize) -> Msg) -> Item<'a> {
++    let mut item = settings::item::builder(title);
++    if let Some(d) = description {
++        item = item.description(d);
++    }
++    Element::from(item.control(widget::dropdown(options, Some(selected), move |i| m(f(i))))).into_list_item()
++}
++
++fn times<'a>(title: &'a str, minutes: u32, f: fn(usize) -> Msg) -> Item<'a> {
++    settings::item::builder(title)
++        .control(widget::dropdown(time_labels(), Some(slot(minutes)), move |i| m(f(i))))
++        .apply(Element::from)
++        .into_list_item()
++}
++
++fn prefs(binder: &Binder<PMsg>) -> &Prefs {
++    static EMPTY: std::sync::OnceLock<Prefs> = std::sync::OnceLock::new();
++    binder.resource::<Prefs>().unwrap_or_else(|| EMPTY.get_or_init(Prefs::default))
++}
++
++/// A page made of Lapin sections.
++macro_rules! lapin_page {
++    ($name:ident, $id:literal, $icon:literal, $title:literal, $desc:literal, [$(($stitle:expr, $rows:expr)),* $(,)?]) => {
++        #[derive(Default)]
++        pub struct $name {
++            entity: page::Entity,
++        }
++        impl page::Page<PMsg> for $name {
++            fn set_id(&mut self, entity: page::Entity) {
++                self.entity = entity;
++            }
++            fn info(&self) -> page::Info {
++                page::Info::new($id, $icon).title($title).description($desc)
++            }
++            fn content(&self, sections: &mut SlotMap<section::Entity, Section<PMsg>>) -> Option<page::Content> {
++                Some(vec![$(sections.insert(section_view::<$name>($stitle, $rows))),*])
++            }
++        }
++        impl page::AutoBind<PMsg> for $name {}
++    };
++}
++
++type Item<'a> = widget::list_column::ListItem<'a, PMsg>;
++type Rows = for<'a> fn(&'a Binder<PMsg>, &'a Prefs) -> Vec<Item<'a>>;
++
++fn section_view<P: page::Page<PMsg>>(title: &'static str, f: Rows) -> Section<PMsg> {
++    let mut s = Section::default();
++    if !title.is_empty() {
++        s = s.title(title);
++    }
++    s.view::<P>(move |binder, _page, section| {
++        // Built fresh each frame from the shared settings.
++        let rows = f(binder, prefs(binder));
++        let mut sec = settings::section();
++        if !section.title.is_empty() {
++            sec = sec.title(&section.title);
++        }
++        rows.into_iter()
++            .fold(sec, |s, r| match r {
++                widget::list_column::ListItem::Element(e) => s.add(e),
++                widget::list_column::ListItem::Button(b) => s.add(b),
++            })
++            .into()
++    })
++}
++
++// --- Personalization > Taskbar -------------------------------------------
++
++const ALIGN: [&str; 2] = ["Center", "Left"];
++const WHEN: [&str; 3] = ["Always", "When taskbar is full", "Never"];
++const MULTI: [&str; 3] = ["All taskbars", "Main taskbar and taskbar where window is open", "Taskbar where window is open"];
++
++fn taskbar_items<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    vec![
++        toggle("Search", Some("Show the Search box on the taskbar"), p.show_search, Msg::ShowSearch),
++        toggle("Touch keyboard", Some("Show the touch keyboard button"), p.touch_keyboard_button, Msg::TouchKeyboard),
++    ]
++}
++
++fn taskbar_behaviors<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let multi = match p.multi_display {
++        MultiDisplay::AllTaskbars => 0,
++        MultiDisplay::MainAndWhereOpen => 1,
++        MultiDisplay::WhereOpen => 2,
++    };
++    vec![
++        choice("Taskbar alignment", None, &ALIGN, usize::from(p.alignment == Alignment::Left), Msg::Alignment),
++        toggle("Automatically hide the taskbar", None, p.auto_hide, Msg::AutoHide),
++        choice("Combine taskbar buttons and hide labels", None, &WHEN, p.combine as usize, Msg::Combine),
++        choice("Show smaller taskbar buttons", None, &WHEN, p.small as usize, Msg::Small),
++        choice("When using multiple displays, show my taskbar apps on", None, &MULTI, multi, Msg::MultiDisplay),
++        toggle("Select the far corner of the taskbar to show the desktop", None, p.desktop_corner, Msg::DesktopCorner),
++        toggle("Peek at the desktop when hovering the far corner", None, p.peek, Msg::Peek),
++        toggle("Show seconds in system tray clock", None, p.seconds, Msg::Seconds),
++    ]
++}
++
++lapin_page!(Taskbar, "lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins", [
++    ("Taskbar items", taskbar_items),
++    ("Taskbar behaviors", taskbar_behaviors),
++]);
++
++// --- Personalization > Start ----------------------------------------------
++
++fn start_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let engine = ENGINES.iter().position(|(_, url)| *url == p.web_search).unwrap_or(0);
++    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
++    let names: &'static [&'static str] = NAMES.get_or_init(|| ENGINES.iter().map(|(n, _)| *n).collect());
++    vec![
++        toggle("Show web results in search", Some("Offer \"Search the web\" when you search from Start"), p.web_results, Msg::WebResults),
++        choice("Search engine", Some("Used for web results"), names, engine, Msg::Engine),
++    ]
++}
++
++lapin_page!(Start, "lapin-start", "view-app-grid-symbolic", "Start", "Search, web results", [("", start_rows)]);
++
++// --- System > Display > Night light ---------------------------------------
++
++fn night_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let mut rows = vec![
++        toggle("Night light", Some("Use warmer colors to help block blue light"), p.night_on, Msg::NightOn),
++        settings::item::builder("Strength")
++            .control(
++                widget::slider(0..=100, p.night_strength, |v| m(Msg::NightStrength(v)))
++                    .width(Length::Fixed(250.0)),
++            )
++            .apply(Element::from)
++            .into_list_item(),
++        toggle("Schedule night light", None, p.night_schedule.is_some(), Msg::NightSchedule),
++    ];
++    if let Some((from, to)) = p.night_schedule {
++        rows.push(times("Turn on", u32::from(from), Msg::NightFrom));
++        rows.push(times("Turn off", u32::from(to), Msg::NightTo));
++    }
++    rows
++}
++
++lapin_page!(NightLight, "lapin-night-light", "night-light-symbolic", "Night light", "Warmer colors, schedule", [("", night_rows)]);
++
++// --- System > Notifications -----------------------------------------------
++
++fn dnd_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let s = p.dnd_schedule;
++    let mut rows = vec![
++        toggle("Do not disturb", Some("Notifications go straight to the notification center"), p.dnd, Msg::Dnd),
++        toggle("Turn on do not disturb automatically", Some("During these times"), s.enabled, Msg::DndSchedule),
++    ];
++    if s.enabled {
++        rows.push(times("From", s.start, Msg::DndFrom));
++        rows.push(times("To", s.end, Msg::DndTo));
++    }
++    rows
++}
++
++fn app_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    if p.apps.is_empty() {
++        return vec![Element::from(text::body("Apps appear here after they send a notification.")).into_list_item()];
++    }
++    p.apps
++        .iter()
++        .map(|app| {
++            let name = app.clone();
++            let on = p.app_enabled(app);
++            settings::item::builder(name.clone())
++                .icon(widget::icon::from_name(name.to_lowercase()).fallback(Some(widget::icon::IconFallback::Names(vec!["application-x-executable-symbolic".into()]))).size(20))
++                .toggler(on, move |v| m(Msg::App(name.clone(), v)))
++                .into_list_item()
++        })
++        .collect()
++}
++
++lapin_page!(Notifications, "lapin-notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts from apps and system, do not disturb", [
++    ("", dnd_rows),
++    ("Notifications from apps and other senders", app_rows),
++]);
++
++// --- System > Multitasking -------------------------------------------------
++
++fn snap_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    vec![toggle(
++        "Snap windows",
++        Some("When I snap a window, suggest what I can snap next to it"),
++        p.snap_assist,
++        Msg::SnapAssist,
++    )]
++}
++
++/// Multitasking's "Advanced": COSMIC's own window and workspace pages.
++fn advanced_rows<'a>(binder: &'a Binder<PMsg>, _: &'a Prefs) -> Vec<Item<'a>> {
++    ["window-management", "workspaces"]
++        .iter()
++        .filter_map(|id| binder.find_page_by_id(id))
++        .map(|(entity, info)| crate::widget::go_next_item(info.title.as_str(), PMsg::Page(entity)).into_list_item())
++        .collect()
++}
++
++lapin_page!(Multitasking, "lapin-multitasking", "view-grid-symbolic", "Multitasking", "Snap windows, desktops", [
++    ("", snap_rows),
++    ("Advanced", advanced_rows),
++]);
++
++/// Registers the pages and the shared settings; returns them by id.
++pub fn register(pages: &mut Binder<PMsg>) {
++    pages.resource_register::<Prefs>();
++    if let Some(p) = pages.resource_mut::<Prefs>() {
++        *p = Prefs::load();
++    }
++    let _ = pages.register::<Taskbar>();
++    let _ = pages.register::<Start>();
++    let _ = pages.register::<NightLight>();
++    let _ = pages.register::<Notifications>();
++    let _ = pages.register::<Multitasking>();
++}
++
++/// Re-reads the settings (when a Lapin page opens), in case the shell or
++/// the notification centre changed them.
++pub fn reload(pages: &mut Binder<PMsg>) {
++    if let Some(p) = pages.resource_mut::<Prefs>() {
++        *p = Prefs::load();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn strength_round_trip() {
++        assert_eq!(strength_from_kelvin(0), strength_from_kelvin(DEFAULT_KELVIN));
++        for s in [0u8, 25, 50, 75, 100] {
++            assert_eq!(strength_from_kelvin(kelvin_from_strength(s)), s);
++        }
++    }
++
++    #[test]
++    fn times() {
++        assert_eq!(time_labels()[0], "12:00 AM");
++        assert_eq!(time_labels()[43], "9:30 PM");
++        assert_eq!(slot(22 * 60), 44);
++    }
++}
++
++/// System > Display gets a "Night light" row at the top, as on Windows,
++/// opening Lapin's Night light page.
++pub fn add_night_light_row(pages: &mut Binder<PMsg>) {
++    let (Some((display, _)), Some((night, _))) = (pages.find_page_by_id("display"), pages.find_page_by_id("lapin-night-light")) else {
++        return;
++    };
++    let row = Section::default().title("Brightness & color").view::<crate::pages::display::Page>(move |binder, _page, section| {
++        let on = prefs(binder).night_on;
++        settings::section()
++            .title(&section.title)
++            .add(crate::widget::go_next_with_item("Night light", text::body(if on { "On" } else { "Off" }), PMsg::Page(night)))
++            .into()
++    });
++    let id = pages.sections.insert(row);
++    if let Some(content) = pages.content.get_mut(display) {
++        content.insert(0, id);
++    }
++}
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index d424fb1..a5cf379 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -272,10 +272,20 @@ pub fn category_view<'a>(pages: &'a Binder<crate::pages::Message>, state: &'a St
+         if info.id == SYSTEM_ID {
+             list = list.push(system_top(pages, state));
+         }
+-        for &k in kids {
++        let advanced = &state.layout.advanced;
++        for &k in kids.iter().filter(|k| !advanced.contains(k)) {
+             let ki = &pages.info[k];
+             list = list.push(page_row(&ki.icon_name, ki.title.as_str(), ki.description.as_str(), Message::Page(k)));
+         }
++        // COSMIC-only pages, under "Advanced" at the bottom.
++        let extra: Vec<_> = kids.iter().filter(|k| advanced.contains(k)).collect();
++        if !extra.is_empty() {
++            list = list.push(text::heading("Advanced").apply(container).padding([20, 0, 4, 0]));
++            for &k in extra {
++                let ki = &pages.info[k];
++                list = list.push(page_row(&ki.icon_name, ki.title.as_str(), ki.description.as_str(), Message::Page(k)));
++            }
++        }
+         list.into()
+     };
+     page_frame(breadcrumb(pages, page, None), body)
+diff --git a/cosmic-settings/src/pages/mod.rs b/cosmic-settings/src/pages/mod.rs
+index e24524e..ee0ac7f 100644
+--- a/cosmic-settings/src/pages/mod.rs
++++ b/cosmic-settings/src/pages/mod.rs
+@@ -26,6 +26,9 @@ pub type Element<'a> = cosmic::Element<'a, Message>;
+ 
+ #[derive(Clone, Debug)]
+ pub enum Message {
++    /// Lapin UX's own pages (Taskbar, Start, Night light, Notifications,
++    /// Multitasking).
++    Lapin(crate::lapin::settings::Msg),
+     // Page-specific messages
+     #[cfg(feature = "page-accessibility")]
+     Accessibility(accessibility::Message),
+-- 
+2.43.0
+

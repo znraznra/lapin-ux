@@ -63,8 +63,32 @@ impl Quiet {
             q.rules = c.get::<Vec<AppRule>>("app_rules").unwrap_or_default();
             q.calendars = c.get::<Vec<String>>("calendar_sources").unwrap_or_default();
             q.focus_minutes = c.get::<u32>("focus_minutes").unwrap_or(30).clamp(5, 240);
+            q.seen_apps = c.get::<Vec<String>>("seen_apps").unwrap_or_default();
         }
         q
+    }
+}
+
+use cosmic::cosmic_config::{self, CosmicConfigEntry};
+
+/// The settings Lapin Settings can change while the daemon runs (System >
+/// Notifications): watched live, the rest are only changed here.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, cosmic_config::cosmic_config_derive::CosmicConfigEntry)]
+#[version = 1]
+pub struct Prefs {
+    pub dnd_schedule: Schedule,
+    pub app_rules: Vec<AppRule>,
+}
+
+impl crate::App {
+    /// Settings changed them: take the new schedule and app rules.
+    pub(crate) fn prefs_changed(&mut self, p: Prefs) -> Task<Message> {
+        if p.dnd_schedule == self.quiet.dnd.schedule && p.app_rules == self.quiet.rules {
+            return Task::none();
+        }
+        self.quiet.dnd.schedule = p.dnd_schedule;
+        self.quiet.rules = p.app_rules;
+        self.refresh_dnd()
     }
 }
 

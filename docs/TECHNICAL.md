@@ -169,7 +169,7 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
 
 **Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.10.0 with
-patches in `packaging/lapin-ux-settings`; in progress, stages 0–2 of 5 done)
+patches in `packaging/lapin-ux-settings`; in progress, stages 0–3 of 5 built)
 - Windows 11 layout: account card and colour category icons in the sidebar
   (Home, System, Bluetooth & devices, Network & internet, Personalization,
   Apps, Accounts, Time & language, Accessibility, Privacy & security,
@@ -184,6 +184,15 @@ patches in `packaging/lapin-ux-settings`; in progress, stages 0–2 of 5 done)
   round slider thumbs, 4 px buttons; Power mode and the primary mouse button
   as drop-downs; Add buttons inside rows; About laid out like Windows with
   Device and OS specification cards (Copy, links).
+- Windows' page layout (`lapin/settings.rs`): Personalization > Taskbar and
+  Start, System > Notifications, Display > Night light and System >
+  Multitasking are Lapin pages that read and write the shell's
+  `dev.lapinux.Shell` and the notification service's
+  `dev.lapinux.Notifications` cosmic-config (both watch them, so changes
+  apply at once; Do not disturb goes over the notification service's
+  D-Bus property). Panel and Dock are hidden; COSMIC-only pages (Window
+  management, Workspaces, X11 compatibility) sit under an "Advanced"
+  heading. Notifications lists apps the service has seen (`seen_apps`).
 - All Lapin code is in `cosmic-settings/src/lapin/`; COSMIC's files get small
   hooks. The look inside pages comes from opt-in libcosmic patches
   (`packaging/lapin-ux-libcosmic` 0002–0007), turned on only by Lapin
