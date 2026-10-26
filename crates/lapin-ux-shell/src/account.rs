@@ -180,13 +180,50 @@ async fn change_picture() -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path))
 }
 
-/// The account picture: one just chosen, else AccountsService's copy.
+/// The account picture: one just chosen, else AccountsService's copy,
+/// always round like Windows'.
 pub fn avatar(shell: &Shell, size: u16) -> Element<'static, Message> {
     let path = shell.avatar.clone().or_else(|| crate::start_view::account_avatar());
-    match path {
-        Some(p) => icon(icon::from_path(p)).size(size).into(),
+    match path.and_then(|p| round_picture(&p)) {
+        Some(h) => cosmic::widget::image(h)
+            .width(cosmic::iced::Length::Fixed(size as f32))
+            .height(cosmic::iced::Length::Fixed(size as f32))
+            .content_fit(cosmic::iced::ContentFit::Fill)
+            .into(),
         None => icon::from_name("avatar-default-symbolic").size(size * 5 / 7).into(),
     }
+}
+
+/// The picture at `path` cut to a circle (centre square, soft edge),
+/// cached until the file changes. None if it can't be read.
+fn round_picture(path: &std::path::Path) -> Option<cosmic::widget::image::Handle> {
+    use std::cell::RefCell;
+    type Key = (std::path::PathBuf, Option<std::time::SystemTime>);
+    thread_local! {
+        static CACHE: RefCell<Option<(Key, Option<cosmic::widget::image::Handle>)>> = const { RefCell::new(None) };
+    }
+    let key: Key = (path.to_path_buf(), std::fs::metadata(path).and_then(|m| m.modified()).ok());
+    if let Some(h) = CACHE.with(|c| c.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, h)| h.clone())) {
+        return h;
+    }
+    const SIDE: u32 = 192;
+    let made = (|| {
+        // AccountsService pictures have no file extension: sniff the format.
+        let img = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
+        let (w, h) = (img.width(), img.height());
+        let side = w.min(h).max(1);
+        let sq = img.crop_imm((w - side) / 2, (h - side) / 2, side, side);
+        let mut rgba = sq.resize_exact(SIDE, SIDE, image::imageops::FilterType::CatmullRom).to_rgba8();
+        let r = SIDE as f32 / 2.0;
+        for (x, y, px) in rgba.enumerate_pixels_mut() {
+            let (dx, dy) = (x as f32 + 0.5 - r, y as f32 + 0.5 - r);
+            let cover = (r - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+            px[3] = (px[3] as f32 * cover).round() as u8;
+        }
+        Some(cosmic::widget::image::Handle::from_rgba(SIDE, SIDE, rgba.into_raw()))
+    })();
+    CACHE.with(|c| *c.borrow_mut() = Some((key, made.clone())));
+    made
 }
 
 /// The account button's menu.

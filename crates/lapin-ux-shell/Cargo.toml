@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 mime_guess = "2.0.5"
 png = "0.17"
+# Account picture cut to a circle (already in the tree through libcosmic).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 lapin-ux-core.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

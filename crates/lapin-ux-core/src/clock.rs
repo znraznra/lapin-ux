@@ -50,6 +50,15 @@ impl ClockStyle {
     }
 
     /// Read LC_ALL / LC_TIME / LANG the way glibc prioritises them.
+    /// The locale's date style, with the hours as Settings' "24-hour time"
+    /// switch (Time & language > Date & time) shows them: that page shows
+    /// it off until it's turned on, so unset means 12-hour, like the page.
+    pub fn from_env_and_settings() -> Self {
+        let mut c = Self::from_env();
+        c.hour12 = !settings_24h().unwrap_or(false);
+        c
+    }
+
     pub fn from_env() -> Self {
         let pick = ["LC_ALL", "LC_TIME", "LANG"]
             .iter()
@@ -169,5 +178,40 @@ mod tests {
         assert_eq!(us.long_date(&at(0, 0)), "Monday, October 5, 2026");
         let gb = ClockStyle::from_locale("en_GB");
         assert_eq!(gb.long_date(&at(0, 0)), "Monday, 5 October 2026");
+    }
+}
+
+/// Settings' "24-hour time" switch (COSMIC's Date & time page, also used by
+/// the lock screen): `com.system76.CosmicAppletTime` `military_time`.
+/// `None` until it has been set once (then the locale decides).
+pub fn settings_24h() -> Option<bool> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    parse_bool_file(&base.join("cosmic/com.system76.CosmicAppletTime/v1/military_time"))
+}
+
+fn parse_bool_file(p: &std::path::Path) -> Option<bool> {
+    match std::fs::read_to_string(p).ok()?.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    #[test]
+    fn reads_the_switch() {
+        let d = std::env::temp_dir().join(format!("lapin-clock-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("military_time");
+        assert_eq!(super::parse_bool_file(&f), None);
+        std::fs::write(&f, "false").unwrap();
+        assert_eq!(super::parse_bool_file(&f), Some(false));
+        std::fs::write(&f, "true\n").unwrap();
+        assert_eq!(super::parse_bool_file(&f), Some(true));
+        let _ = std::fs::remove_dir_all(d);
     }
 }

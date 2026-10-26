@@ -61,16 +61,36 @@ undone. They apply to every change.
   graphical-session.target) and `/etc/xdg/autostart/lapin-ux-other-desktops.desktop`
   hand settings back after a crash; `$XDG_RUNTIME_DIR/lapin-ux-session.pid`
   keeps them away from a Lapin session that's starting.
+- Other desktops' own parts stay out of a Lapin session without touching their
+  files: Start/search hide them (`lapin_ux_core::desktops`, Settings > Start >
+  "Show apps from other desktops"), and `lapin-ux-session` masks their system
+  autostart units with `--runtime` for the session only, listed in
+  `$XDG_RUNTIME_DIR/lapin-ux-autostart-masked`; the session end and
+  `lapin-ux-desktop-settings leave` unmask them. Lapin UX handles the power
+  button itself (logind `handle-power-key` inhibitor held by the shell).
+- The lock screen signs in through `/etc/pam.d/cosmic-greeter`, shipped by
+  `lapin-ux-greeter` (Arch has no such file; without it every unlock fails).
 
 **Building.**
 - `pkgver()` comes from git, so `git pull && ./install.sh` always installs the
   new build. The root `Cargo.toml` excludes `packaging/` from the workspace;
   `prepare()` runs `git reset --hard && git clean -fdq` before patching.
 
+## Bugs from real hardware
+
+Tako's reports are GitHub issues (read them with `gh api
+'repos/znraznra/lapin-ux/issues?state=all&per_page=100'`; GraphQL is blocked
+in Claude sessions). A fix gets a comment saying what changed and what to
+retest, and the `fixed: needs retest` label; reference issues as `Refs #N`
+(not `Fixes`), since they're closed only after Tako retests on hardware.
+The sandbox runs only the nested compositor: KMS-only paths, real locking,
+real keyboards' compositor shortcuts (Alt+Tab) and touch hardware can't be
+checked here.
+
 ## Checks before pushing
 
 - `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (needs
-  dconf): all checks must pass. Add a scenario for any new shared setting.
+  dconf; 55 checks): all checks must pass. Add a scenario for any new shared setting.
 - `shellcheck -S warning tools/lapin-ux-uninstall`.
 - Forks you touched: `cargo check --locked` (or a build) at the pinned commit
   with all patches applied.

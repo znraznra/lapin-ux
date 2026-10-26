@@ -22,7 +22,7 @@ use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::runtime::wayland::popup::{SctkPopupSettings, SctkPositioner};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
-    Anchor, KeyboardInteractivity, Layer, destroy_layer_surface,
+    Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, set_keyboard_interactivity,
 };
 use cosmic::iced::platform_specific::shell::commands::popup::destroy_popup;
 use cosmic::iced::{Limits, Rectangle, Subscription, window};
@@ -170,6 +170,12 @@ pub enum Message {
     KeyNamed(window::Id, Named, bool),
     /// Open Start on a given page (Win+X "Search").
     OpenStartAt(StartPage),
+    /// Taskbar search box: clicked (focus it on that taskbar), typed into,
+    /// Enter (results in Start), Esc / clicked away.
+    BarSearchOpen(window::Id),
+    BarSearchInput(String),
+    BarSearchSubmit,
+    BarSearchCancel,
     /// Open Settings on a page ("" = Home; `lapin-…` ids or COSMIC pages).
     OpenSettings(&'static str),
     Panel(crate::panels::PanelMsg),
@@ -295,6 +301,13 @@ pub struct Shell {
     pub rects: HashMap<String, Rectangle>,
     pub tracker: Option<RectangleTracker<String>>,
     pub clock: ClockStyle,
+    /// The taskbar's own search box: what's typed, and the taskbar that has
+    /// it focused (that taskbar takes the keyboard only meanwhile).
+    pub bar_search: String,
+    pub bar_search_on: Option<window::Id>,
+    /// Whether Alt is down, as the compositor reports it (lapin_shell v3);
+    /// None with a compositor that doesn't.
+    pub alt_down: Option<bool>,
     pub now: chrono::NaiveDateTime,
     pub calendar: cosmic::widget::calendar::CalendarModel,
     pub notify: crate::notify_client::State,
@@ -386,6 +399,7 @@ impl Shell {
         }
     }
 
+    /// Lapin's own `clock_24h` (if set) > Settings' 24-hour switch > locale.
     pub fn clock_style(&self) -> ClockStyle {
         let mut c = self.clock;
         if let Some(h24) = self.config.clock_24h {
@@ -446,7 +460,7 @@ impl Shell {
             .unwrap_or(style::START_HEIGHT)
             .max(360);
         if self.catalog.changed_on_disk() {
-            self.catalog = Catalog::load();
+            self.catalog = Catalog::load(self.config.show_other_desktop_apps);
         }
         let index = self.refresh_file_index();
         self.start = Some(StartMenu {
@@ -736,6 +750,60 @@ fn spawn(exec: String, app_id: String, terminal: bool, token: Option<String>) ->
     })
 }
 
+/// The taskbar search box's id on one taskbar (one per monitor).
+pub fn bar_search_id(bar: window::Id) -> cosmic::widget::Id {
+    cosmic::widget::Id::new(format!("bar-search-{bar:?}"))
+}
+
+impl Shell {
+    /// The taskbar search box lost focus: the taskbar stops taking keys.
+    fn end_bar_search(&mut self) -> Task<Message> {
+        match self.bar_search_on.take() {
+            Some(id) => set_keyboard_interactivity(id, KeyboardInteractivity::None),
+            None => Task::none(),
+        }
+    }
+}
+
+/// What the power button does, like Windows' defaults: Sleep on a PC with
+/// a battery, Shut down on a desktop PC.
+pub fn power_button_action() -> PowerAction {
+    let battery = std::fs::read_dir("/sys/class/power_supply").into_iter().flatten().flatten().any(|e| {
+        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
+        read("type").trim() == "Battery" && read("scope").trim() != "Device"
+    });
+    if battery { PowerAction::Sleep } else { PowerAction::ShutDown }
+}
+
+/// Keeps logind (and whatever else listens to it) from acting on the power
+/// button while the shell runs; the shell handles the key itself. Released
+/// when the shell exits, so logind takes over again if the shell is gone.
+static POWER_KEY_INHIBITOR: std::sync::OnceLock<zbus::zvariant::OwnedFd> = std::sync::OnceLock::new();
+
+pub async fn take_power_key() {
+    let res: anyhow::Result<zbus::zvariant::OwnedFd> = async {
+        let conn = zbus::Connection::system().await?;
+        let reply = conn
+            .call_method(
+                Some("org.freedesktop.login1"),
+                "/org/freedesktop/login1",
+                Some("org.freedesktop.login1.Manager"),
+                "Inhibit",
+                &("handle-power-key", "Lapin UX", "Lapin UX handles the power button", "block"),
+            )
+            .await?;
+        Ok(reply.body().deserialize::<zbus::zvariant::OwnedFd>()?)
+    }
+    .await;
+    match res {
+        Ok(fd) => {
+            let _ = POWER_KEY_INHIBITOR.set(fd);
+            tracing::info!("handling the power button");
+        }
+        Err(e) => tracing::warn!("couldn't take the power button from logind: {e:#}"),
+    }
+}
+
 async fn power_action(action: PowerAction) -> anyhow::Result<()> {
     if action == PowerAction::Lock {
         tokio::process::Command::new("loginctl").arg("lock-session").status().await?;
@@ -782,9 +850,9 @@ impl Application for Shell {
     }
 
     fn init(core: Core, _flags: crate::Args) -> (Self, Task<Message>) {
-        let catalog = Catalog::load();
         let config_handle = config::shell_config();
         let mut cfg: ShellConfig = config::load(config_handle.as_ref());
+        let catalog = Catalog::load(cfg.show_other_desktop_apps);
         if !cfg.initialized {
             crate::defaults::apply_first_run();
             cfg = cfg.with_defaults(&catalog);
@@ -800,10 +868,24 @@ impl Application for Shell {
             }
         }
         // First sign-in: the short setup (network, light or dark, pointers).
+        // Two guards, so one bad or missing config file can't bring it back
+        // at every sign-in: the shell setting and a marker file.
+        let marker = lapin_ux_core::system::welcomed_marker();
+        if !cfg.welcomed && marker.exists() {
+            cfg.welcomed = true;
+        }
         if !cfg.welcomed && std::env::var_os("LAPIN_UX_NO_WELCOME").is_none() && crate::account::which("lapin-ux-welcome") {
             cfg.welcomed = true;
-            if let Some(h) = &config_handle {
-                let _ = cfg.set_welcomed(h, true);
+            match &config_handle {
+                Some(h) => {
+                    if let Err(e) = cfg.set_welcomed(h, true) {
+                        tracing::error!("couldn't remember that Get Started ran: {e}");
+                    }
+                }
+                None => tracing::error!("no shell config; Get Started only remembered by its marker file"),
+            }
+            if let Err(e) = lapin_ux_core::system::mark_welcomed() {
+                tracing::error!(path = %marker.display(), "couldn't write the Get Started marker: {e}");
             }
             let _ = std::process::Command::new("lapin-ux-welcome").spawn();
         }
@@ -829,7 +911,10 @@ impl Application for Shell {
             popup: None,
             rects: HashMap::new(),
             tracker: None,
-            clock: ClockStyle::from_env(),
+            clock: ClockStyle::from_env_and_settings(),
+            bar_search: String::new(),
+            bar_search_on: None,
+            alt_down: None,
             now: chrono::Local::now().naive_local(),
             calendar: cosmic::widget::calendar::CalendarModel::now(),
             notify: Default::default(),
@@ -872,7 +957,15 @@ impl Application for Shell {
             suppress_click_until: Instant::now(),
             item_context_at: Instant::now() - Duration::from_secs(10),
         };
-        (shell, crate::account::check_switch_user())
+        let power_key = if crate::in_lapin_ux_session() {
+            Task::future(async {
+                take_power_key().await;
+                cosmic::Action::App(Message::Noop)
+            })
+        } else {
+            Task::none()
+        };
+        (shell, Task::batch([crate::account::check_switch_user(), power_key]))
     }
 
     fn system_theme_mode_update(&mut self, _keys: &[&'static str], _mode: &cosmic::cosmic_theme::ThemeMode) -> Task<Message> {
@@ -960,6 +1053,8 @@ impl Application for Shell {
                     self.update(Message::Quick(crate::quick::QuickMsg::HighContrast(on)))
                 }
                 "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
+                // Hardware power button (bound by Lapin UX's shortcuts).
+                "power-button" => self.update(Message::Power(power_button_action())),
                 "taskbar-item" => match args.first().and_then(|a| a.parse::<usize>().ok()) {
                     Some(n) => self.update(Message::TaskbarItem(n)),
                     None => Task::none(),
@@ -1093,6 +1188,12 @@ impl Shell {
                 WaylandUpdate::Shot { window, width, height, rgba } => {
                     return self.update_snip(crate::snip::SnipMsg::Shot(window, width, height, rgba));
                 }
+                WaylandUpdate::Alt(down) => {
+                    self.alt_down = Some(down);
+                    if !down {
+                        return self.update(Message::Preview(crate::previews::PreviewMsg::AltReleased));
+                    }
+                }
                 WaylandUpdate::Gesture(fingers, dir) => {
                     return self.update_extras(crate::comp_extras::ExtrasMsg::Gesture(fingers, dir));
                 }
@@ -1147,6 +1248,11 @@ impl Shell {
                     return Task::batch(tasks);
                 }
             },
+            // Clicked away from the taskbar search box.
+            Message::Layer(LayerEvent::Unfocused, id) if self.bar_search_on == Some(id) => {
+                self.bar_search.clear();
+                return self.end_bar_search();
+            }
             Message::Layer(LayerEvent::Unfocused, id) if self.start.as_ref().is_some_and(|s| s.id == id) => {
                 // A Start-menu popup (right-click menu) takes focus without
                 // meaning "the user clicked away".
@@ -1202,7 +1308,11 @@ impl Shell {
                 }
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
                 let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
+                let apps_changed = cfg.show_other_desktop_apps != self.config.show_other_desktop_apps;
                 self.config = cfg;
+                if apps_changed {
+                    self.catalog = Catalog::load(self.config.show_other_desktop_apps);
+                }
                 self.sync_night_light();
                 if icons_changed {
                     self.reload_desktop();
@@ -1213,6 +1323,8 @@ impl Shell {
             }
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
+                // Follow Settings' 24-hour switch live.
+                self.clock.hour12 = !lapin_ux_core::clock::settings_24h().unwrap_or(false);
                 self.desktop_tick();
                 self.extras_tick();
             }
@@ -1238,6 +1350,9 @@ impl Shell {
                 return Task::batch([close, self.open_start()]);
             }
             Message::KeyNamed(id, named, alt) => {
+                if self.bar_search_on == Some(id) && named == Named::Escape {
+                    return self.update(Message::BarSearchCancel);
+                }
                 if self.start.as_ref().is_some_and(|s| s.id == id) {
                     let msg = match named {
                         Named::Escape if self.start.as_ref().is_some_and(|s| s.folder.is_some()) => {
@@ -1265,6 +1380,40 @@ impl Shell {
                     self.mods = saved;
                     return task;
                 }
+            }
+            Message::BarSearchOpen(id) => {
+                let close = if self.start.is_some() { self.close_start() } else { Task::none() };
+                let close_panel = self.close_panel();
+                let prev = self.bar_search_on.replace(id);
+                let release = match prev {
+                    Some(p) if p != id => set_keyboard_interactivity(p, KeyboardInteractivity::None),
+                    _ => Task::none(),
+                };
+                // Take the keyboard while the box is in use, like Start does;
+                // clicking anything else takes it away (Unfocused ends it).
+                let take = set_keyboard_interactivity(id, KeyboardInteractivity::Exclusive)
+                    .chain(text_input::focus(bar_search_id(id)));
+                return Task::batch([close, close_panel, release, take]);
+            }
+            Message::BarSearchInput(q) => self.bar_search = q,
+            Message::BarSearchSubmit => {
+                let q = std::mem::take(&mut self.bar_search);
+                let end = self.end_bar_search();
+                let open = if self.start.is_none() { self.open_start() } else { Task::none() };
+                let mut search = Task::none();
+                if let Some(s) = &mut self.start {
+                    s.page = StartPage::Home;
+                    s.selected = (!q.trim().is_empty()).then_some(0);
+                    s.query = q.clone();
+                    if !q.trim().is_empty() {
+                        search = crate::start_search::content_search(q);
+                    }
+                }
+                return Task::batch([end, open, search]);
+            }
+            Message::BarSearchCancel => {
+                self.bar_search.clear();
+                return self.end_bar_search();
             }
             Message::OpenStartAt(page) => {
                 let close = self.close_panel();
@@ -1309,9 +1458,14 @@ impl Shell {
                 {
                     // Esc steps back: clear search / leave All apps first.
                     // (The text box drops focus on Esc; take it back so typing works.)
+                    // Leaving All apps slides back, like ‹ Back.
+                    let slide = s.query.is_empty() && s.page == StartPage::AllApps;
                     s.query.clear();
                     s.page = StartPage::Home;
                     s.selected = None;
+                    if slide {
+                        self.anim_page(StartPage::Home);
+                    }
                     return text_input::focus(SEARCH_ID.clone());
                 }
                 return self.close_start();
@@ -1355,10 +1509,15 @@ impl Shell {
                 }
             }
             Message::StartPage(page) => {
+                let mut slide = false;
                 if let Some(s) = &mut self.start {
+                    slide = s.page != page && s.query.trim().is_empty();
                     s.page = page;
                     s.selected = None;
                     s.query.clear();
+                }
+                if slide {
+                    self.anim_page(page);
                 }
                 return text_input::focus(SEARCH_ID.clone());
             }
@@ -1581,7 +1740,7 @@ impl Shell {
                 self.files = idx;
                 self.indexing = false;
             }
-            Message::ReloadApps => self.catalog = Catalog::load(),
+            Message::ReloadApps => self.catalog = Catalog::load(self.config.show_other_desktop_apps),
             Message::Desktop(m) => return self.update_desktop(m),
             Message::Clip(m) => return self.update_clip(m),
             Message::Preview(m) => return self.update_preview(m),

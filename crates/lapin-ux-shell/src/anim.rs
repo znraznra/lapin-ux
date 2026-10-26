@@ -19,6 +19,8 @@ const START_SLIDE: Duration = Duration::from_millis(220);
 /// or covers the taskbar and nothing of it is cut off.
 const START_DROP: f32 = 8.0;
 const LAUNCH_HOP: Duration = Duration::from_millis(900);
+/// Start's slide between Pinned and All apps.
+const PAGE_SLIDE: Duration = Duration::from_millis(220);
 /// Height of the launch hop.
 const HOP: f32 = 5.0;
 
@@ -28,6 +30,8 @@ pub struct Anims {
     /// The slide clock was restarted when Start first got focus.
     start_shown: bool,
     launches: HashMap<String, Instant>,
+    /// Start sliding to this page (All › / ‹ Back), since.
+    page: Option<(crate::app::StartPage, Instant)>,
 }
 
 /// `LAPIN_UX_ANIM_SCALE=10` plays animations ten times slower (for checking
@@ -45,7 +49,7 @@ fn ease_out(t: f32) -> f32 {
 
 impl Anims {
     pub fn active(&self) -> bool {
-        self.start.is_some() || !self.launches.is_empty()
+        self.start.is_some() || !self.launches.is_empty() || self.page.is_some()
     }
 }
 
@@ -74,8 +78,24 @@ impl Shell {
         (std::f32::consts::PI * 2.0 * t).sin().abs() * HOP * (1.0 - t)
     }
 
+    /// Start's page changed with All › / ‹ Back (or Esc): slide to it.
+    pub(crate) fn anim_page(&mut self, to: crate::app::StartPage) {
+        self.anims.page = Some((to, Instant::now()));
+    }
+
+    /// The page slide in progress: the page it goes to and how far (0..1,
+    /// eased). None when Start isn't sliding between pages.
+    pub(crate) fn page_slide(&self) -> Option<(crate::app::StartPage, f32)> {
+        let (to, t0) = self.anims.page?;
+        let t = (t0.elapsed().as_secs_f32() / slow(PAGE_SLIDE).as_secs_f32()).min(1.0);
+        (t < 1.0).then(|| (to, ease_out(t)))
+    }
+
     pub(crate) fn anim_tick(&mut self) -> Task<Message> {
         self.anims.launches.retain(|_, t| t.elapsed() < LAUNCH_HOP);
+        if self.anims.page.is_some() && (self.page_slide().is_none() || self.start.is_none()) {
+            self.anims.page = None;
+        }
         let Some((id, t0)) = self.anims.start else { return Task::none() };
         if self.start.as_ref().is_none_or(|s| s.id != id) {
             self.anims.start = None;

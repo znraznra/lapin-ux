@@ -53,6 +53,8 @@ pub enum PreviewMsg {
     /// Alt went up / down while the switcher has the keyboard.
     Alt(window::Id, bool),
     /// Quick Alt+Tab tap: Alt may be released before the switcher appears.
+    /// The compositor reports Alt let go.
+    AltReleased,
     AltTabCheck,
     /// The pointer left a surface (a button's own "exit" never fires when
     /// the pointer jumps straight off the taskbar).
@@ -205,6 +207,12 @@ impl Shell {
                     return self.alt_tab_commit();
                 }
             }
+            // The compositor saw Alt let go (lapin_shell v3): switch.
+            PreviewMsg::AltReleased => {
+                if matches!(&self.panel, Some(Panel { kind: PanelKind::AltTab(_), .. })) {
+                    return self.alt_tab_commit();
+                }
+            }
             PreviewMsg::AltTabCheck => {
                 tracing::debug!("alt-tab: checking for a quick tap");
                 if let Some(Panel { kind: PanelKind::AltTab(a), .. }) = &self.panel
@@ -239,6 +247,13 @@ impl Shell {
         self.capture(order.iter().copied());
         let n = order.len();
         let selected = if n == 1 { 0 } else if back { n - 1 } else { 1 };
+        // A quick tap that was over before the switcher could open: just
+        // flip to that window, like Windows (the compositor says Alt is up).
+        if self.alt_down == Some(false) {
+            tracing::debug!("alt-tab: quick tap");
+            let close = Task::batch([self.close_start(), self.close_popup()]);
+            return Task::batch([close, activate_after_close(order[selected])]);
+        }
         let close = Task::batch([self.close_start(), self.close_popup()]);
         Task::batch([close, self.open_panel(PanelKind::AltTab(AltTab { order, selected, saw_alt: false }))])
     }
@@ -266,6 +281,11 @@ impl Shell {
     }
 
     pub(crate) fn alt_tab_focused(&self) -> Task<Message> {
+        // With Lapin UX's compositor the Alt release itself closes the
+        // switcher (AltReleased); guessing from a timer only for others.
+        if self.alt_down.is_some() {
+            return Task::none();
+        }
         later(Duration::from_millis(350), PreviewMsg::AltTabCheck)
     }
 }

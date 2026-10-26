@@ -328,6 +328,19 @@ leave_session() {
             && run dbus-update-activation-environment FONTCONFIG_FILE=/etc/fonts/fonts.conf
         changed=1
     fi
+    # Other desktops' autostart parts a Lapin UX session skipped (masked with
+    # --runtime) when it didn't end cleanly: give them back.
+    local masked="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lapin-ux-autostart-masked"
+    if [ -s "$masked" ] && command -v systemctl >/dev/null 2>&1; then
+        local -a units=()
+        mapfile -t units < <(grep -v '^[[:space:]]*$' "$masked")
+        if [ ${#units[@]} -gt 0 ]; then
+            say "  Other desktops' startup parts: back on (${#units[@]})"
+            run systemctl --user unmask --runtime "${units[@]}" || true
+        fi
+        run rm -f "$masked"
+        changed=1
+    fi
     [ "$changed" = 1 ]
 }
 
@@ -365,7 +378,7 @@ restore_settings() {
 
     # Lapin UX's own files.
     local -a own=()
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"

@@ -1,0 +1,363 @@
+From d8e74eb4f5ce88d9df14f0c5e9fbc918f45e4b92 Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 14:47:23 +0800
+Subject: [PATCH] Lapin UX: real-hardware fixes and requests
+
+- Pages fill the content panel at any window size (no 1000 px cap), same
+  edges everywhere. znraznra/lapin-ux#11
+- Mouse: "Reverse scrolling direction"; Touchpad: Windows' "Scrolling
+  direction" drop-down (the same natural-scroll settings, wheel and
+  touchpad separately). znraznra/lapin-ux#6
+- Start: "Show apps from other desktops" (off). znraznra/lapin-ux#7
+- Taskbar: "Start button icon" (Lapin UX, Dots, Circle, Rabbit, the
+  system's logo, or a custom SVG/PNG copied to ~/.local/share/lapin-ux).
+  znraznra/lapin-ux#17
+- The account picture in the sidebar is cut to a circle, whatever its
+  shape (it was drawn as a rounded rectangle). znraznra/lapin-ux#8
+---
+ cosmic-settings/src/lapin/search.rs         |   2 +
+ cosmic-settings/src/lapin/settings.rs       | 141 ++++++++++++++++++++
+ cosmic-settings/src/lapin/view.rs           |  37 ++++-
+ cosmic-settings/src/pages/input/mouse.rs    |  16 ++-
+ cosmic-settings/src/pages/input/touchpad.rs |  22 ++-
+ 5 files changed, 206 insertions(+), 12 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 33a2196..f1c922b 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -39,6 +39,8 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-start", "Show web results in search"),
+     ("lapin-start", "Search engine"),
+     ("lapin-start", "Show recently opened items in Start and jump lists"),
++    ("lapin-start", "Show apps from other desktops"),
++    ("lapin-taskbar", "Start button icon"),
+     ("lapin-night-light", "Night light strength"),
+     ("lapin-night-light", "Schedule night light"),
+     ("lapin-notifications", "Do not disturb"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index b5061ab..852a3a5 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -123,6 +123,10 @@ pub struct Prefs {
+     pub signin_picture: bool,
+     /// Pictures offered for the lock screen.
+     pub pictures: Vec<String>,
++    /// Start: list other desktops' own apps (settings, panels...) too.
++    pub other_apps: bool,
++    /// Taskbar: the Start button's picture ("", a preset, or "custom").
++    pub start_icon: String,
+ }
+ 
+ impl Prefs {
+@@ -168,6 +172,8 @@ impl Prefs {
+             lock_wallpaper: get(&shell, "lock_wallpaper").unwrap_or_default(),
+             signin_picture: !get::<bool>(&shell, "no_signin_picture").unwrap_or(false),
+             pictures: pictures(),
++            other_apps: get(&shell, "show_other_desktop_apps").unwrap_or(false),
++            start_icon: get(&shell, "start_icon").unwrap_or_default(),
+         }
+     }
+ 
+@@ -203,6 +209,11 @@ pub enum Msg {
+     App(String, bool),
+     // Personalization > Start
+     RecentItems(bool),
++    OtherApps(bool),
++    // Personalization > Taskbar: Start button icon
++    StartIcon(usize),
++    StartIconBrowse,
++    StartIconPicked(String),
+     // System > Clipboard
+     ClipHistory(bool),
+     ClipClear,
+@@ -259,6 +270,49 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+     match msg {
+         Msg::Apps(_) | Msg::Storage(_) | Msg::Update(_) | Msg::Privacy(_) | Msg::SignIn(_) => {}
+         Msg::RecentItems(v) => (p.recent_items = v, save(SHELL, "no_recent_items", &!v)).1,
++        Msg::OtherApps(v) => (p.other_apps = v, save(SHELL, "show_other_desktop_apps", &v)).1,
++        Msg::StartIcon(i) => {
++            let id = START_ICONS.get(i).map_or("", |(id, _)| *id);
++            if id == "custom" {
++                // Pick the picture first; the setting changes once there is one.
++                return update(pages, Msg::StartIconBrowse);
++            }
++            p.start_icon = id.to_string();
++            save(SHELL, "start_icon", &p.start_icon);
++        }
++        Msg::StartIconBrowse => {
++            #[cfg(feature = "xdg-portal")]
++            return cosmic::task::future(async {
++                use cosmic::dialog::file_chooser;
++                let filter = file_chooser::FileFilter::new("Pictures").glob("*.svg").glob("*.png");
++                let picked = file_chooser::open::Dialog::new()
++                    .title("Choose a picture for the Start button")
++                    .accept_label("Choose picture")
++                    .filter(filter)
++                    .modal(false)
++                    .open_file()
++                    .await
++                    .ok()
++                    .and_then(|r| r.url().to_file_path().ok());
++                match picked {
++                    Some(path) => crate::Message::PageMessage(PMsg::Lapin(Msg::StartIconPicked(path.to_string_lossy().into_owned()))),
++                    None => crate::Message::None,
++                }
++            });
++        }
++        Msg::StartIconPicked(path) => {
++            // A copy in Lapin UX's own folder, so moving or deleting the
++            // original doesn't lose it.
++            match copy_start_icon(std::path::Path::new(&path)) {
++                Ok(()) => {
++                    p.start_icon = "custom".into();
++                    // Re-saving the same value wouldn't wake the shell up.
++                    save(SHELL, "start_icon", &String::new());
++                    save(SHELL, "start_icon", &p.start_icon);
++                }
++                Err(e) => tracing::warn!("Lapin Settings: Start icon {path}: {e}"),
++            }
++        }
+         Msg::ClipHistory(v) => (p.clip_history = v, save(SHELL, "no_clipboard_history", &!v)).1,
+         Msg::ClipClear => {
+             p.clip_cleared = true;
+@@ -500,9 +554,90 @@ fn taskbar_behaviors<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     ]
+ }
+ 
++/// Start button pictures (ids the shell knows) and their names.
++const START_ICONS: [(&str, &str); 6] = [
++    ("", "Lapin UX"),
++    ("dots", "Dots"),
++    ("circle", "Circle"),
++    ("rabbit", "Rabbit"),
++    ("distro", "My system's logo"),
++    ("custom", "Custom picture…"),
++];
++
++const PRESET_DIR: &str = "/usr/share/lapin-ux/start-icons";
++
++fn start_icon_preview(id: &str) -> widget::icon::Handle {
++    let preset = |name: &str| widget::icon::from_path(std::path::PathBuf::from(format!("{PRESET_DIR}/{name}.svg")));
++    match id {
++        "distro" => {
++            let logo = std::fs::read_to_string("/etc/os-release").ok().and_then(|t| {
++                t.lines().find_map(|l| l.strip_prefix("LOGO=").map(|v| v.trim_matches('"').to_string()))
++            });
++            match logo {
++                Some(l) => widget::icon::from_name(l).size(32).handle(),
++                None => preset("default"),
++            }
++        }
++        "custom" => custom_start_icon().map(widget::icon::from_path).unwrap_or_else(|| preset("default")),
++        "" => preset("default"),
++        other => preset(other),
++    }
++}
++
++fn data_home() -> Option<std::path::PathBuf> {
++    std::env::var_os("XDG_DATA_HOME")
++        .map(std::path::PathBuf::from)
++        .filter(|p| p.is_absolute())
++        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))
++}
++
++fn custom_start_icon() -> Option<std::path::PathBuf> {
++    let d = data_home()?.join("lapin-ux");
++    ["svg", "png"].iter().map(|e| d.join(format!("start-icon.{e}"))).find(|p| p.is_file())
++}
++
++fn copy_start_icon(src: &std::path::Path) -> std::io::Result<()> {
++    let ext = match src.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
++        Some("svg") => "svg",
++        Some("png") => "png",
++        _ => return Err(std::io::Error::other("only SVG and PNG pictures can be used")),
++    };
++    let dir = data_home().ok_or_else(|| std::io::Error::other("no home folder"))?.join("lapin-ux");
++    std::fs::create_dir_all(&dir)?;
++    for old in ["svg", "png"] {
++        let _ = std::fs::remove_file(dir.join(format!("start-icon.{old}")));
++    }
++    std::fs::copy(src, dir.join(format!("start-icon.{ext}")))?;
++    Ok(())
++}
++
++fn start_icon_row<'a>(p: &'a Prefs) -> Item<'a> {
++    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
++    let names: &'static [&'static str] = NAMES.get_or_init(|| START_ICONS.iter().map(|(_, n)| *n).collect());
++    let selected = START_ICONS.iter().position(|(id, _)| *id == p.start_icon).unwrap_or(0);
++    let mut controls = widget::row::with_capacity(3)
++        .spacing(12)
++        .align_y(cosmic::iced::Alignment::Center)
++        .push(widget::icon(start_icon_preview(&p.start_icon)).size(24))
++        .push(widget::dropdown(names, Some(selected), |i| m(Msg::StartIcon(i))));
++    if p.start_icon == "custom" {
++        controls = controls.push(widget::button::standard("Browse").on_press(m(Msg::StartIconBrowse)));
++    }
++    settings::item::builder("Start button icon")
++        .description("One of Lapin UX's pictures, your system's logo or a picture of your own")
++        .control(controls)
++        .apply(Element::from)
++        .into_list_item()
++}
++
++fn taskbar_icon_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    vec![start_icon_row(p)]
++}
++
+ lapin_page!(Taskbar, "lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins", [
+     ("Taskbar items", taskbar_items),
+     ("Taskbar behaviors", taskbar_behaviors),
++    ("Start button", taskbar_icon_rows),
+ ]);
+ 
+ // --- Personalization > Start ----------------------------------------------
+@@ -520,6 +655,12 @@ fn start_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+             p.recent_items,
+             Msg::RecentItems,
+         ),
++        toggle(
++            "Show apps from other desktops",
++            Some("Their settings apps, panels and other parts of their own desktop, in Start and search"),
++            p.other_apps,
++            Msg::OtherApps,
++        ),
+     ]
+ }
+ 
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index b39bad7..12df435 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -15,7 +15,9 @@ use super::{Msg, State, style};
+ use crate::app::Message;
+ 
+ pub const SIDEBAR_WIDTH: f32 = 280.0;
+-pub const CONTENT_MAX: f32 = 1000.0;
++/// Pages fill the content panel at any window size (no cap), with the
++/// same left/right edges everywhere.
++pub const CONTENT_MAX: f32 = f32::INFINITY;
+ 
+ /// The signed-in person, for the top of the sidebar.
+ pub struct Account {
+@@ -99,12 +101,41 @@ fn colour_icon(name: &str) -> icon::Handle {
+ /// folder has a store-style icon under the same name).
+ pub const UPDATE_ICON: &str = "apps/system-software-update";
+ 
++fn round_picture(path: &std::path::Path) -> Option<widget::image::Handle> {
++    static CACHE: std::sync::Mutex<Option<(PathBuf, Option<widget::image::Handle>)>> = std::sync::Mutex::new(None);
++    let mut cache = CACHE.lock().ok()?;
++    if let Some((p, h)) = cache.as_ref()
++        && p == path
++    {
++        return h.clone();
++    }
++    const SIDE: u32 = 192;
++    let made = (|| {
++        let img = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
++        let (w, h) = (img.width(), img.height());
++        let side = w.min(h).max(1);
++        let sq = img.crop_imm((w - side) / 2, (h - side) / 2, side, side);
++        let mut rgba = sq.resize_exact(SIDE, SIDE, image::imageops::FilterType::CatmullRom).to_rgba8();
++        let r = SIDE as f32 / 2.0;
++        for (x, y, px) in rgba.enumerate_pixels_mut() {
++            let (dx, dy) = (x as f32 + 0.5 - r, y as f32 + 0.5 - r);
++            let cover = (r - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
++            px[3] = (px[3] as f32 * cover).round() as u8;
++        }
++        Some(widget::image::Handle::from_rgba(SIDE, SIDE, rgba.into_raw()))
++    })();
++    *cache = Some((path.to_path_buf(), made.clone()));
++    made
++}
++
+ fn avatar(account: &Account, size: f32) -> Element<'static, Message> {
+     match &account.avatar {
+-        Some(p) => widget::image(widget::image::Handle::from_path(p))
++        // Cut to a circle once (centre square), so a picture of any shape
++        // is round, like Windows'.
++        Some(p) => widget::image(round_picture(p).unwrap_or_else(|| widget::image::Handle::from_path(p)))
+             .width(Length::Fixed(size))
+             .height(Length::Fixed(size))
+-            .border_radius(size / 2.0)
++            .content_fit(cosmic::iced::ContentFit::Fill)
+             .into(),
+         None => container(icon::from_name("avatar-default-symbolic").size((size * 0.5) as u16))
+             .width(Length::Fixed(size))
+diff --git a/cosmic-settings/src/pages/input/mouse.rs b/cosmic-settings/src/pages/input/mouse.rs
+index 685964f..7acb324 100644
+--- a/cosmic-settings/src/pages/input/mouse.rs
++++ b/cosmic-settings/src/pages/input/mouse.rs
+@@ -166,9 +166,15 @@ fn scrolling() -> Section<crate::pages::Message> {
+                         })
+                         .align_items(Alignment::Center),
+                 )
+-                .add(
+-                    settings::item::builder(&descriptions[natural])
+-                        .description(&descriptions[natural_desc])
++                .add({
++                    // Lapin UX: Windows-style wording for the same switch.
++                    let (title, desc) = if crate::lapin::enabled() {
++                        ("Reverse scrolling direction", "Rolling the wheel down moves the page down instead of up")
++                    } else {
++                        (descriptions[natural].as_str(), descriptions[natural_desc].as_str())
++                    };
++                    settings::item::builder(title)
++                        .description(desc)
+                         .toggler(
+                             input
+                                 .input_default
+@@ -177,8 +183,8 @@ fn scrolling() -> Section<crate::pages::Message> {
+                                 .and_then(|x| x.natural_scroll)
+                                 .unwrap_or(false),
+                             |x| Message::SetNaturalScroll(x, false),
+-                        ),
+-                )
++                        )
++                })
+                 .apply(Element::from)
+                 .map(crate::pages::Message::Input)
+         })
+diff --git a/cosmic-settings/src/pages/input/touchpad.rs b/cosmic-settings/src/pages/input/touchpad.rs
+index 511fcc3..c64490c 100644
+--- a/cosmic-settings/src/pages/input/touchpad.rs
++++ b/cosmic-settings/src/pages/input/touchpad.rs
+@@ -292,8 +292,22 @@ fn scrolling() -> Section<crate::pages::Message> {
+                         )
+                         .push(slider)
+                 }))
+-                // Natural scrolling toggle
+-                .add(
++                // Natural scrolling toggle (Lapin UX: Windows' "Scrolling
++                // direction" drop-down for the same setting).
++                .add_maybe(crate::lapin::enabled().then(|| {
++                    static DIRECTIONS: [&str; 2] = ["Down motion scrolls up", "Down motion scrolls down"];
++                    let natural_on = page
++                        .input_touchpad
++                        .scroll_config
++                        .as_ref()
++                        .is_some_and(|conf| conf.natural_scroll.unwrap_or(false));
++                    Element::from(settings::item::builder("Scrolling direction").control(widget::dropdown(
++                        &DIRECTIONS,
++                        Some(usize::from(natural_on)),
++                        |i| Message::SetNaturalScroll(i == 1, true),
++                    )))
++                }))
++                .add_maybe((!crate::lapin::enabled()).then(|| {
+                     settings::item::builder(&descriptions[natural])
+                         .description(&descriptions[natural_desc])
+                         .toggler(
+@@ -302,8 +316,8 @@ fn scrolling() -> Section<crate::pages::Message> {
+                                 .as_ref()
+                                 .is_some_and(|conf| conf.natural_scroll.unwrap_or(false)),
+                             |enabled| Message::SetNaturalScroll(enabled, true),
+-                        ),
+-                )
++                        )
++                }))
+                 .apply(Element::from)
+                 .map(crate::pages::Message::Input)
+         })
+-- 
+2.43.0
+

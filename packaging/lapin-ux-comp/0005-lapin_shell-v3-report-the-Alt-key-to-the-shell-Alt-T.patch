@@ -1,0 +1,93 @@
+From b400c27d95b15abd6e6f20e2ba68e6a2376044bb Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 14:21:51 +0800
+Subject: [PATCH] lapin_shell v3: report the Alt key to the shell (Alt+Tab)
+
+The shell's Alt+Tab switcher couldn't reliably tell whether Alt was still
+held: a surface that gets the keyboard while Alt is already down may never
+see a modifiers change, and a quick tap can end before the switcher exists.
+The compositor now sends lapin_shell_manager_v1.alt(pressed) on every Alt
+press and release. znraznra/lapin-ux#22
+---
+ resources/protocols/lapin-shell-v1.xml | 15 ++++++++++++++-
+ src/input/mod.rs                       |  4 ++++
+ src/wayland/protocols/lapin_shell.rs   |  9 ++++++++-
+ 3 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/resources/protocols/lapin-shell-v1.xml b/resources/protocols/lapin-shell-v1.xml
+index 0f653dd..3bbe598 100644
+--- a/resources/protocols/lapin-shell-v1.xml
++++ b/resources/protocols/lapin-shell-v1.xml
+@@ -10,7 +10,7 @@
+     identifier of their ext_foreign_toplevel_handle_v1.
+   </description>
+ 
+-  <interface name="lapin_shell_manager_v1" version="2">
++  <interface name="lapin_shell_manager_v1" version="3">
+     <request name="destroy" type="destructor"/>
+ 
+     <request name="snap">
+@@ -66,5 +66,18 @@
+       <arg name="fingers" type="uint"/>
+       <arg name="direction" type="uint" enum="direction"/>
+     </event>
++
++    <!-- version 3 -->
++
++    <event name="alt" since="3">
++      <description summary="an Alt key went down or up">
++        Sent whenever an Alt key is pressed or released, whichever surface
++        has the keyboard (pressed: 1 down, 0 up). The shell's Alt+Tab
++        switcher uses it: a surface that gets the keyboard while Alt is
++        already down can't tell reliably from its own keyboard events, and
++        a quick tap can be over before the switcher exists.
++      </description>
++      <arg name="pressed" type="uint"/>
++    </event>
+   </interface>
+ </protocol>
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 1403efd..aeb4dd4 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -2418,6 +2418,10 @@ impl State {
+         if let Some(a11y_keyboard_monitor) = self.common.dbus_state.a11y_keyboard_monitor() {
+             a11y_keyboard_monitor.key_event(modifiers, &handle, key_state);
+         }
++        // Lapin UX: the shell's Alt+Tab switcher follows the Alt key.
++        if handle.raw_syms().iter().any(|s| matches!(*s, Keysym::Alt_L | Keysym::Alt_R | Keysym::Meta_L | Keysym::Meta_R)) {
++            self.common.lapin_shell_state.alt(key_state == KeyState::Pressed);
++        }
+ 
+         // Leave move overview mode, if any modifier was released
+         if let Some(Trigger::KeyboardMove(action_modifiers)) =
+diff --git a/src/wayland/protocols/lapin_shell.rs b/src/wayland/protocols/lapin_shell.rs
+index e3ff6bd..9770cfe 100644
+--- a/src/wayland/protocols/lapin_shell.rs
++++ b/src/wayland/protocols/lapin_shell.rs
+@@ -53,7 +53,7 @@ impl LapinShellState {
+         D: GlobalDispatch<LapinShellManagerV1, LapinShellGlobalData> + 'static,
+         F: for<'a> Fn(&'a Client) -> bool + Send + Sync + 'static,
+     {
+-        let global = dh.create_global::<D, LapinShellManagerV1, _>(2, LapinShellGlobalData { filter: Box::new(client_filter) });
++        let global = dh.create_global::<D, LapinShellManagerV1, _>(3, LapinShellGlobalData { filter: Box::new(client_filter) });
+         LapinShellState { global, managers: Vec::new() }
+     }
+ 
+@@ -65,6 +65,13 @@ impl LapinShellState {
+     }
+ 
+     /// Hand a touchpad swipe to the shell. Returns whether anyone listens.
++    /// An Alt key went down or up (for the shell's Alt+Tab switcher).
++    pub fn alt(&self, pressed: bool) {
++        for m in self.managers.iter().filter(|m| m.version() >= 3) {
++            m.alt(pressed as u32);
++        }
++    }
++
+     pub fn gesture(&self, fingers: u32, direction: lapin_shell_manager_v1::Direction) -> bool {
+         let mut sent = false;
+         for m in self.managers.iter().filter(|m| m.version() >= 2) {
+-- 
+2.43.0
+

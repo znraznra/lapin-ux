@@ -307,9 +307,11 @@ pub fn agenda(app: &App) -> Element<'_, Message> {
         list = list.push(dim("No events"));
     }
     for o in items {
+        // As Settings' 24-hour switch says (the taskbar clock does the same).
+        let fmt = if lapin_ux_core::clock::settings_24h().unwrap_or(false) { "%H:%M" } else { "%-I:%M %p" };
         let time = match (o.start, o.end) {
-            (Some(s), Some(e)) => format!("{} – {}", s.format("%-I:%M %p"), e.format("%-I:%M %p")),
-            (Some(s), None) => s.format("%-I:%M %p").to_string(),
+            (Some(s), Some(e)) => format!("{} – {}", s.format(fmt), e.format(fmt)),
+            (Some(s), None) => s.format(fmt).to_string(),
             _ => "All day".into(),
         };
         let when = if o.location.is_empty() { time } else { format!("{time} · {}", o.location) };

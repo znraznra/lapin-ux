@@ -212,7 +212,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 14;
+pub const DEFAULTS_VERSION: u32 = 15;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -271,6 +271,9 @@ pub fn windows_style_shortcuts() -> String {
         // Accessibility: Narrator, contrast themes.
         r#"(modifiers: [Ctrl, Super], key: "Return"): Spawn("lapin-ux-shell narrator"),"#.to_string(),
         r#"(modifiers: [Alt, Shift], key: "Print"): Spawn("lapin-ux-shell contrast"),"#.to_string(),
+        // The power button: Lapin UX handles it (sleep on laptops, shut down
+        // on desktops, as Windows does), not COSMIC's or another desktop's.
+        r#"(modifiers: [], key: "XF86PowerOff"): Spawn("lapin-ux-shell power-button"),"#.to_string(),
     ];
     // Super+1…9 open the n-th taskbar app (these keys switch workspaces in COSMIC).
     for n in 1..=9 {

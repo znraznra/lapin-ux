@@ -69,6 +69,42 @@ pub fn panel_bg() -> theme::Container<'static> {
     })
 }
 
+/// Start, right-click menus, Win+X and dialogs: fully opaque, whatever the
+/// theme's frosted settings (nothing behind them shows through).
+pub fn menu_bg() -> theme::Container<'static> {
+    theme::Container::custom(|t| {
+        let c = t.cosmic();
+        container::Style {
+            background: Some(Background::Color(with_alpha(c.background(false).base, 1.0))),
+            border: Border { color: with_alpha(c.bg_divider(), 0.9), width: 1.0, radius: PANEL_RADIUS.into() },
+            shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.3), offset: Vector::new(0.0, 8.0), blur_radius: 24.0 },
+            text_color: Some(c.on_bg_color().into()),
+            icon_color: Some(c.on_bg_color().into()),
+            ..Default::default()
+        }
+    })
+}
+
+/// Start's bottom strip (account + power), opaque: a slightly different
+/// shade of the menu, as in Windows 11.
+pub fn menu_footer() -> theme::Container<'static> {
+    theme::Container::custom(|t| {
+        let c = t.cosmic();
+        let base: Color = c.background(false).base.into();
+        let on: Color = c.on_bg_color().into();
+        let mix = |a: f32, b: f32| a + (b - a) * 0.04;
+        container::Style {
+            background: Some(Background::Color(Color { r: mix(base.r, on.r), g: mix(base.g, on.g), b: mix(base.b, on.b), a: 1.0 })),
+            border: Border {
+                color: with_alpha(c.bg_divider(), 0.9),
+                width: 0.0,
+                radius: [0.0, 0.0, PANEL_RADIUS, PANEL_RADIUS].into(),
+            },
+            ..Default::default()
+        }
+    })
+}
+
 /// Bottom strip of the Start menu (account + power).
 pub fn panel_footer() -> theme::Container<'static> {
     theme::Container::custom(|t| {

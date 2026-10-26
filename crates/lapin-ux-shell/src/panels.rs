@@ -474,7 +474,13 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
         PanelKind::Project(_) => crate::system_ui::PROJECT_WIDTH,
     } as f32;
     widget::autosize::autosize(
-        container(content).width(Length::Fill).class(style::panel_bg()),
+        container(content).width(Length::Fill).class(if matches!(panel.kind, PanelKind::Quick(_) | PanelKind::Clip(_) | PanelKind::AltTab(_)) {
+            // These keep their frosted look.
+            style::panel_bg()
+        } else {
+            // Win+X, Run, Shut Down, Properties…: opaque.
+            style::menu_bg()
+        }),
         AUTOSIZE.clone(),
     )
     .min_width(width)

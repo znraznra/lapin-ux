@@ -1,0 +1,44 @@
+From 1a7c4ca72eabd2b903884845d646c48586ea1cf4 Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 14:31:15 +0800
+Subject: [PATCH] Lapin UX: no empty heading for untitled settings sections
+ (opt-in)
+
+With card lists on, a section whose title is empty no longer draws an
+empty heading line, so the first card sits right under the page title on
+every page (Mouse, Touchpad and Pen had an extra gap). znraznra/lapin-ux#11
+---
+ iced                           | 2 +-
+ src/widget/settings/section.rs | 9 ++++++++-
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/iced b/iced
+index 229186b..a31e6c6 160000
+--- a/iced
++++ b/iced
+@@ -1 +1 @@
+-Subproject commit 229186b5180b6217d93866c912e6373ac378b231
++Subproject commit a31e6c6f837e4c4d0cdb790df50883bee01ea558
+diff --git a/src/widget/settings/section.rs b/src/widget/settings/section.rs
+index 3dddb1a..3d622f2 100644
+--- a/src/widget/settings/section.rs
++++ b/src/widget/settings/section.rs
+@@ -35,7 +35,14 @@ pub struct Section<'a, Message> {
+ impl<'a, Message: Clone + 'static> Section<'a, Message> {
+     /// Define an optional title for the section.
+     pub fn title(self, title: impl Into<Cow<'a, str>>) -> Self {
+-        self.header(text::heading(title.into()))
++        let title = title.into();
++        // Lapin UX (opt-in card lists): an untitled section gets no empty
++        // heading line, so every page's first card sits the same distance
++        // under the page title.
++        if crate::lapin::card_lists() && title.trim().is_empty() {
++            return self;
++        }
++        self.header(text::heading(title))
+     }
+ 
+     /// Define an optional custom header for the section.
+-- 
+2.43.0
+

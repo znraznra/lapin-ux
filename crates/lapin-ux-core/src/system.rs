@@ -273,3 +273,23 @@ mod os_release_tests {
         assert_eq!((i.name.as_str(), i.pretty_name.as_str(), i.logo), ("Linux", "Linux", None));
     }
 }
+
+/// `~/.local/state/lapin-ux/welcomed`: Get Started (first-run setup) has
+/// been shown. A second guard next to the shell's `welcomed` setting.
+pub fn welcomed_marker() -> std::path::PathBuf {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    state.join("lapin-ux/welcomed")
+}
+
+/// Write [`welcomed_marker`].
+pub fn mark_welcomed() -> std::io::Result<()> {
+    let p = welcomed_marker();
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(p, b"1\n")
+}

@@ -23,8 +23,11 @@ depends=('libinput' 'libxkbcommon' 'mesa' 'pixman' 'seatd' 'systemd-libs' 'wayla
 makedepends=('cargo' 'git' 'clang')
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_commit}"
         "0001-Add-lapin_shell_v1-snap-to-a-fraction-of-the-work-ar.patch"
-        "0002-lapin_shell-v2-desktop-peek-night-light-shell-touchp.patch")
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+        "0002-lapin_shell-v2-desktop-peek-night-light-shell-touchp.patch"
+        "0003-Lapin-UX-app-icon-and-title-at-the-left-of-the-title.patch"
+        "0004-Lapin-UX-night-light-uniform-on-the-KMS-path-screen-.patch"
+        "0005-lapin_shell-v3-report-the-Alt-key-to-the-shell-Alt-T.patch")
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 prepare() {
     cd cosmic-comp

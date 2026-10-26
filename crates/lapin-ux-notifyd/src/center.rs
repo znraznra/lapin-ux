@@ -160,9 +160,20 @@ fn notifications(app: &App) -> Element<'_, Message> {
     card(col).height(Length::Fill).into()
 }
 
-/// `compact` leaves out the month grid (the screen is too short for it next
-/// to the notifications); the agenda and focus controls stay.
-fn calendar(app: &App, compact: bool) -> Element<'_, Message> {
+/// How much of the expanded calendar fits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CalFit {
+    /// Month grid, agenda and focus.
+    Full,
+    /// Month grid and focus; the agenda is dropped first (Windows' grid is
+    /// the main thing, events are secondary).
+    NoAgenda,
+    /// Only on genuinely tiny screens: agenda and focus, no grid.
+    Compact,
+}
+
+fn calendar(app: &App, fit: CalFit) -> Element<'_, Message> {
+    let compact = fit == CalFit::Compact;
     let now = chrono::Local::now();
     let collapsed = app.calendar_collapsed;
     let header = row::with_children(vec![
@@ -200,24 +211,22 @@ fn calendar(app: &App, compact: bool) -> Element<'_, Message> {
             jiff::civil::Weekday::Monday
         },
     );
-    card(
-        column::with_children(vec![
-            header.into(),
-            container(cal).center_x(Length::Fill).into(),
-            crate::quiet::agenda(app),
-            widget::divider::horizontal::default().into(),
-            crate::quiet::focus_row(app),
-        ])
-        .spacing(10),
-    )
-    .into()
+    let mut parts: Vec<Element<'_, Message>> = vec![header.into(), container(cal).center_x(Length::Fill).into()];
+    if fit == CalFit::Full {
+        parts.push(crate::quiet::agenda(app));
+    }
+    parts.push(widget::divider::horizontal::default().into());
+    parts.push(crate::quiet::focus_row(app));
+    card(column::with_children(parts).spacing(10)).into()
 }
 
-/// Heights used to decide whether the month grid fits (logical pixels).
+/// Heights used to decide how much of the calendar fits (logical pixels).
 const CAL_GRID: f32 = 360.0;
 const CAL_REST: f32 = 150.0;
 const NOTES_EMPTY: f32 = 170.0;
-const NOTES_MIN: f32 = 240.0;
+/// The notifications card's header and Do not disturb row: all it keeps
+/// when the calendar is expanded (its list scrolls in what's left).
+const NOTES_HEADER: f32 = 110.0;
 const GAP: f32 = 12.0;
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -231,9 +240,19 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // agenda and focus controls, and the month grid is left out when there
     // isn't room for it. Nothing gets cut off.
     cosmic::iced::widget::responsive(move |size| {
-        let calendar_full = CAL_GRID + CAL_REST + crate::quiet::agenda_height(app);
-        let notes = if empty { NOTES_EMPTY } else { NOTES_MIN };
-        let compact = !app.calendar_collapsed && size.height < notes + GAP + calendar_full;
+        // Expanding the calendar always shows the month grid: the
+        // notifications give up their room (their list scrolls), then the
+        // agenda goes; only a screen too short for the grid itself loses it.
+        let notes = if empty { NOTES_EMPTY } else { NOTES_HEADER };
+        let room = size.height - notes - GAP;
+        let fit = if room >= CAL_GRID + CAL_REST + crate::quiet::agenda_height(app) {
+            CalFit::Full
+        } else if room >= CAL_GRID + CAL_REST {
+            CalFit::NoAgenda
+        } else {
+            CalFit::Compact
+        };
+        let compact = fit;
         let cards = column::with_capacity(2).spacing(GAP).width(Length::Fill);
         if empty {
             // Cards sit at the bottom; the space above closes the centre.

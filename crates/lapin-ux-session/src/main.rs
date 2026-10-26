@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
     }
     if !nested {
         export_environment(&env).await;
+        skip_other_desktops_autostart().await;
         systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
         // The sign-in sound, once the audio server has had a moment.
         tokio::spawn(async {
@@ -133,6 +134,7 @@ async fn main() -> Result<()> {
     terminate(&mut comp).await;
     if !nested {
         systemctl(&["stop", "--no-block", "lapin-ux-session.target"]).await;
+        restore_autostart().await;
     }
     std::process::exit(code);
 }
@@ -230,6 +232,74 @@ async fn export_environment(env: &HashMap<String, String>) {
         }
     }
     run_quiet("dbus-update-activation-environment", &dbus_args).await;
+}
+
+/// Other desktops' own parts that start with every desktop through
+/// /etc/xdg/autostart (settings daemons, polkit agents, power-key handlers,
+/// panels…) are skipped in this session: their systemd units are masked
+/// with `--runtime` (gone at reboot), listed in
+/// `$XDG_RUNTIME_DIR/lapin-ux-autostart-masked`, and unmasked when the
+/// session ends (or, after a crash, by `lapin-ux-desktop-settings leave`).
+/// No .desktop file is changed, so other desktops start them as always.
+/// The user's own ~/.config/autostart entries are never touched.
+const MASK_LIST: &str = "lapin-ux-autostart-masked";
+
+fn runtime_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from)
+}
+
+async fn skip_other_desktops_autostart() {
+    // A previous Lapin session that crashed may have left its list behind.
+    restore_autostart().await;
+    let Some(run) = runtime_dir() else { return };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut units = Vec::new();
+    for dir in ["systemd/generator.late", "systemd/generator"] {
+        let Ok(rd) = std::fs::read_dir(run.join(dir)) else { continue };
+        for e in rd.flatten() {
+            let unit = e.file_name().to_string_lossy().into_owned();
+            if !(unit.starts_with("app-") && unit.ends_with("@autostart.service")) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+            let Some(src) = text.lines().find_map(|l| l.strip_prefix("SourcePath=")).map(str::trim) else { continue };
+            if !home.is_empty() && src.starts_with(&home) {
+                continue;
+            }
+            let Ok(entry) = std::fs::read_to_string(src) else { continue };
+            let id = std::path::Path::new(src).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            let parsed = lapin_ux_core::desktops::parse(id, &entry);
+            if !lapin_ux_core::desktops::autostart_in_session(&parsed, lapin_ux_core::ids::DESKTOP_NAME) {
+                units.push(unit);
+            }
+        }
+    }
+    units.sort();
+    units.dedup();
+    if units.is_empty() {
+        return;
+    }
+    info!(?units, "skipping other desktops' autostart parts in this session");
+    if let Err(e) = std::fs::write(run.join(MASK_LIST), units.join("\n") + "\n") {
+        warn!("can't record masked autostart units, not masking: {e}");
+        return;
+    }
+    let mut args = vec!["mask", "--runtime"];
+    args.extend(units.iter().map(String::as_str));
+    systemctl(&args).await;
+}
+
+async fn restore_autostart() {
+    let Some(run) = runtime_dir() else { return };
+    let list = run.join(MASK_LIST);
+    let Ok(text) = std::fs::read_to_string(&list) else { return };
+    let units: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if !units.is_empty() {
+        let mut args = vec!["unmask", "--runtime"];
+        args.extend(units);
+        systemctl(&args).await;
+    }
+    let _ = std::fs::remove_file(list);
 }
 
 async fn systemctl(args: &[&str]) {

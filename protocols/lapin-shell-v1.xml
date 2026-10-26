@@ -10,7 +10,7 @@
     identifier of their ext_foreign_toplevel_handle_v1.
   </description>
 
-  <interface name="lapin_shell_manager_v1" version="2">
+  <interface name="lapin_shell_manager_v1" version="3">
     <request name="destroy" type="destructor"/>
 
     <request name="snap">
@@ -65,6 +65,19 @@
       </description>
       <arg name="fingers" type="uint"/>
       <arg name="direction" type="uint" enum="direction"/>
+    </event>
+
+    <!-- version 3 -->
+
+    <event name="alt" since="3">
+      <description summary="an Alt key went down or up">
+        Sent whenever an Alt key is pressed or released, whichever surface
+        has the keyboard (pressed: 1 down, 0 up). The shell's Alt+Tab
+        switcher uses it: a surface that gets the keyboard while Alt is
+        already down can't tell reliably from its own keyboard events, and
+        a quick tap can be over before the switcher exists.
+      </description>
+      <arg name="pressed" type="uint"/>
     </event>
   </interface>
 </protocol>

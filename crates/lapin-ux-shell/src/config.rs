@@ -96,6 +96,13 @@ pub struct ShellConfig {
     /// Settings > Lock screen: "Show the lock screen background picture on
     /// the sign-in screen" turned off.
     pub no_signin_picture: bool,
+    /// Settings > Start: "Show apps from other desktops" (their settings
+    /// apps, panels, launchers…). Off: Start lists only apps.
+    pub show_other_desktop_apps: bool,
+    /// Settings > Taskbar > "Start button icon": "" (Lapin UX's), a preset
+    /// ("dots", "circle", "rabbit", "distro" = the OS logo from os-release)
+    /// or "custom" (the picture copied to ~/.local/share/lapin-ux/start-icon.*).
+    pub start_icon: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

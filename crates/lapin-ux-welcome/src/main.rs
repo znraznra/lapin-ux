@@ -48,7 +48,8 @@ enum Message {
     Connected(Result<(), String>),
     Dark(bool),
     Pointers,
-    PointersDone(bool),
+    /// Ok, or the reason it failed (the tool's last line of output).
+    PointersDone(Result<(), String>),
 }
 
 struct App {
@@ -61,7 +62,7 @@ struct App {
     connecting: bool,
     net_error: Option<String>,
     dark: bool,
-    pointers: Option<bool>,
+    pointers: Option<Result<(), String>>,
     installing_pointers: bool,
 }
 
@@ -267,14 +268,27 @@ impl cosmic::Application for App {
             }
             Message::Pointers => {
                 self.installing_pointers = true;
+                self.pointers = None;
                 return Task::future(async {
-                    let ok = tokio::process::Command::new("lapin-ux-cursors").status().await.is_ok_and(|s| s.success());
-                    cosmic::Action::App(Message::PointersDone(ok))
+                    let res = match tokio::process::Command::new("lapin-ux-cursors").output().await {
+                        Ok(out) if out.status.success() => Ok(()),
+                        Ok(out) => {
+                            let err = String::from_utf8_lossy(&out.stderr);
+                            let line = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+                            Err(if line.is_empty() { "The pointer tool stopped with an error.".into() } else { line })
+                        }
+                        Err(e) => Err(format!("lapin-ux-cursors couldn't start: {e}")),
+                    };
+                    cosmic::Action::App(Message::PointersDone(res))
                 });
             }
-            Message::PointersDone(ok) => {
+            Message::PointersDone(res) => {
                 self.installing_pointers = false;
-                self.pointers = Some(ok);
+                let ok = res.is_ok();
+                if let Err(e) = &res {
+                    eprintln!("lapin-ux-welcome: pointers: {e}");
+                }
+                self.pointers = Some(res);
                 if ok {
                     self.step = self.step.next();
                 }
@@ -367,9 +381,16 @@ impl cosmic::Application for App {
             Step::Pointers => (
                 "Windows 11-style mouse pointers".into(),
                 "\"Cursor Concept W11 Tail HDPi\", designed by JepriCreations (deviantart.com/jepricreations). Lapin UX can't include them, so they're downloaded and converted for your own use.".into(),
-                match self.pointers {
-                    Some(false) => text::body("They couldn't be installed. You can try again later with lapin-ux-cursors.").into(),
+                match &self.pointers {
                     _ if self.installing_pointers => text::body("Getting them…").into(),
+                    Some(Err(reason)) => column::with_children(vec![
+                        text::body("They couldn't be installed.").into(),
+                        text::caption(reason.clone()).into(),
+                        lapin_ux_ui::button::standard("Try again").on_press(Message::Pointers).into(),
+                    ])
+                    .spacing(8)
+                    .align_x(cosmic::iced::Alignment::Center)
+                    .into(),
                     _ => lapin_ux_ui::button::standard("Get the pointers").on_press(Message::Pointers).into(),
                 },
                 lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),

@@ -73,7 +73,7 @@ prepare() {
 
     cd "$srcdir/cosmic-comp"
     git reset -q --hard && git clean -fdq   # also drop files our patches added
-    git apply "$_src"/packaging/lapin-ux-comp/*.patch
+    for p in "$_src"/packaging/lapin-ux-comp/*.patch; do git apply "$p"; done
     rm -f rust-toolchain rust-toolchain.toml   # build with the system's stable toolchain
     cargo fetch --locked --target "$host"
 
@@ -207,7 +207,8 @@ package_lapin-ux-desktop-git() {
     optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)'
                 'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)'
                 'flatpak: Flatpak apps in Update, Installed apps and app permissions'
-                'fwupd: firmware updates in Settings > Update')
+                'fwupd: firmware updates in Settings > Update'
+                'orca: Narrator (screen reader: Ctrl+Win+Enter, Quick settings, Settings > Accessibility > Vision)')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install
@@ -224,6 +225,9 @@ package_lapin-ux-desktop-git() {
     install -Dm644 data/wallpapers/lapin-ux-dark.jpg  "$pkgdir/usr/share/backgrounds/lapin-ux/lapin-ux-dark.jpg"
     install -Dm644 data/wallpapers/lapin-ux-light.jpg "$pkgdir/usr/share/backgrounds/lapin-ux/lapin-ux-light.jpg"
     install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
+    # Start button icon presets (shown in Settings > Taskbar).
+    install -Dm644 data/icons/lapin-ux-start.svg "$pkgdir/usr/share/lapin-ux/start-icons/default.svg"
+    install -Dm644 -t "$pkgdir/usr/share/lapin-ux/start-icons" data/icons/start/*.svg
     install -Dm644 LICENSE                          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm755 tools/lapin-ux-cursors           "$pkgdir/usr/bin/lapin-ux-cursors"
     # Clean removal: restores desktop settings, then removes the packages.
@@ -292,12 +296,15 @@ package_lapin-ux-greeter() {
     pkgdesc="COSMIC greeter and lock screen with Lapin UX's Windows 11-style faces"
     url="https://github.com/pop-os/cosmic-greeter"
     license=('GPL-3.0-only')
-    depends=('cosmic-comp' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
+    depends=('cosmic-comp' 'cosmic-icon-theme' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
     provides=('cosmic-greeter')
     conflicts=('cosmic-greeter')
+    # The lock screen signs in through the "cosmic-greeter" PAM service.
+    backup=('etc/pam.d/cosmic-greeter')
     install=lapin-ux-greeter.install
     cd "$srcdir/cosmic-greeter"
     just rootdir="$pkgdir" install
+    install -Dm644 "$_src/packaging/lapin-ux-greeter/cosmic-greeter.pam" "$pkgdir/etc/pam.d/cosmic-greeter"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
 
@@ -342,7 +349,8 @@ package_lapin-ux-settings() {
                 'howdy-git: Facial recognition in Sign-in options (AUR)'
                 'flatpak: Flatpak apps in Installed apps and Update'
                 'fwupd: firmware updates in Update'
-                'xdg-desktop-portal: app permissions in Privacy & security')
+                'xdg-desktop-portal: app permissions in Privacy & security'
+                'orca: Screen reader in Accessibility > Vision')
     provides=('cosmic-settings')
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"

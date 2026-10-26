@@ -191,8 +191,24 @@ kill $sp; wait $sp 2>/dev/null
 bash $DS leave
 check "runs once that session is gone (stale mark)" "[ -z \"\$(rd font-name)\" ]"
 }
+scenI() {
+echo "I: other desktops' startup parts a crashed Lapin session skipped come back"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+export XDG_RUNTIME_DIR=$HOME/run; mkdir -p $XDG_RUNTIME_DIR
+# Stand-in systemctl records what it's asked to do.
+mkdir -p $HOME/bin
+printf '#!/bin/sh\necho "$*" >> %s/systemctl.log\n' "$HOME" > $HOME/bin/systemctl; chmod +x $HOME/bin/systemctl
+export PATH=$HOME/bin:$PATH
+printf 'app-io.elementary.settings\\x2ddaemon@autostart.service\napp-xfsettingsd@autostart.service\n' > $XDG_RUNTIME_DIR/lapin-ux-autostart-masked
+bash $DS leave
+check "unmasked them (runtime)" "grep -q 'unmask --runtime app-io.elementary.settings.*app-xfsettingsd@autostart.service' $HOME/systemctl.log"
+check "list removed" "[ ! -e $XDG_RUNTIME_DIR/lapin-ux-autostart-masked ]"
+: > $HOME/systemctl.log
+bash $DS leave
+check "nothing to unmask the next time" "! grep -q unmask $HOME/systemctl.log"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H; do
+for x in A B C D E F G H I; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

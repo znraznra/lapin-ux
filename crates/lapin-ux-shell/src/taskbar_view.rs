@@ -31,6 +31,38 @@ pub fn app_icon(shell: &Shell, app: &str) -> icon::Handle {
 /// Two overlapping window frames (our own drawing).
 const TASK_VIEW_ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="13" height="11" rx="2" fill="#8f9bb3" stroke="#e8ecf4" stroke-width="1.2"/><rect x="8.5" y="3.5" width="13" height="11" rx="2" fill="#3d8fe0" stroke="#e8ecf4" stroke-width="1.2"/></svg>"##;
 
+/// Start icon presets (Settings > Taskbar > Start button icon). Original
+/// artwork; never Microsoft's logo.
+const START_DOTS: &[u8] = include_bytes!("../../../data/icons/start/dots.svg");
+const START_CIRCLE: &[u8] = include_bytes!("../../../data/icons/start/circle.svg");
+const START_RABBIT: &[u8] = include_bytes!("../../../data/icons/start/rabbit.svg");
+
+/// The Start button's picture for the `start_icon` setting, falling back to
+/// Lapin UX's own when a chosen picture is missing.
+pub fn start_icon(choice: &str) -> icon::Handle {
+    match choice {
+        "dots" => icon::from_svg_bytes(START_DOTS),
+        "circle" => icon::from_svg_bytes(START_CIRCLE),
+        "rabbit" => icon::from_svg_bytes(START_RABBIT),
+        "distro" => match lapin_ux_core::system::os_info().logo {
+            Some(logo) => icon::from_name(logo).size(64).handle(),
+            None => icon::from_svg_bytes(START_ICON),
+        },
+        "custom" => custom_start_icon().map(icon::from_path).unwrap_or_else(|| icon::from_svg_bytes(START_ICON)),
+        _ => icon::from_svg_bytes(START_ICON),
+    }
+}
+
+/// `~/.local/share/lapin-ux/start-icon.{svg,png}` (copied there by Settings,
+/// so it survives the original being moved).
+fn custom_start_icon() -> Option<std::path::PathBuf> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))?;
+    ["svg", "png"].iter().map(|e| data.join(format!("lapin-ux/start-icon.{e}"))).find(|p| p.is_file())
+}
+
 pub fn app_name(shell: &Shell, app: &str) -> String {
     shell.catalog.data_for(app).map(|d| d.name.clone()).unwrap_or_else(|| app.to_string())
 }
@@ -42,7 +74,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     }
     let start_open = shell.start.is_some();
     let start_btn = button::custom(
-        container(icon(icon::from_svg_bytes(START_ICON)).size(style::task_icon()))
+        container(icon(start_icon(&shell.config.start_icon)).size(style::task_icon()))
             .center(Length::Fill),
     )
     .width(style::task_button())
@@ -57,25 +89,44 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         .push(track(shell, rect_key(bar.id, "start"), start_btn));
 
     if shell.config.show_search {
+        // A real search box, like Windows': click to type here; Enter shows
+        // the results in Start. Until it's clicked it's a picture of one, so
+        // the taskbar never takes the keyboard from apps.
+        let editing = shell.bar_search_on == Some(bar.id);
+        let field: Element<'a, Message> = if editing {
+            cosmic::widget::text_input::text_input("Search", shell.bar_search.as_str())
+                .id(crate::app::bar_search_id(bar.id))
+                .on_input(Message::BarSearchInput)
+                .on_paste(Message::BarSearchInput)
+                .on_submit(|_| Message::BarSearchSubmit)
+                .style(cosmic::theme::TextInput::Inline)
+                .padding(0)
+                .size(14)
+                .width(Length::Fill)
+                .into()
+        } else {
+            text::body("Search").into()
+        };
         let pill = container(
-            row::with_children(vec![
-                icon::from_name("system-search-symbolic").size(16).into(),
-                text::body("Search").into(),
-            ])
-            .spacing(8)
-            .align_y(Alignment::Center),
+            row::with_children(vec![icon::from_name("system-search-symbolic").size(16).into(), field])
+                .spacing(8)
+                .align_y(Alignment::Center),
         )
         .padding([0, 14])
         .height(32)
         .width(180)
         .align_y(Alignment::Center)
         .class(style::search_pill());
-        center = center.push(
-            button::custom(pill)
-                .padding([0, 4])
-                .class(style::flat_button(false))
-                .on_press(Message::ToggleStart),
-        );
+        if editing {
+            center = center.push(container(pill).padding([0, 4]));
+        } else {
+            center = center.push(
+                button::custom(pill)
+                    .padding([0, 4])
+                    .class(style::flat_button(false))
+                    .on_press(Message::BarSearchOpen(bar.id)),
+            );
+        }
     }
 
     // Task view, like the benchmark's button after Search.
@@ -641,7 +692,8 @@ pub(crate) fn menu_divider<'a>() -> Element<'a, Message> {
 
 /// `width` 0 means "fit the content".
 pub(crate) fn panel<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
-    let c = container(content).padding(4).class(style::panel_bg());
+    // Right-click menus and their kin: opaque, like Windows 11's.
+    let c = container(content).padding(4).class(style::menu_bg());
     if width > 0.0 { c.width(width).into() } else { c.into() }
 }
 

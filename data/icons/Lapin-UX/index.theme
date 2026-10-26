@@ -4,7 +4,7 @@ Comment=Lapin UX: Fluent UI System Icons (MIT, Microsoft) for symbolic icons; ap
 Inherits=Win11,hicolor,breeze,Adwaita
 Example=folder
 
-Directories=symbolic/actions,symbolic/apps,symbolic/categories,symbolic/devices,symbolic/emblems,symbolic/mimes,symbolic/places,symbolic/status
+Directories=scalable/apps,symbolic/actions,symbolic/apps,symbolic/categories,symbolic/devices,symbolic/emblems,symbolic/mimes,symbolic/places,symbolic/status
 
 [symbolic/actions]
 Context=Actions
@@ -62,3 +62,11 @@ MinSize=8
 MaxSize=512
 Type=Scalable
 
+# Settings shows the Win11 theme's settings gear inside Lapin UX (COSMIC's own
+# session keeps COSMIC's icon: this theme is only used in Lapin UX).
+[scalable/apps]
+Context=Applications
+Size=64
+MinSize=8
+MaxSize=512
+Type=Scalable

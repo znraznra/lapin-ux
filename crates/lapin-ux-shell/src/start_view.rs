@@ -117,9 +117,38 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
     let body: Element<'_, Message> = if !start.query.trim().is_empty() {
         search_results(shell, start)
     } else {
-        match start.page {
-            StartPage::Home => home(shell, start),
-            StartPage::AllApps => all_apps(shell, start),
+        match shell.page_slide() {
+            // All › / ‹ Back: both pages move together, clipped to Start;
+            // the search box and the bottom strip stay put.
+            Some((to, p)) => cosmic::iced::widget::responsive(move |size| {
+                let w = size.width;
+                let off = p * w;
+                let page = |e: Element<'a, Message>| container(e).width(w).height(Length::Fill);
+                let (a, ax, b, bx) = if to == StartPage::AllApps {
+                    // Pinned leaves to the left, All apps comes from the right.
+                    (home(shell, start), -off, all_apps(shell, start), w - off)
+                } else {
+                    // All apps leaves to the right, Pinned comes from the left.
+                    (all_apps(shell, start), off, home(shell, start), off - w)
+                };
+                container(
+                    cosmic::iced::widget::stack![
+                        cosmic::iced::widget::pin(page(a)).x(ax).width(Length::Fill).height(Length::Fill),
+                        cosmic::iced::widget::pin(page(b)).x(bx).width(Length::Fill).height(Length::Fill),
+                    ]
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                )
+                .clip(true)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+            })
+            .into(),
+            None => match start.page {
+                StartPage::Home => home(shell, start),
+                StartPage::AllApps => all_apps(shell, start),
+            },
         }
     };
 
@@ -151,7 +180,7 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
     )
     .padding([8, 40])
     .width(Length::Fill)
-    .class(style::panel_footer());
+    .class(style::menu_footer());
 
     let panel = container(
         column::with_children(vec![
@@ -162,7 +191,7 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .class(style::panel_bg());
+    .class(style::menu_bg());
     panel.into()
 }
 

@@ -3,7 +3,9 @@ Description=Give other desktops their own font, icons and pointer back after Lap
 Documentation=man:systemd.special(7)
 # Runs at every login (any desktop, window manager or text console) and every
 # time a graphical session starts, so a Lapin UX session that didn't end
-# cleanly never leaves its look behind. Does nothing while Lapin UX runs.
+# cleanly never leaves its look behind (or other desktops' startup parts
+# skipped). Does nothing while Lapin UX runs.
+Before=xdg-desktop-autostart.target
 
 [Service]
 Type=oneshot

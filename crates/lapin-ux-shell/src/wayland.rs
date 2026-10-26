@@ -114,6 +114,8 @@ pub enum WaylandUpdate {
     /// A touchpad swipe for the shell: fingers, direction (0 up, 1 down,
     /// 2 left, 3 right).
     Gesture(u32, u32),
+    /// An Alt key went down (true) or up (lapin_shell v3, for Alt+Tab).
+    Alt(bool),
     /// A full-size screenshot of a monitor (`window` None) or a window (RGBA).
     Shot { window: Option<WindowId>, width: u32, height: u32, rgba: std::sync::Arc<Vec<u8>> },
 }
@@ -633,7 +635,7 @@ fn run(tx: UnboundedSender<WaylandUpdate>, rx: calloop::channel::Channel<Wayland
         workspace_state: WorkspaceState::new(&registry_state_for_ws, &qh),
         ws_ids: HashMap::new(),
         ws_objects: HashMap::new(),
-        lapin: globals.bind::<LapinShellManagerV1, _, _>(&qh, 1..=2, ()).ok(),
+        lapin: globals.bind::<LapinShellManagerV1, _, _>(&qh, 1..=3, ()).ok(),
         by_identifier: HashMap::new(),
         identifiers: HashMap::new(),
     };
@@ -957,6 +959,9 @@ impl Dispatch<LapinShellManagerV1, ()> for AppData {
                     WEnum::Unknown(d) => d,
                 };
                 let _ = state.tx.unbounded_send(WaylandUpdate::Gesture(fingers, d));
+            }
+            lapin_shell_manager_v1::Event::Alt { pressed } => {
+                let _ = state.tx.unbounded_send(WaylandUpdate::Alt(pressed != 0));
             }
         }
     }

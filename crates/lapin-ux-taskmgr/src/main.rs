@@ -381,7 +381,7 @@ fn card() -> theme::Container<'static> {
 }
 
 /// An area graph: one bar per sample, newest at the right.
-fn graph<'a>(hist: &VecDeque<f64>, height: f32) -> Element<'a, Message> {
+fn graph<'a>(hist: &VecDeque<f64>, height: impl Into<Length>) -> Element<'a, Message> {
     let mut bars = Vec::with_capacity(HISTORY);
     for i in 0..HISTORY {
         let v = if i + hist.len() >= HISTORY { hist[i + hist.len() - HISTORY] } else { 0.0 };
@@ -880,20 +880,23 @@ impl App {
         while it.peek().is_some() {
             grid = grid.push(row::with_children(it.by_ref().take(3).collect::<Vec<_>>()).spacing(16));
         }
+        // Like Windows: the card never scrolls; the heading and the stats
+        // keep their size and only the graph grows or shrinks.
         let detail = column::with_children(vec![
             text::title3(title).into(),
             text::caption(sub).into(),
             text::caption(caption).into(),
-            graph(hist, 200.0),
+            graph(hist, Length::Fill),
             grid.into(),
         ])
         .spacing(10)
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .height(Length::Fill);
         column::with_children(vec![
             self.page_head("Performance", vec![lapin_ux_ui::button::standard("Run new task").on_press(Message::RunOpen(true)).into()]),
             row::with_children(vec![
                 tiles.into(),
-                container(scrollable(container(detail).padding([0, 16, 0, 0]))).padding(16).class(card()).width(Length::Fill).height(Length::Fill).into(),
+                container(detail).padding(16).class(card()).width(Length::Fill).height(Length::Fill).into(),
             ])
             .spacing(16)
             .into(),

@@ -1,0 +1,14 @@
+#%PAM-1.0
+# Lapin UX: the PAM policy the lock screen (cosmic-greeter's locker) signs in
+# with. Upstream COSMIC uses a service called "cosmic-greeter" but only ships
+# a Debian-style file; without this one PAM falls back to /etc/pam.d/other,
+# which refuses everything, so the lock screen could never be unlocked.
+# Same rules as a local console login on Arch. Face sign-in (Howdy) and
+# fingerprint lines may be added above these by lapin-ux-howdy / fprintd.
+auth       requisite    pam_nologin.so
+auth       include      system-local-login
+-auth      optional     pam_gnome_keyring.so
+account    include      system-local-login
+session    include      system-local-login
+-session   optional     pam_gnome_keyring.so auto_start
+password   include      system-local-login

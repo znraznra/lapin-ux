@@ -25,7 +25,13 @@ import tempfile
 import zipfile
 import urllib.request
 
-REPO_ZIP = "https://github.com/SullensCR/Windows-11-Hdpi-Tail-Cursor-Concept-by-jepriCreations/archive/refs/heads/main.zip"
+REPO = "https://github.com/SullensCR/Windows-11-Hdpi-Tail-Cursor-Concept-by-jepriCreations"
+# Pinned to a known-good commit (branch v2, 2026-09-17): the upstream repo
+# reshuffles its branches (main -> v1/v2), which broke the download once.
+REPO_COMMIT = "b14dd9e1fce1efe0c5c3daf9abcae8a0ff2dee07"
+REPO_ZIP = f"{REPO}/archive/{REPO_COMMIT}.zip"
+# If that commit ever disappears: the newest version on the default branch.
+REPO_ZIP_LATEST = f"{REPO}/archive/HEAD.zip"
 THEME_DIR = "Cursor-Concept-W11-Tail-HDPi-by-JepriCreations"
 THEME_NAME = "Cursor Concept W11 Tail HDPi (by JepriCreations)"
 
@@ -135,12 +141,24 @@ def xcursor(frames):
 
 def fetch(dest):
     print("Downloading the cursor pack…")
-    with urllib.request.urlopen(REPO_ZIP) as r:
-        zipfile.ZipFile(io.BytesIO(r.read())).extractall(dest)
-    for root, dirs, _ in os.walk(dest):
-        if "assets" in dirs:
-            return os.path.join(root, "assets")
-    sys.exit("The download doesn't contain the cursor files.")
+    last = None
+    for url in (REPO_ZIP, REPO_ZIP_LATEST):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                data = r.read()
+        except Exception as e:  # noqa: BLE001 - any network failure: try the next
+            last = e
+            print(f"Couldn't download {url}: {e}", file=sys.stderr)
+            continue
+        part = os.path.join(dest, str(len(os.listdir(dest))))
+        zipfile.ZipFile(io.BytesIO(data)).extractall(part)
+        for root, dirs, _ in os.walk(part):
+            if "assets" in dirs and os.path.isdir(os.path.join(root, "assets", "light")):
+                return os.path.join(root, "assets")
+        print(f"{url} doesn't contain the cursor files in the expected layout.", file=sys.stderr)
+    if last is not None:
+        sys.exit(f"Couldn't download the cursor pack (no internet connection?): {last}")
+    sys.exit("The download doesn't contain the cursor files (the upstream pack changed its layout).")
 
 
 def main():

@@ -1,0 +1,59 @@
+From a05bc25e3e6da81d9fddd094875ce449207b59f0 Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 14:00:05 +0800
+Subject: [PATCH] Lapin UX: night light uniform on the KMS path (screen filters
+ no longer black out real screens)
+
+On real hardware the post-process shader runs from backend/kms/surface,
+which never set the night-light gains, so every pixel was multiplied by
+vec3(0) as soon as any screen filter (night light, invert, colour filter)
+was on. Pass the gains there too, and make the shader treat an unset
+value as off. Fixes znraznra/lapin-ux#9.
+---
+ src/backend/kms/surface/mod.rs            | 4 ++++
+ src/backend/render/shaders/offscreen.frag | 7 +++++--
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/backend/kms/surface/mod.rs b/src/backend/kms/surface/mod.rs
+index cbc8938..66dbe93 100644
+--- a/src/backend/kms/surface/mod.rs
++++ b/src/backend/kms/surface/mod.rs
+@@ -1902,6 +1902,8 @@ fn postprocess_elements<'a>(
+                         .map(|val| val as u8 as f32)
+                         .unwrap_or(0.),
+                 ),
++                // Lapin UX night light (unset would multiply every pixel by 0).
++                Uniform::new("warm", screen_filter.night_light_gains()),
+             ],
+         ));
+     }
+@@ -1936,6 +1938,8 @@ fn postprocess_elements<'a>(
+                     .map(|val| val as u8 as f32)
+                     .unwrap_or(0.),
+             ),
++            // Lapin UX night light (unset would multiply every pixel by 0).
++            Uniform::new("warm", screen_filter.night_light_gains()),
+         ],
+     ));
+ 
+diff --git a/src/backend/render/shaders/offscreen.frag b/src/backend/render/shaders/offscreen.frag
+index ea69eca..cc08a29 100644
+--- a/src/backend/render/shaders/offscreen.frag
++++ b/src/backend/render/shaders/offscreen.frag
+@@ -84,8 +84,11 @@ void main() {
+         color.rgb += correction;
+     }
+ 
+-    // Lapin UX night light
+-    color.rgb *= warm;
++    // Lapin UX night light. A caller that never sets `warm` leaves it at
++    // vec3(0): treat that as "off" instead of blacking out the screen.
++    if (warm.r + warm.g + warm.b > 0.0) {
++        color.rgb *= warm;
++    }
+ 
+     // re-multiply
+     color.rgb *= color.a;
+-- 
+2.43.0
+

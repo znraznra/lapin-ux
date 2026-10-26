@@ -70,7 +70,7 @@ impl CosmicFlags for Args {
     }
 }
 
-fn in_lapin_ux_session() -> bool {
+pub(crate) fn in_lapin_ux_session() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP")
         .is_ok_and(|d| d.split(':').any(|n| n == lapin_ux_core::ids::DESKTOP_NAME))
 }
@@ -86,7 +86,7 @@ fn main() -> cosmic::iced::Result {
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();
     if matches!(action.as_deref(), Some("-h" | "--help")) {
-        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskview | snap | taskbar-item N]");
+        println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskview | snap | taskbar-item N | power-button]");
         return Ok(());
     }
 
