@@ -52,7 +52,7 @@ pub const SETTINGS_PAGES: &[SettingsPage] = &[
     page("Sign-in options", "lapin-signin", "dialog-password-symbolic", &["sign-in", "password", "change password", "fingerprint", "face", "facial recognition", "howdy"]),
     page("Date & time", "date-time", "preferences-system-time-symbolic", &["date", "time", "clock", "time zone", "timezone"]),
     page("Language & region", "region-language", "preferences-desktop-locale-symbolic", &["language", "region", "locale", "formats"]),
-    page("Accessibility", "accessibility", "preferences-desktop-accessibility-symbolic", &["accessibility", "magnifier", "high contrast", "screen reader", "narrator", "color filters"]),
+    page("Accessibility", "accessibility", "preferences-desktop-accessibility-symbolic", &["accessibility", "magnifier", "screen reader", "narrator", "color filters"]),
     page("Privacy & security", "lapin-privacy", "security-high-symbolic", &["privacy", "security", "permissions", "camera", "microphone", "location", "encryption"]),
     page("Update", "lapin-update", "software-update-available-symbolic", &["update", "updates", "upgrade", "firmware", "check for updates", "windows update"]),
 ];

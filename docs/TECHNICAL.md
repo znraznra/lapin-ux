@@ -52,7 +52,8 @@ COSMIC compositor. Arch Linux first.
 - System tray (StatusNotifierItem): left-click activates, right-click opens
   the app's menu with checkmarks, disabled items and submenus. Discord,
   Steam, Nextcloud, etc. show up here.
-- Clock with locale-aware date; 12 or 24 hours as Settings' Time & language >
+- Clock with locale-aware date (time only, no seconds, on the slim taskbar);
+  12 or 24 hours as Settings' Time & language >
   Date & time > 24-hour time says (COSMIC's `military_time`, read only); click
   for a calendar.
 - "Show desktop" sliver at the far right (click again to restore).
@@ -310,7 +311,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 
 **Accessibility**
 - Quick settings → Accessibility: Magnifier, Colour filters, **Narrator**
-  (Orca; Ctrl+Win+Enter) and **Contrast themes** (Left Alt+Left Shift+Print Screen).
+  (Orca; Ctrl+Win+Enter). Contrast themes are turned off for now (Lapin UX
+  has none of its own yet; COSMIC's high-contrast palette didn't work as
+  one): no quick setting, no shortcut, hidden in Settings and on the lock
+  screen; an upgrade turns a high-contrast palette off again.
 
 **Sounds and pointers**
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,

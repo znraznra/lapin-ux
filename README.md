@@ -135,7 +135,7 @@ flowchart LR
 - [ ] Snip markup editor (pen, highlighter, crop)
 - [x] Keyboard layout switcher and input methods (Japanese, Chinese…)
 - [x] Touch keyboard
-- [x] Narrator, Contrast themes, Magnifier, colour filters
+- [x] Narrator, Magnifier, colour filters *(contrast themes off for now: none of our own yet)*
 - [x] System sounds and Windows 11-style pointers
 - [ ] **Store**
 - [x] Admin prompt in Windows 11's style

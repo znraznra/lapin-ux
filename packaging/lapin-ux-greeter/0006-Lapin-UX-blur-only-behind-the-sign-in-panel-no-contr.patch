@@ -1,0 +1,79 @@
+From 5a720c4fe6b4d575abeb91dbbdd0e1b3ccc5f349 Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 19:43:23 +0800
+Subject: [PATCH] Lapin UX: blur only behind the sign-in panel; no contrast
+ item
+
+- The lock screen's clock face is never blurred: every lock starts on the
+  clock face, going back to it (Esc) clears the blur, and late position
+  updates from the sign-in panel no longer blur it again. The blur is only
+  there while the sign-in panel (password box) is up.
+- The accessibility flyout drops High contrast: Lapin UX has no contrast
+  themes yet.
+---
+ src/greeter.rs |  2 +-
+ src/locker.rs  | 17 ++++++++++++++++-
+ 2 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/src/greeter.rs b/src/greeter.rs
+index 3dc2380..7b5cc15 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -1132,7 +1132,7 @@ impl App {
+         let a11y = vec![
+             (fl!("accessibility", "screen-reader"), Some(self.accessibility.screen_reader.is_some()), Message::ScreenReader(self.accessibility.screen_reader.is_none())),
+             (fl!("accessibility", "magnifier"), Some(self.accessibility.magnifier), Message::Magnifier(!self.accessibility.magnifier)),
+-            (fl!("accessibility", "high-contrast"), Some(self.accessibility.high_contrast), Message::HighContrast(!self.accessibility.high_contrast)),
++            // High contrast: off in Lapin UX for now (no contrast themes yet).
+             (fl!("accessibility", "invert-colors"), Some(self.accessibility.invert_colors), Message::InvertColors(!self.accessibility.invert_colors)),
+             (fl!("on-screen-keyboard"), None, Message::Common(common::Message::OnScreenKeyboard)),
+         ];
+diff --git a/src/locker.rs b/src/locker.rs
+index 5a587cb..a38554a 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -322,6 +322,13 @@ pub struct App {
+ }
+ 
+ impl App {
++    /// Lapin UX: no blur on the clock face (only behind the sign-in panel).
++    fn unblur(&mut self) -> Task<Message> {
++        let ids: Vec<SurfaceId> = self.common.subsurface_outputs.keys().copied().collect();
++        self.common.rectangles.retain(|(id, _), _| !ids.contains(id));
++        Task::batch(ids.into_iter().map(|id| cosmic::iced::platform_specific::shell::commands::blur::blur(id, None).discard()))
++    }
++
+     fn menu(&self, surface_id: SurfaceId) -> Element<'_, Message> {
+         // Lapin UX: Windows 11-style lock screen and sign-in panel.
+         let military_time = self.flags.user_data.time_applet_config.military_time;
+@@ -643,11 +650,16 @@ impl cosmic::Application for App {
+                 }
+             }
+             Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
+-                // Back to the clock, like Windows.
++                // Back to the clock, like Windows: the picture is sharp again.
+                 self.signing_in = false;
+                 if let Some((_, _, Some(value))) = &mut self.common.prompt_opt {
+                     value.clear();
+                 }
++                return self.unblur();
++            }
++            // Lapin UX: the background is only blurred behind the sign-in
++            // panel; a late position update from it mustn't blur the clock.
++            Message::Common(common::Message::Rectangle(cosmic::widget::rectangle_tracker::RectangleUpdate::Rectangle(_))) if !self.signing_in => {
+                 return Task::none();
+             }
+             Message::Common(common_message) => {
+@@ -839,6 +851,9 @@ impl cosmic::Application for App {
+                     if matches!(self.state, State::Locked { .. }) {
+                         return Task::none();
+                     }
++                    // Lapin UX: every lock starts on the clock face, unblurred.
++                    self.signing_in = false;
++                    self.common.rectangles.clear();
+ 
+                     let username = self.flags.user_data.name.clone();
+                     let (locked_task, locked_handle) =
+-- 
+2.43.0
+

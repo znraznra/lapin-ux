@@ -135,6 +135,8 @@ pub enum QuickMsg {
     Magnifier(bool),
     ColorFilter(bool),
     ScreenReader(bool),
+    /// Contrast themes: unused while they're turned off (no themes yet).
+    #[allow(dead_code)]
     HighContrast(bool),
     Agent(bt_agent::AgentEvent),
     BtPair(String),
@@ -1404,7 +1406,8 @@ fn accessibility_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
     if crate::account::which("orca") {
         list = list.push(switch_row("audio-speakers-symbolic", "Narrator", q.screen_reader, |on| Message::Quick(QuickMsg::ScreenReader(on))));
     }
-    list = list.push(switch_row("preferences-desktop-theme-symbolic", "Contrast themes", q.high_contrast, |on| Message::Quick(QuickMsg::HighContrast(on))));
+    // Contrast themes are off for now: Lapin UX has no contrast themes of its
+    // own yet (COSMIC's high-contrast palette didn't work as one).
     page("Accessibility", list, Some(("More accessibility settings", "accessibility")))
 }
 

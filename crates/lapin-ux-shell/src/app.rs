@@ -479,10 +479,10 @@ impl Shell {
         self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
-                move |shell: &Shell| LiveSettings {
-                    // No blur while sliding: the blur covers the whole surface,
-                    // part of which the panel hasn't reached yet.
-                    blur: Some(!shell.start_sliding()),
+                move |_: &Shell| LiveSettings {
+                    // Start is opaque (#12), so no compositor blur behind it:
+                    // nothing would show and it costs every frame of a slide.
+                    blur: Some(false),
                     corners: Some(CornerRadius { top_left: r, top_right: r, bottom_left: r, bottom_right: r }),
                     ..Default::default()
                 },
@@ -1047,11 +1047,9 @@ impl Application for Shell {
                     let on = !crate::quick::orca_running();
                     self.update(Message::Quick(crate::quick::QuickMsg::ScreenReader(on)))
                 }
-                // Left Alt+Left Shift+Print Screen: contrast themes on / off.
-                "contrast" => {
-                    let on = !crate::defaults::high_contrast();
-                    self.update(Message::Quick(crate::quick::QuickMsg::HighContrast(on)))
-                }
+                // Left Alt+Left Shift+Print Screen (contrast themes): off for
+                // now, there are none yet. Kept so an old shortcut does nothing.
+                "contrast" => Task::none(),
                 "security" => self.update(Message::System(crate::system_ui::SystemMsg::Security)),
                 // Hardware power button (bound by Lapin UX's shortcuts).
                 "power-button" => self.update(Message::Power(power_button_action())),

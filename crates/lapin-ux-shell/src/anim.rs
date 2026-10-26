@@ -20,7 +20,7 @@ const START_SLIDE: Duration = Duration::from_millis(220);
 const START_DROP: f32 = 8.0;
 const LAUNCH_HOP: Duration = Duration::from_millis(900);
 /// Start's slide between Pinned and All apps.
-const PAGE_SLIDE: Duration = Duration::from_millis(220);
+const PAGE_SLIDE: Duration = Duration::from_millis(260);
 /// Height of the launch hop.
 const HOP: f32 = 5.0;
 
@@ -88,7 +88,8 @@ impl Shell {
     pub(crate) fn page_slide(&self) -> Option<(crate::app::StartPage, f32)> {
         let (to, t0) = self.anims.page?;
         let t = (t0.elapsed().as_secs_f32() / slow(PAGE_SLIDE).as_secs_f32()).min(1.0);
-        (t < 1.0).then(|| (to, ease_out(t)))
+        // Windows' page slide: quick start, long gentle stop.
+        (t < 1.0).then(|| (to, 1.0 - (1.0 - t).powi(4)))
     }
 
     pub(crate) fn anim_tick(&mut self) -> Task<Message> {
@@ -119,10 +120,5 @@ impl Shell {
         }
         let t = (t0.elapsed().as_secs_f32() / slow(START_SLIDE).as_secs_f32()).min(1.0);
         (START_DROP * (1.0 - ease_out(t))).round()
-    }
-
-    /// Start is still sliding (its blur waits until it has arrived).
-    pub(crate) fn start_sliding(&self) -> bool {
-        self.start_drop() > 0.0
     }
 }

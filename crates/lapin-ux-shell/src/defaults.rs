@@ -212,7 +212,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 15;
+pub const DEFAULTS_VERSION: u32 = 16;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -270,7 +270,6 @@ pub fn windows_style_shortcuts() -> String {
         r#"(modifiers: [Super], key: "space"): Spawn("lapin-ux-shell input-next"),"#.to_string(),
         // Accessibility: Narrator, contrast themes.
         r#"(modifiers: [Ctrl, Super], key: "Return"): Spawn("lapin-ux-shell narrator"),"#.to_string(),
-        r#"(modifiers: [Alt, Shift], key: "Print"): Spawn("lapin-ux-shell contrast"),"#.to_string(),
         // The power button: Lapin UX handles it (sleep on laptops, shut down
         // on desktops, as Windows does), not COSMIC's or another desktop's.
         r#"(modifiers: [], key: "XF86PowerOff"): Spawn("lapin-ux-shell power-button"),"#.to_string(),
@@ -340,6 +339,12 @@ pub fn apply_upgrade(from: u32) {
             if let Err(e) = apply_theme_variant(dark) {
                 tracing::warn!("could not update corner radii: {e}");
             }
+        }
+    }
+    if from < 16 && high_contrast() {
+        // Contrast themes are switched off for now; don't leave anyone in one.
+        if let Err(e) = set_high_contrast(false) {
+            tracing::warn!("could not turn contrast themes off: {e}");
         }
     }
     match apply_keybindings() {

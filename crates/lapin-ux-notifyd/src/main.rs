@@ -189,7 +189,10 @@ impl App {
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
                 move |_: &App| LiveSettings {
-                    blur: Some(true),
+                    // No compositor blur: the surface runs the whole screen
+                    // height, so the blur showed as a frosted strip above and
+                    // around the cards. The cards draw their own backgrounds.
+                    blur: Some(false),
                     corners: Some(CornerRadius { top_left: r, top_right: r, bottom_left: r, bottom_right: r }),
                     ..Default::default()
                 },

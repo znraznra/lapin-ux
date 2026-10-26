@@ -1,0 +1,36 @@
+From 0e17d187ce6dd7c24aeb7933ebc11d6e6809504c Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 19:43:30 +0800
+Subject: [PATCH] Lapin UX: hide High contrast mode (no contrast themes yet)
+
+In a Lapin session Accessibility > Vision no longer offers High contrast
+mode; COSMIC's session keeps it.
+---
+ cosmic-settings/src/pages/accessibility/mod.rs | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/cosmic-settings/src/pages/accessibility/mod.rs b/cosmic-settings/src/pages/accessibility/mod.rs
+index 4345473..efcebd6 100644
+--- a/cosmic-settings/src/pages/accessibility/mod.rs
++++ b/cosmic-settings/src/pages/accessibility/mod.rs
+@@ -250,12 +250,14 @@ pub fn vision() -> section::Section<crate::pages::Message> {
+                         .is_some()
+                         .then_some(crate::pages::Message::Page(magnifier_entity)),
+                 ))
+-                .add(
++                // Lapin UX: no contrast themes yet, so the switch is hidden
++                // there for now (COSMIC's session keeps it).
++                .add_maybe((!crate::lapin::enabled()).then(|| {
+                     settings::item::builder(&descriptions[high_contrast])
+                         .toggler(page.theme.is_high_contrast, |enable| {
+                             Message::HighContrast(enable).into()
+-                        }),
+-                )
++                        })
++                }))
+                 .add(
+                     settings::item::builder(&descriptions[invert_colors]).toggler_maybe(
+                         page.screen_inverted,
+-- 
+2.43.0
+

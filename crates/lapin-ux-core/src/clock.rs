@@ -215,3 +215,17 @@ mod settings_tests {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+#[cfg(test)]
+mod slim_clock_tests {
+    use super::*;
+    #[test]
+    fn slim_formats() {
+        let t = chrono::NaiveDate::from_ymd_opt(2026, 10, 26).unwrap().and_hms_opt(23, 23, 41).unwrap();
+        let mut c = ClockStyle { seconds: false, ..ClockStyle::default() };
+        c.hour12 = false;
+        assert_eq!(c.time(&t), "23:23");
+        c.hour12 = true;
+        assert_eq!(c.time(&t), "11:23 PM");
+    }
+}

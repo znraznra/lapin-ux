@@ -72,6 +72,12 @@ fn section_header<'a>(title: &'static str, action: Option<(&'static str, Message
 }
 
 fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    // While Start slides between its pages every item moves each frame;
+    // tracking them then floods the shell with position updates (and both
+    // pages share keys), which made the slide stutter.
+    if shell.page_slide().is_some() {
+        return content.into();
+    }
     match &shell.tracker {
         Some(t) => t.container(key, content).into(),
         None => content.into(),
@@ -122,7 +128,8 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
             // the search box and the bottom strip stay put.
             Some((to, p)) => cosmic::iced::widget::responsive(move |size| {
                 let w = size.width;
-                let off = p * w;
+                // Whole pixels, so text doesn't shimmer as it moves.
+                let off = (p * w).round();
                 let page = |e: Element<'a, Message>| container(e).width(w).height(Length::Fill);
                 let (a, ax, b, bx) = if to == StartPage::AllApps {
                     // Pinned leaves to the left, All apps comes from the right.

@@ -260,6 +260,12 @@ impl Shell {
 }
 
 fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    // While Start slides between its pages every item moves each frame;
+    // tracking them then floods the shell with position updates (and both
+    // pages share keys), which made the slide stutter.
+    if shell.page_slide().is_some() {
+        return content.into();
+    }
     match &shell.tracker {
         Some(t) => t.container(key, content).into(),
         None => content.into(),
