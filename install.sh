@@ -51,7 +51,18 @@ for theme in Win11 Win11-dark; do
 done
 
 cd packaging/arch
+# makepkg writes the version it computes (pkgver() from git) back into the
+# PKGBUILD's pkgver= line, which would block the next `git pull`. Put that one
+# line back afterwards (even if the build fails); any other edit is left alone.
+restore_pkgver() {
+    local orig
+    orig=$(git show HEAD:packaging/arch/PKGBUILD 2>/dev/null | grep -m1 '^pkgver=') || return 0
+    [ -n "$orig" ] && sed -i "s/^pkgver=.*/$orig/" PKGBUILD
+}
+restore_pkgver
+trap restore_pkgver EXIT
 makepkg -si --noconfirm --needed
+restore_pkgver
 
 # Optional Windows 11-style pointers. Their author (JepriCreations) doesn't
 # allow the files to be redistributed, so they're downloaded and converted
