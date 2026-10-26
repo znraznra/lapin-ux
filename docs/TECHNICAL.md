@@ -30,6 +30,13 @@ COSMIC compositor. Arch Linux first.
 
 **Taskbar** (`lapin-ux-shell`), one per monitor
 - Centered (or left-aligned) Start button, Search box, pinned and running apps.
+- The Search box is a real text field: click it to type on the taskbar (the
+  taskbar takes the keyboard only meanwhile); Enter shows the results in
+  Start; Esc or clicking away clears it.
+- Start button picture: Settings > Personalization > Taskbar > Start button
+  icon (Lapin UX's, Dots, Circle, Rabbit, the OS logo from os-release
+  `LOGO=`, or a custom SVG/PNG copied to `~/.local/share/lapin-ux`);
+  `start_icon` in `dev.lapinux.Shell`.
 - All windows of an app share a button. Click: open / focus / minimize;
   several windows: a window picker. Middle-click: new instance.
 - Accent "pill" under the focused app, short dash for background apps.
@@ -45,7 +52,9 @@ COSMIC compositor. Arch Linux first.
 - System tray (StatusNotifierItem): left-click activates, right-click opens
   the app's menu with checkmarks, disabled items and submenus. Discord,
   Steam, Nextcloud, etc. show up here.
-- Clock with locale-aware time/date; click for a calendar.
+- Clock with locale-aware date; 12 or 24 hours as Settings' Time & language >
+  Date & time > 24-hour time says (COSMIC's `military_time`, read only); click
+  for a calendar.
 - "Show desktop" sliver at the far right (click again to restore).
 
 **Start menu**
@@ -287,6 +296,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   sign-in panel (round picture, name, password; network, battery,
   accessibility and power bottom right). The login screen adds the user list
   bottom left. Fingerprint sign-in works through fprintd (optional).
+- The lock screen checks the password through the `cosmic-greeter` PAM
+  service; `lapin-ux-greeter` ships `/etc/pam.d/cosmic-greeter` in Arch's
+  style (`include system-local-login`; Arch has none, and without it every
+  unlock fails). Account pictures are cut to a circle when loaded.
 
 **Typing**
 - With several keyboard layouts or fcitx5 input methods, the taskbar shows
@@ -315,7 +328,19 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   cosmic-session, exports the display to systemd/D-Bus, then starts and
   supervises every component with exponential back-off restarts.
 - `dev.lapinux.Session.Exit` on the session bus for Sign out.
-- XDG autostart ("startup apps") through `lapin-ux-session.target`.
+- XDG autostart ("startup apps") through `lapin-ux-session.target`. Other
+  desktops' own parts in /etc/xdg/autostart (settings daemons, polkit
+  agents, panels, session-manager plumbing; rule in
+  `lapin_ux_core::desktops`) are masked with `systemctl --user mask
+  --runtime` for the session only, listed in
+  `$XDG_RUNTIME_DIR/lapin-ux-autostart-masked` and unmasked when it ends
+  (after a crash, by `lapin-ux-desktop-settings leave`). Your own
+  ~/.config/autostart entries are never touched.
+- The power button: Lapin UX's shortcuts bind `XF86PowerOff` to
+  `lapin-ux-shell power-button` (Sleep with a battery, Shut down without),
+  and the shell holds a logind `handle-power-key` inhibitor while it runs.
+- Start, search and Run list apps, not other desktops' own parts (same
+  rule; Settings > Start > "Show apps from other desktops" shows them).
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
@@ -418,10 +443,12 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 | `lapin-ux-ui` | Shared Windows-style widget styles (4 px buttons, round slider thumbs, sidebar items, icon + title for title bars) | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
-pinned commit plus two patches adding `lapin_shell_v1` (`protocols/`): snap a
+pinned commit plus five patches adding `lapin_shell_v1` (`protocols/`, version 3): snap a
 window into a fraction of the work area, tell the shell when a window asks
-for attention, desktop peek, night light, touchpad swipes for the shell, and
-a window-open animation. Everything else works on stock cosmic-comp.
+for attention, desktop peek, night light (also on the real-screen KMS path),
+touchpad swipes for the shell, the Alt key's state for the shell's Alt+Tab
+switcher (v3 `alt` event), and a window-open animation; plus title bars with
+the app icon and a left-aligned title. Everything else works on stock cosmic-comp.
 
 Five more COSMIC programs are built with small patches, each as its own
 package that replaces the original: `lapin-ux-greeter` (lock and sign-in
@@ -503,7 +530,8 @@ plan; `--settings-only` only restores settings (for someone who already ran
   installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
   else sets greetd to a text login (`agreety`, old config kept as
   `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
-- Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf).
+- Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf; 55
+  checks, scenario I covers giving other desktops' skipped startup parts back).
 
 ## Try it without installing
 

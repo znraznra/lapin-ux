@@ -6,7 +6,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Status:** the everyday desktop is built and reviewed screen by screen. It has not been tested on a real Arch Linux machine yet, so treat it as a preview. The new [Settings app](#settings) in Windows 11's layout is finished; File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
+> **Status:** the everyday desktop is built and reviewed screen by screen, and the first test on a real Arch-based PC (CachyOS) is under way: it installs, and the [bugs that test found](https://github.com/znraznra/lapin-ux/issues) are fixed and waiting for a retest, so treat it as a preview. The new [Settings app](#settings) in Windows 11's layout is finished; File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
 >
 > Lapin UX copies how Windows 11 *behaves and looks*, not Microsoft's files. It ships no Microsoft logos, Windows artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#license)). It is an independent project, not affiliated with or endorsed by Microsoft.
 
@@ -19,7 +19,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 21 October 2026 (build `1f159de`).*
+*Last updated: 26 October 2026 (build `6c2b37a`).*
 
 ## Take the tour
 
@@ -85,18 +85,18 @@ flowchart LR
 
 ### Phase 1 — core desktop (done)
 
-- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash
+- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice
 - [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor, Show desktop corner
 - [x] System tray with app menus
 - [x] Clock with calendar
 - [x] Start: type to search, pinned apps and folders, All apps, Recommended, account and power menus, Uninstall
 - [x] Search: apps, Settings pages, files, text inside documents, the web
-- [x] Start slides up as it opens, without touching the taskbar
+- [x] Start slides up as it opens, without touching the taskbar, and slides across to All apps and back
 - [x] Notifications: pop-ups, notification centre, agenda, Focus, Do not disturb on a schedule
 - [x] Wallpaper and theme: accent colour, rounded corners, frosted panels
 - [x] Look: Selawik font, Fluent Emoji, Win11-style icons
 - [x] Session: starts everything and restarts anything that crashes
-- [x] Arch package and one-step installer *(built, not yet tried on a real Arch machine)*
+- [x] Arch package and one-step installer *(installs on a real Arch-based PC; first test's fixes waiting for a retest)*
 
 ### Phase 2 — settings and multitasking (9 of 9)
 
@@ -200,6 +200,7 @@ Want to try it first without installing? See [Try it without installing](docs/TE
 | Win + Shift + S | Snip part of the screen |
 | Ctrl + Shift + Esc | Task Manager |
 | Ctrl + Alt + Del | Lock, sign out, Task Manager |
+| Power button | Sleep on a laptop, shut down on a desktop PC |
 
 The full list is in the [technical reference](docs/TECHNICAL.md).
 
