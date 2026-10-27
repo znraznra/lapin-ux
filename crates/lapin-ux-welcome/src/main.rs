@@ -76,12 +76,22 @@ fn first_name() -> String {
         .map(|g| g.split(',').next().unwrap_or_default().trim().to_string())
         .filter(|g| !g.is_empty())
         .unwrap_or(user);
-    full.split_whitespace().next().unwrap_or_default().to_string()
+    full.split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 async fn scan() -> Vec<Wifi> {
     let out = tokio::process::Command::new("nmcli")
-        .args(["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list"])
+        .args([
+            "-t",
+            "-f",
+            "IN-USE,SSID,SIGNAL,SECURITY",
+            "dev",
+            "wifi",
+            "list",
+        ])
         .output()
         .await;
     let Ok(out) = out else { return Vec::new() };
@@ -124,13 +134,25 @@ fn set_dark(dark: bool) {
     }
     // Lapin UX's icon themes come in a light and a dark flavour.
     if let Ok(cfg) = cosmic_config::Config::new("com.system76.CosmicTk", 1) {
-        let _ = cfg.set("icon_theme", if dark { "Lapin-UX-dark".to_string() } else { "Lapin-UX".to_string() });
+        let _ = cfg.set(
+            "icon_theme",
+            if dark {
+                "Lapin-UX-dark".to_string()
+            } else {
+                "Lapin-UX".to_string()
+            },
+        );
     }
     // Swap Lapin UX's default wallpaper for its light/dark twin.
-    let home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
+    let home = std::env::var("XDG_CONFIG_HOME")
+        .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
     let all = format!("{home}/cosmic/com.system76.CosmicBackground/v1/all");
     if let Ok(ron) = std::fs::read_to_string(&all) {
-        let (from, to) = if dark { ("lapin-ux-light.jpg", "lapin-ux-dark.jpg") } else { ("lapin-ux-dark.jpg", "lapin-ux-light.jpg") };
+        let (from, to) = if dark {
+            ("lapin-ux-light.jpg", "lapin-ux-dark.jpg")
+        } else {
+            ("lapin-ux-dark.jpg", "lapin-ux-light.jpg")
+        };
         if ron.contains(from) {
             let _ = std::fs::write(&all, ron.replace(from, to));
         }
@@ -138,25 +160,42 @@ fn set_dark(dark: bool) {
 }
 
 fn is_dark() -> bool {
-    let home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    std::fs::read_to_string(format!("{home}/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark")).map(|s| s.trim() != "false").unwrap_or(true)
+    let home = std::env::var("XDG_CONFIG_HOME")
+        .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
+    std::fs::read_to_string(format!(
+        "{home}/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark"
+    ))
+    .map(|s| s.trim() != "false")
+    .unwrap_or(true)
 }
 
 /// A big choice card (light / dark).
-fn choice<'a>(label: &'a str, selected: bool, preview: Color, ink: Color, msg: Message) -> Element<'a, Message> {
+fn choice<'a>(
+    label: &'a str,
+    selected: bool,
+    preview: Color,
+    ink: Color,
+    msg: Message,
+) -> Element<'a, Message> {
     let sample = container(
         column::with_children(vec![
             container(widget::Space::new().width(Length::Fill).height(10))
                 .class(theme::Container::custom(move |_| container::Style {
                     background: Some(Background::Color(Color { a: 0.35, ..ink })),
-                    border: Border { radius: 3.0.into(), ..Default::default() },
+                    border: Border {
+                        radius: 3.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }))
                 .into(),
             container(widget::Space::new().width(Length::Fixed(90.0)).height(10))
                 .class(theme::Container::custom(move |_| container::Style {
                     background: Some(Background::Color(Color { a: 0.2, ..ink })),
-                    border: Border { radius: 3.0.into(), ..Default::default() },
+                    border: Border {
+                        radius: 3.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }))
                 .into(),
@@ -170,15 +209,23 @@ fn choice<'a>(label: &'a str, selected: bool, preview: Color, ink: Color, msg: M
         let a: Color = t.cosmic().accent_color().into();
         container::Style {
             background: Some(Background::Color(preview)),
-            border: Border { radius: 8.0.into(), width: if selected { 3.0 } else { 1.0 }, color: if selected { a } else { Color { a: 0.3, ..ink } } },
+            border: Border {
+                radius: 8.0.into(),
+                width: if selected { 3.0 } else { 1.0 },
+                color: if selected { a } else { Color { a: 0.3, ..ink } },
+            },
             ..Default::default()
         }
     }));
-    button::custom(column::with_children(vec![sample.into(), text::body(label).into()]).spacing(8).align_x(Alignment::Center))
-        .padding(6)
-        .class(theme::Button::MenuItem)
-        .on_press(msg)
-        .into()
+    button::custom(
+        column::with_children(vec![sample.into(), text::body(label).into()])
+            .spacing(8)
+            .align_x(Alignment::Center),
+    )
+    .padding(6)
+    .class(theme::Button::MenuItem)
+    .on_press(msg)
+    .into()
 }
 
 impl cosmic::Application for App {
@@ -221,7 +268,9 @@ impl cosmic::Application for App {
             Message::Next => {
                 self.step = self.step.next();
                 if self.step == Step::Network {
-                    return Task::future(async { cosmic::Action::App(Message::Networks(scan().await)) });
+                    return Task::future(async {
+                        cosmic::Action::App(Message::Networks(scan().await))
+                    });
                 }
             }
             Message::Finish => std::process::exit(0),
@@ -236,7 +285,9 @@ impl cosmic::Application for App {
             }
             Message::Password(p) => self.password = p,
             Message::Connect => {
-                let Some(ssid) = self.picked.clone() else { return Task::none() };
+                let Some(ssid) = self.picked.clone() else {
+                    return Task::none();
+                };
                 let password = self.password.clone();
                 self.connecting = true;
                 return Task::future(async move {
@@ -259,7 +310,13 @@ impl cosmic::Application for App {
                     Ok(()) => {
                         self.step = self.step.next();
                     }
-                    Err(e) => self.net_error = Some(if e.is_empty() { "Couldn't connect to this network.".into() } else { e }),
+                    Err(e) => {
+                        self.net_error = Some(if e.is_empty() {
+                            "Couldn't connect to this network.".into()
+                        } else {
+                            e
+                        })
+                    }
                 }
             }
             Message::Dark(d) => {
@@ -270,12 +327,25 @@ impl cosmic::Application for App {
                 self.installing_pointers = true;
                 self.pointers = None;
                 return Task::future(async {
-                    let res = match tokio::process::Command::new("lapin-ux-cursors").output().await {
+                    let res = match tokio::process::Command::new("lapin-ux-cursors")
+                        .output()
+                        .await
+                    {
                         Ok(out) if out.status.success() => Ok(()),
                         Ok(out) => {
                             let err = String::from_utf8_lossy(&out.stderr);
-                            let line = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
-                            Err(if line.is_empty() { "The pointer tool stopped with an error.".into() } else { line })
+                            let line = err
+                                .lines()
+                                .rev()
+                                .find(|l| !l.trim().is_empty())
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            Err(if line.is_empty() {
+                                "The pointer tool stopped with an error.".into()
+                            } else {
+                                line
+                            })
                         }
                         Err(e) => Err(format!("lapin-ux-cursors couldn't start: {e}")),
                     };
@@ -385,7 +455,7 @@ impl cosmic::Application for App {
                     _ if self.installing_pointers => text::body("Getting them…").into(),
                     Some(Err(reason)) => column::with_children(vec![
                         text::body("They couldn't be installed.").into(),
-                        text::caption(reason.clone()).into(),
+                        text::caption(reason.clone()).align_x(cosmic::iced::alignment::Horizontal::Center).into(),
                         lapin_ux_ui::button::standard("Try again").on_press(Message::Pointers).into(),
                     ])
                     .spacing(8)
@@ -409,18 +479,37 @@ impl cosmic::Application for App {
                 .center_x(Length::Fixed(520.0))
                 .into(),
             widget::Space::new().height(16).into(),
-            container(body).width(Length::Fixed(520.0)).height(Length::Fill).align_x(Alignment::Center).into(),
-            row::with_children(vec![widget::Space::new().width(Length::Fill).into(), primary]).width(Length::Fixed(520.0)).into(),
+            container(body)
+                .width(Length::Fixed(520.0))
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .into(),
+            row::with_children(vec![
+                widget::Space::new().width(Length::Fill).into(),
+                primary,
+            ])
+            .width(Length::Fixed(520.0))
+            .into(),
         ])
         .spacing(12)
         .align_x(Alignment::Center);
         // The title's line height adds about 12 px above it, so the bottom gets
         // that much more to look even with the top.
-        container(page).padding([40, 32, 52, 32]).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).into()
+        container(page)
+            .padding([40, 32, 52, 32])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .into()
     }
 }
 
 fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-welcome");
-    cosmic::app::run::<App>(Settings::default().size(Size::new(760.0, 600.0)).resizable(None), ())
+    cosmic::app::run::<App>(
+        Settings::default()
+            .size(Size::new(760.0, 600.0))
+            .resizable(None),
+        (),
+    )
 }
