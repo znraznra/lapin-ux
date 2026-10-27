@@ -78,21 +78,36 @@ fn report(program: &str, info: &str, backtrace: &str, recent: &[String]) -> Stri
     s
 }
 
+/// Set once the first panic of this process has been reported, so a later
+/// one (e.g. while unwinding) can't overwrite the report that matters.
+static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Install the crash reporter for `program` (call first thing in `main`).
 /// The previous hook still runs afterwards, so the usual panic line stays.
+///
+/// A panic on the main thread ends the program here, with exit code 101 like
+/// a normal Rust panic, instead of unwinding: tearing the program down
+/// mid-update (D-Bus proxies, Wayland objects) can panic again and abort,
+/// and the session restarts it either way. Panics on other threads (e.g. a
+/// background task) keep their usual behaviour.
 pub fn install(program: &'static str) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let first = !REPORTED.swap(true, std::sync::atomic::Ordering::SeqCst);
         let bt = std::backtrace::Backtrace::force_capture().to_string();
         let recent: Vec<String> = RECENT.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default();
         let text = report(program, &info.to_string(), &bt, &recent);
         eprintln!("{text}");
-        if let Some(dir) = state_dir()
+        if first
+            && let Some(dir) = state_dir()
             && std::fs::create_dir_all(&dir).is_ok()
         {
             let _ = std::fs::write(dir.join(format!("crash-{program}.txt")), &text);
         }
         previous(info);
+        if std::thread::current().name() == Some("main") {
+            std::process::exit(101);
+        }
     }));
 }
 

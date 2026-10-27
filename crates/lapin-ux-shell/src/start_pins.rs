@@ -263,13 +263,7 @@ fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Mes
     // While Start slides between its pages every item moves each frame;
     // tracking them then floods the shell with position updates (and both
     // pages share keys), which made the slide stutter.
-    if shell.page_slide().is_some() {
-        return content.into();
-    }
-    match &shell.tracker {
-        Some(t) => t.container(key, content).into(),
-        None => content.into(),
-    }
+    crate::taskbar_view::track_if(shell, shell.page_slide().is_none(), key, content)
 }
 
 fn pin_icon(shell: &Shell, pin: &Pin, size: u16) -> Element<'static, Message> {

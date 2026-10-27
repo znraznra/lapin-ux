@@ -14,10 +14,32 @@ use crate::wayland::WindowId as Handle;
 
 pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/lapin-ux-start.svg");
 
+/// Report where `content` is drawn (for pop-ups, previews, drag and drop).
+///
+/// The content always sits in a one-child row, tracked or not (#29). In
+/// libcosmic's iced a `container` shares its content's state, and the
+/// position-tracking container passes that state on but says it has none
+/// (its tag is "stateless"). Two different tracked widgets meeting at the
+/// same place in the view then look alike to iced, which kept the old one's
+/// state: a button found a mouse area's state and the shell panicked with
+/// "Downcast widget state". A row really has no state of its own, so the
+/// tag tells the truth and the widget below it gets its own state. Always
+/// wrapping also keeps the same shape before and after the tracker starts.
 pub(crate) fn track<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    track_if(shell, true, key, content)
+}
+
+/// `track`, but only while `on` (the content keeps the same shape either way).
+pub(crate) fn track_if<'a>(
+    shell: &'a Shell,
+    on: bool,
+    key: String,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let wrapped = row::with_capacity(1).push(content);
     match &shell.tracker {
-        Some(t) => t.container(key, content).into(),
-        None => content.into(),
+        Some(t) if on => t.container(key, wrapped).into(),
+        _ => wrapped.into(),
     }
 }
 
