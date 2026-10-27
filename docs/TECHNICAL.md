@@ -332,6 +332,13 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   cosmic-session, exports the display to systemd/D-Bus, then starts and
   supervises every component with exponential back-off restarts.
 - `dev.lapinux.Session.Exit` on the session bus for Sign out.
+- Crash reports: every Lapin program installs `lapin_ux_core::crash`, which on
+  a panic writes the message, its last ~40 handled messages (shell and
+  notification service) and a backtrace to the session log and to
+  `~/.local/state/lapin-ux/crash-<program>.txt`. Release builds keep line
+  tables (`debug = "line-tables-only"`, PKGBUILD `!strip`) so backtraces
+  name files and lines; `start-lapin-ux` sets `RUST_BACKTRACE=1` and logs
+  the installed build.
 - XDG autostart ("startup apps") through `lapin-ux-session.target`. Other
   desktops' own parts in /etc/xdg/autostart (settings daemons, polkit
   agents, panels, session-manager plumbing; rule in

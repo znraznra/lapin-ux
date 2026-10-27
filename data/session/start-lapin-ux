@@ -76,6 +76,11 @@ if mkdir -p "$LOG_DIR" 2>/dev/null; then
     exec >>"$LOG_DIR/session.log" 2>&1
 fi
 echo "=== Lapin UX session start $(date -Iseconds) ==="
+pacman -Q lapin-ux-desktop-git 2>/dev/null || true   # which build this is
+# Crash reports with a backtrace (each Lapin program also writes
+# crash-<program>.txt next to this log). Set here because the login shell
+# doesn't always pass the user's own setting on (GDM + fish, #29).
+export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
 
 # Before Lapin UX changes any desktop setting the first time, remember the
 # originals so lapin-ux-uninstall can put them back (does nothing afterwards).

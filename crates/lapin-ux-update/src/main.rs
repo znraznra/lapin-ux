@@ -378,6 +378,7 @@ async fn check_and_notify() {
 }
 
 fn main() -> cosmic::iced::Result {
+    lapin_ux_core::crash::install("lapin-ux-update");
     if std::env::args().any(|a| a == "--check") {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         rt.block_on(check_and_notify());

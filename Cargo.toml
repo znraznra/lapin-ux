@@ -53,6 +53,9 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "430f3d48a97d87
 [profile.release]
 opt-level = 3
 lto = "thin"
+# File and line numbers in crash reports (backtraces name the code, #29).
+# Line tables only: small, and no effect on speed.
+debug = "line-tables-only"
 
 # Fast enough to iterate on, small enough to fit this machine.
 [profile.dev]

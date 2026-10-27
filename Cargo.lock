@@ -3052,6 +3052,7 @@ dependencies = [
 name = "lapin-ux-welcome"
 version = "0.1.0"
 dependencies = [
+ "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",
  "tokio",

@@ -378,6 +378,7 @@ impl Application for App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        lapin_ux_core::crash::note(&message);
         let now = Instant::now();
         match message {
             Message::Prefs(p) => return self.prefs_changed(*p),
@@ -683,6 +684,7 @@ fn toggle_center_and_exit() -> ! {
 }
 
 fn main() -> cosmic::iced::Result {
+    lapin_ux_core::crash::install("lapin-ux-notifyd");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,lapin_ux_notifyd=info".into()),

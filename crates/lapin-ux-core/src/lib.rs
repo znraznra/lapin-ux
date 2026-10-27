@@ -10,6 +10,7 @@ pub mod apps;
 pub mod badge;
 pub mod clip;
 pub mod clock;
+pub mod crash;
 pub mod desktop;
 pub mod desktops;
 pub mod display;

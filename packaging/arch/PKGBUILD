@@ -52,7 +52,9 @@ source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_co
         "xdg-desktop-portal-cosmic::git+https://github.com/pop-os/xdg-desktop-portal-cosmic.git#commit=${_portal_commit}"
         "cosmic-files::git+https://github.com/pop-os/cosmic-files.git#commit=${_files_commit}")
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
-options=('!lto')
+# !strip keeps the line tables Lapin's release profile adds, so crash
+# reports in ~/.local/state/lapin-ux name the code (#29).
+options=('!lto' '!strip')
 
 _src="$startdir/../.."
 

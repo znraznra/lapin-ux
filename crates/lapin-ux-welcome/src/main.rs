@@ -421,5 +421,6 @@ impl cosmic::Application for App {
 }
 
 fn main() -> cosmic::iced::Result {
+    lapin_ux_core::crash::install("lapin-ux-welcome");
     cosmic::app::run::<App>(Settings::default().size(Size::new(760.0, 600.0)).resizable(None), ())
 }

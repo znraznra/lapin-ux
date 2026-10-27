@@ -241,4 +241,8 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
    - Stage A: `lapin-test.log` in the repo folder
    - Stage B: `~/.local/state/lapin-ux/session.log`
      (the previous session's log is `session.previous.log`)
+   - If something crashed: `~/.local/state/lapin-ux/crash-<program>.txt`
+     (e.g. `crash-lapin-ux-shell.txt`). It holds the error, the program's
+     last steps and a backtrace with file and line numbers, and is the most
+     useful thing to send.
 4. Open an issue on GitHub using the "Bug report" template, or paste it to me.

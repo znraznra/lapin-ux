@@ -1151,6 +1151,11 @@ impl Application for Shell {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // For crash reports (#29): what the shell was doing just before.
+        // Animation frames and position updates arrive every frame; skip them.
+        if !matches!(message, Message::AnimTick | Message::Rect(_)) {
+            lapin_ux_core::crash::note(&message);
+        }
         let task = self.handle(message);
         Task::batch([task, self.sync_catcher(), self.sync_autohide(), self.sync_taskbar_fit()])
     }

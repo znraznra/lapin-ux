@@ -76,6 +76,7 @@ pub(crate) fn in_lapin_ux_session() -> bool {
 }
 
 fn main() -> cosmic::iced::Result {
+    lapin_ux_core::crash::install("lapin-ux-shell");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

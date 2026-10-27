@@ -325,5 +325,6 @@ fn win11_icon(name: &str) -> icon::Handle {
 }
 
 fn main() -> cosmic::iced::Result {
+    lapin_ux_core::crash::install("lapin-ux-control");
     cosmic::app::run::<App>(Settings::default().size(Size::new(900.0, 620.0)), ())
 }
