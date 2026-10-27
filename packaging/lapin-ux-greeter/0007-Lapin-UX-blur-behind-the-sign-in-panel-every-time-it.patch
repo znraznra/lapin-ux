@@ -1,0 +1,88 @@
+From 5800149b7cd5fc1e1e28e3af45feeff380ea92cb Mon Sep 17 00:00:00 2001
+From: Lapin UX <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 10:53:41 +0800
+Subject: [PATCH] Lapin UX: blur behind the sign-in panel every time it opens
+
+Going back to the clock face deleted the panel's stored rectangle, and its
+position tracker only reports changes, so the second time the panel opened
+(in the same place) nothing blurred it again. Keep the rectangle (stored,
+not applied, while the clock face shows) and re-send the blur whenever the
+panel opens (click, key press). znraznra/lapin-ux#30
+---
+ src/locker.rs | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/src/locker.rs b/src/locker.rs
+index a38554a..486fd71 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -323,12 +323,20 @@ pub struct App {
+ 
+ impl App {
+     /// Lapin UX: no blur on the clock face (only behind the sign-in panel).
++    /// Keeps the panel's last rectangles: its position tracker only reports
++    /// changes, so they're what re-blurs the next time it opens (#30).
+     fn unblur(&mut self) -> Task<Message> {
+         let ids: Vec<SurfaceId> = self.common.subsurface_outputs.keys().copied().collect();
+-        self.common.rectangles.retain(|(id, _), _| !ids.contains(id));
+         Task::batch(ids.into_iter().map(|id| cosmic::iced::platform_specific::shell::commands::blur::blur(id, None).discard()))
+     }
+ 
++    /// Lapin UX: the sign-in panel opens: blur behind it again from the
++    /// stored rectangles (it opens in the same place, so no new one arrives).
++    fn reblur(&mut self) -> Task<Message> {
++        let ids: Vec<SurfaceId> = self.common.subsurface_outputs.keys().copied().collect();
++        Task::batch(ids.into_iter().map(|id| self.common.blur_rects(id)))
++    }
++
+     fn menu(&self, surface_id: SurfaceId) -> Element<'_, Message> {
+         // Lapin UX: Windows 11-style lock screen and sign-in panel.
+         let military_time = self.flags.user_data.time_applet_config.military_time;
+@@ -643,11 +651,13 @@ impl cosmic::Application for App {
+             Message::None => {}
+             Message::Reveal => {
+                 self.signing_in = true;
++                let blur = self.reblur();
+                 if let Some(surface_id) = self.common.active_surface_id_opt
+                     && let Some(id) = self.common.surface_names.get(&surface_id).and_then(|n| self.common.text_input_ids.get(n))
+                 {
+-                    return widget::text_input::focus(id.clone());
++                    return Task::batch([blur, widget::text_input::focus(id.clone())]);
+                 }
++                return blur;
+             }
+             Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
+                 // Back to the clock, like Windows: the picture is sharp again.
+@@ -659,15 +669,19 @@ impl cosmic::Application for App {
+             }
+             // Lapin UX: the background is only blurred behind the sign-in
+             // panel; a late position update from it mustn't blur the clock.
+-            Message::Common(common::Message::Rectangle(cosmic::widget::rectangle_tracker::RectangleUpdate::Rectangle(_))) if !self.signing_in => {
++            Message::Common(common::Message::Rectangle(cosmic::widget::rectangle_tracker::RectangleUpdate::Rectangle(r))) if !self.signing_in => {
++                // Remember it (for reblur), but don't blur the clock face.
++                self.common.rectangles.insert(r.0, r.1);
+                 return Task::none();
+             }
+             Message::Common(common_message) => {
+                 if matches!(common_message, common::Message::OnScreenKeyboard) {
+                     crate::lapin::ensure_osk();
+                 }
++                let mut opened = Task::none();
+                 if matches!(common_message, common::Message::Key(..)) && !self.signing_in {
+                     self.signing_in = true;
++                    opened = self.reblur();
+                 }
+                 if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
+                     && self.authenticating
+@@ -675,7 +689,7 @@ impl cosmic::Application for App {
+                     self.authenticating = false;
+                     self.common.prompt_opt = None;
+                 }
+-                return self.common.update(common_message);
++                return Task::batch([opened, self.common.update(common_message)]);
+             }
+             Message::OutputEvent(output_event, output) => {
+                 match output_event {
+-- 
+2.43.0
+
