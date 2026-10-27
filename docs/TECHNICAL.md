@@ -315,6 +315,11 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   has none of its own yet; COSMIC's high-contrast palette didn't work as
   one): no quick setting, no shortcut, hidden in Settings and on the lock
   screen; an upgrade turns a high-contrast palette off again.
+- Narrator needs Orca (an optional dependency). Without it, quick settings
+  leaves the Narrator switch out, and Settings → Accessibility → Vision →
+  Screen reader shows **Install** (the admin prompt, then `pacman -S orca`)
+  instead of a switch. In a Lapin session that switch starts and stops Orca
+  itself.
 
 **Sounds and pointers**
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,

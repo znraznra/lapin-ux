@@ -1,0 +1,170 @@
+From c044d15614ec2309028f47eb00b8d3f956ba3da1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 14:08:32 +0800
+Subject: [PATCH] Lapin UX: Screen reader offers to install Orca when it's
+ missing
+
+Inside Lapin UX the Vision page's Screen reader row shows an Install
+button (pkexec pacman -S orca) instead of a switch that can't do
+anything, and the switch starts and stops Orca itself, like Lapin's
+quick settings. COSMIC's own session is unchanged.
+---
+ .../src/pages/accessibility/mod.rs            | 104 ++++++++++++++++--
+ 1 file changed, 95 insertions(+), 9 deletions(-)
+
+diff --git a/cosmic-settings/src/pages/accessibility/mod.rs b/cosmic-settings/src/pages/accessibility/mod.rs
+index efcebd6..95547bb 100644
+--- a/cosmic-settings/src/pages/accessibility/mod.rs
++++ b/cosmic-settings/src/pages/accessibility/mod.rs
+@@ -39,6 +39,11 @@ pub struct Page {
+     daemon_helper: cosmic_config::Config,
+     dbus_sender: Option<UnboundedSender<a11y_bus::Request>>,
+     reader_enabled: bool,
++    /// Lapin UX: whether Orca (the screen reader) is installed, and an
++    /// install in progress / its error.
++    orca_installed: bool,
++    orca_installing: bool,
++    orca_error: Option<String>,
+     comp_config: CosmicCompConfig,
+     comp_helper: cosmic_config::Config,
+ }
+@@ -78,6 +83,9 @@ impl Default for Page {
+                 .unwrap_or_default(),
+             daemon_helper,
+             reader_enabled: false,
++            orca_installed: orca_installed(),
++            orca_installing: false,
++            orca_error: None,
+             comp_config,
+             comp_helper,
+         }
+@@ -89,6 +97,9 @@ pub enum Message {
+     A11yBus(a11y_bus::Response),
+     Event(cosmic_a11y_manager::AccessibilityEvent),
+     HighContrast(bool),
++    /// Lapin UX: install Orca through the admin prompt, and its result.
++    InstallOrca,
++    OrcaInstalled(Result<(), String>),
+     ProtocolUnavailable,
+     Return,
+     ScreenReaderEnabled(bool),
+@@ -233,16 +244,41 @@ pub fn vision() -> section::Section<crate::pages::Message> {
+                 &descriptions[unavailable]
+             };
+ 
++            // Lapin UX: without Orca the switch can't do anything, so the
++            // row offers to install it instead (COSMIC's session unchanged).
++            let orca_missing = crate::lapin::enabled() && !page.orca_installed;
++            let install_row = orca_missing.then(|| {
++                let desc = match (&page.orca_error, page.orca_installing) {
++                    (_, true) => "Installing Orca…".to_string(),
++                    (Some(e), false) => format!("Orca couldn't be installed: {e}"),
++                    (None, false) => {
++                        "Needs Orca, the screen reader app, which isn't installed".to_string()
++                    }
++                };
++                // No switch until Orca is there (it would look like a
++                // working Off); Install brings the switch.
++                let install: Element<'_, crate::pages::Message> = if page.orca_installing {
++                    cosmic::widget::Space::new().width(0).into()
++                } else {
++                    cosmic::widget::button::standard("Install")
++                        .on_press(Message::InstallOrca.into())
++                        .into()
++                };
++                settings::item::builder(&descriptions[screen_reader])
++                    .description(desc)
++                    .control(install)
++            });
++            let toggle_row = (!orca_missing).then(|| {
++                settings::item::builder(&descriptions[screen_reader]).toggler(
++                    page.reader_enabled,
++                    |enabled| crate::pages::Message::from(Message::ScreenReaderEnabled(enabled)),
++                )
++            });
++
+             settings::section()
+                 .title(&section.title)
+-                .add(
+-                    settings::item::builder(&descriptions[screen_reader]).toggler(
+-                        page.reader_enabled,
+-                        |enabled| {
+-                            crate::pages::Message::from(Message::ScreenReaderEnabled(enabled))
+-                        },
+-                    ),
+-                )
++                .add_maybe(install_row)
++                .add_maybe(toggle_row)
+                 .add(crate::widget::go_next_with_item(
+                     &descriptions[magnifier],
+                     text::body(status_text).wrapping(Wrapping::Word),
+@@ -506,15 +542,65 @@ impl Page {
+                     self.dbus_sender = Some(tx);
+                 }
+             },
++            Message::InstallOrca => {
++                self.orca_installing = true;
++                self.orca_error = None;
++                return cosmic::task::future(async {
++                    let res = tokio::process::Command::new("pkexec")
++                        .args(["pacman", "-S", "--needed", "--noconfirm", "orca"])
++                        .env("LC_ALL", "C")
++                        .output()
++                        .await
++                        .map_err(|e| format!("pkexec: {e}"))
++                        .and_then(|out| {
++                            if out.status.success() {
++                                return Ok(());
++                            }
++                            // pkexec: 126 = prompt dismissed, 127 = not allowed.
++                            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
++                            Err(match out.status.code() {
++                                Some(126) => "cancelled.".into(),
++                                Some(127) => "not authorized.".into(),
++                                _ => err.lines().last().unwrap_or("pacman failed").to_string(),
++                            })
++                        });
++                    crate::app::Message::from(Message::OrcaInstalled(res))
++                });
++            }
++            Message::OrcaInstalled(res) => {
++                self.orca_installing = false;
++                self.orca_installed = orca_installed();
++                self.orca_error = match res {
++                    Ok(()) if !self.orca_installed => Some("it isn't on this system after all.".into()),
++                    Ok(()) => None,
++                    Err(e) => Some(e),
++                };
++            }
+             Message::ScreenReaderEnabled(enabled) => {
++                // Lapin UX starts and stops Orca itself (like its quick
++                // settings), so the switch works without COSMIC's daemon.
++                if crate::lapin::enabled() {
++                    let args: &[&str] = if enabled { &["--replace"] } else { &["--quit"] };
++                    if let Err(e) = std::process::Command::new("orca").args(args).spawn() {
++                        tracing::warn!("orca: {e}");
++                    }
++                }
+                 if let Some(tx) = &self.dbus_sender {
+                     self.reader_enabled = enabled;
+                     let _ = tx.send(a11y_bus::Request::ScreenReader(enabled));
+                 } else {
+-                    self.reader_enabled = false;
++                    // Without the a11y bus only Lapin UX's own start counts.
++                    self.reader_enabled = crate::lapin::enabled() && enabled;
+                 }
+             }
+         }
+         cosmic::iced::Task::none()
+     }
+ }
++
++/// Lapin UX: whether the `orca` command exists on PATH.
++fn orca_installed() -> bool {
++    std::env::var_os("PATH").is_some_and(|path| {
++        std::env::split_paths(&path).any(|d| d.join("orca").is_file())
++    })
++}
+-- 
+2.43.0
+

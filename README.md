@@ -19,7 +19,7 @@ Lapin UX gives Linux a Windows 11-style desktop: a centred taskbar, a Start menu
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Road to a 1:1 Windows 11 | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 26 October 2026 (build `6c2b37a`).*
+*Last updated: 27 October 2026 (build `3e2dc63`).*
 
 ## Take the tour
 
