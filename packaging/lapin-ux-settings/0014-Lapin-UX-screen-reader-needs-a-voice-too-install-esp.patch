@@ -1,0 +1,79 @@
+From 7e3c91b055d2a3aa2afc227df9702eac06cccbb0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 16:53:35 +0800
+Subject: [PATCH] Lapin UX: screen reader needs a voice too (install espeak-ng
+ with Orca)
+
+Orca speaks through speech-dispatcher, whose voice (espeak-ng) is only
+an optional dependency on Arch, so Orca ran silently. The Screen reader
+row now counts as ready only with Orca and a voice (espeak-ng, Festival
+or RHVoice), says when Orca has no voice, and Install installs both.
+---
+ .../src/pages/accessibility/mod.rs            | 29 +++++++++++++++----
+ 1 file changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/cosmic-settings/src/pages/accessibility/mod.rs b/cosmic-settings/src/pages/accessibility/mod.rs
+index 95547bb..f05f009 100644
+--- a/cosmic-settings/src/pages/accessibility/mod.rs
++++ b/cosmic-settings/src/pages/accessibility/mod.rs
+@@ -251,8 +251,11 @@ pub fn vision() -> section::Section<crate::pages::Message> {
+                 let desc = match (&page.orca_error, page.orca_installing) {
+                     (_, true) => "Installing Orca…".to_string(),
+                     (Some(e), false) => format!("Orca couldn't be installed: {e}"),
++                    (None, false) if on_path("orca") => {
++                        "Orca is installed but has no voice to speak with".to_string()
++                    }
+                     (None, false) => {
+-                        "Needs Orca, the screen reader app, which isn't installed".to_string()
++                        "Needs Orca, the screen reader app, and a voice for it".to_string()
+                     }
+                 };
+                 // No switch until Orca is there (it would look like a
+@@ -547,7 +550,10 @@ impl Page {
+                 self.orca_error = None;
+                 return cosmic::task::future(async {
+                     let res = tokio::process::Command::new("pkexec")
+-                        .args(["pacman", "-S", "--needed", "--noconfirm", "orca"])
++                        // Orca speaks through speech-dispatcher, whose voice
++                        // (espeak-ng) is only optional on Arch: without it
++                        // Orca runs silently.
++                        .args(["pacman", "-S", "--needed", "--noconfirm", "orca", "espeak-ng"])
+                         .env("LC_ALL", "C")
+                         .output()
+                         .await
+@@ -571,7 +577,7 @@ impl Page {
+                 self.orca_installing = false;
+                 self.orca_installed = orca_installed();
+                 self.orca_error = match res {
+-                    Ok(()) if !self.orca_installed => Some("it isn't on this system after all.".into()),
++                    Ok(()) if !self.orca_installed => Some("Orca or its voice still isn't on this system.".into()),
+                     Ok(()) => None,
+                     Err(e) => Some(e),
+                 };
+@@ -598,9 +604,20 @@ impl Page {
+     }
+ }
+ 
+-/// Lapin UX: whether the `orca` command exists on PATH.
+-fn orca_installed() -> bool {
++/// Lapin UX: whether a command exists on PATH.
++fn on_path(cmd: &str) -> bool {
+     std::env::var_os("PATH").is_some_and(|path| {
+-        std::env::split_paths(&path).any(|d| d.join("orca").is_file())
++        std::env::split_paths(&path).any(|d| d.join(cmd).is_file())
+     })
+ }
++
++/// Lapin UX: whether Orca can actually speak: Orca itself, plus a voice for
++/// speech-dispatcher (espeak-ng, its default, or Festival / RHVoice).
++fn orca_installed() -> bool {
++    let voice = on_path("espeak-ng")
++        || on_path("festival")
++        || std::fs::read_dir("/usr/lib").is_ok_and(|d| {
++            d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("libRHVoice"))
++        });
++    on_path("orca") && voice
++}
+-- 
+2.43.0
+

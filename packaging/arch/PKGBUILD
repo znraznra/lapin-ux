@@ -210,7 +210,8 @@ package_lapin-ux-desktop-git() {
                 'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)'
                 'flatpak: Flatpak apps in Update, Installed apps and app permissions'
                 'fwupd: firmware updates in Settings > Update'
-                'orca: Narrator (screen reader: Ctrl+Win+Enter, Quick settings, Settings > Accessibility > Vision)')
+                'orca: Narrator (screen reader: Ctrl+Win+Enter, Quick settings, Settings > Accessibility > Vision)'
+                'espeak-ng: the voice Narrator speaks with (Orca is silent without one)')
     provides=('lapin-ux-desktop')
     conflicts=('lapin-ux-desktop' 'win11-icon-theme' 'win11-icon-theme-git' 'sound-theme-borealis')
     install=lapin-ux.install
@@ -352,7 +353,8 @@ package_lapin-ux-settings() {
                 'flatpak: Flatpak apps in Installed apps and Update'
                 'fwupd: firmware updates in Update'
                 'xdg-desktop-portal: app permissions in Privacy & security'
-                'orca: Screen reader in Accessibility > Vision')
+                'orca: Screen reader in Accessibility > Vision'
+                'espeak-ng: voice for the screen reader (Orca is silent without one)')
     provides=('cosmic-settings')
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"

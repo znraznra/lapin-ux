@@ -293,3 +293,19 @@ pub fn mark_welcomed() -> std::io::Result<()> {
     }
     std::fs::write(p, b"1\n")
 }
+
+fn on_path(cmd: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(cmd).is_file()))
+}
+
+/// Whether the screen reader can actually speak: Orca, plus a voice for
+/// speech-dispatcher (espeak-ng, its default, or Festival / RHVoice). On
+/// Arch the voice is only an optional dependency, and without one Orca runs
+/// silently (#18).
+pub fn screen_reader_ready() -> bool {
+    let voice = on_path("espeak-ng")
+        || on_path("festival")
+        || std::fs::read_dir("/usr/lib")
+            .is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("libRHVoice")));
+    on_path("orca") && voice
+}

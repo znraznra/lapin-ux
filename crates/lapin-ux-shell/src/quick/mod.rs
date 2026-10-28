@@ -980,7 +980,7 @@ fn tile_specs(shell: &Shell) -> Vec<TileSpec> {
         let toggle = Message::Extras(crate::comp_extras::ExtrasMsg::RotationLock(!on));
         specs.push(TileSpec::new("rotation", icon, "Rotation lock", on, Some(toggle), None));
     }
-    if q.a11y.available || crate::account::which("orca") {
+    if q.a11y.available || lapin_ux_core::system::screen_reader_ready() {
         let on = q.a11y.magnifier || q.a11y.filter_on || q.screen_reader;
         specs.push(TileSpec::new("accessibility", 
             "preferences-desktop-accessibility-symbolic",
@@ -1403,7 +1403,7 @@ fn accessibility_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         list = list.push(switch_row("zoom-in-symbolic", "Magnifier", q.a11y.magnifier, |on| Message::Quick(QuickMsg::Magnifier(on))));
         list = list.push(switch_row("color-select-symbolic", "Color filters", q.a11y.filter_on, |on| Message::Quick(QuickMsg::ColorFilter(on))));
     }
-    if crate::account::which("orca") {
+    if lapin_ux_core::system::screen_reader_ready() {
         list = list.push(switch_row("audio-speakers-symbolic", "Narrator", q.screen_reader, |on| Message::Quick(QuickMsg::ScreenReader(on))));
     }
     // Contrast themes are off for now: Lapin UX has no contrast themes of its
