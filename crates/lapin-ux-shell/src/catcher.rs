@@ -49,7 +49,7 @@ impl Shell {
 
     pub(crate) fn catcher_click(&mut self) -> Task<Message> {
         tracing::debug!("click outside menu");
-        Task::batch([self.close_start(), self.close_panel()])
+        Task::batch([self.close_popup(), self.close_start(), self.close_panel()])
     }
 }
 

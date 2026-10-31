@@ -49,7 +49,7 @@ impl Shell {
             close_with_children: false,
             input_zone: None,
         };
-        self.sub = Some(Popup { id, parent, kind });
+        self.sub = Some(Popup { id, parent, kind, opened: std::time::Instant::now() });
         let rad = style::PANEL_RADIUS as u32;
         let create = cosmic::surface::surface_task(cosmic::surface::action::app_popup(
             move |_: &Shell| LiveSettings {

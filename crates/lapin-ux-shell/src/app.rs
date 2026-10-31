@@ -148,6 +148,8 @@ pub struct Popup {
     pub id: window::Id,
     pub parent: window::Id,
     pub kind: PopupKind,
+    /// When it opened: the press that opened it isn't a press outside it.
+    pub opened: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +262,8 @@ pub enum Message {
     ClockClick(window::Id),
     /// Click outside an open Start menu or panel.
     CatcherClick,
+    /// A mouse button or touch went down on one of the shell's surfaces.
+    PointerPressed(window::Id),
     FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
     Desktop(crate::desktop::DesktopMsg),
     Clip(crate::clipboard::ClipMsg),
@@ -312,6 +316,10 @@ pub struct Shell {
     pub start: Option<StartMenu>,
     pub(crate) start_closed_at: Instant,
     pub popup: Option<Popup>,
+    /// A menu a press outside just closed, and when (#36): the press that
+    /// closes it can also be the click on the button that opened it, which
+    /// must not open it again.
+    pub popup_dismissed: Option<(PopupKind, Instant)>,
     pub rects: HashMap<String, Rectangle>,
     pub tracker: Option<RectangleTracker<String>>,
     pub clock: ClockStyle,
@@ -544,6 +552,10 @@ impl Shell {
 
     /// Open a popup anchored above the tracked rectangle `key` on surface `parent`.
     pub(crate) fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
+        // The press that closed this very menu was the click on its button.
+        if self.popup_dismissed.take().is_some_and(|(k, at)| k == kind && at.elapsed() < Duration::from_millis(400)) {
+            return Task::none();
+        }
         let same = self.popup.as_ref().is_some_and(|p| p.kind == kind);
         let close = self.close_popup();
         if same {
@@ -595,7 +607,7 @@ impl Shell {
             close_with_children: false,
             input_zone: None,
         };
-        self.popup = Some(Popup { id, parent, kind });
+        self.popup = Some(Popup { id, parent, kind, opened: Instant::now() });
         let r = style::PANEL_RADIUS as u32;
         let create = cosmic::surface::surface_task(cosmic::surface::action::app_popup(
             move |_: &Shell| LiveSettings {
@@ -923,6 +935,7 @@ impl Application for Shell {
             start_closed_at: Instant::now() - Duration::from_secs(10),
             catcher: None,
             popup: None,
+            popup_dismissed: None,
             rects: HashMap::new(),
             tracker: None,
             clock: ClockStyle::from_env_and_settings(),
@@ -1106,6 +1119,12 @@ impl Application for Shell {
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
             crate::input::subscription().map(Message::Input),
+            // Clicks anywhere on the shell's own surfaces, to close menus (#36).
+            cosmic::iced::event::listen_with(|event, _status, id| match event {
+                cosmic::iced::Event::Mouse(cosmic::iced::mouse::Event::ButtonPressed(_))
+                | cosmic::iced::Event::Touch(cosmic::iced::touch::Event::FingerPressed { .. }) => Some(Message::PointerPressed(id)),
+                _ => None,
+            }),
             crate::screen_reader::subscription().map(|on| Message::Quick(crate::quick::QuickMsg::ReaderFlag(on))),
             crate::comp_extras::sensor_subscription().map(|s| Message::Extras(crate::comp_extras::ExtrasMsg::Sensor(s))),
             wl::subscription().map(Message::Wayland),
@@ -1321,6 +1340,21 @@ impl Shell {
                 self.desktop_focused = false;
             }
             Message::Layer(..) => {}
+            // A press on any of the shell's surfaces other than the open menu
+            // (and its submenu) closes the menu, like Windows (#36). The
+            // compositor only does this for clicks on other apps: Lapin's
+            // taskbar, desktop and Start are one app to it, so a click there
+            // is an ordinary click while the menu keeps the input grab.
+            Message::PointerPressed(id) => {
+                let outside = self.popup.as_ref().is_some_and(|p| p.id != id && p.opened.elapsed() > Duration::from_millis(250))
+                    && self.sub.as_ref().is_none_or(|s| s.id != id);
+                if outside {
+                    tracing::debug!("press outside the menu: closing it");
+                    self.popup_dismissed = self.popup.as_ref().map(|p| (p.kind.clone(), Instant::now()));
+                    self.hover = None;
+                    return self.close_popup();
+                }
+            }
             Message::PopupClosed(id) => {
                 if self.popup.as_ref().is_some_and(|p| p.id == id) {
                     self.popup = None;
