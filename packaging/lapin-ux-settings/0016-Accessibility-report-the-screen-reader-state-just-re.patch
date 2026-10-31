@@ -1,0 +1,34 @@
+From 3eff35fa4077ab194be30f86a0b6db3f25eb1dc9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 00:05:26 +0800
+Subject: [PATCH] Accessibility: report the screen reader state just read, not
+ the old one
+
+When the first read of ScreenReaderEnabled failed at start-up (the
+property cache not filled yet), the page started at Off; the watcher
+then read the real value but sent the stale one, so the page kept
+showing Off while the screen reader ran (Lapin UX #18).
+---
+ subscriptions/accessibility/src/lib.rs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/subscriptions/accessibility/src/lib.rs b/subscriptions/accessibility/src/lib.rs
+index d4d6933..e40ff36 100644
+--- a/subscriptions/accessibility/src/lib.rs
++++ b/subscriptions/accessibility/src/lib.rs
+@@ -106,8 +106,11 @@ impl State {
+             };
+ 
+             if let Ok(status) = proxy.screen_reader_enabled().await {
++                // Report the value just read. (This sent the old one: when
++                // the first read failed at start-up, the page kept showing
++                // Off while the screen reader ran, Lapin UX #18.)
+                 if self.enabled != status {
+-                    _ = output.send(Response::ScreenReader(self.enabled)).await;
++                    _ = output.send(Response::ScreenReader(status)).await;
+                 }
+                 self.enabled = status;
+             }
+-- 
+2.43.0
+

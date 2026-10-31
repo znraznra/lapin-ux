@@ -62,14 +62,25 @@ pub async fn set(on: bool) -> bool {
     }
 }
 
+/// When Orca was last asked to start. A switch and the flag watcher both
+/// call `follow(true)` within moments, before the new Orca shows up in
+/// /proc; without this, two Orcas started.
+static STARTED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
 /// Start or stop Orca to match `on` (the watcher's job).
 pub fn follow(on: bool) {
-    let running = orca_running();
+    // Decide and record under one lock: the switch's task and the flag
+    // watcher can call this at the same moment from different threads.
+    let Ok(mut started) = STARTED.lock() else { return };
+    let starting = started.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5));
+    let running = orca_running() || (on && starting);
     let args: &[&str] = match (on, running) {
         (true, false) => &[],
         (false, true) => &["--quit"],
         _ => return,
     };
+    *started = on.then(std::time::Instant::now);
+    drop(started);
     tracing::info!(on, "screen reader: {}", if on { "starting Orca" } else { "stopping Orca" });
     match std::process::Command::new("orca").args(args).spawn() {
         // Reap it when it ends, so no finished Orca lingers as a zombie.
