@@ -75,6 +75,16 @@ undone. They apply to every change.
 - `pkgver()` comes from git, so `git pull && ./install.sh` always installs the
   new build. The root `Cargo.toml` excludes `packaging/` from the workspace;
   `prepare()` runs `git reset --hard && git clean -fdq` before patching.
+- Screen readers (#44): Lapin's crates build libcosmic with `a11y`, and
+  libcosmic's bundled iced is patched (`packaging/libcosmic-a11y/`, applied in
+  the `iced/` folder) for Lapin's own private cargo home (`cargo-lapin`) and
+  Settings' (`cargo-settings`). In a sandbox, keep that patch applied to
+  `~/.cargo/git/checkouts/libcosmic-*/430f3d4/iced` for every build (the
+  title-bar patches in `lapin-ux-libcosmic/` stay for Settings only). Name
+  icon-only buttons with `.name(...)`, wrap new shell surfaces in
+  `lapin_ux_ui::a11y::group(name, ...)`, and hide decorative duplicates with
+  `lapin_ux_ui::a11y::hidden`. Never pass a stateful widget straight into
+  `tracker.container()`; use `track()` (#29).
 
 ## Bugs from real hardware
 

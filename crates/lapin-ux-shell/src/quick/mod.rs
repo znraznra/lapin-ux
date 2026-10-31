@@ -763,11 +763,16 @@ fn tile<'a>(
     toggle: Option<Message>,
     more: Option<Message>,
 ) -> Element<'a, Message> {
+    let label: String = label.into();
+    // Screen readers: "Wi-Fi: HomeNet, on" (the caption under the tile is
+    // the same words, so it's hidden from them).
+    let a11y = format!("{label}, {}", if on { "on" } else { "off" });
     let main = button::custom(container(sym(icon_name, &[])).center(Length::Fill))
         .height(TILE_H)
         .width(Length::Fill)
         .padding(0)
         .class(tile_style(on))
+        .name(a11y)
         .on_press_maybe(toggle);
     let top: Element<'a, Message> = match more {
         Some(m) => row::with_children(vec![
@@ -777,6 +782,7 @@ fn tile<'a>(
                 .width(30)
                 .padding(0)
                 .class(tile_style(on))
+                .name(format!("More {label} settings"))
                 .on_press(m)
                 .into(),
         ])
@@ -784,7 +790,7 @@ fn tile<'a>(
         .into(),
         None => main.into(),
     };
-    column::with_children(vec![top, container(text::caption(label.into())).center_x(Length::Fill).into()])
+    column::with_children(vec![top, lapin_ux_ui::a11y::hidden(container(text::caption(label)).center_x(Length::Fill))])
         .spacing(6)
         .width(TILE_W)
         .into()
@@ -796,6 +802,7 @@ type HeaderToggle = (bool, fn(bool) -> Message);
 fn header<'a>(title: &'static str, toggle: Option<HeaderToggle>) -> Element<'a, Message> {
     let mut r = row::with_capacity(3).spacing(8).align_y(Alignment::Center).push(
         button::custom(sym("go-previous-symbolic", &[]))
+            .name("Back")
             .padding(8)
             .class(style::flat_button(false))
             .on_press(Message::Quick(QuickMsg::Page(Page::Main))),
@@ -914,6 +921,7 @@ fn add_list<'a>(shell: &'a Shell, available: &[&'static str]) -> Element<'a, Mes
     let mut col = column::with_capacity(hidden.len() + 1).spacing(2).push(
         row::with_children(vec![
             button::custom(sym("go-previous-symbolic", &[]))
+            .name("Back")
                 .padding(8)
                 .class(style::flat_button(false))
                 .on_press(Message::Quick(QuickMsg::AddList(false)))
@@ -1097,6 +1105,7 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
         body = body.push(slider_row(
             sym("display-brightness-symbolic", &[]).into(),
             slider(0.0..=1.0, b.fraction(), |v| Message::Quick(QuickMsg::Brightness(v)))
+                .name("Brightness")
                 .class(lapin_ux_ui::slider())
                 .step(0.01f32)
                 .on_release(Message::Quick(QuickMsg::BrightnessDone))
@@ -1110,9 +1119,11 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
             button::custom(sym(model::volume_icon(&q.volume), &["audio-volume-high-symbolic"]))
                 .padding(4)
                 .class(style::flat_button(false))
+                .name(if q.volume.muted { "Unmute" } else { "Mute" })
                 .on_press(Message::Quick(QuickMsg::Mute))
                 .into(),
             slider(0.0..=1.0, q.volume.level.min(1.0), |v| Message::Quick(QuickMsg::Volume(v)))
+                .name("Volume")
                 .class(lapin_ux_ui::slider())
                 .step(0.01f32)
                 .on_release(Message::Quick(QuickMsg::VolumeDone))
@@ -1124,6 +1135,7 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
                     .height(28)
                     .padding(6)
                     .class(style::flat_button(false))
+                    .name("Select a sound output")
                     .on_press(Message::Quick(QuickMsg::Page(Page::Sound)))
                     .into(),
             ),
@@ -1149,11 +1161,13 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
             button::custom(sym("document-edit-symbolic", &["edit-symbolic"]))
                 .padding(8)
                 .class(style::flat_button(false))
+                .name("Edit quick settings")
                 .on_press(Message::Quick(QuickMsg::Edit(true)))
                 .into(),
             button::custom(sym("emblem-system-symbolic", &["preferences-system-symbolic"]))
                 .padding(8)
                 .class(style::flat_button(false))
+                .name("All settings")
                 .on_press(Message::Quick(QuickMsg::Settings("")))
                 .into(),
         ]
@@ -1172,9 +1186,16 @@ fn main_page<'a>(shell: &'a Shell, p: &'a QuickPanel) -> Element<'a, Message> {
 fn media_card<'a>(shell: &'a Shell, p: &'a media::Player) -> Element<'a, Message> {
     let app = if p.desktop_entry.is_empty() { p.identity.to_lowercase() } else { p.desktop_entry.clone() };
     let ctl = |name: &'static str, on: bool, c: media::Command| -> Element<'a, Message> {
+        let a11y = match name {
+            "media-skip-backward-symbolic" => "Previous",
+            "media-skip-forward-symbolic" => "Next",
+            "media-playback-pause-symbolic" => "Pause",
+            _ => "Play",
+        };
         button::custom(sym(name, &[]))
             .padding(8)
             .class(style::flat_button(false))
+            .name(a11y)
             .on_press_maybe(on.then(|| Message::Quick(QuickMsg::MediaCommand(p.bus.clone(), c))))
             .into()
     };
@@ -1534,6 +1555,7 @@ fn bt_add_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         container(
             row::with_children(vec![
                 button::custom(sym("go-previous-symbolic", &[]))
+            .name("Back")
                     .padding(8)
                     .class(style::flat_button(false))
                     .on_press(Message::Quick(QuickMsg::Page(Page::Bluetooth)))

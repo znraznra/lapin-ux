@@ -2263,6 +2263,7 @@ dependencies = [
  "cosmic-client-toolkit",
  "dnd",
  "glam",
+ "iced_accessibility",
  "lilt",
  "log",
  "mime 0.1.0",
@@ -2390,6 +2391,7 @@ dependencies = [
  "bytes",
  "cosmic-client-toolkit",
  "dnd",
+ "iced_accessibility",
  "iced_core 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "iced_futures 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "raw-window-handle",
@@ -2454,6 +2456,7 @@ dependencies = [
  "build_helpers 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "cosmic-client-toolkit",
  "dnd",
+ "iced_accessibility",
  "iced_renderer",
  "iced_runtime",
  "log",
@@ -2474,6 +2477,7 @@ dependencies = [
  "cosmic-client-toolkit",
  "cursor-icon",
  "dnd",
+ "iced_accessibility",
  "iced_debug",
  "iced_futures 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "iced_graphics",
@@ -3033,6 +3037,7 @@ dependencies = [
 name = "lapin-ux-ui"
 version = "0.1.0"
 dependencies = [
+ "iced_accessibility",
  "libcosmic",
 ]
 
@@ -3094,6 +3099,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "iced",
+ "iced_accessibility",
  "iced_core 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "iced_futures 0.14.0 (git+https://github.com/pop-os/libcosmic?rev=430f3d48a97d8779f9c1985473912e594ccca1ae)",
  "iced_renderer",

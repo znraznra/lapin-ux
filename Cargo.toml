@@ -38,6 +38,8 @@ dirs = "6"
 
 # Pinned to a known commit so builds are reproducible. Bump deliberately.
 libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "430f3d48a97d8779f9c1985473912e594ccca1ae", default-features = false, features = [
+    # Screen readers (AT-SPI through accesskit): Orca reads Lapin UX (#44).
+    "a11y",
     "autosize",
     "dbus-config",
     "desktop",
@@ -49,6 +51,8 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "430f3d48a97d87
     "wgpu",
     "winit",
 ] }
+# Screen reader nodes for Lapin's own widgets (same libcosmic revision).
+iced_accessibility = { git = "https://github.com/pop-os/libcosmic", rev = "430f3d48a97d8779f9c1985473912e594ccca1ae" }
 
 [profile.release]
 opt-level = 3

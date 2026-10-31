@@ -120,6 +120,20 @@ pub enum PopupKind {
     DesktopMenu(Option<std::path::PathBuf>, crate::desktop::MenuPage),
 }
 
+/// What a screen reader calls a pop-up.
+fn popup_a11y_name(kind: &PopupKind) -> &'static str {
+    match kind {
+        PopupKind::Windows(_) | PopupKind::Preview(_) => "Window previews",
+        PopupKind::Calendar => "Calendar",
+        PopupKind::Power => "Power",
+        PopupKind::TrayOverflow => "Hidden icons",
+        PopupKind::Account => "Account",
+        PopupKind::InputMenu => "Input methods",
+        PopupKind::ConfirmEmptyTrash | PopupKind::ConfirmUninstall(_) => "Confirm",
+        _ => "Menu",
+    }
+}
+
 /// One icon in the notification area.
 pub struct TrayEntry {
     pub item: crate::tray::TrayItem,
@@ -980,23 +994,26 @@ impl Application for Shell {
     }
 
     fn view_window(&self, id: window::Id) -> Element<'_, Message> {
+        use lapin_ux_ui::a11y::group;
+        // Each surface is named for screen readers (#44): Wayland panels and
+        // pop-ups have no window title to read.
         if let Some(bar) = self.bars.iter().find(|b| b.id == id) {
-            return crate::taskbar_view::taskbar(self, bar);
+            return group("Taskbar", crate::taskbar_view::taskbar(self, bar));
         }
         if self.catcher == Some(id) {
             return crate::catcher::view();
         }
         if self.desktop.as_ref().is_some_and(|d| d.id == id) {
-            return crate::desktop::view(self);
+            return group("Desktop", crate::desktop::view(self));
         }
         if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
             return crate::desktop::rename_view(self);
         }
         if let Some(start) = self.start.as_ref().filter(|s| s.id == id) {
-            return crate::start_view::start_menu(self, start);
+            return group("Start", crate::start_view::start_menu(self, start));
         }
         if let Some(panel) = self.panel.as_ref().filter(|p| p.id == id) {
-            return crate::panels::view(self, panel);
+            return group(crate::panels::a11y_name(&panel.kind), crate::panels::view(self, panel));
         }
         if let Some(sub) = self.sub.as_ref().filter(|p| p.id == id) {
             return cosmic::widget::autosize::autosize(crate::taskbar_view::popup(self, sub), crate::submenu::SUB_AUTOSIZE.clone())
@@ -1008,7 +1025,7 @@ impl Application for Shell {
         }
         if let Some(popup) = self.popup.as_ref().filter(|p| p.id == id) {
             // Popups size themselves to their content.
-            return cosmic::widget::autosize::autosize(crate::taskbar_view::popup(self, popup), POPUP_AUTOSIZE.clone())
+            return cosmic::widget::autosize::autosize(group(popup_a11y_name(&popup.kind), crate::taskbar_view::popup(self, popup)), POPUP_AUTOSIZE.clone())
                 .min_width(1.0)
                 .min_height(1.0)
                 .max_width(440.0)

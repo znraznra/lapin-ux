@@ -1,0 +1,9 @@
+Patches to libcosmic's bundled iced (the `iced/` folder of the libcosmic
+checkout, its own git repository) so screen readers can read libcosmic
+apps (#44). Applied with `git -C <libcosmic>/iced apply` by
+packaging/arch/PKGBUILD to every libcosmic copy that is built: Lapin UX's
+own crates (private cargo home `cargo-lapin`) and the Settings fork
+(`cargo-settings`). They change nothing unless the `a11y` feature is on.
+
+In a sandbox: apply to ~/.cargo/git/checkouts/libcosmic-*/430f3d4/iced,
+then `cargo clean -p iced_winit -p iced_widget` before building.

@@ -71,7 +71,10 @@ prepare() {
     local host
     host="$(rustc -vV | sed -n 's/host: //p')"
     cd "$_src"
-    cargo fetch --locked --target "$host"
+    # Lapin's crates build with their own cargo home, so libcosmic's iced
+    # can be patched for screen readers (#44) without touching ~/.cargo.
+    CARGO_HOME="$srcdir/cargo-lapin" cargo fetch --locked --target "$host"
+    _patch_iced_a11y "$srcdir/cargo-lapin"
 
     cd "$srcdir/cosmic-comp"
     git reset -q --hard && git clean -fdq   # also drop files our patches added
@@ -108,6 +111,7 @@ prepare() {
     rm -f rust-toolchain rust-toolchain.toml
     CARGO_HOME="$srcdir/cargo-settings" cargo fetch --locked --target "$host"
     _patch_libcosmic "$srcdir/cargo-settings"
+    _patch_iced_a11y "$srcdir/cargo-settings"
 
     cd "$srcdir/cosmic-files"
     git reset -q --hard && git clean -fdq
@@ -133,12 +137,26 @@ _patch_libcosmic() {
     [ "$patched" = 1 ] || { echo "libcosmic not found in $1" >&2; return 1; }
 }
 
+# Screen readers (#44): libcosmic's bundled iced sends its widget tree to
+# AT-SPI. Applied to every libcosmic copy in a cargo home (once).
+_patch_iced_a11y() {
+    local dir patched=0
+    for dir in "$1"/git/checkouts/libcosmic-*/*/iced/; do
+        [ -f "$dir/winit/src/lib.rs" ] || continue
+        if ! grep -q "Control::A11yUpdate" "$dir/winit/src/lib.rs"; then
+            for p in "$_src"/packaging/libcosmic-a11y/*.patch; do git -C "$dir" apply "$p"; done
+        fi
+        patched=1
+    done
+    [ "$patched" = 1 ] || { echo "libcosmic's iced not found in $1" >&2; return 1; }
+}
+
 _files_patch='patch."https://github.com/pop-os/cosmic-files".cosmic-files.path="../cosmic-files"'
 
 build() {
     export RUSTUP_TOOLCHAIN=stable
     cd "$_src"
-    CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release --workspace
+    CARGO_HOME="$srcdir/cargo-lapin" CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release --workspace
     [ -f data/wallpapers/lapin-ux-dark.jpg ] || python tools/make-wallpaper.py data/wallpapers
 
     cd "$srcdir/cosmic-comp"
@@ -163,7 +181,7 @@ build() {
 check() {
     export RUSTUP_TOOLCHAIN=stable
     cd "$_src"
-    CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release -p lapin-ux-core -p lapin-ux-session
+    CARGO_HOME="$srcdir/cargo-lapin" CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release -p lapin-ux-core -p lapin-ux-session
 }
 
 package_lapin-ux-desktop-git() {

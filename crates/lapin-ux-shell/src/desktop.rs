@@ -1158,7 +1158,8 @@ fn label<'a>(s: String, width: f32) -> Element<'a, Message> {
         .width(width)
         .align_x(Alignment::Center)
         .class(theme::Text::Custom(|_| cosmic::iced::widget::text::Style { color: Some(Color::WHITE), ..Default::default() }));
-    cosmic::iced::widget::stack![container(shadow).padding([1, 0, 0, 1]), front].into()
+    // The shadow is a second copy of the text: screen readers skip it.
+    cosmic::iced::widget::stack![lapin_ux_ui::a11y::hidden(container(shadow).padding([1, 0, 0, 1])), front].into()
 }
 
 fn short(s: &str, max: usize) -> String {

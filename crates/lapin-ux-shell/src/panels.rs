@@ -58,6 +58,25 @@ pub struct Panel {
     pub kind: PanelKind,
 }
 
+/// What a screen reader calls a panel (#44).
+pub fn a11y_name(kind: &PanelKind) -> &'static str {
+    match kind {
+        PanelKind::WinX { .. } => "Quick link menu",
+        PanelKind::Run { .. } => "Run",
+        PanelKind::Quick(_) => "Quick settings",
+        PanelKind::Clip(_) => "Clipboard and emoji",
+        PanelKind::AltTab(_) => "Task switching",
+        PanelKind::TaskView(_) => "Task view",
+        PanelKind::Snap(_) => "Snap layouts",
+        PanelKind::ShutDown { .. } => "Shut Down",
+        PanelKind::Project(_) => "Project",
+        PanelKind::Properties(_) => "Properties",
+        PanelKind::Security { .. } => "Security options",
+        PanelKind::Snip(_) => "Snipping",
+        PanelKind::OpenWith(_) => "Open with",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PanelMsg {
     OpenWinX,

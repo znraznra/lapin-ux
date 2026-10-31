@@ -320,8 +320,25 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   and without one Orca runs silently). Until both are there, quick settings
   leaves the Narrator switch out, and Settings → Accessibility → Vision →
   Screen reader shows **Install** (the admin prompt, then
-  `pacman -S orca espeak-ng`) instead of a switch. In a Lapin session that
-  switch starts and stops Orca itself.
+  `pacman -S orca espeak-ng`) instead of a switch.
+- One owner for Orca (#18): the AT-SPI flag `org.a11y.Status
+  ScreenReaderEnabled` is the switch. Quick settings, Ctrl+Win+Enter and
+  Settings only set it (and `IsEnabled`, so Chromium/Electron apps turn their
+  accessibility on); the shell watches it and starts or stops Orca. at-spi
+  keeps the flags in `org.gnome.desktop.a11y.applications
+  screen-reader-enabled` and `org.gnome.desktop.interface
+  toolkit-accessibility`, which are swapped per session like Lapin's other
+  shared settings.
+- What Orca reads (#44): Lapin's programs are built with libcosmic's `a11y`
+  feature, and libcosmic's iced is patched (`packaging/libcosmic-a11y/`) so
+  the widget tree actually reaches AT-SPI, window focus is reported and
+  closed panels leave the tree. Each shell surface is a named group
+  (Taskbar, Desktop, Start, Quick settings, menus…); icon-only buttons carry
+  names ("Start", "Firefox - 2 running windows", "Wi-Fi, on"). Not read yet:
+  text boxes (libcosmic's text input has no accessibility support), and
+  keyboard focus inside a surface (Orca follows the window, not the focused
+  button). Apps that were already running when Narrator came on need a
+  restart to turn their own accessibility on.
 
 **Sounds and pointers**
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,

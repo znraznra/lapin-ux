@@ -103,6 +103,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     .height(style::task_button())
     .padding(0)
     .class(style::flat_button(start_open))
+    .name("Start")
     .on_press(Message::ToggleStart);
 
     let mut center = row::with_capacity(16)
@@ -159,6 +160,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .height(style::task_button())
             .padding(0)
             .class(style::flat_button(tv_open))
+            .name("Task view")
             .on_press(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
     );
 
@@ -237,6 +239,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .height(style::task_button())
             .padding(0)
             .class(style::flat_button(open))
+            .name("Show hidden icons")
             .on_press(Message::TrayOverflow(bar.id));
         tray.push(track(shell, rect_key(bar.id, "tray-overflow"), btn));
     }
@@ -250,6 +253,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .height(style::task_button())
             .padding([0, 10])
             .class(style::flat_button(shell.quick_open()))
+            .name("Quick settings")
             .on_press(Message::Quick(crate::quick::QuickMsg::Toggle));
         // Scrolling over it changes the volume, like the benchmark.
         let area = mouse_area(btn).on_scroll(|d| {
@@ -268,6 +272,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .height(style::task_button())
             .padding(0)
             .class(style::flat_button(false))
+            .name("Touch keyboard")
             .on_press(Message::ToggleTouchKeyboard);
         status_slot.insert(0, btn.into());
     }
@@ -285,6 +290,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
                 .padding(0)
                 .height(Length::Fill)
                 .class(style::flat_button(false))
+                .name("Show desktop")
                 .on_press(Message::ShowDesktop),
         );
     }
@@ -407,7 +413,18 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>, label: Opt
         Some((h, _, _)) => Message::TaskWindowClick(*h),
         None => Message::TaskClick(bar.id, b.app.clone()),
     };
-    let btn = button::custom(content).width(width).height(style::task_button()).padding(0).class(class).on_press(press);
+    // What a screen reader says, like Windows: "Firefox - 2 running windows".
+    let a11y_name = {
+        let app = app_name(shell, &b.app);
+        match (&label, b.windows.len()) {
+            (Some((_, title, _)), _) => format!("{app} - {title}"),
+            (None, 0) => format!("{app} - pinned"),
+            (None, 1) => format!("{app} - 1 running window"),
+            (None, n) => format!("{app} - {n} running windows"),
+        }
+    };
+    let btn =
+        button::custom(content).width(width).height(style::task_button()).padding(0).class(class).name(a11y_name).on_press(press);
 
     let area = mouse_area(btn)
         .on_right_press(Message::TaskContext(bar.id, b.app.clone()))
@@ -444,6 +461,7 @@ fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry)
         .height(style::task_button())
         .padding(0)
         .class(style::flat_button(open))
+        .name(t.title.clone().filter(|s| !s.is_empty()).or_else(|| t.id.clone()).unwrap_or_else(|| name.clone()))
         .on_press(Message::TrayClick(bar.id, name.clone()));
     let area = mouse_area(btn).on_right_press(Message::TrayContext(bar.id, name.clone()));
     track(shell, rect_key(bar.id, &format!("tray:{name}")), area)

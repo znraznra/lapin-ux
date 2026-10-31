@@ -139,3 +139,130 @@ pub fn title_bar<'a, M: 'static>(icon_name: &'a str, title: &'a str) -> cosmic::
         .push(cosmic::widget::text::body(title))
         .into()
 }
+
+/// Screen reader helpers.
+pub mod a11y {
+    use cosmic::iced::core::widget::{tree, Operation, Tree};
+    use cosmic::iced::core::{layout, mouse, overlay, renderer, Clipboard, Event, Layout, Length, Rectangle, Shell, Size, Vector};
+    use cosmic::{Element, Renderer, Theme};
+
+    /// Draws `content` as usual but leaves it out of what screen readers see:
+    /// decoration that repeats something already there, such as a text's
+    /// drop shadow (a second copy of the text underneath it).
+    pub fn hidden<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+        Element::new(Wrap { kind: Kind::Hidden, content: content.into() })
+    }
+
+    /// Gives `content` a name for screen readers, as one group: what a
+    /// panel or pop-up is called ("Taskbar", "Start", "Quick settings").
+    /// Wayland panels have no window title for a screen reader to read.
+    pub fn group<'a, Message: 'a>(name: impl Into<String>, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+        Element::new(Wrap { kind: Kind::Group(name.into(), cosmic::widget::Id::unique()), content: content.into() })
+    }
+
+    enum Kind {
+        Hidden,
+        Group(String, cosmic::widget::Id),
+    }
+
+    struct Wrap<'a, Message> {
+        kind: Kind,
+        content: Element<'a, Message>,
+    }
+
+    // Everything goes to the content, tag and state included, so the
+    // widget tree is exactly the content's (see #29 for what a wrapper with
+    // a different tag but the content's state does). Only `a11y_nodes`
+    // differs.
+    impl<'a, Message> cosmic::iced::core::Widget<Message, Theme, Renderer> for Wrap<'a, Message> {
+        fn tag(&self) -> tree::Tag {
+            self.content.as_widget().tag()
+        }
+        fn state(&self) -> tree::State {
+            self.content.as_widget().state()
+        }
+        fn children(&self) -> Vec<Tree> {
+            self.content.as_widget().children()
+        }
+        fn diff(&mut self, tree: &mut Tree) {
+            self.content.as_widget_mut().diff(tree);
+        }
+        fn size(&self) -> Size<Length> {
+            self.content.as_widget().size()
+        }
+        fn size_hint(&self) -> Size<Length> {
+            self.content.as_widget().size_hint()
+        }
+        fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+            self.content.as_widget_mut().layout(tree, renderer, limits)
+        }
+        fn draw(
+            &self,
+            tree: &Tree,
+            renderer: &mut Renderer,
+            theme: &Theme,
+            style: &renderer::Style,
+            layout: Layout<'_>,
+            cursor: mouse::Cursor,
+            viewport: &Rectangle,
+        ) {
+            self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
+        }
+        fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+            self.content.as_widget_mut().operate(tree, layout, renderer, operation);
+        }
+        fn update(
+            &mut self,
+            tree: &mut Tree,
+            event: &Event,
+            layout: Layout<'_>,
+            cursor: mouse::Cursor,
+            renderer: &Renderer,
+            clipboard: &mut dyn Clipboard,
+            shell: &mut Shell<'_, Message>,
+            viewport: &Rectangle,
+        ) {
+            self.content.as_widget_mut().update(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+        }
+        fn mouse_interaction(
+            &self,
+            tree: &Tree,
+            layout: Layout<'_>,
+            cursor: mouse::Cursor,
+            viewport: &Rectangle,
+            renderer: &Renderer,
+        ) -> mouse::Interaction {
+            self.content.as_widget().mouse_interaction(tree, layout, cursor, viewport, renderer)
+        }
+        fn overlay<'b>(
+            &'b mut self,
+            tree: &'b mut Tree,
+            layout: Layout<'b>,
+            renderer: &Renderer,
+            viewport: &Rectangle,
+            translation: Vector,
+        ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+            self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
+        }
+        fn a11y_nodes(&self, layout: Layout<'_>, state: &Tree, cursor: mouse::Cursor) -> iced_accessibility::A11yTree {
+            use iced_accessibility::accesskit::{Node, Rect, Role};
+            use iced_accessibility::{A11yNode, A11yTree};
+            match &self.kind {
+                Kind::Hidden => A11yTree::default(),
+                Kind::Group(name, id) => {
+                    let b = layout.bounds();
+                    let mut node = Node::new(Role::Group);
+                    node.set_label(name.clone());
+                    node.set_bounds(Rect {
+                        x0: b.x as f64,
+                        y0: b.y as f64,
+                        x1: (b.x + b.width) as f64,
+                        y1: (b.y + b.height) as f64,
+                    });
+                    let inner = self.content.as_widget().a11y_nodes(layout, state, cursor);
+                    A11yTree::node_with_child_tree(A11yNode::new(node, id.clone()), inner)
+                }
+            }
+        }
+    }
+}

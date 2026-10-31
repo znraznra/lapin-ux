@@ -174,6 +174,7 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
                 button::custom(icon::from_name("system-shutdown-symbolic").size(16))
                     .padding(10)
                     .class(style::flat_button(false))
+                    .name("Power")
                     .on_press(Message::PowerMenu),
             ),
         ])

@@ -1,0 +1,179 @@
+From: Lapin UX
+Subject: [PATCH] iced: screen readers see the widget tree (Lapin UX #44)
+
+The a11y feature built accesskit adapters but never sent them anything
+but an empty window. Send the widget tree after each redraw while a
+screen reader listens, pass window focus to the adapter, remove a
+window's adapter when its Wayland surface goes, and let Stack report
+its layers.
+---
+diff --git a/widget/src/stack.rs b/widget/src/stack.rs
+index e85bf2af..5f930f03 100644
+--- a/widget/src/stack.rs
++++ b/widget/src/stack.rs
+@@ -299,6 +299,26 @@ where
+             .unwrap_or_default()
+     }
+ 
++    #[cfg(feature = "a11y")]
++    /// get the a11y nodes for the widget (every layer, bottom first)
++    fn a11y_nodes(
++        &self,
++        layout: Layout<'_>,
++        state: &Tree,
++        cursor: mouse::Cursor,
++    ) -> iced_accessibility::A11yTree {
++        use iced_accessibility::A11yTree;
++        A11yTree::join(
++            self.children
++                .iter()
++                .zip(layout.children())
++                .zip(state.children.iter())
++                .map(|((c, c_layout), state)| {
++                    c.as_widget().a11y_nodes(c_layout, state, cursor)
++                }),
++        )
++    }
++
+     fn draw(
+         &self,
+         tree: &Tree,
+diff --git a/winit/src/lib.rs b/winit/src/lib.rs
+index dd1ca382..bbb5a027 100644
+--- a/winit/src/lib.rs
++++ b/winit/src/lib.rs
+@@ -623,6 +623,43 @@ where
+                             Control::Cleanup(id) => {
+                                 _ = self.adapters.remove(&id);
+                             }
++                            #[cfg(feature = "a11y")]
++                            Control::A11yFocus(id, window, focused) => {
++                                if let Some((_, adapter)) =
++                                    self.adapters.get_mut(&id)
++                                {
++                                    adapter.process_event(
++                                        window.as_ref(),
++                                        &WindowEvent::Focused(focused),
++                                    );
++                                }
++                            }
++                            #[cfg(feature = "a11y")]
++                            Control::A11yUpdate(id, tree) => {
++                                use iced_accessibility::accesskit::{
++                                    Node, NodeId, Role, Tree, TreeId,
++                                    TreeUpdate,
++                                };
++                                use iced_accessibility::{A11yNode, A11yTree};
++                                if let Some((node_id, adapter)) =
++                                    self.adapters.get_mut(&id)
++                                {
++                                    let root_id = NodeId(*node_id);
++                                    let window = A11yTree::node_with_child_tree(
++                                        A11yNode::new(
++                                            Node::new(Role::Window),
++                                            *node_id,
++                                        ),
++                                        tree,
++                                    );
++                                    adapter.update_if_active(|| TreeUpdate {
++                                        tree_id: TreeId::ROOT,
++                                        nodes: window.into(),
++                                        tree: Some(Tree::new(root_id)),
++                                        focus: root_id,
++                                    });
++                                }
++                            }
+                         },
+                         _ => {
+                             break;
+@@ -742,6 +779,12 @@ enum Control {
+     AccessibilityEnabled(bool),
+     #[cfg(feature = "a11y")]
+     InitAdapter(window::Id, Arc<dyn winit::window::Window>),
++    /// A window's widget tree for its accessibility adapter (screen readers).
++    #[cfg(feature = "a11y")]
++    A11yUpdate(window::Id, iced_accessibility::A11yTree),
++    /// A window gained or lost the keyboard focus (for its adapter).
++    #[cfg(feature = "a11y")]
++    A11yFocus(window::Id, Arc<dyn winit::window::Window>, bool),
+     PlatformSpecific(crate::platform_specific::Event),
+     AboutToWait,
+     Winit(winit::window::WindowId, winit::event::WindowEvent),
+@@ -1227,6 +1270,14 @@ async fn run_instance<P>(
+                     .update_subsurfaces(id, window.raw.rwh_06_window_handle());
+                 draw_span.finish();
+ 
++                // Screen readers: send what was just drawn to the window's
++                // accessibility adapter (only while one is listening).
++                #[cfg(feature = "a11y")]
++                if a11y_enabled {
++                    let _ = control_sender
++                        .start_send(Control::A11yUpdate(id, interface.a11y_nodes(cursor)));
++                }
++
+                 if let user_interface::State::Updated {
+                     redraw_request,
+                     input_method,
+@@ -1322,6 +1373,15 @@ async fn run_instance<P>(
+                 else {
+                     continue;
+                 };
++                // Screen readers follow which window has the focus.
++                #[cfg(feature = "a11y")]
++                if let winit::event::WindowEvent::Focused(focused) = &event {
++                    let _ = control_sender.start_send(Control::A11yFocus(
++                        id,
++                        window.raw.clone(),
++                        *focused,
++                    ));
++                }
+                 // Initiates a drag resize window state when found.
+                 if let Some(func) = window.drag_resize_window_func.as_mut() {
+                     if func(
+diff --git a/winit/src/platform_specific/wayland/sctk_event.rs b/winit/src/platform_specific/wayland/sctk_event.rs
+index b96f1765..d13b5404 100755
+--- a/winit/src/platform_specific/wayland/sctk_event.rs
++++ b/winit/src/platform_specific/wayland/sctk_event.rs
+@@ -728,6 +728,10 @@ impl SctkEvent {
+             } => match variant {
+                 LayerSurfaceEventVariant::Done => {
+                     if let Some(id) = surface_ids.remove(&surface.id()) {
++                        // Screen readers: the surface is gone, so is its window.
++                        #[cfg(feature = "a11y")]
++                        let _ = control_sender
++                            .unbounded_send(crate::Control::Cleanup(id.inner()));
+                         if let Some(w) = window_manager.remove(id.inner()) {
+                             clipboard.register_dnd_destination(
+                                 DndSurface(Arc::new(Box::new(w.raw.clone()))),
+@@ -941,6 +945,10 @@ impl SctkEvent {
+                     PopupEventVariant::Done => {
+                         if let Some(e) =
+                             surface_ids.remove(&surface.id()).map(|id| {
++                                #[cfg(feature = "a11y")]
++                                let _ = control_sender.unbounded_send(
++                                    crate::Control::Cleanup(id.inner()),
++                                );
+                                 if let Some(w) =
+                                     window_manager.remove(id.inner())
+                                 {
+@@ -1399,6 +1407,9 @@ impl SctkEvent {
+             }
+             SctkEvent::SessionLockSurfaceDone { surface } => {
+                 if let Some(id) = surface_ids.remove(&surface.id()) {
++                    #[cfg(feature = "a11y")]
++                    let _ = control_sender
++                        .unbounded_send(crate::Control::Cleanup(id.inner()));
+                     _ = window_manager.remove(id.inner());
+                 }
+             }
+@@ -1688,6 +1699,10 @@ impl SctkEvent {
+                         surface_ids.remove(&instance.wl_surface.id())
+                     {
+                         _ = user_interfaces.remove(&id_wrapper.inner());
++                        #[cfg(feature = "a11y")]
++                        let _ = control_sender.unbounded_send(
++                            crate::Control::Cleanup(id_wrapper.inner()),
++                        );
+ 
+                         if let Some(w) =
+                             window_manager.remove(id_wrapper.inner())
