@@ -1,0 +1,44 @@
+From 57df5328ea8ba693e59313cab3336d5a04a6ac09 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 23:15:38 +0800
+Subject: [PATCH] Lapin UX: Screen reader only sets the AT-SPI flag (the shell
+ starts Orca)
+
+Starting Orca from here as well as from the shell put Orca and the
+flag out of step (#18). The switch now only sets ScreenReaderEnabled;
+in Lapin UX the shell watches it and starts or stops Orca.
+---
+ cosmic-settings/src/pages/accessibility/mod.rs | 13 +++----------
+ 1 file changed, 3 insertions(+), 10 deletions(-)
+
+diff --git a/cosmic-settings/src/pages/accessibility/mod.rs b/cosmic-settings/src/pages/accessibility/mod.rs
+index f05f009..449e209 100644
+--- a/cosmic-settings/src/pages/accessibility/mod.rs
++++ b/cosmic-settings/src/pages/accessibility/mod.rs
+@@ -583,20 +583,13 @@ impl Page {
+                 };
+             }
+             Message::ScreenReaderEnabled(enabled) => {
+-                // Lapin UX starts and stops Orca itself (like its quick
+-                // settings), so the switch works without COSMIC's daemon.
+-                if crate::lapin::enabled() {
+-                    let args: &[&str] = if enabled { &["--replace"] } else { &["--quit"] };
+-                    if let Err(e) = std::process::Command::new("orca").args(args).spawn() {
+-                        tracing::warn!("orca: {e}");
+-                    }
+-                }
++                // Only the AT-SPI flag changes here. In Lapin UX the shell
++                // watches it and starts or stops Orca (one owner, #18).
+                 if let Some(tx) = &self.dbus_sender {
+                     self.reader_enabled = enabled;
+                     let _ = tx.send(a11y_bus::Request::ScreenReader(enabled));
+                 } else {
+-                    // Without the a11y bus only Lapin UX's own start counts.
+-                    self.reader_enabled = crate::lapin::enabled() && enabled;
++                    self.reader_enabled = false;
+                 }
+             }
+         }
+-- 
+2.43.0
+

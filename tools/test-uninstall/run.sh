@@ -207,8 +207,24 @@ check "list removed" "[ ! -e $XDG_RUNTIME_DIR/lapin-ux-autostart-masked ]"
 bash $DS leave
 check "nothing to unmask the next time" "! grep -q unmask $HOME/systemctl.log"
 }
+scenJ() {
+echo "J: Narrator turned on in Lapin UX stays in Lapin UX (#18)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+SR=/org/gnome/desktop/a11y/applications/screen-reader-enabled
+TA=/org/gnome/desktop/interface/toolkit-accessibility
+bash $U --snapshot; bash $DS enter
+dconf write $SR true; dconf write $TA true
+bash $DS leave
+check "screen reader off again in the other desktop" "[ -z \"\$(dconf read $SR)\" ]"
+check "app accessibility back to the other desktop's value" "[ -z \"\$(dconf read $TA)\" ]"
+bash $DS enter
+check "Narrator still on in Lapin UX" "[ \"\$(dconf read $SR)\" = true ] && [ \"\$(dconf read $TA)\" = true ]"
+bash $DS leave
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "after uninstall: screen reader off" "[ -z \"\$(dconf read $SR)\" ]"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I; do
+for x in A B C D E F G H I J; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

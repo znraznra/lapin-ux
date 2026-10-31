@@ -7,7 +7,7 @@ Requirements set on 2026-10-21 after the first real Arch run: Lapin UX must (1) 
 2. Every Lapin look inside a COSMIC fork (OSD, OSK, file dialog, Settings, libcosmic title bars, future File Explorer/Store forks) applies only in a Lapin session; COSMIC's own path stays intact.
 3. Any new write to a shared COSMIC (`com.system76.*`) or GTK/dconf setting must be added to `items()` in `tools/lapin-ux-uninstall`. New packages replacing a COSMIC package go in `LAPIN_PKGS`/`STOCK` there.
 4. Selawik is never enabled system-wide (session-only `FONTCONFIG_FILE`).
-5. Run `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (55 checks) and `shellcheck` before pushing.
+5. Run `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (59 checks) and `shellcheck` before pushing.
 6. Real-hardware bugs are GitHub issues with the fix/comment/label workflow.
 
 ## How it works

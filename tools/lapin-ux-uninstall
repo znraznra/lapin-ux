@@ -63,8 +63,14 @@ COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_the
              com.system76.CosmicBackground/same-on-all com.system76.CosmicBackground/all
              com.system76.CosmicSettings.Shortcuts/custom com.system76.CosmicSettings.Shortcuts/system_actions
              com.system76.CosmicComp/activation_policy)
-GKEYS=(font-name document-font-name icon-theme cursor-theme)
+# GNOME/GTK settings (dconf). A plain name is under $GPATH; a name with a
+# slash is under /org/gnome/desktop/. The screen reader keys are what the
+# AT-SPI "screen reader on" and "accessibility on" flags are kept in (#18):
+# Narrator in Lapin UX mustn't start Orca in another desktop.
+GKEYS=(font-name document-font-name icon-theme cursor-theme toolkit-accessibility
+       a11y/applications/screen-reader-enabled)
 GPATH=/org/gnome/desktop/interface
+gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/$1" ;; esac; }
 
 # Packages, and the stock COSMIC package each one stands in for.
 LAPIN_PKGS=(lapin-ux-desktop-git lapin-ux-comp lapin-ux-greeter lapin-ux-osk lapin-ux-osd
@@ -157,6 +163,8 @@ store_path() { echo "$1/$2/${3//\//__}"; }   # base kind name
 saved() { [ -e "$1" ] || [ -e "$1.absent" ]; }
 describe() {
     case "$1:${2#*/}" in
+    dconf:toolkit-accessibility) echo "app accessibility (for the screen reader)" ;;
+    dconf:applications/screen-reader-enabled) echo "screen reader on/off" ;;
     dconf:*) echo "GTK $2" ;;
     cosmic:interface_font) echo "COSMIC font" ;;
     cosmic:icon_theme) echo "COSMIC icons" ;;
@@ -177,7 +185,7 @@ item_save() {   # kind name dest
     [ "$DRY" = 1 ] && return 0
     mkdir -p "$(dirname "$3")"; rm -rf "$3" "$3.absent"
     if [ "$1" = dconf ]; then
-        dconf_ok && { dconf read "$GPATH/$2" > "$3" 2>/dev/null || :; }
+        dconf_ok && { dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null || :; }
         return 0
     fi
     f=$(item_path "$1" "$2")
@@ -187,8 +195,8 @@ item_save() {   # kind name dest
 item_apply() {   # kind name src
     local f
     if [ "$1" = dconf ]; then
-        if [ -s "$3" ]; then dconf_do write "$GPATH/$2" "$(cat "$3")"
-        elif [ -e "$3" ] || [ -e "$3.absent" ]; then dconf_do reset "$GPATH/$2"; fi
+        if [ -s "$3" ]; then dconf_do write "$(gkey_path "$2")" "$(cat "$3")"
+        elif [ -e "$3" ] || [ -e "$3.absent" ]; then dconf_do reset "$(gkey_path "$2")"; fi
         return 0
     fi
     f=$(item_path "$1" "$2")
@@ -200,7 +208,7 @@ item_apply() {   # kind name src
 }
 # Back to the desktop's own default.
 item_default() {   # kind name
-    if [ "$1" = dconf ]; then dconf_do reset "$GPATH/$2"; else run rm -rf "$(item_path "$1" "$2")"; fi
+    if [ "$1" = dconf ]; then dconf_do reset "$(gkey_path "$2")"; else run rm -rf "$(item_path "$1" "$2")"; fi
 }
 
 # Does a value look like one Lapin UX sets? (Selawik, its icons and pointer,
@@ -243,7 +251,7 @@ lapins_at() {   # kind name location-of-a-value
 looks_lapins_now() {   # kind name
     if [ "$1" = dconf ]; then
         dconf_ok || return 1
-        value_is_lapins "$(dconf read "$GPATH/$2" 2>/dev/null)"
+        value_is_lapins "$(dconf read "$(gkey_path "$2")" 2>/dev/null)"
     else
         lapins_at "$1" "$2" "$(item_path "$1" "$2")"
     fi

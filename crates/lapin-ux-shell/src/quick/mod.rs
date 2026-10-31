@@ -135,6 +135,8 @@ pub enum QuickMsg {
     Magnifier(bool),
     ColorFilter(bool),
     ScreenReader(bool),
+    /// The AT-SPI screen reader flag changed (or its value at start).
+    ReaderFlag(bool),
     /// Contrast themes: unused while they're turned off (no themes yet).
     #[allow(dead_code)]
     HighContrast(bool),
@@ -176,9 +178,7 @@ pub(crate) fn keyboard_layouts() -> Vec<(String, String)> {
 
 /// Is Orca (the screen reader) running?
 pub(crate) fn orca_running() -> bool {
-    std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
-        std::fs::read(e.path().join("cmdline")).is_ok_and(|c| c.split(|b| *b == 0).take(2).any(|a| a.ends_with(b"/orca") || a == b"orca"))
-    })
+    crate::screen_reader::orca_running()
 }
 
 fn hostname() -> String {
@@ -279,7 +279,7 @@ impl Shell {
                 self.quick.backlight = backend::backlight();
                 self.quick.error = None;
                 self.quick.layouts = keyboard_layouts();
-                self.quick.screen_reader = orca_running();
+                self.quick.screen_reader = self.quick.screen_reader || orca_running();
                 self.quick.high_contrast = crate::defaults::high_contrast();
                 let close_centre = Task::future(async {
                     crate::notify_client::close_center().await;
@@ -598,13 +598,17 @@ impl Shell {
             }
             QuickMsg::ScreenReader(on) => {
                 q.screen_reader = on;
+                // Set the flag (so Orca, Settings and apps agree), then match
+                // Orca to it. Changes made elsewhere arrive as ReaderFlag.
                 return Task::future(async move {
-                    let args: &[&str] = if on { &["--replace"] } else { &["--quit"] };
-                    if let Err(e) = tokio::process::Command::new("orca").args(args).spawn() {
-                        tracing::warn!("orca: {e}");
-                    }
+                    crate::screen_reader::set(on).await;
+                    crate::screen_reader::follow(on);
                     cosmic::Action::App(Message::Noop)
                 });
+            }
+            QuickMsg::ReaderFlag(on) => {
+                q.screen_reader = on;
+                crate::screen_reader::follow(on);
             }
             QuickMsg::Agent(ev) => match ev {
                 bt_agent::AgentEvent::Prompt(p) => {

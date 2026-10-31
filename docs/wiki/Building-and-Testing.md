@@ -12,7 +12,7 @@
 ## Tests
 - `lapin-ux-core`: 99 unit tests.
 - Settings: `cargo test --release --locked -p cosmic-settings --bin cosmic-settings lapin` (13 passed).
-- Uninstaller: `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (55 checks, needs dconf and dbus-run-session; run as a normal user) plus `shellcheck`.
+- Uninstaller: `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (59 checks, needs dconf and dbus-run-session; run as a normal user) plus `shellcheck`.
 
 ## Sandbox test harness
 Run `dbus-run-session -- bash run.sh bash b9.sh`. Helpers: `S name [wait]` screenshot, `C x y wait [right]` click, `SH <subcommand>`, `W` wtype, `F app-id "Title"` foot window. Screenshots are 1600x900 with the nested screen at offset (160,50), 1280x800. `mocksys` mocks logind and systemd; `fakebin` stands in for checkupdates, flatpak, fwupdmgr, pkexec. `LAPIN_UX_ANIM_SCALE=10` slows animations for mid-frame captures.

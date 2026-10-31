@@ -1044,7 +1044,7 @@ impl Application for Shell {
                 "input-next" => self.update(Message::Input(crate::input::InputMsg::Next)),
                 // Ctrl+Win+Enter: Narrator (Orca) on / off.
                 "narrator" => {
-                    let on = !crate::quick::orca_running();
+                    let on = !(self.quick.screen_reader || crate::quick::orca_running());
                     self.update(Message::Quick(crate::quick::QuickMsg::ScreenReader(on)))
                 }
                 // Left Alt+Left Shift+Print Screen (contrast themes): off for
@@ -1089,6 +1089,7 @@ impl Application for Shell {
             crate::quick::media::subscription().map(|p| Message::Quick(crate::quick::QuickMsg::Media(p))),
             crate::quick::bt_agent::subscription().map(|e| Message::Quick(crate::quick::QuickMsg::Agent(e))),
             crate::input::subscription().map(Message::Input),
+            crate::screen_reader::subscription().map(|on| Message::Quick(crate::quick::QuickMsg::ReaderFlag(on))),
             crate::comp_extras::sensor_subscription().map(|s| Message::Extras(crate::comp_extras::ExtrasMsg::Sensor(s))),
             wl::subscription().map(Message::Wayland),
             // Watch the files directly: works even when COSMIC's settings
