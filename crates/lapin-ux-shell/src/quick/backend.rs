@@ -68,12 +68,22 @@ impl Service {
         }
     }
 
-    async fn snapshot(self, c: &Connection) -> Event {
-        match self {
-            Service::Network => Event::Network(network(c).await.unwrap_or_default()),
+    /// The service's state now. `None`: a read failed while the service is
+    /// running (an object vanished mid-change), so keep showing the last
+    /// good state rather than "offline" (#39).
+    async fn snapshot(self, c: &Connection) -> Option<Event> {
+        Some(match self {
+            Service::Network => match network(c).await {
+                Ok(n) => Event::Network(n),
+                Err(e) if has_owner(c, NM).await => {
+                    tracing::debug!("network: read failed while NetworkManager runs, keeping the last state: {e}");
+                    return None;
+                }
+                Err(_) => Event::Network(Network::default()),
+            },
             Service::Bluetooth => Event::Bluetooth(bluetooth(c).await.unwrap_or_default()),
             Service::Power => Event::Power(power(c).await),
-        }
+        })
     }
 }
 
@@ -109,7 +119,9 @@ fn watch(service: Service) -> Subscription<Event> {
             }
             let mut signals = futures::stream::select_all(streams);
             loop {
-                let _ = out.send(service.snapshot(&conn).await).await;
+                if let Some(event) = service.snapshot(&conn).await {
+                    let _ = out.send(event).await;
+                }
                 if signals.next().await.is_none() {
                     return futures::future::pending().await;
                 }
@@ -122,6 +134,13 @@ fn watch(service: Service) -> Subscription<Event> {
 }
 
 use futures::FutureExt;
+
+/// Whether a bus name has an owner (the service is running).
+async fn has_owner(c: &Connection, name: &str) -> bool {
+    let Ok(dbus) = zbus::fdo::DBusProxy::new(c).await else { return false };
+    let Ok(name) = zbus::names::BusName::try_from(name) else { return false };
+    dbus.name_has_owner(name).await.unwrap_or(false)
+}
 
 pub fn subscriptions() -> Subscription<Event> {
     Subscription::batch([watch(Service::Network), watch(Service::Bluetooth), watch(Service::Power), audio_subscription()])
@@ -199,17 +218,46 @@ pub async fn network(conn: &Connection) -> zbus::Result<Network> {
     n.vpns = vpns;
     n.hotspot = hotspot;
 
-    let primary: OwnedObjectPath = nm.get_property("PrimaryConnection").await?;
-    if primary.as_str() != "/" {
-        let ac = proxy(conn, NM, primary.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await?;
+    // NetworkManager's own view (#39): its overall state and its internet
+    // check. 50+ = connected (local, site or global).
+    let state: u32 = nm.get_property("State").await.unwrap_or(0);
+    n.connectivity = lapin_ux_core::quick::Connectivity::from_nm(nm.get_property("Connectivity").await.unwrap_or(0));
+
+    // The link: the primary connection, or while NM briefly has none (it
+    // moves the default route, re-associates) but says it's connected, the
+    // first active Wi-Fi or wired connection.
+    let mut link_ac: Option<OwnedObjectPath> = None;
+    let primary: OwnedObjectPath = nm.get_property("PrimaryConnection").await.unwrap_or_else(|_| OwnedObjectPath::default());
+    if primary.as_str() != "/" && !primary.as_str().is_empty() {
+        link_ac = Some(primary);
+    } else if state >= 50 {
+        for a in nm.get_property::<Vec<OwnedObjectPath>>("ActiveConnections").await.unwrap_or_default() {
+            let Ok(ac) = proxy(conn, NM, a.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await else { continue };
+            let kind: String = ac.get_property("Type").await.unwrap_or_default();
+            if matches!(kind.as_str(), "802-11-wireless" | "802-3-ethernet") {
+                link_ac = Some(a);
+                break;
+            }
+        }
+    }
+    if let Some(path) = link_ac {
+        let ac = proxy(conn, NM, path.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await?;
         let kind: String = ac.get_property("Type").await.unwrap_or_default();
         n.link_name = ac.get_property("Id").await.unwrap_or_default();
         n.link = if kind == "802-11-wireless" {
-            let strength = n.networks.iter().find(|w| w.active).map_or(0, |w| w.strength);
+            let mut strength = n.networks.iter().find(|w| w.active).map(|w| w.strength);
             if let Some(w) = n.networks.iter().find(|w| w.active) {
                 n.link_name = w.ssid.clone();
             }
-            Link::Wifi { strength }
+            // The active access point can be missing from a scan in
+            // progress: ask it directly instead of showing no bars.
+            if strength.is_none()
+                && let Some(ap) = &active_ap
+                && let Ok(p) = proxy(conn, NM, ap, "org.freedesktop.NetworkManager.AccessPoint").await
+            {
+                strength = p.get_property::<u8>("Strength").await.ok();
+            }
+            Link::Wifi { strength: strength.unwrap_or(0) }
         } else {
             Link::Wired
         };

@@ -25,11 +25,41 @@ pub enum Link {
     Wifi { strength: u8 },
 }
 
+/// NetworkManager's own internet check (its `Connectivity` property).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Connectivity {
+    /// Not checked (or checking turned off): trust the link.
+    #[default]
+    Unknown,
+    /// Connected to a network, but no internet.
+    None,
+    /// Behind a sign-in page (captive portal).
+    Portal,
+    /// Some network, no internet.
+    Limited,
+    Full,
+}
+
+impl Connectivity {
+    /// From NetworkManager's `NMConnectivityState`.
+    pub fn from_nm(v: u32) -> Self {
+        match v {
+            1 => Self::None,
+            2 => Self::Portal,
+            3 => Self::Limited,
+            4 => Self::Full,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Network {
     /// NetworkManager is running.
     pub available: bool,
     pub link: Link,
+    /// Whether that link reaches the internet, as NetworkManager checked.
+    pub connectivity: Connectivity,
     /// Name of the active Wi-Fi network or wired connection.
     pub link_name: String,
     pub wifi_present: bool,
@@ -323,8 +353,12 @@ pub fn wifi_icon(strength: u8) -> &'static str {
 }
 
 pub fn network_icon(n: &Network) -> &'static str {
+    // "No internet" only when NetworkManager's own check says so (#39).
+    let no_internet = matches!(n.connectivity, Connectivity::None | Connectivity::Portal | Connectivity::Limited);
     match n.link {
+        Link::Wired if no_internet => "network-wired-disconnected-symbolic",
         Link::Wired => "network-wired-symbolic",
+        Link::Wifi { .. } if no_internet => "network-wireless-no-route-symbolic",
         Link::Wifi { strength } => wifi_icon(strength),
         Link::Offline if n.wifi_present && !n.wifi_enabled => "network-wireless-offline-symbolic",
         Link::Offline => "network-offline-symbolic",
@@ -468,6 +502,22 @@ mod tile_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn network_icon_follows_networkmanagers_check() {
+        let mut n = Network { available: true, link: Link::Wifi { strength: 80 }, ..Default::default() };
+        // Not checked: trust the link (#39).
+        assert_eq!(network_icon(&n), "network-wireless-signal-excellent-symbolic");
+        n.connectivity = Connectivity::Full;
+        assert_eq!(network_icon(&n), "network-wireless-signal-excellent-symbolic");
+        n.connectivity = Connectivity::Limited;
+        assert_eq!(network_icon(&n), "network-wireless-no-route-symbolic");
+        n.link = Link::Wired;
+        n.connectivity = Connectivity::from_nm(4);
+        assert_eq!(network_icon(&n), "network-wired-symbolic");
+        n.link = Link::Offline;
+        assert_eq!(network_icon(&n), "network-offline-symbolic");
+    }
+
     use super::*;
 
     #[test]
