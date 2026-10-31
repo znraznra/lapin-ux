@@ -331,6 +331,12 @@ fn small_picture<'a>(shell: &'a Shell, id: WindowId, app: &str, w: f32, h: f32) 
     container(inner).width(w).height(h).align_x(Alignment::Center).align_y(Alignment::Center).into()
 }
 
+/// Whether the preview for `app` has anything to show (a window, or a snap
+/// group with one of its windows).
+pub fn has_cards(shell: &Shell, app: &str) -> bool {
+    shell.taskbar.windows().iter().any(|w| w.app == app)
+}
+
 /// Hover preview above a taskbar button: one card per window.
 pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
     let mut cards: Vec<Element<'a, Message>> = shell
@@ -384,6 +390,12 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
                 .on_press(Message::Snap(crate::snap::SnapMsg::RestoreGroup(order)))
                 .into(),
         );
+    }
+    // Never smaller than a card, even for the moment between a window
+    // closing and the preview going: a surface smaller than its rounded
+    // corners is a protocol error that ends the shell's connection (#45).
+    if cards.is_empty() {
+        cards.push(cosmic::widget::Space::new().width(Length::Fixed(220.0)).height(Length::Fixed(40.0)).into());
     }
     let body = container(row::with_children(cards).spacing(4)).padding(4).class(style::panel_bg());
     mouse_area(body)

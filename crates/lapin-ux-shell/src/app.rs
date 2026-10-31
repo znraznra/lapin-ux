@@ -1171,7 +1171,20 @@ impl Shell {
                 WaylandUpdate::Init(tx) => self.wayland_tx = Some(tx),
                 WaylandUpdate::Finished => self.wayland_tx = None,
                 WaylandUpdate::Window(info) => self.window_changed(info),
-                WaylandUpdate::Closed(id) => self.window_closed(id),
+                WaylandUpdate::Closed(id) => {
+                    self.window_closed(id);
+                    // A window preview with nothing left to show closes
+                    // (#45): it would shrink below its rounded corners, and
+                    // the compositor ends the shell's connection over that.
+                    let empty = match self.popup.as_ref().map(|p| &p.kind) {
+                        Some(PopupKind::Preview(app) | PopupKind::Windows(app)) => !crate::previews::has_cards(self, app),
+                        _ => false,
+                    };
+                    if empty {
+                        self.hover = None;
+                        return self.close_popup();
+                    }
+                }
                 WaylandUpdate::ActivationToken { token, app_id, exec, terminal } => {
                     return spawn(exec, app_id, terminal, token);
                 }
@@ -1635,6 +1648,18 @@ impl Shell {
             }
             Message::CloseWindow(h) => {
                 self.request(WaylandRequest::Close(h));
+                // Closing the last window from its preview: close the preview
+                // with it, like Windows (#45).
+                let last = match self.popup.as_ref().map(|p| &p.kind) {
+                    Some(PopupKind::Preview(app) | PopupKind::Windows(app)) => {
+                        !self.taskbar.windows().iter().any(|w| &w.app == app && w.handle != h)
+                    }
+                    _ => false,
+                };
+                if last {
+                    self.hover = None;
+                    return self.close_popup();
+                }
             }
             Message::CloseApp(app) => {
                 for w in self.taskbar.windows().iter().filter(|w| w.app == app) {
