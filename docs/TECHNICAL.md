@@ -363,6 +363,11 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   tables (`debug = "line-tables-only"`, PKGBUILD `!strip`) so backtraces
   name files and lines; `start-lapin-ux` sets `RUST_BACKTRACE=1` and logs
   the installed build.
+- Redraw diagnostics (#32, #34): `touch ~/.local/state/lapin-ux/debug-redraw`
+  (or `LAPIN_UX_DEBUG_REDRAW=1`) before signing in makes the shell log to
+  `session.log` its message count every 5 s, every tracked position change,
+  every pop-up/Start/catcher opened or closed (with its anchor), and which
+  surface each click lands on. Delete the file to turn it off.
 - XDG autostart ("startup apps") through `lapin-ux-session.target`. Other
   desktops' own parts in /etc/xdg/autostart (settings daemons, polkit
   agents, panels, session-manager plumbing; rule in

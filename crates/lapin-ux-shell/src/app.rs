@@ -536,16 +536,50 @@ impl Shell {
     pub(crate) fn close_start(&mut self) -> Task<Message> {
         let mut tasks = vec![self.close_popup()];
         if let Some(s) = self.start.take() {
+            if *crate::redraw_debug::ON {
+                crate::redraw_debug::surface("Start closed", s.id);
+            }
             self.start_closed_at = Instant::now();
             tasks.push(destroy_layer_surface(s.id));
         }
         Task::batch(tasks)
     }
 
+    /// What a surface of the shell is, for diagnostics.
+    pub(crate) fn describe_surface(&self, id: window::Id) -> String {
+        if let Some(b) = self.bars.iter().find(|b| b.id == id) {
+            return format!("taskbar on {:?}", b.output_name);
+        }
+        if self.desktop.as_ref().is_some_and(|d| d.id == id) {
+            return "desktop".into();
+        }
+        if self.start.as_ref().is_some_and(|s| s.id == id) {
+            return "Start".into();
+        }
+        if let Some(p) = self.panel.as_ref().filter(|p| p.id == id) {
+            return format!("panel {}", crate::panels::a11y_name(&p.kind));
+        }
+        if let Some(p) = self.popup.as_ref().filter(|p| p.id == id) {
+            return format!("pop-up {:?}", p.kind);
+        }
+        if self.sub.as_ref().is_some_and(|p| p.id == id) {
+            return "submenu".into();
+        }
+        if self.catcher == Some(id) {
+            return "click catcher".into();
+        }
+        format!("unknown surface {id:?}")
+    }
+
     pub(crate) fn close_popup(&mut self) -> Task<Message> {
         let sub = self.close_submenu();
         match self.popup.take() {
-            Some(p) => Task::batch([sub, destroy_popup(p.id)]),
+            Some(p) => {
+                if *crate::redraw_debug::ON {
+                    crate::redraw_debug::surface("pop-up closed", (&p.kind, p.id));
+                }
+                Task::batch([sub, destroy_popup(p.id)])
+            }
             None => sub,
         }
     }
@@ -563,6 +597,9 @@ impl Shell {
         }
         let id = window::Id::unique();
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+        if *crate::redraw_debug::ON {
+            crate::redraw_debug::surface("pop-up opened", (&kind, parent, key, r, self.rects.contains_key(key)));
+        }
         // Menus over the taskbar, or the Task view's desktop row, open upwards.
         let above = self.bars.iter().any(|b| b.id == parent)
             || matches!(kind, PopupKind::DesktopTile(_) | PopupKind::DesktopBackground(_));
@@ -1188,6 +1225,12 @@ impl Application for Shell {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if *crate::redraw_debug::ON {
+            crate::redraw_debug::message();
+            if let Message::Rect(RectangleUpdate::Rectangle((k, r))) = &message {
+                crate::redraw_debug::rect(k, r);
+            }
+        }
         // For crash reports (#29): what the shell was doing just before.
         // Animation frames and position updates arrive every frame; skip them.
         if !matches!(message, Message::AnimTick | Message::Rect(_)) {
@@ -1346,6 +1389,9 @@ impl Shell {
             // taskbar, desktop and Start are one app to it, so a click there
             // is an ordinary click while the menu keeps the input grab.
             Message::PointerPressed(id) => {
+                if *crate::redraw_debug::ON {
+                    crate::redraw_debug::surface("press on", self.describe_surface(id));
+                }
                 let outside = self.popup.as_ref().is_some_and(|p| p.id != id && p.opened.elapsed() > Duration::from_millis(250))
                     && self.sub.as_ref().is_none_or(|s| s.id != id);
                 if outside {

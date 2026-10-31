@@ -34,6 +34,7 @@ mod panels;
 mod previews;
 mod properties;
 mod quick;
+mod redraw_debug;
 mod screen_reader;
 mod snap;
 mod snip;

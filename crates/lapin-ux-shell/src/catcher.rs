@@ -26,6 +26,9 @@ impl Shell {
                 let id = window::Id::unique();
                 self.catcher = Some(id);
                 tracing::debug!(?id, "click catcher on");
+                if *crate::redraw_debug::ON {
+                    crate::redraw_debug::surface("click catcher on", id);
+                }
                 get_layer_surface(SctkLayerSurfaceSettings {
                     id,
                     layer: Layer::Top,
