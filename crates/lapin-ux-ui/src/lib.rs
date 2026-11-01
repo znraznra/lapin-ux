@@ -266,3 +266,15 @@ pub mod a11y {
         }
     }
 }
+
+/// Flags for Lapin apps that run as a single instance, like Windows' own
+/// (Task Manager, Control Panel, Update, Get Started; #37). Opening one again
+/// brings the running window to the front instead of starting another:
+/// `cosmic::app::run_single_instance::<App>(settings, SingleInstance)`.
+#[derive(Debug, Clone, Default)]
+pub struct SingleInstance;
+
+impl cosmic::app::CosmicFlags for SingleInstance {
+    type SubCommand = String;
+    type Args = Vec<String>;
+}

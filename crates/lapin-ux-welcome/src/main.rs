@@ -230,7 +230,7 @@ fn choice<'a>(
 
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = lapin_ux_ui::SingleInstance;
     type Message = Message;
     const APP_ID: &'static str = "dev.lapinux.Welcome";
 
@@ -242,7 +242,7 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _: ()) -> (Self, Task<Message>) {
+    fn init(core: Core, _: lapin_ux_ui::SingleInstance) -> (Self, Task<Message>) {
         let mut app = App {
             core,
             step: Step::Hello,
@@ -506,10 +506,10 @@ impl cosmic::Application for App {
 
 fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-welcome");
-    cosmic::app::run::<App>(
+    cosmic::app::run_single_instance::<App>(
         Settings::default()
             .size(Size::new(760.0, 600.0))
             .resizable(None),
-        (),
+        lapin_ux_ui::SingleInstance,
     )
 }

@@ -1,4 +1,5 @@
 [Desktop Entry]
+SingleMainWindow=true
 Type=Application
 Name=Task Manager
 GenericName=System Monitor

@@ -164,7 +164,7 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = lapin_ux_ui::SingleInstance;
     type Message = Message;
     const APP_ID: &'static str = "dev.lapinux.Update";
 
@@ -176,7 +176,7 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _: ()) -> (Self, Task<Message>) {
+    fn init(core: Core, _: lapin_ux_ui::SingleInstance) -> (Self, Task<Message>) {
         let mut app = App { core, state: State::Checking, updates: Vec::new(), checked_at: None, log: Vec::new(), show_log: false, history: None };
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Update".into(), id),
@@ -389,7 +389,7 @@ fn main() -> cosmic::iced::Result {
     if std::env::var_os("LAPIN_UX_UPDATE_WINDOW").is_none() && open_in_settings() {
         return Ok(());
     }
-    cosmic::app::run::<App>(Settings::default().size(Size::new(860.0, 640.0)), ())
+    cosmic::app::run_single_instance::<App>(Settings::default().size(Size::new(860.0, 640.0)), lapin_ux_ui::SingleInstance)
 }
 
 /// Opens Settings > Update, if the installed Settings is Lapin's.

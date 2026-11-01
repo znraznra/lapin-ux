@@ -435,7 +435,7 @@ fn kbps(bytes_per_sec: f64) -> String {
 
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = lapin_ux_ui::SingleInstance;
     type Message = Message;
     const APP_ID: &'static str = "dev.lapinux.TaskManager";
 
@@ -447,7 +447,7 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _: ()) -> (Self, Task<Message>) {
+    fn init(core: Core, _: lapin_ux_ui::SingleInstance) -> (Self, Task<Message>) {
         let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
             .ok()
             .and_then(|s| s.lines().find(|l| l.starts_with("model name")).and_then(|l| l.split(':').nth(1)).map(|m| m.trim().to_string()))
@@ -1131,5 +1131,5 @@ fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .init();
-    cosmic::app::run::<App>(Settings::default().size(Size::new(1000.0, 700.0)).size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)), ())
+    cosmic::app::run_single_instance::<App>(Settings::default().size(Size::new(1000.0, 700.0)).size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)), lapin_ux_ui::SingleInstance)
 }

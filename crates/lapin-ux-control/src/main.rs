@@ -176,7 +176,7 @@ fn link<'a>(label: &'a str, t: Target, big: bool) -> Element<'a, Message> {
 
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = lapin_ux_ui::SingleInstance;
     type Message = Message;
     const APP_ID: &'static str = "dev.lapinux.ControlPanel";
 
@@ -188,7 +188,7 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _: ()) -> (Self, Task<Message>) {
+    fn init(core: Core, _: lapin_ux_ui::SingleInstance) -> (Self, Task<Message>) {
         let mut app = App { core, large_icons: false, search: String::new() };
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Control Panel".into(), id),
@@ -326,5 +326,5 @@ fn win11_icon(name: &str) -> icon::Handle {
 
 fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-control");
-    cosmic::app::run::<App>(Settings::default().size(Size::new(900.0, 620.0)), ())
+    cosmic::app::run_single_instance::<App>(Settings::default().size(Size::new(900.0, 620.0)), lapin_ux_ui::SingleInstance)
 }
