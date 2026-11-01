@@ -210,12 +210,9 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     };
     center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
 
-    let mut clock_style = shell.clock_style();
-    // Smaller buttons: like Windows, the slim bar shows only the time, and
-    // without seconds even when they're on ("23:23" / "11:23 PM").
-    if style::small_taskbar() {
-        clock_style.seconds = false;
-    }
+    // Seconds only when the user turned them on, on either taskbar size
+    // (#38; Settings > Taskbar behaviors or Time & language > Date & time).
+    let clock_style = shell.clock_style();
     let mut time = column::with_capacity(2).align_x(Alignment::End);
     time = time.push(text::caption(clock_style.time(&shell.now)).size(12.0));
     if !style::small_taskbar() {
