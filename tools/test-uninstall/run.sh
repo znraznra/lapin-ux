@@ -223,8 +223,82 @@ bash $DS leave
 bash $U --settings-only --yes > $HOME/out.txt 2>&1
 check "after uninstall: screen reader off" "[ -z \"\$(dconf read $SR)\" ]"
 }
+scenK() {
+echo "K: a pointer size chosen in Lapin UX stays in Lapin UX (#24)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+CS=/org/gnome/desktop/interface/cursor-size
+dconf write $CS 32
+bash $U --snapshot; bash $DS enter
+dconf write $CS 48
+bash $DS leave
+check "other desktop: its own size back" "[ \"\$(dconf read $CS)\" = 32 ]"
+bash $DS enter
+check "Lapin UX: the size chosen there" "[ \"\$(dconf read $CS)\" = 48 ]"
+bash $DS leave
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "after uninstall: the other desktop's size" "[ \"\$(dconf read $CS)\" = 32 ]"
+}
+scenL() {
+echo "L: your own icon pack, pointer and font survive install, Lapin UX, other desktops and uninstall (#23)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+C=$HOME/.config/cosmic
+mkdir -p $C/com.system76.CosmicTk/v1
+dconf write /org/gnome/desktop/interface/icon-theme "'Tela-circle'"
+dconf write /org/gnome/desktop/interface/cursor-theme "'Bibata-Modern-Ice'"
+dconf write /org/gnome/desktop/interface/font-name "'Inter 11'"
+echo '"Tela-circle"' > $C/com.system76.CosmicTk/v1/icon_theme
+bash $U --snapshot; bash $DS enter
+lapin_writes
+bash $DS leave
+check "other desktop: icon pack kept" "[ \"\$(rd icon-theme)\" = \"'Tela-circle'\" ] && grep -q Tela-circle $C/com.system76.CosmicTk/v1/icon_theme"
+check "other desktop: pointer and font kept" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ] && [ \"\$(rd font-name)\" = \"'Inter 11'\" ]"
+bash $DS enter
+check "Lapin UX: its own icons" "[ \"\$(rd icon-theme)\" = \"'Lapin-UX-dark'\" ]"
+bash $DS leave
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "after uninstall: icon pack, pointer, font still yours" "[ \"\$(rd icon-theme)\" = \"'Tela-circle'\" ] && [ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ] && [ \"\$(rd font-name)\" = \"'Inter 11'\" ]"
+}
+scenM() {
+echo "M: no restore point (Lapin UX set up before they existed): your own values found elsewhere, not reset (#23)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+lapin_writes
+mkdir -p $HOME/.config/gtk-3.0 $HOME/.icons/default
+printf '[Settings]\ngtk-icon-theme-name=Papirus-Dark\ngtk-font-name=Noto Sans 10\n' > $HOME/.config/gtk-3.0/settings.ini
+printf '[Icon Theme]\nInherits=Bibata-Modern-Classic\n' > $HOME/.icons/default/index.theme
+bash $U --snapshot
+check "restore point marked late" "[ -e $HOME/.local/state/lapin-ux/restore/late ]"
+bash $DS enter; bash $DS leave
+check "other desktop: GTK icons from settings.ini, not Adwaita" "[ \"\$(rd icon-theme)\" = \"'Papirus-Dark'\" ]"
+check "other desktop: COSMIC icons the same pack" "grep -q Papirus-Dark $HOME/.config/cosmic/com.system76.CosmicTk/v1/icon_theme"
+check "other desktop: pointer from ~/.icons/default, font from settings.ini" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Classic'\" ] && [ \"\$(rd font-name)\" = \"'Noto Sans 10'\" ]"
+bash $DS enter
+check "Lapin UX: still Lapin's" "[ \"\$(rd icon-theme)\" = \"'Lapin-UX-dark'\" ]"
+bash $DS leave
+rm -rf $HOME/.local/state/lapin-ux; lapin_writes
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "uninstall with no copies: icons from settings.ini" "[ \"\$(rd icon-theme)\" = \"'Papirus-Dark'\" ]"
+}
+scenN() {
+echo "N: the pointer installed from another desktop goes to Lapin UX only (#23)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+dconf write /org/gnome/desktop/interface/cursor-theme "'Bibata-Modern-Ice'"
+bash $U --snapshot
+# what lapin-ux-cursors does outside Lapin UX: Lapin's own copy only
+I=$HOME/.local/state/lapin-ux/lapin-desktop; mkdir -p $I/dconf $I/pointer
+echo "'Cursor-Concept-W11-Tail-HDPi-by-JepriCreations'" > $I/dconf/cursor-theme
+printf '[Icon Theme]\nName=Default\nInherits=Cursor-Concept-W11-Tail-HDPi-by-JepriCreations\n' > $I/pointer/default
+check "this desktop's pointer untouched" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ]"
+bash $DS enter
+check "Lapin UX gets the new pointer" "[ \"\$(rd cursor-theme)\" = \"'Cursor-Concept-W11-Tail-HDPi-by-JepriCreations'\" ] && grep -q Cursor-Concept $HOME/.local/share/icons/default/index.theme"
+bash $DS leave
+check "other desktop: its pointer back" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ] && [ ! -e $HOME/.local/share/icons/default/index.theme ]"
+# an older install wrote Lapin's pointer live from another desktop
+dconf write /org/gnome/desktop/interface/cursor-theme "'Cursor-Concept-W11-Tail-HDPi-by-JepriCreations'"
+bash $DS enter; bash $DS leave
+check "Lapin's value written outside isn't taken as the other desktop's" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ]"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J; do
+for x in A B C D E F G H I J K L M N; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

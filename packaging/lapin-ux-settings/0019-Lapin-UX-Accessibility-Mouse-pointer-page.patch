@@ -1,0 +1,242 @@
+From 2447e525ad097f01d9acfd7ccfb7502b53433009 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 12:00:30 +0800
+Subject: [PATCH] Lapin UX: Accessibility > Mouse pointer page
+
+Pointer style (the extra pointer pack, light or dark, or the system's), the
+busy pointer's colour, and size. Runs lapin-ux-cursors; the size is saved
+for the session start (XCURSOR_SIZE) and GTK's cursor-size. Refs #24
+---
+ cosmic-settings/src/lapin/categories.rs |   1 +
+ cosmic-settings/src/lapin/search.rs     |   3 +
+ cosmic-settings/src/lapin/settings.rs   | 153 ++++++++++++++++++++++++
+ 3 files changed, 157 insertions(+)
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 480c857..43dae86 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -147,6 +147,7 @@ const SPECS: &[Spec] = &[
+         children: &[
+             c("accessibility", "preferences-desktop-accessibility-symbolic", "Vision", "Narrator, contrast, color filters, invert colors"),
+             c("accessibility_magnifier", "zoom-in-symbolic", "Magnifier", "Zoom level, zoom increment"),
++            c("lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, busy colour, size"),
+             c("accessibility_osk", "input-keyboard-symbolic", "Keyboard", "On-screen keyboard"),
+         ],
+     },
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 79d36f2..d4d3611 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -37,6 +37,9 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-taskbar", "Show desktop corner"),
+     ("lapin-taskbar", "Show seconds in system tray clock"),
+     ("time-date", "Show seconds in the taskbar clock"),
++    ("lapin-pointer", "Mouse pointer style"),
++    ("lapin-pointer", "Busy pointer colour"),
++    ("lapin-pointer", "Mouse pointer size"),
+     ("lapin-start", "Show web results in search"),
+     ("lapin-start", "Search engine"),
+     ("lapin-start", "Show recently opened items in Start and jump lists"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 8b1bd80..a850237 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -127,6 +127,14 @@ pub struct Prefs {
+     pub other_apps: bool,
+     /// Taskbar: the Start button's picture ("", a preset, or "custom").
+     pub start_icon: String,
++    /// Mouse pointer (#24): "light" / "dark" (the Windows 11-style pack) or
++    /// "system"; the busy animation's colour; the size in pixels.
++    pub pointer_style: String,
++    pub pointer_busy: String,
++    pub pointer_size: u32,
++    /// The pointer tool is running, or why it failed last.
++    pub pointer_busy_now: bool,
++    pub pointer_error: Option<String>,
+ }
+ 
+ impl Prefs {
+@@ -174,6 +182,11 @@ impl Prefs {
+             pictures: pictures(),
+             other_apps: get(&shell, "show_other_desktop_apps").unwrap_or(false),
+             start_icon: get(&shell, "start_icon").unwrap_or_default(),
++            pointer_style: get(&shell, "pointer_style").unwrap_or_else(pointer_style_now),
++            pointer_busy: get(&shell, "pointer_busy").unwrap_or_else(|| "default".into()),
++            pointer_size: get(&shell, "pointer_size").unwrap_or(24),
++            pointer_busy_now: false,
++            pointer_error: None,
+         }
+     }
+ 
+@@ -207,6 +220,12 @@ pub enum Msg {
+     DndFrom(usize),
+     DndTo(usize),
+     App(String, bool),
++    // Accessibility > Mouse pointer (#24)
++    PointerStyle(usize),
++    PointerBusy(usize),
++    PointerSize(u32),
++    PointerSizeDone,
++    PointerDone(Result<(), String>),
+     // Personalization > Start
+     RecentItems(bool),
+     OtherApps(bool),
+@@ -280,6 +299,30 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+     match msg {
+         Msg::Apps(_) | Msg::Storage(_) | Msg::Update(_) | Msg::Privacy(_) | Msg::SignIn(_) => {}
+         Msg::RecentItems(v) => (p.recent_items = v, save(SHELL, "no_recent_items", &!v)).1,
++        Msg::PointerStyle(i) => {
++            let style = POINTER_STYLES.get(i).map_or("light", |(id, _)| *id);
++            p.pointer_style = style.into();
++            save(SHELL, "pointer_style", &p.pointer_style);
++            return run_pointer_tool(p);
++        }
++        Msg::PointerBusy(i) => {
++            p.pointer_busy = POINTER_BUSY.get(i).copied().unwrap_or("default").into();
++            save(SHELL, "pointer_busy", &p.pointer_busy);
++            return run_pointer_tool(p);
++        }
++        Msg::PointerSize(v) => p.pointer_size = v,
++        // Saved when the slider is let go: Lapin's own setting (the session
++        // passes it to the compositor at sign-in) and GTK's cursor-size.
++        Msg::PointerSizeDone => {
++            save(SHELL, "pointer_size", &p.pointer_size);
++            let _ = std::process::Command::new("gsettings")
++                .args(["set", "org.gnome.desktop.interface", "cursor-size", &p.pointer_size.to_string()])
++                .status();
++        }
++        Msg::PointerDone(r) => {
++            p.pointer_busy_now = false;
++            p.pointer_error = r.err();
++        }
+         Msg::OtherApps(v) => (p.other_apps = v, save(SHELL, "show_other_desktop_apps", &v)).1,
+         Msg::StartIcon(i) => {
+             let id = START_ICONS.get(i).map_or("", |(id, _)| *id);
+@@ -564,6 +607,115 @@ fn taskbar_behaviors<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     ]
+ }
+ 
++// --- Accessibility > Mouse pointer (#24) ------------------------------------
++
++/// Pointer styles: the Windows 11-style pack (downloaded on this computer by
++/// lapin-ux-cursors, never shipped), or the system's own pointer.
++const POINTER_STYLES: [(&str, &str); 3] = [
++    ("light", "Extra pointers, light"),
++    ("dark", "Extra pointers, dark"),
++    ("system", "The system's pointer"),
++];
++
++/// The pack's busy animation colours (its `variants` folders).
++const POINTER_BUSY: [&str; 11] =
++    ["default", "classic", "green", "red", "purple", "indigo", "sunset", "squid", "amber", "candy", "inverted"];
++
++/// Sizes offered by the slider, as on Windows (1 = normal).
++const POINTER_SIZE_MIN: u32 = 24;
++const POINTER_SIZE_STEP: u32 = 8;
++
++/// What's in use now, for accounts that set it before this page existed.
++fn pointer_style_now() -> String {
++    let default = std::env::var_os("HOME")
++        .map(|h| std::path::PathBuf::from(h).join(".local/share/icons/default/index.theme"))
++        .and_then(|p| std::fs::read_to_string(p).ok())
++        .unwrap_or_default();
++    if default.contains("Cursor-Concept-W11") { "light".into() } else { "system".into() }
++}
++
++/// Runs lapin-ux-cursors for the chosen style and busy colour (it downloads
++/// the pack the first time and keeps it, so later changes are quick).
++fn run_pointer_tool(p: &mut Prefs) -> cosmic::app::Task<crate::Message> {
++    p.pointer_busy_now = true;
++    p.pointer_error = None;
++    let mut args: Vec<String> = Vec::new();
++    match p.pointer_style.as_str() {
++        "system" => args.push("--system".into()),
++        style => {
++            if style == "dark" {
++                args.push("--dark".into());
++            }
++            args.push("--variant".into());
++            args.push(p.pointer_busy.clone());
++        }
++    }
++    cosmic::task::future(async move {
++        let r = match tokio::process::Command::new("lapin-ux-cursors").args(&args).output().await {
++            Ok(out) if out.status.success() => Ok(()),
++            Ok(out) => {
++                let err = String::from_utf8_lossy(&out.stderr);
++                Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("The pointer tool stopped with an error.").trim().to_string())
++            }
++            Err(e) => Err(format!("lapin-ux-cursors couldn't start: {e}")),
++        };
++        crate::Message::PageMessage(PMsg::Lapin(Msg::PointerDone(r)))
++    })
++}
++
++fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    static STYLES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
++    let styles: &'static [&'static str] = STYLES.get_or_init(|| POINTER_STYLES.iter().map(|(_, n)| *n).collect());
++    let style_i = POINTER_STYLES.iter().position(|(id, _)| *id == p.pointer_style).unwrap_or(2);
++    let status = if p.pointer_busy_now {
++        "Getting the pointers…".to_string()
++    } else if let Some(e) = &p.pointer_error {
++        format!("They couldn't be installed: {e}")
++    } else if p.pointer_style == "system" {
++        "The pointer your system uses in every desktop".to_string()
++    } else {
++        "\u{201C}Cursor Concept W11 Tail HDPi\u{201D} by JepriCreations, downloaded and converted on this computer".to_string()
++    };
++    let mut rows = vec![
++        settings::item::builder("Mouse pointer style")
++            .description(status)
++            .control(widget::dropdown(styles, Some(style_i), |i| m(Msg::PointerStyle(i))))
++            .apply(Element::from)
++            .into_list_item(),
++    ];
++    if p.pointer_style != "system" {
++        let busy_i = POINTER_BUSY.iter().position(|b| *b == p.pointer_busy).unwrap_or(0);
++        rows.push(
++            settings::item::builder("Busy pointer colour")
++                .description("The spinning circle while an app is working")
++                .control(widget::dropdown(&POINTER_BUSY, Some(busy_i), |i| m(Msg::PointerBusy(i))))
++                .apply(Element::from)
++                .into_list_item(),
++        );
++    }
++    let step = (p.pointer_size.saturating_sub(POINTER_SIZE_MIN) / POINTER_SIZE_STEP + 1).clamp(1, 8);
++    rows.push(
++        settings::item::builder("Size")
++            .description("Applies everywhere after you sign out and back in")
++            .control(
++                widget::row::with_capacity(2)
++                    .spacing(12)
++                    .align_y(cosmic::iced::Alignment::Center)
++                    .push(widget::text::body(step.to_string()))
++                    .push(
++                        widget::slider(1..=8u32, step, |v| m(Msg::PointerSize(POINTER_SIZE_MIN + (v - 1) * POINTER_SIZE_STEP)))
++                            .on_release(m(Msg::PointerSizeDone))
++                            .width(Length::Fixed(250.0)),
++                    ),
++            )
++            .apply(Element::from)
++            .into_list_item(),
++    );
++    rows
++}
++
++lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, colour, size", [("", pointer_rows)]);
++
+ /// Start button pictures (ids the shell knows) and their names.
+ const START_ICONS: [(&str, &str); 6] = [
+     ("", "Lapin UX"),
+@@ -920,6 +1072,7 @@ pub fn register(pages: &mut Binder<PMsg>) {
+     let _ = pages.register::<Multitasking>();
+     let _ = pages.register::<Clipboard>();
+     let _ = pages.register::<LockScreen>();
++    let _ = pages.register::<Pointer>();
+     let _ = pages.register::<super::apps::Page>();
+     let _ = pages.register::<super::storage::Page>();
+     let _ = pages.register::<super::storage::TempPage>();
+-- 
+2.43.0
+

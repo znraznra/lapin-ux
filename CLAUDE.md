@@ -123,7 +123,7 @@ checked here.
 ## Checks before pushing
 
 - `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (needs
-  dconf; 59 checks): all checks must pass. Add a scenario for any new shared setting.
+  dconf; 76 checks): all checks must pass. Add a scenario for any new shared setting.
 - `shellcheck -S warning tools/lapin-ux-uninstall`.
 - Forks you touched: `cargo check --locked` (or a build) at the pinned commit
   with all patches applied.

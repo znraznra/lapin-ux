@@ -63,9 +63,21 @@ if [ -f /usr/share/lapin-ux/fonts.conf ] && [ -z "${FONTCONFIG_FILE:-}" ]; then
     export FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf
 fi
 
+# Mouse pointer size from Settings > Accessibility > Mouse pointer (#24): the
+# compositor and apps read it once when they start. Only this session's
+# environment; other desktops keep their own.
+POINTER_SIZE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/cosmic/dev.lapinux.Shell/v1/pointer_size"
+if [ -z "${XCURSOR_SIZE:-}" ] && [ -f "$POINTER_SIZE_FILE" ]; then
+    POINTER_SIZE=$(tr -dc '0-9' < "$POINTER_SIZE_FILE")
+    if [ -n "$POINTER_SIZE" ] && [ "$POINTER_SIZE" -ge 16 ] && [ "$POINTER_SIZE" -le 128 ]; then
+        export XCURSOR_SIZE="$POINTER_SIZE"
+    fi
+fi
+
 if command -v systemctl >/dev/null; then
     systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
     [ -n "${FONTCONFIG_FILE:-}" ] && systemctl --user import-environment FONTCONFIG_FILE
+    [ -n "${XCURSOR_SIZE:-}" ] && systemctl --user import-environment XCURSOR_SIZE
 fi
 
 # Keep a log of this session (and the previous one) for bug reports:

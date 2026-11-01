@@ -66,8 +66,9 @@ COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_the
 # GNOME/GTK settings (dconf). A plain name is under $GPATH; a name with a
 # slash is under /org/gnome/desktop/. The screen reader keys are what the
 # AT-SPI "screen reader on" and "accessibility on" flags are kept in (#18):
-# Narrator in Lapin UX mustn't start Orca in another desktop.
-GKEYS=(font-name document-font-name icon-theme cursor-theme toolkit-accessibility
+# Narrator in Lapin UX mustn't start Orca in another desktop. cursor-size is
+# Settings > Accessibility > Mouse pointer > Size (#24).
+GKEYS=(font-name document-font-name icon-theme cursor-theme cursor-size toolkit-accessibility
        a11y/applications/screen-reader-enabled)
 GPATH=/org/gnome/desktop/interface
 gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/$1" ;; esac; }
@@ -279,6 +280,59 @@ snap_usable() {   # kind name
     have_snap && saved "$sp" && ! lapins_at "$1" "$2" "$sp"
 }
 
+# Your own value from somewhere else, when the restore point has none (#23):
+# icons, pointer and font are also kept in GTK's settings.ini (nwg-look,
+# lxappearance, Xfce, KDE write it), in ~/.icons/default, and COSMIC and GTK
+# each hold the icon theme. Prints it, quoted the way the setting stores it.
+gtk_ini() {   # key
+    local f v
+    for f in "$CFG/gtk-3.0/settings.ini" "$CFG/gtk-4.0/settings.ini"; do
+        v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" 2>/dev/null | tail -n1 | tr -d '"')
+        [ -n "$v" ] && ! value_is_lapins "$v" && { echo "$v"; return 0; }
+    done
+    return 1
+}
+unquote() { local v=$1; v=${v#\'}; v=${v%\'}; v=${v#\"}; v=${v%\"}; echo "$v"; }
+other_icon_theme() {   # name of a non-Lapin icon theme you had, or nothing
+    local v
+    v=$(gtk_ini gtk-icon-theme-name) && { echo "$v"; return 0; }
+    if dconf_ok; then
+        v=$(unquote "$(dconf read "$(gkey_path icon-theme)" 2>/dev/null)")
+        [ -n "$v" ] && ! value_is_lapins "$v" && { echo "$v"; return 0; }
+    fi
+    v=$(unquote "$(tr -d '[:space:]' < "$(item_path cosmic com.system76.CosmicTk/icon_theme)" 2>/dev/null)")
+    [ -n "$v" ] && ! value_is_lapins "$v" && { echo "$v"; return 0; }
+    return 1
+}
+own_value() {   # kind name -> value in the setting's own format
+    local v
+    case "$1:$2" in
+    dconf:icon-theme) v=$(other_icon_theme) && echo "'$v'" ;;
+    dconf:cursor-theme)
+        if v=$(gtk_ini gtk-cursor-theme-name); then echo "'$v'"
+        else
+            v=$(sed -n 's/^Inherits=//p' "$HOME/.icons/default/index.theme" 2>/dev/null | head -n1)
+            [ -n "$v" ] && ! value_is_lapins "$v" && echo "'$v'"
+        fi ;;
+    dconf:font-name) v=$(gtk_ini gtk-font-name) && echo "'$v'" ;;
+    cosmic:com.system76.CosmicTk/icon_theme) v=$(other_icon_theme) && echo "\"$v\"" ;;
+    *) return 1 ;;
+    esac
+}
+# What other desktops get for a setting that holds Lapin UX's value: the
+# restore point's, else your own from elsewhere (own_value), else the
+# desktop's default (only ever for a value that is recognisably Lapin's).
+other_desktops_value() {   # kind name dest
+    local sp v; sp=$(snap_path "$1" "$2")
+    mkdir -p "$(dirname "$3")"; rm -rf "$3" "$3.absent"
+    if snap_usable "$1" "$2"; then
+        if [ -e "$sp.absent" ]; then : > "$3.absent"; else cp -a "$sp" "$3"; fi
+    elif v=$(own_value "$1" "$2") && [ -n "$v" ]; then
+        printf '%s\n' "$v" > "$3"
+    elif [ "$1" = dconf ]; then : > "$3"
+    else : > "$3.absent"; fi
+}
+
 # ---------------------------------------------------------------- per session
 #
 # Lapin UX and every other desktop keep their own copy of these settings.
@@ -294,17 +348,17 @@ enter_session() {
     while read -r kind name; do
         out=$(store_path "$OUTSIDE" "$kind" "$name")
         in=$(store_path "$INSIDE" "$kind" "$name")
-        if [ "$first" = 1 ] && looks_lapins_now "$kind" "$name"; then
-            # Set up before per-session copies existed: what's there is
-            # Lapin's. Keep it for Lapin UX; other desktops get the restore
-            # point's value, or their default.
-            saved "$in" || item_save "$kind" "$name" "$in"
-            mkdir -p "$(dirname "$out")"; rm -rf "$out" "$out.absent"
-            if snap_usable "$kind" "$name"; then
-                local sp; sp=$(snap_path "$kind" "$name")
-                if [ -e "$sp.absent" ]; then : > "$out.absent"; else cp -a "$sp" "$out"; fi
-            elif [ "$kind" = dconf ]; then : > "$out"
-            else : > "$out.absent"; fi
+        if looks_lapins_now "$kind" "$name"; then
+            # Lapin's value is in place although Lapin UX isn't running: set
+            # up before per-session copies existed (first time), or written
+            # from another desktop (lapin-ux-cursors at install). It's
+            # Lapin's: keep it for Lapin UX. Other desktops keep the copy
+            # they have, unless that's Lapin's too or there's none: then the
+            # restore point's, your own from elsewhere, or the default.
+            [ "$first" = 1 ] && saved "$in" || item_save "$kind" "$name" "$in"
+            if [ "$first" = 1 ] || ! saved "$out" || lapins_at "$kind" "$name" "$out"; then
+                other_desktops_value "$kind" "$name" "$out"
+            fi
         else
             item_save "$kind" "$name" "$out"
             saved "$in" && item_apply "$kind" "$name" "$in"
@@ -366,7 +420,7 @@ offer_cosmic_cleanup() {
 restore_settings() {
     local kind name v changed=0
     if have_snap; then say "Restoring your settings (restore point from $(cat "$SNAP/complete"))."
-    else say "Restoring your settings (no restore point for this account: anything still Lapin UX's goes back to the desktop's default)."; fi
+    else say "Restoring your settings (no restore point for this account: anything still Lapin UX's goes back to your own value where one is found, or the desktop's default)."; fi
     # Other desktops' own copy back in place.
     leave_session && changed=1
     # Anything that still looks like Lapin UX's: the restore point, or the default.
@@ -375,6 +429,11 @@ restore_settings() {
         if snap_usable "$kind" "$name"; then
             say "  $(describe "$kind" "$name"): back to yours (restore point)"
             item_apply "$kind" "$name" "$(snap_path "$kind" "$name")"
+        elif v=$(own_value "$kind" "$name") && [ -n "$v" ]; then
+            say "  $(describe "$kind" "$name"): back to yours ($v)"
+            if [ "$kind" = dconf ]; then dconf_do write "$(gkey_path "$name")" "$v"
+            else run mkdir -p "$(dirname "$(item_path "$kind" "$name")")"
+                 [ "$DRY" = 1 ] || printf '%s\n' "$v" > "$(item_path "$kind" "$name")"; fi
         else
             say "  $(describe "$kind" "$name"): back to the default"
             item_default "$kind" "$name"

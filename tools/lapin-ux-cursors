@@ -3,6 +3,7 @@
 """Install the "Cursor Concept W11 Tail HDPi" mouse pointers for this user.
 
     lapin-ux-cursors [--dark] [--variant NAME] [--from DIR]
+    lapin-ux-cursors --system        (back to the system's own pointer)
 
 Cursor design by JepriCreations — https://www.deviantart.com/jepricreations
 and https://jepricreations.com. Its author doesn't allow the cursor files to
@@ -18,6 +19,7 @@ Needs Python's Pillow (python-pillow).
 import argparse
 import io
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -161,13 +163,99 @@ def fetch(dest):
     sys.exit("The download doesn't contain the cursor files (the upstream pack changed its layout).")
 
 
+def lapin_copy_dir():
+    """Where Lapin UX's own copy of the pointer settings is kept while another
+    desktop's are in place (tools/lapin-ux-uninstall, "per session"), or None
+    when the live settings are Lapin UX's (#23: run at install time from
+    another desktop, this mustn't change that desktop's pointer)."""
+    if "LapinUX" in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":"):
+        return None
+    state = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "lapin-ux")
+    if os.path.exists(os.path.join(state, "lapin-active")):
+        return None
+    return os.path.join(state, "lapin-desktop")
+
+
+def set_pointer(theme_dir):
+    """Make theme_dir (or None: the system's) the pointer, in the live
+    settings or in Lapin UX's own copy."""
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    store = lapin_copy_dir()
+    if store is not None:
+        os.makedirs(os.path.join(store, "dconf"), exist_ok=True)
+        os.makedirs(os.path.join(store, "pointer"), exist_ok=True)
+        with open(os.path.join(store, "dconf", "cursor-theme"), "w") as f:
+            f.write(f"'{theme_dir}'\n" if theme_dir else "")
+        index = os.path.join(store, "pointer", "default")
+        for p in (index, index + ".absent"):
+            if os.path.exists(p):
+                os.remove(p)
+        if theme_dir:
+            with open(index, "w") as f:
+                f.write(f"[Icon Theme]\nName=Default\nInherits={theme_dir}\n")
+        else:
+            open(index + ".absent", "w").close()
+        print("Saved for Lapin UX: it's used the next time you sign in to Lapin UX "
+              "(this desktop keeps its own pointer).")
+        return
+    index = os.path.join(data_home, "icons", "default", "index.theme")
+    if theme_dir:
+        os.makedirs(os.path.dirname(index), exist_ok=True)
+        with open(index, "w") as f:
+            f.write(f"[Icon Theme]\nName=Default\nInherits={theme_dir}\n")
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme_dir],
+                       stderr=subprocess.DEVNULL, check=False)
+        print("It's now your mouse pointer (log out and back in for every app to pick it up).")
+        return
+    try:
+        with open(index) as f:
+            ours = f"Inherits={THEME_DIR}" in f.read()
+    except OSError:
+        ours = False
+    if ours:
+        os.remove(index)
+    current = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"],
+                             capture_output=True, text=True, check=False).stdout.strip().strip("'")
+    if current == THEME_DIR:
+        subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
+                       stderr=subprocess.DEVNULL, check=False)
+    print("Back to the system's mouse pointer (log out and back in for every app to pick it up).")
+
+
+def cached_pack():
+    """The pack from an earlier download (kept in ~/.cache/lapin-ux), so
+    changing the colour in Settings doesn't download it again."""
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+                         "lapin-ux", "cursor-pack")
+    assets = os.path.join(cache, "assets")
+    if os.path.isdir(os.path.join(assets, "light")):
+        return assets
+    with tempfile.TemporaryDirectory() as tmp:
+        found = fetch(tmp)
+        os.makedirs(cache, exist_ok=True)
+        if os.path.isdir(assets):
+            shutil.rmtree(assets)
+        shutil.copytree(found, assets)
+    return assets
+
+
+def use_system():
+    """Stop using the pack: the system's pointer again (the pack stays
+    installed, so switching back is quick)."""
+    set_pointer(None)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dark", action="store_true", help="the dark (black) pointers instead of the light ones")
     ap.add_argument("--variant", default="default", help="busy animation colour (default, classic, green, …)")
     ap.add_argument("--from", dest="src", help="a folder that already holds the pack")
     ap.add_argument("--no-default", action="store_true", help="install, but don't make it your pointer")
+    ap.add_argument("--system", action="store_true", help="go back to the system's own pointer")
     args = ap.parse_args()
+    if args.system:
+        use_system()
+        return
     try:
         import PIL  # noqa: F401
     except ImportError:
@@ -189,7 +277,7 @@ def main():
         elif assets and os.path.isdir(os.path.join(assets, "assets")):
             assets = os.path.join(assets, "assets")
         if not assets:
-            assets = fetch(tmp)
+            assets = cached_pack()
         theme = os.path.join(assets, "dark" if args.dark else "light")
         variant = os.path.join(theme, "variants", args.variant)
         if not os.path.isdir(variant):
@@ -231,13 +319,7 @@ def main():
     if args.no_default:
         return
     # The "default" cursor theme is what apps use when nothing else is set.
-    default = os.path.join(data_home, "icons", "default")
-    os.makedirs(default, exist_ok=True)
-    with open(os.path.join(default, "index.theme"), "w") as f:
-        f.write(f"[Icon Theme]\nName=Default\nInherits={THEME_DIR}\n")
-    subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", THEME_DIR],
-                   stderr=subprocess.DEVNULL, check=False)
-    print("It's now your mouse pointer (log out and back in for every app to pick it up).")
+    set_pointer(THEME_DIR)
 
 
 if __name__ == "__main__":
