@@ -1,0 +1,16 @@
+[package]
+name = "lapin-ux-xembed"
+description = "Lapin UX: puts older X11/Wine tray icons (XEmbed) in the taskbar's tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lapin-ux-core.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+x11rb = { version = "0.13", features = ["composite"] }

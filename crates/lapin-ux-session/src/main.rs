@@ -40,6 +40,8 @@ fn components() -> Vec<Component> {
         // Ours
         c("lapin-ux-shell", true),
         c("lapin-ux-notifyd", true),
+        // older X11/Wine tray icons (XEmbed) into the tray (#33)
+        c("lapin-ux-xembed", false),
         // Reused, unmodified COSMIC services (no visible branding):
         // applies theme/fonts, media keys, night light
         c("cosmic-settings-daemon", false),

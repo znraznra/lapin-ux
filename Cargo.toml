@@ -10,6 +10,7 @@ members = [
     "crates/lapin-ux-control",
     "crates/lapin-ux-update",
     "crates/lapin-ux-welcome",
+    "crates/lapin-ux-xembed",
 ]
 # makepkg checks the COSMIC forks out under packaging/*/src; some of them
 # (cosmic-osd) have no [workspace] table of their own.

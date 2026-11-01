@@ -3064,6 +3064,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapin-ux-xembed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "lapin-ux-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

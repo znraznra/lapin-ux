@@ -1982,9 +1982,14 @@ impl Shell {
                         return Task::batch([prepare, open]);
                     }
                     None => {
+                        // No menu of its own: ask the app to show one
+                        // (ContextMenu is the right-click call; older
+                        // items only answer SecondaryActivate).
                         let proxy = t.item.proxy().clone();
                         return Task::future(async move {
-                            let _ = proxy.secondary_activate(0, 0).await;
+                            if proxy.context_menu(0, 0).await.is_err() {
+                                let _ = proxy.secondary_activate(0, 0).await;
+                            }
                             cosmic::Action::App(Message::Noop)
                         });
                     }
