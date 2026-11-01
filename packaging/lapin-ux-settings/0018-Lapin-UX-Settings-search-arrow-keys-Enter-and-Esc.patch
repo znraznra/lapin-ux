@@ -1,0 +1,255 @@
+From 7120319044aae8dd41dac0a5b796cdf3bc053a38 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 12:00:30 +0800
+Subject: [PATCH 18/19] Lapin UX: Settings search: arrow keys, Enter and Esc
+
+Up/Down move through the suggestions (and the results page), Enter opens
+the highlighted one, Esc clears the search. Refs #35
+---
+ cosmic-settings/src/app.rs          | 61 ++++++++++++++++++++++++++++-
+ cosmic-settings/src/lapin/mod.rs    | 13 ++++++
+ cosmic-settings/src/lapin/search.rs | 49 +++++++++++++++++++----
+ cosmic-settings/src/lapin/view.rs   |  2 +-
+ 4 files changed, 116 insertions(+), 9 deletions(-)
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index d5ec581..dd7a742 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -347,6 +347,23 @@ impl cosmic::Application for SettingsApp {
+                 iced::Event::PlatformSpecific(PlatformSpecific::Wayland(
+                     wayland::Event::Output(wayland::OutputEvent::Removed, o),
+                 )) => Some(Message::OutputRemoved(o)),
++                // Lapin UX: arrow keys, Enter and Esc for Find a setting's
++                // suggestions and results (#35).
++                iced::Event::Keyboard(keyboard::Event::KeyPressed {
++                    key: keyboard::Key::Named(named),
++                    ..
++                }) if crate::lapin::enabled() => {
++                    use crate::lapin::SearchKey;
++                    let key = match named {
++                        keyboard::key::Named::ArrowDown => SearchKey::Down,
++                        keyboard::key::Named::ArrowUp => SearchKey::Up,
++                        keyboard::key::Named::Escape => SearchKey::Escape,
++                        // The box handles its own Enter (on_submit).
++                        keyboard::key::Named::Enter if status == event::Status::Ignored => SearchKey::Enter,
++                        _ => return None,
++                    };
++                    Some(Message::Lapin(crate::lapin::Msg::Key(key)))
++                }
+                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                     key: keyboard::Key::Character(c),
+                     modifiers: m,
+@@ -418,9 +435,18 @@ impl cosmic::Application for SettingsApp {
+                     }
+                     self.lapin.show_results = false;
+                     self.lapin.hide_suggestions = false;
++                    self.lapin.selected = None;
+                     self.search_input = phrase;
+                 }
+                 crate::lapin::Msg::ShowResults => {
++                    // Enter with a suggestion highlighted opens it (#35).
++                    let suggesting = !(self.search_input.trim().is_empty() || self.lapin.show_results || self.lapin.hide_suggestions);
++                    if suggesting && let Some(i) = self.lapin.selected {
++                        if let Some(page) = crate::lapin::search::suggestion_at(&self.lapin.index, &self.search_input, i) {
++                            return self.update(Message::Lapin(crate::lapin::Msg::Pick(page)));
++                        }
++                    }
++                    self.lapin.selected = None;
+                     if !self.search_input.trim().is_empty() {
+                         if self.lapin.index.is_empty() {
+                             self.lapin.index = crate::lapin::search::build(&self.pages, self.lapin.layout.home);
+@@ -429,8 +455,41 @@ impl cosmic::Application for SettingsApp {
+                     }
+                 }
+                 crate::lapin::Msg::HideSuggestions => self.lapin.hide_suggestions = true,
++                // Arrow keys through the suggestions, or the results page.
++                crate::lapin::Msg::Key(key) => {
++                    use crate::lapin::{SearchKey, search};
++                    let query = self.search_input.clone();
++                    let suggesting = !(query.trim().is_empty() || self.lapin.show_results || self.lapin.hide_suggestions);
++                    let rows = if suggesting {
++                        search::suggestion_rows(&self.lapin.index, &query)
++                    } else if self.lapin.show_results {
++                        search::result_count(&self.lapin.index, &query)
++                    } else {
++                        0
++                    };
++                    match key {
++                        SearchKey::Down if rows > 0 => {
++                            self.lapin.selected = Some(self.lapin.selected.map_or(0, |i| (i + 1).min(rows - 1)));
++                        }
++                        SearchKey::Up if rows > 0 => {
++                            self.lapin.selected = self.lapin.selected.and_then(|i| i.checked_sub(1));
++                        }
++                        SearchKey::Escape if suggesting => {
++                            self.lapin.hide_suggestions = true;
++                            self.lapin.selected = None;
++                        }
++                        // Enter on the results page (the box doesn't have it).
++                        SearchKey::Enter if self.lapin.show_results => {
++                            if let Some(page) = self.lapin.selected.and_then(|i| search::result_at(&self.lapin.index, &query, i)) {
++                                return self.update(Message::Lapin(crate::lapin::Msg::Pick(page)));
++                            }
++                        }
++                        _ => {}
++                    }
++                }
+                 crate::lapin::Msg::Pick(page) => {
+                     self.lapin.show_results = false;
++                    self.lapin.selected = None;
+                     self.search_input.clear();
+                     return self.activate_page(page);
+                 }
+@@ -1324,7 +1383,7 @@ impl SettingsApp {
+         let layout = &self.lapin.layout;
+         let page = self.active_page;
+         let body = if self.lapin.show_results && !self.search_input.trim().is_empty() {
+-            crate::lapin::search::results(&self.lapin.index, &self.search_input)
++            crate::lapin::search::results(&self.lapin.index, &self.search_input, self.lapin.selected)
+         } else if page == layout.home {
+             crate::lapin::home_view(&self.pages, layout)
+         } else if layout.is_list(&self.pages, page) {
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 6e742db..28a57b4 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -58,10 +58,21 @@ pub enum Msg {
+     Pick(cosmic_settings_page::Entity),
+     /// Clicked away from the suggestions.
+     HideSuggestions,
++    /// Up/Down/Enter/Esc for the suggestions and results (#35).
++    Key(SearchKey),
+     /// Open the Update app (until Update moves into Settings, stage 4).
+     OpenUpdate,
+ }
+ 
++/// Keys that move through "Find a setting"'s suggestions and results.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum SearchKey {
++    Up,
++    Down,
++    Enter,
++    Escape,
++}
++
+ /// Lapin's state inside the app.
+ #[derive(Default)]
+ pub struct State {
+@@ -78,6 +89,8 @@ pub struct State {
+     /// The "Search results" page is showing.
+     pub show_results: bool,
+     pub hide_suggestions: bool,
++    /// The highlighted suggestion or result (arrow keys), if any.
++    pub selected: Option<usize>,
+ }
+ 
+ impl State {
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 23abf07..79d36f2 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -177,13 +177,34 @@ pub fn find<'a>(index: &'a [Entry], query: &str) -> Vec<&'a Entry> {
+ pub const SUGGESTIONS: usize = 8;
+ 
+ /// The list under "Find a setting".
+-pub fn suggestions<'a>(index: &'a [Entry], query: &str) -> Element<'a, Message> {
++/// How many rows the suggestions list has (its "Show all results" too).
++pub fn suggestion_rows(index: &[Entry], query: &str) -> usize {
++    let n = find(index, query).len();
++    n.min(SUGGESTIONS) + usize::from(n > SUGGESTIONS)
++}
++
++/// What the highlighted suggestion row opens: a page, or None for "Show all
++/// results".
++pub fn suggestion_at(index: &[Entry], query: &str, i: usize) -> Option<Entity> {
++    find(index, query).get(i).filter(|_| i < SUGGESTIONS).map(|e| e.page)
++}
++
++/// The page of the highlighted result.
++pub fn result_at(index: &[Entry], query: &str, i: usize) -> Option<Entity> {
++    find(index, query).get(i).map(|e| e.page)
++}
++
++pub fn result_count(index: &[Entry], query: &str) -> usize {
++    find(index, query).len()
++}
++
++pub fn suggestions<'a>(index: &'a [Entry], query: &str, selected: Option<usize>) -> Element<'a, Message> {
+     let hits = find(index, query);
+     let mut list = column::with_capacity(SUGGESTIONS + 1).spacing(2);
+     if hits.is_empty() {
+         list = list.push(container(text::body("No results").class(style::quiet())).padding([10, 12]));
+     }
+-    for e in hits.iter().take(SUGGESTIONS) {
++    for (i, e) in hits.iter().take(SUGGESTIONS).enumerate() {
+         list = list.push(
+             button::custom(
+                 row::with_capacity(2)
+@@ -194,7 +215,8 @@ pub fn suggestions<'a>(index: &'a [Entry], query: &str) -> Element<'a, Message>
+             )
+             .padding([8, 12])
+             .width(Length::Fill)
+-            .class(style::nav_item(false))
++            // The arrow keys' highlight looks like the selected item.
++            .class(style::nav_item(selected == Some(i)))
+             .on_press(Message::Lapin(Msg::Pick(e.page))),
+         );
+     }
+@@ -203,7 +225,7 @@ pub fn suggestions<'a>(index: &'a [Entry], query: &str) -> Element<'a, Message>
+             button::custom(text::body("Show all results").class(cosmic::theme::Text::Accent))
+                 .padding([8, 12])
+                 .width(Length::Fill)
+-                .class(style::nav_item(false))
++                .class(style::nav_item(selected == Some(SUGGESTIONS)))
+                 .on_press(Message::Lapin(Msg::ShowResults)),
+         );
+     }
+@@ -211,15 +233,28 @@ pub fn suggestions<'a>(index: &'a [Entry], query: &str) -> Element<'a, Message>
+ }
+ 
+ /// The "Search results" page (Enter, or "Show all results").
+-pub fn results<'a>(index: &'a [Entry], query: &'a str) -> Element<'a, Message> {
++pub fn results<'a>(index: &'a [Entry], query: &'a str, selected: Option<usize>) -> Element<'a, Message> {
+     let hits = find(index, query);
+     let head = container(text::title2(format!("Search results for \u{201C}{}\u{201D}", query.trim()))).padding([4, 0, 20, 0]);
+     let mut list = column::with_capacity(hits.len() + 1).spacing(4);
+     if hits.is_empty() {
+         list = list.push(text::body("No results. Try different words.").class(style::quiet()));
+     }
+-    for e in hits {
+-        list = list.push(super::view::page_row(&e.icon, e.label.as_str(), e.path.as_str(), Message::Lapin(Msg::Pick(e.page))));
++    for (i, e) in hits.into_iter().enumerate() {
++        let row = super::view::page_row(&e.icon, e.label.as_str(), e.path.as_str(), Message::Lapin(Msg::Pick(e.page)));
++        // The arrow keys' highlight: a focus ring around the row.
++        list = list.push(if selected == Some(i) {
++            container(row).padding(1).class(cosmic::theme::Container::custom(|t| {
++                let accent: cosmic::iced::Color = t.cosmic().accent_color().into();
++                cosmic::iced::widget::container::Style {
++                    border: cosmic::iced::Border { color: accent, width: 2.0, radius: 6.0.into() },
++                    ..Default::default()
++                }
++            }))
++            .into()
++        } else {
++            row
++        });
+     }
+     column::with_capacity(2)
+         .push(head)
+diff --git a/cosmic-settings/src/lapin/view.rs b/cosmic-settings/src/lapin/view.rs
+index 12df435..72c52a6 100644
+--- a/cosmic-settings/src/lapin/view.rs
++++ b/cosmic-settings/src/lapin/view.rs
+@@ -205,7 +205,7 @@ pub fn header_center<'a>(query: &'a str, state: &'a State) -> Vec<Element<'a, Me
+     // when the list appears.
+     let mut pop = widget::popover(search).position(widget::popover::Position::Bottom).on_close(Message::Lapin(Msg::HideSuggestions));
+     if !(query.trim().is_empty() || state.show_results || state.hide_suggestions) {
+-        pop = pop.popup(container(super::search::suggestions(&state.index, query)).padding([4, 0, 0, 0]));
++        pop = pop.popup(container(super::search::suggestions(&state.index, query, state.selected)).padding([4, 0, 0, 0]));
+     }
+     vec![pop.into()]
+ }
+-- 
+2.43.0
+
