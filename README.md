@@ -97,8 +97,8 @@ flowchart LR
 
 - [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice
 - [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor, Show desktop corner
-- [x] System tray with app menus
-- [x] Clock with calendar
+- [x] System tray with app menus, older X11 and Wine tray icons included
+- [x] Clock with calendar, seconds if you want them
 - [x] Start: type to search, pinned apps and folders, All apps, Recommended, account and power menus, Uninstall
 - [x] Search: apps, Settings pages, files, text inside documents, the web
 - [x] Start slides up as it opens, without touching the taskbar, and slides across to All apps and back
@@ -146,7 +146,7 @@ flowchart LR
 - [x] Keyboard layout switcher and input methods (Japanese, Chinese…)
 - [x] Touch keyboard
 - [x] Narrator, Magnifier, colour filters *(contrast themes off for now: none of our own yet)*
-- [x] System sounds and pointers
+- [x] System sounds and pointers (style, busy colour and size in Settings)
 - [ ] **Store**
 - [x] A clear admin prompt
 - [x] Richer file preview in search

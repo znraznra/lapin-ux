@@ -51,9 +51,18 @@ COSMIC compositor. Arch Linux first.
   (all taskbars / main and where open / where open). Only the current
   desktop's windows are shown.
 - System tray (StatusNotifierItem): left-click activates, right-click opens
-  the app's menu with checkmarks, disabled items and submenus. Discord,
-  Steam, Nextcloud, etc. show up here.
-- Clock with locale-aware date (time only, no seconds, on the slim taskbar);
+  the app's menu with checkmarks, disabled items and submenus (or, for an
+  item without a menu, asks the app for one with `ContextMenu`). Discord,
+  Steam, Nextcloud, etc. show up here. Older X11 and Wine tray icons
+  (XEmbed) show up too, through `lapin-ux-xembed` (#33): it owns
+  `_NET_SYSTEM_TRAY_S0` on Xwayland, keeps each docked icon window
+  off-screen, reads its picture through Composite every half second and
+  publishes it as a StatusNotifierItem on its own D-Bus connection (so the
+  item goes when the icon does); clicks and scrolling go back to the X window
+  as button events.
+- Clock with locale-aware date (seconds when turned on, on both taskbar
+  sizes; the switch is in Taskbar behaviors and in Settings > Time &
+  language > Date & time);
   12 or 24 hours as Settings' Time & language >
   Date & time > 24-hour time says (COSMIC's `military_time`, read only); click
   for a calendar.
@@ -347,6 +356,15 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   changes, emptying the Recycle Bin.
 - Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
+- Settings > Accessibility > Mouse pointer (#24): style (the extra pointers,
+  light or dark, or the system's: `lapin-ux-cursors [--dark] --variant V` or
+  `--system`), the busy pointer's colour (the pack's variants) and size
+  (24–80 px). The pack is kept in `~/.cache/lapin-ux/cursor-pack` after the
+  first download. The size is Lapin's `pointer_size` (exported as
+  `XCURSOR_SIZE` by `start-lapin-ux`, read by the compositor and apps at
+  start) and GTK's `cursor-size` (swapped per session). Run from another
+  desktop, `lapin-ux-cursors` only changes Lapin UX's own copy of the pointer
+  settings (`~/.local/state/lapin-ux/lapin-desktop`).
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - Every app's Open/Save dialog ends with *File name* with the file
@@ -461,9 +479,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 
 ```
 display manager ──> start-lapin-ux ──> lapin-ux-session
-                                      ├─ lapin-ux-comp / cosmic-comp  compositor (ours = upstream + 2 small patches)
+                                      ├─ lapin-ux-comp / cosmic-comp  compositor (ours = upstream + small patches)
                                       ├─ lapin-ux-shell           taskbar ×N, Start menu, tray   ← ours
                                       ├─ lapin-ux-notifyd         notification toasts + centre   ← ours
+                                      ├─ lapin-ux-xembed          X11/Wine tray icons → tray     ← ours
                                       ├─ cosmic-settings-daemon theme, media keys              (reused)
                                       ├─ cosmic-bg              wallpaper                      (reused)
                                       ├─ lapin-ux-osd           volume pop-ups, admin prompt   (COSMIC's + patch)
@@ -477,6 +496,7 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 | `lapin-ux-shell` | Taskbar, Start menu, tray, popups, first-run defaults | yes |
 | `lapin-ux-notifyd` | Notification server and toasts | yes |
 | `lapin-ux-session` | Compositor handshake and process supervisor. 2 tests. | no |
+| `lapin-ux-xembed` | XEmbed tray (X11/Wine icons) as StatusNotifierItems | no |
 | `lapin-ux-taskmgr` | Task Manager | yes |
 | `lapin-ux-control` | Control Panel | yes |
 | `lapin-ux-update` | Update (pacman + Flatpak + firmware) | yes |
@@ -484,12 +504,17 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 | `lapin-ux-ui` | Shared widget styles (4 px buttons, round slider thumbs, sidebar items, icon + title for title bars) | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
-pinned commit plus five patches adding `lapin_shell_v1` (`protocols/`, version 3): snap a
+pinned commit plus seven patches adding `lapin_shell_v1` (`protocols/`, version 3): snap a
 window into a fraction of the work area, tell the shell when a window asks
 for attention, desktop peek, night light (also on the real-screen KMS path),
 touchpad swipes for the shell, the Alt key's state for the shell's Alt+Tab
-switcher (v3 `alt` event), and a window-open animation; plus title bars with
-the app icon and a left-aligned title. Everything else works on stock cosmic-comp.
+switcher (v3 `alt` event), and a window-open animation that grows the window
+at its real size (patch 0006, #42); plus title bars with the app icon and a
+left-aligned title. Patch 0007 (#28) publishes `_NET_WORKAREA` on the X root
+window in the Lapin session: the screen minus layer-shell exclusive zones
+(the taskbar), in X coordinates, updated when layers map, change or go and
+when outputs or the Xwayland scale change; X11 apps such as Steam place their
+own pop-ups inside it. Everything else works on stock cosmic-comp.
 
 Five more COSMIC programs are built with small patches, each as its own
 package that replaces the original: `lapin-ux-greeter` (lock and sign-in
@@ -544,7 +569,16 @@ plan; `--settings-only` only restores settings (for someone who already ran
   wallpaper, shortcuts (`custom`, `system_actions`), focus policy and the
   four theme folders; `~/.local/share/icons/default/index.theme`. Saved once
   in `~/.local/state/lapin-ux/restore`. Accounts set up before this existed
-  get a `late` marker instead (no originals).
+  get a `late` marker instead (no originals). GTK's cursor-size is swapped
+  per session too.
+- **Your own values first (#23).** When a setting holds Lapin's value outside
+  Lapin UX and the restore point has no usable value, other desktops (and
+  uninstalling) get the user's own value found elsewhere before any default:
+  icon theme, pointer and font from `~/.config/gtk-3.0|gtk-4.0/settings.ini`,
+  the pointer from `~/.icons/default/index.theme`, the icon theme from
+  whichever of GTK's and COSMIC's settings isn't Lapin's. An existing
+  other-desktops copy is never replaced by a Lapin value written outside the
+  session.
 - **Restore.** A value is only changed while it is still Lapin UX's
   (Selawik, Lapin-UX/Win11 icons, Lapin's pointer, wallpaper or shortcuts),
   so later choices made elsewhere stay. With a restore point it goes back to
