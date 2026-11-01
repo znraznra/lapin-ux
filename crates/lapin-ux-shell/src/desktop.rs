@@ -66,6 +66,7 @@ fn trash_shown(full: bool) -> Shown {
         label: "Recycle Bin".into(),
         look: Look::Named(if full { "user-trash-full".into() } else { "user-trash".into() }),
         launch: None,
+        shortcut: false,
     }
 }
 
@@ -93,6 +94,8 @@ pub struct Shown {
     look: Look,
     /// For launchers: the catalog id it matches, or its own Exec line.
     launch: Option<Launch>,
+    /// A launcher or a link: drawn with the shortcut arrow (#43).
+    shortcut: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -238,9 +241,10 @@ impl IconSize {
     /// Cell width, cell height, icon size.
     fn metrics(self) -> (f32, f32, u16) {
         match self {
-            IconSize::Small => (76.0, 76.0, 32),
-            IconSize::Medium => (92.0, 100.0, 48),
-            IconSize::Large => (120.0, 132.0, 72),
+            // Room for a two-line name under the icon (#43).
+            IconSize::Small => (76.0, 92.0, 32),
+            IconSize::Medium => (92.0, 108.0, 48),
+            IconSize::Large => (120.0, 140.0, 72),
         }
     }
 }
@@ -346,6 +350,7 @@ impl Shell {
                         label: de.name(&locales).map(|n| n.to_string()).unwrap_or_else(|| item.file_name.clone()),
                         look: Look::Named(de.icon().unwrap_or("application-x-executable").to_string()),
                         launch,
+                        shortcut: true,
                         item,
                     };
                 }
@@ -359,7 +364,8 @@ impl Shell {
                 } else {
                     Look::Named(crate::start_view::mime_icon(&item.file_name).into())
                 };
-                Shown { label: item.file_name.clone(), look, launch: None, item }
+                let shortcut = std::fs::symlink_metadata(&item.path).is_ok_and(|m| m.file_type().is_symlink());
+                Shown { label: item.file_name.clone(), look, launch: None, shortcut, item }
             })
             .collect();
         // The Recycle Bin comes first, like the benchmark's.
@@ -385,6 +391,7 @@ impl Shell {
                     label: if id == "user" { user.clone() } else { label.to_string() },
                     look: Look::Named(icon.into()),
                     launch: None,
+                    shortcut: false,
                 });
             }
         }
@@ -1148,23 +1155,103 @@ fn cell_style(selected: bool, target: bool) -> theme::Container<'static> {
     })
 }
 
-/// White label with a dark shadow so it reads on any wallpaper.
-fn label<'a>(s: String, width: f32) -> Element<'a, Message> {
-    let shadow = text::body(s.clone())
-        .width(width)
-        .align_x(Alignment::Center)
-        .class(theme::Text::Custom(|_| cosmic::iced::widget::text::Style { color: Some(Color { a: 0.85, ..Color::BLACK }), ..Default::default() }));
-    let front = text::body(s)
-        .width(width)
-        .align_x(Alignment::Center)
-        .class(theme::Text::Custom(|_| cosmic::iced::widget::text::Style { color: Some(Color::WHITE), ..Default::default() }));
-    // The shadow is a second copy of the text: screen readers skip it.
-    cosmic::iced::widget::stack![lapin_ux_ui::a11y::hidden(container(shadow).padding([1, 0, 0, 1])), front].into()
+/// The selected icon's whole name, drawn over the icons below: the same
+/// accent as a selected cell but solid, so nothing shows through (#43).
+fn expanded_style() -> theme::Container<'static> {
+    theme::Container::custom(|t| {
+        let accent: Color = t.cosmic().accent_color().into();
+        let mix = |a: f32, base: f32| a * 0.45 + base * 0.55;
+        let bg = Color { r: mix(accent.r, 0.11), g: mix(accent.g, 0.11), b: mix(accent.b, 0.12), a: 1.0 };
+        container::Style {
+            background: Some(Background::Color(bg)),
+            border: Border { color: Color { a: 0.8, ..accent }, width: 1.0, radius: 4.0.into() },
+            text_color: Some(Color::WHITE),
+            ..Default::default()
+        }
+    })
 }
 
-fn short(s: &str, max: usize) -> String {
-    if s.chars().count() <= max { s.to_string() } else { format!("{}\u{2026}", s.chars().take(max - 1).collect::<String>()) }
+/// White label with a dark shadow so it reads on any wallpaper.
+fn label<'a>(s: String, width: f32) -> Element<'a, Message> {
+    use cosmic::iced::widget::text::Wrapping;
+    // Both copies get the same width (one pixel less than the cell, for the
+    // shadow's offset), so they wrap at the same places.
+    let line = |s: String, color: Color| {
+        text::body(s)
+            .width(Length::Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .align_x(Alignment::Center)
+            .class(theme::Text::Color(color))
+    };
+    let shadow = container(line(s.clone(), Color { a: 0.85, ..Color::BLACK })).width(width).padding([1, 0, 0, 1]);
+    let front = container(line(s, Color::WHITE)).width(width).padding([0, 1, 1, 0]);
+    // The shadow is a second copy of the text: screen readers skip it.
+    cosmic::iced::widget::stack![lapin_ux_ui::a11y::hidden(shadow), front].into()
 }
+
+/// Text size and line height of desktop labels (`text::body`).
+const LABEL_SIZE: f32 = 14.0;
+const LABEL_LINE: f32 = 14.0 * 1.3;
+
+/// `s` as it fits in `lines` lines of `width` in the interface font, like
+/// Windows: wrapped at words (inside a word only when one word is wider
+/// than the line, e.g. CJK), and cut with "…" at the end of the last line
+/// when it's longer (#43). Measured with the same text engine iced draws
+/// with, and cached.
+fn fit_label(s: &str, width: f32, lines: usize) -> String {
+    use cosmic::iced::advanced::graphics::text::{cosmic_text as ct, font_system};
+    use std::cell::RefCell;
+    thread_local! {
+        static CACHE: RefCell<HashMap<(String, u32, usize), String>> = RefCell::new(HashMap::new());
+    }
+    let key = (s.to_string(), width as u32, lines);
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let Ok(mut fs) = font_system().write() else { return s.to_string() };
+    let raw = fs.raw();
+    let font = cosmic::font::default();
+    let family = match font.family {
+        cosmic::iced::font::Family::Name(n) => ct::Family::Name(n),
+        cosmic::iced::font::Family::Serif => ct::Family::Serif,
+        cosmic::iced::font::Family::Monospace => ct::Family::Monospace,
+        _ => ct::Family::SansSerif,
+    };
+    let attrs = ct::Attrs::new().family(family);
+    let mut buf = ct::Buffer::new(raw, ct::Metrics::new(LABEL_SIZE, LABEL_LINE));
+    let mut count = |t: &str| {
+        let mut b = buf.borrow_with(raw);
+        b.set_wrap(ct::Wrap::WordOrGlyph);
+        b.set_size(Some(width), None);
+        b.set_text(t, &attrs, ct::Shaping::Advanced, None);
+        b.shape_until_scroll(false);
+        b.layout_runs().count()
+    };
+    let fitted = if count(s) <= lines {
+        s.to_string()
+    } else {
+        let chars: Vec<char> = s.chars().collect();
+        let cut = |n: usize| format!("{}\u{2026}", chars[..n].iter().collect::<String>().trim_end());
+        let (mut lo, mut hi) = (0usize, chars.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if count(&cut(mid)) <= lines { lo = mid } else { hi = mid - 1 }
+        }
+        cut(lo)
+    };
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 2000 {
+            c.clear();
+        }
+        c.insert(key, fitted.clone());
+    });
+    fitted
+}
+
+/// The shortcut arrow drawn over launchers' and links' icons (lower-left,
+/// like Windows). Lapin's own drawing.
+const SHORTCUT_ARROW: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="0.5" y="0.5" width="15" height="15" rx="2" fill="#ffffff" stroke="#9aa0a6"/><path d="M4.5 12.5 C4.5 8 6.5 6.5 10 6.5" fill="none" stroke="#1a73e8" stroke-width="1.8" stroke-linecap="round"/><path d="M8.6 3.8 L11.6 6.5 L8.6 9.2" fill="none" stroke="#1a73e8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
 
 pub fn view(shell: &Shell) -> Element<'_, Message> {
     let Some(d) = &shell.desktop else { return widget::Space::new().into() };
@@ -1179,6 +1266,13 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
     }
     let dragging = d.drag.as_ref();
     let target = d.drop_at.map(|p| shell.cell_at(p));
+    // The selected icon whose whole name is shown over the icons below
+    // (#43): only when one icon is selected and its name doesn't fit.
+    let expanded: Option<(Cell, usize)> = (d.selected.len() == 1 && d.rename.is_none() && dragging.is_none())
+        .then(|| d.selected.iter().next())
+        .flatten()
+        .and_then(|path| by_cell.iter().find(|(_, i)| d.items[**i].item.path == *path).map(|(c, i)| (*c, *i)))
+        .filter(|(_, i)| fit_label(&d.items[*i].label, cw - 9.0, 2) != d.items[*i].label);
 
     let mut grid = row::with_capacity(cols as usize);
     for c in 0..cols {
@@ -1188,7 +1282,7 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
             let cell: Element<'_, Message> = match by_cell.get(&(c, r)).map(|&i| &d.items[i]) {
                 Some(s) => {
                     let selected = d.selected.contains(&s.item.path);
-                    let picture: Element<'_, Message> = match &s.look {
+                    let mut picture: Element<'_, Message> = match &s.look {
                         Look::Image(p) => widget::image(widget::image::Handle::from_path(p))
                             .width(isz as f32)
                             .height(isz as f32)
@@ -1198,12 +1292,30 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
                         .size(isz)
                         .into(),
                     };
+                    if s.shortcut {
+                        // The arrow sits on the icon's lower-left corner, a third of its size.
+                        let badge = (isz / 3).max(12);
+                        picture = cosmic::iced::widget::stack![
+                            picture,
+                            container(icon(icon::from_svg_bytes(SHORTCUT_ARROW)).size(badge))
+                                .width(isz as f32)
+                                .height(isz as f32)
+                                .align_x(Alignment::Start)
+                                .align_y(Alignment::End),
+                        ]
+                        .into();
+                    }
                     // While renaming, the label is drawn by the rename box above it.
                     let renaming = d.rename.as_ref().is_some_and(|(p, _)| p == &s.item.path);
                     let caption: Element<'_, Message> = if renaming {
                         widget::Space::new().height(20).into()
+                    } else if expanded.is_some_and(|(cell, _)| cell == (c, r)) {
+                        // Drawn whole by the overlay instead.
+                        widget::Space::new().height(LABEL_LINE * 2.0).into()
                     } else {
-                        label(if selected { short(&s.label, 60) } else { short(&s.label, 22) }, cw - 8.0)
+                        // Two lines at most; the selected icon shows its whole
+                        // name over the icons below (an overlay, see below).
+                        label(fit_label(&s.label, cw - 9.0, 2), cw - 8.0)
                     };
                     let body = column::with_children(vec![picture, caption]).spacing(4).align_x(Alignment::Center);
                     let dim = dragging.is_some_and(|g| g.path == s.item.path);
@@ -1256,6 +1368,21 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
         grid = grid.push(col);
     }
     let mut layers: Vec<Element<'_, Message>> = vec![container(grid).padding(MARGIN as u16).width(Length::Fill).height(Length::Fill).into()];
+    // The selected icon's whole name, over the icons below it (#43).
+    if let Some(((c, r), i)) = expanded {
+        let x = MARGIN + c as f32 * cw + 2.0;
+        let y = MARGIN + r as f32 * ch + 2.0 + 6.0 + isz as f32 + 2.0;
+        layers.push(
+            container(
+                container(label(d.items[i].label.clone(), cw - 8.0))
+                    .width(cw - 4.0)
+                    .padding([2, 2, 4, 2])
+                    .class(expanded_style()),
+            )
+            .padding(cosmic::iced::Padding { top: y, left: x, right: 0.0, bottom: 0.0 })
+            .into(),
+        );
+    }
     // The selection box.
     if let Some(o) = d.band {
         let r = band_rect(o, d.pointer);
