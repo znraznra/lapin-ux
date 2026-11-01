@@ -1,0 +1,244 @@
+From 95ef909c25e26e79fc6940b19d5ac1c0229dcf1f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 12:26:33 +0800
+Subject: [PATCH] Lapin UX: publish _NET_WORKAREA for X11 apps (the screen
+ minus the taskbar)
+
+X11 apps that place their own pop-ups (Steam's friend toasts) use it to stay
+clear of panels; cosmic-comp never set it, so they covered the taskbar.
+Updated when layer surfaces map, change their exclusive zone or go away,
+when outputs change and when Xwayland's scale changes. Refs #28
+---
+ src/state.rs                        |   1 +
+ src/wayland/handlers/compositor.rs  |   8 ++
+ src/wayland/handlers/layer_shell.rs |   4 +
+ src/xwayland.rs                     | 125 +++++++++++++++++++++++++++-
+ 4 files changed, 137 insertions(+), 1 deletion(-)
+
+diff --git a/src/state.rs b/src/state.rs
+index b1f47d4..556da44 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -618,6 +618,7 @@ impl LockedBackend<'_> {
+             state.update_inhibitor_locks();
+             state.common.update_xwayland_settings();
+             state.common.update_xwayland_primary_output();
++            state.common.update_xwayland_workarea();
+         });
+ 
+         Ok(())
+diff --git a/src/wayland/handlers/compositor.rs b/src/wayland/handlers/compositor.rs
+index ed40448..0e5b152 100644
+--- a/src/wayland/handlers/compositor.rs
++++ b/src/wayland/handlers/compositor.rs
+@@ -372,6 +372,10 @@ impl CompositorHandler for State {
+             let changed = layer_map_for_output(&output).arrange();
+             if changed {
+                 shell.workspaces.recalculate();
++                // Lapin UX (#28): X11 apps' work area follows the taskbar.
++                self.common
++                    .event_loop_handle
++                    .insert_idle(|state| state.common.update_xwayland_workarea());
+             }
+         }
+     }
+@@ -431,6 +435,10 @@ impl State {
+                 Shell::set_focus(self, Some(&target), &seat, None, false);
+             }
+             layer_surface.layer_surface().send_configure();
++            // Lapin UX (#28): a new taskbar/panel changes X11 apps' work area.
++            self.common
++                .event_loop_handle
++                .insert_idle(|state| state.common.update_xwayland_workarea());
+             return true;
+         };
+ 
+diff --git a/src/wayland/handlers/layer_shell.rs b/src/wayland/handlers/layer_shell.rs
+index 9653557..868b2c5 100644
+--- a/src/wayland/handlers/layer_shell.rs
++++ b/src/wayland/handlers/layer_shell.rs
+@@ -76,6 +76,10 @@ impl WlrLayerShellHandler for State {
+             }
+ 
+             shell.workspaces.recalculate();
++            // Lapin UX (#28): X11 apps' work area without it.
++            self.common
++                .event_loop_handle
++                .insert_idle(|state| state.common.update_xwayland_workarea());
+ 
+             self.backend.schedule_render(&output);
+         }
+diff --git a/src/xwayland.rs b/src/xwayland.rs
+index f99fc5d..81ede6b 100644
+--- a/src/xwayland.rs
++++ b/src/xwayland.rs
+@@ -33,7 +33,7 @@ use smithay::{
+             utils::draw_render_elements,
+         },
+     },
+-    desktop::space::SpaceElement,
++    desktop::{layer_map_for_output, space::SpaceElement},
+     input::{keyboard::ModifiersState, pointer::CursorIcon, tablet::TabletSeatTrait},
+     reexports::{wayland_server::Client, x11rb::protocol::xproto::Window as X11Window},
+     utils::{
+@@ -73,6 +73,59 @@ pub struct XWaylandState {
+     pub clipboard_selection_dirty: Option<Vec<String>>,
+     pub primary_selection_dirty: Option<Vec<String>>,
+     pub xrdb_thread: Sender<(String, u32)>,
++    /// Lapin UX (#28): the X screen's work area last sent to X11 apps.
++    pub workarea: Option<[u32; 4]>,
++    pub workarea_thread: Sender<[u32; 4]>,
++}
++
++/// Lapin UX (#28): publishes `_NET_WORKAREA` on the X root window, the
++/// screen minus the taskbar (layer-shell exclusive zones), so X11 apps that
++/// place their own pop-ups (Steam's "friend is playing" toasts) keep them
++/// above the taskbar instead of on it. Its own X connection, like xrdb.
++fn workarea_thread(rx: Receiver<[u32; 4]>, display: u32) {
++    use smithay::reexports::x11rb::{
++        connection::Connection,
++        protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode},
++        rust_connection::RustConnection,
++        wrapper::ConnectionExt as _,
++    };
++    let Ok(mut area) = rx.recv() else { return };
++    let (conn, screen) = match RustConnection::connect(Some(&format!(":{display}"))) {
++        Ok(c) => c,
++        Err(err) => {
++            warn!(?err, "Lapin UX: no X connection for _NET_WORKAREA");
++            return;
++        }
++    };
++    let root = conn.setup().roots[screen].root;
++    let atom = |name: &str| {
++        conn.intern_atom(false, name.as_bytes())
++            .ok()
++            .and_then(|c| c.reply().ok())
++            .map(|r| r.atom)
++    };
++    let (Some(workarea), Some(supported)) = (atom("_NET_WORKAREA"), atom("_NET_SUPPORTED")) else {
++        return;
++    };
++    let _ = conn.change_property32(PropMode::APPEND, root, supported, AtomEnum::ATOM, &[workarea]);
++    loop {
++        // Only the newest one matters.
++        while let Ok(newer) = rx.try_recv() {
++            area = newer;
++        }
++        if let Err(err) = conn
++            .change_property32(PropMode::REPLACE, root, workarea, AtomEnum::CARDINAL, &area)
++            .map(|_| ())
++            .and_then(|_| conn.flush())
++        {
++            warn!(?err, "Lapin UX: couldn't set _NET_WORKAREA");
++            return;
++        }
++        match rx.recv() {
++            Ok(a) => area = a,
++            Err(_) => return,
++        }
++    }
+ }
+ 
+ fn xrdb_thread(rx: Receiver<(String, u32)>, display: u32) {
+@@ -145,6 +198,8 @@ impl State {
+                 } => {
+                     let (tx, rx) = mpsc::channel();
+                     std::thread::spawn(move || xrdb_thread(rx, display_number));
++                    let (workarea_tx, workarea_rx) = mpsc::channel();
++                    std::thread::spawn(move || workarea_thread(workarea_rx, display_number));
+ 
+                     data.common.xwayland_state = Some(XWaylandState {
+                         client: client.clone(),
+@@ -156,6 +211,8 @@ impl State {
+                         clipboard_selection_dirty: None,
+                         primary_selection_dirty: None,
+                         xrdb_thread: tx,
++                        workarea: None,
++                        workarea_thread: workarea_tx,
+                     });
+ 
+                     let wm = match X11Wm::start_wm(
+@@ -178,6 +235,7 @@ impl State {
+ 
+                     data.common.update_xwayland_settings();
+                     data.common.update_xwayland_primary_output();
++                    data.common.update_xwayland_workarea();
+                 }
+                 XWaylandEvent::Error => {
+                     if let Some(mut xwayland_state) = data.common.xwayland_state.take() {
+@@ -747,6 +805,71 @@ impl Common {
+                 self.xwayland_scale = Some(new_scale);
+             }
+         }
++        self.update_xwayland_workarea();
++    }
++
++    /// Lapin UX (#28): the area of the X screen not covered by the taskbar
++    /// (any layer-shell exclusive zone), in X coordinates, for
++    /// `_NET_WORKAREA`. One rectangle for the whole X screen, as X has it:
++    /// each edge of the screen gives up the most any monitor on that edge
++    /// reserves.
++    /// Only in the Lapin UX session: in COSMIC's own, as stock COSMIC.
++    pub fn update_xwayland_workarea(&mut self) {
++        static LAPIN: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
++            std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++        });
++        if !*LAPIN {
++            return;
++        }
++        let scale = self.xwayland_scale.unwrap_or(1.);
++        let area = {
++            let shell = self.shell.read();
++            let zones = shell
++                .outputs()
++                .map(|o| {
++                    let geo = o.geometry().as_logical();
++                    let mut zone = layer_map_for_output(o).non_exclusive_zone();
++                    zone.loc += geo.loc;
++                    (geo, zone)
++                })
++                .collect::<Vec<_>>();
++            let Some(bbox) = zones.iter().map(|(g, _)| *g).reduce(|a, b| a.merge(b)) else {
++                return;
++            };
++            let (right, bottom) = (bbox.loc.x + bbox.size.w, bbox.loc.y + bbox.size.h);
++            let (mut l, mut t, mut r, mut b) = (0, 0, 0, 0);
++            for (g, z) in &zones {
++                if g.loc.x == bbox.loc.x {
++                    l = l.max(z.loc.x - g.loc.x);
++                }
++                if g.loc.y == bbox.loc.y {
++                    t = t.max(z.loc.y - g.loc.y);
++                }
++                if g.loc.x + g.size.w == right {
++                    r = r.max((g.loc.x + g.size.w) - (z.loc.x + z.size.w));
++                }
++                if g.loc.y + g.size.h == bottom {
++                    b = b.max((g.loc.y + g.size.h) - (z.loc.y + z.size.h));
++                }
++            }
++            let x = |v: i32| (v.max(0) as f64 * scale).round() as u32;
++            // The X screen starts at 0,0.
++            [
++                x(l),
++                x(t),
++                x(bbox.size.w - l - r),
++                x(bbox.size.h - t - b),
++            ]
++        };
++        if let Some(xstate) = self.xwayland_state.as_mut()
++            && xstate.xwm.is_some()
++            && xstate.workarea != Some(area)
++        {
++            xstate.workarea = Some(area);
++            if xstate.workarea_thread.send(area).is_err() {
++                warn!("Lapin UX: _NET_WORKAREA thread died");
++            }
++        }
+     }
+ 
+     pub fn update_xwayland_primary_output(&mut self) {
+-- 
+2.43.0
+
