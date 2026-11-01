@@ -1,0 +1,84 @@
+From c3fe425d561ba657f0c77db6c5af611fc1a27a86 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 11:43:05 +0800
+Subject: [PATCH] Lapin UX: window open animation follows the window's current
+ size
+
+The open animation scaled the size the window had when it was mapped.
+Apps resize right after mapping (libcosmic restores its window size,
+GTK/Qt settle on their second commit), and the new buffer was scaled
+into the old rectangle: stretched until the animation ended, then a
+snap. It now scales the current geometry every frame (aspect ratio
+kept) and draws from it.
+---
+ src/shell/layout/floating/mod.rs | 29 +++++++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index 3116a97..600dda3 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -139,6 +139,18 @@ impl Animation {
+         }
+     }
+ 
++    /// Where the window is drawn from: the stored geometry, except while it
++    /// opens, where it's always the window's current geometry. Apps resize
++    /// right after mapping (libcosmic restores its size, GTK/Qt settle on a
++    /// second commit); scaling the new buffer into the size it had at map
++    /// time stretched it until the animation ended (Lapin UX #42).
++    fn base_geometry(&self, current: Option<Rectangle<i32, Local>>) -> Rectangle<i32, Local> {
++        match (self, current) {
++            (Animation::Open { .. }, Some(current)) => current,
++            _ => *self.previous_geometry(),
++        }
++    }
++
+     fn previous_geometry(&self) -> &Rectangle<i32, Local> {
+         match self {
+             Animation::Tiled {
+@@ -178,7 +190,10 @@ impl Animation {
+                 geometry.loc.x += offset;
+                 return geometry;
+             }
+-            Animation::Open { start, geometry } => {
++            Animation::Open { start, .. } => {
++                // Scale the current geometry, so a resize during the
++                // animation is followed, aspect ratio kept (#42).
++                let geometry = &current_geometry;
+                 let progress = Instant::now()
+                     .duration_since(*start)
+                     .min(OPEN_ANIMATION_DURATION)
+@@ -1586,7 +1601,10 @@ impl FloatingLayout {
+             let (geometry, alpha) = self
+                 .animations
+                 .get(elem)
+-                .map(|anim| (*anim.previous_geometry(), alpha * anim.alpha()))
++                .map(|anim| {
++                    let current = self.space.element_geometry(elem).map(RectExt::as_local);
++                    (anim.base_geometry(current), alpha * anim.alpha())
++                })
+                 .unwrap_or_else(|| (self.space.element_geometry(elem).unwrap().as_local(), alpha));
+ 
+             let render_location = geometry.loc - elem.geometry().loc.as_local();
+@@ -1639,12 +1657,15 @@ impl FloatingLayout {
+             let (mut geometry, alpha) = self
+                 .animations
+                 .get(elem)
+-                .map(|anim| (*anim.previous_geometry(), alpha * anim.alpha()))
++                .map(|anim| {
++                    let current = self.space.element_geometry(elem).map(RectExt::as_local);
++                    (anim.base_geometry(current), alpha * anim.alpha())
++                })
+                 .unwrap_or_else(|| (self.space.element_geometry(elem).unwrap().as_local(), alpha));
+             let render_location = geometry.loc - elem.geometry().loc.as_local();
+ 
+             let maybe_map = if let Some(anim) = self.animations.get(elem) {
+-                let original_geo = anim.previous_geometry();
++                let original_geo = anim.base_geometry(self.space.element_geometry(elem).map(RectExt::as_local));
+                 geometry = anim.geometry(
+                     output_geometry,
+                     self.space
+-- 
+2.43.0
+
