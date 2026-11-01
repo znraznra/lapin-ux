@@ -1,9 +1,9 @@
 # Lapin UX Wiki
 
-**Lapin UX** is a Linux desktop environment written in Rust that feels like Windows 11, with no plugins and as little command-line use as possible. It is built with libcosmic/iced on top of the COSMIC compositor, Arch Linux first.
+**Lapin UX** is a Linux desktop environment written in Rust that is familiar from the first minute: a zero learning curve, no plugins and as little command-line use as possible. It is built with libcosmic/iced on top of the COSMIC compositor, Arch Linux first.
 
 > Working name: Lapin UX (earlier "Lapin", originally "Atrium").
-> Rule: match Windows 11's behaviour, layout and look. No Microsoft logos, Windows artwork or proprietary fonts. Open-source third-party assets are used under their own licences and credited.
+> Rule: zero learning curve. Everything sits and behaves where people already expect it. No Microsoft logos, artwork or proprietary fonts. Open-source third-party assets are used under their own licences and credited.
 
 Repository: https://github.com/znraznra/lapin-ux (branch `main`)
 
@@ -31,7 +31,7 @@ Repository: https://github.com/znraznra/lapin-ux (branch `main`)
 | 1 Core desktop | Taskbar, Start, notifications, tray, wallpaper, theme | 12 | 0 | 0 |
 | 2 Settings and multitasking | Settings app, quick settings, Alt+Tab/Task view, snapping | 9 | 0 | 0 |
 | 3 System apps | File manager, Update, Control Panel | 4 | 1 | 1 |
-| 4 Road to 1:1 Windows 11 | Everything else | 16 | 1 | 2 |
+| 4 Zero learning curve | Everything else | 16 | 1 | 2 |
 
 Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), snip markup editor, file dialog navigation pane, snap-group shared-edge resize, #23/#24/#28.
 

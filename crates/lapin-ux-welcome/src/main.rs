@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! First-run setup, shown once after the first sign-in (like the end of
 //! Windows' setup): connect to a network, pick light or dark mode, and
-//! optionally get the Windows 11-style pointers. Every step can be skipped.
+//! optionally get the extra mouse pointers. Every step can be skipped.
 
 use cosmic::app::{Settings, Task};
 use cosmic::cosmic_config::{self, ConfigSet};
@@ -449,7 +449,7 @@ impl cosmic::Application for App {
                 lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),
             Step::Pointers => (
-                "Windows 11-style mouse pointers".into(),
+                "Extra mouse pointers".into(),
                 "\"Cursor Concept W11 Tail HDPi\", designed by JepriCreations (deviantart.com/jepricreations). Lapin UX can't include them, so they're downloaded and converted for your own use.".into(),
                 match &self.pointers {
                     _ if self.installing_pointers => text::body("Getting them…").into(),

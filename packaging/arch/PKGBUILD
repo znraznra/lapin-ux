@@ -39,7 +39,7 @@ _osk_commit=6b146a2b0a23d88ae84223ad06c6813bda5a9386
 # Volume/brightness pop-ups and the admin prompt: cosmic-osd plus our patch.
 _osd_commit=4f96e98981712f02b98f704a6f19c4c6a58b378b
 # Settings: COSMIC Settings with Lapin's
-# Windows 11 layout (packaging/lapin-ux-settings) and title bar.
+# layout (packaging/lapin-ux-settings) and title bar.
 _settings_commit=f1d00fc06e18203e880771617657067c10c43321
 # File dialogs: COSMIC's portal built against COSMIC Files plus our patch.
 _portal_commit=f448ddfb296bf7bb23517b24b2f532559a334a1c
@@ -225,7 +225,7 @@ package_lapin-ux-desktop-git() {
         'gnome-keyring'            # saved passwords and SSH keys
     )
     optdepends=('fprintd: fingerprint sign-in (set up in Settings > Accounts > Sign-in options; the sign-in panel shows its prompts)'
-                'howdy-git: face sign-in with an infrared camera, like Windows Hello (AUR; set up in Settings > Accounts > Sign-in options)'
+                'howdy-git: face sign-in with an infrared camera (AUR; set up in Settings > Accounts > Sign-in options)'
                 'flatpak: Flatpak apps in Update, Installed apps and app permissions'
                 'fwupd: firmware updates in Settings > Update'
                 'orca: Narrator (screen reader: Ctrl+Win+Enter, Quick settings, Settings > Accessibility > Vision)'
@@ -314,7 +314,7 @@ package_lapin-ux-comp() {
 }
 
 package_lapin-ux-greeter() {
-    pkgdesc="COSMIC greeter and lock screen with Lapin UX's Windows 11-style faces"
+    pkgdesc="COSMIC greeter and lock screen with Lapin UX's lock and sign-in faces"
     url="https://github.com/pop-os/cosmic-greeter"
     license=('GPL-3.0-only')
     depends=('cosmic-comp' 'cosmic-icon-theme' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
@@ -330,7 +330,7 @@ package_lapin-ux-greeter() {
 }
 
 package_lapin-ux-osk() {
-    pkgdesc="COSMIC on-screen keyboard with Lapin UX's Windows 11 touch keyboard look"
+    pkgdesc="COSMIC on-screen keyboard with Lapin UX's touch keyboard look"
     url="https://github.com/pop-os/cosmic-osk"
     license=('GPL-3.0-only')
     depends=('libxkbcommon' 'wayland' 'systemd-libs')
@@ -342,7 +342,7 @@ package_lapin-ux-osk() {
 }
 
 package_lapin-ux-osd() {
-    pkgdesc="COSMIC on-screen displays with Lapin UX's Windows 11 volume/brightness pop-ups and admin prompt"
+    pkgdesc="COSMIC on-screen displays with Lapin UX's volume/brightness pop-ups and admin prompt"
     url="https://github.com/pop-os/cosmic-osd"
     license=('GPL-3.0-only')
     depends=('libxkbcommon' 'wayland' 'polkit' 'pipewire')
@@ -354,7 +354,7 @@ package_lapin-ux-osd() {
 }
 
 package_lapin-ux-settings() {
-    pkgdesc="Settings for Lapin UX: COSMIC Settings with Windows 11's layout"
+    pkgdesc="Settings for Lapin UX: COSMIC Settings with Lapin UX's layout"
     url="https://github.com/pop-os/cosmic-settings"
     license=('GPL-3.0-only')
     # Same as Arch's cosmic-settings 1:1.10.0-1 (unchanged in 1.11.0).
@@ -381,7 +381,7 @@ package_lapin-ux-settings() {
 }
 
 package_lapin-ux-portal() {
-    pkgdesc="COSMIC desktop portal with Lapin UX's Windows-style file dialogs"
+    pkgdesc="COSMIC desktop portal with Lapin UX's tidy file dialogs"
     url="https://github.com/pop-os/xdg-desktop-portal-cosmic"
     license=('GPL-3.0-only')
     depends=('xdg-desktop-portal' 'pipewire' 'libxkbcommon' 'wayland' 'mesa')

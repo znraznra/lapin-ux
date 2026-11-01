@@ -13,7 +13,7 @@ Workflow: fix, comment what changed and what to retest, label `fixed: needs rete
 | #3 | Lock screen battery icon blank | Standard `battery-level-N[-charging]` names | Closed |
 | #4 / #8 | Round picture on lock and Start | Picture cut to a circle when loaded | Closed |
 | #5 | Settings named "COSMIC Settings" | Renamed inside Lapin, gear icon in Lapin themes | Closed |
-| #6 | Reverse scrolling | Windows wording on Mouse and Touchpad | Closed |
+| #6 | Reverse scrolling | Familiar wording on Mouse and Touchpad | Closed |
 | #7 | Other desktops' apps in Start | `desktops` filter + Settings > Start switch | Closed |
 | #9 | Night light/filters black screen on KMS | `warm` passed at KMS call sites | Closed |
 | #10 | Pantheon owns power key | Logind inhibitor, autostart masked per session | Closed |

@@ -64,7 +64,7 @@ trap restore_pkgver EXIT
 makepkg -si --noconfirm --needed
 restore_pkgver
 
-# Optional Windows 11-style pointers. Their author (JepriCreations) doesn't
+# Optional extra mouse pointers. Their author (JepriCreations) doesn't
 # allow the files to be redistributed, so they're downloaded and converted
 # on this computer, for this user, only if you say yes.
 echo

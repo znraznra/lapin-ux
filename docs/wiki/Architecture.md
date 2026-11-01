@@ -6,8 +6,8 @@ Lapin UX is its own shell on top of cosmic-comp. Compositor changes stay in smal
 | Part | Role |
 |---|---|
 | lapin-ux-core | UI-free logic with 99 unit tests (search, taskbar model, notifications, quick settings, files, desktops filter, clipboard, pins, calendars, processes, snap layouts, displays, night light, updates incl. fwupd JSON, sounds, users/services, crash reporting) |
-| lapin-ux-ui | Shared Windows-style widget styles (4 px push buttons, round slider thumbs, nav items, title bar) |
-| lapin-ux-shell | Taskbar, Start, tray, quick settings, desktop icons, clipboard/emoji, Win+X, Run, Alt+Tab, Task view, snapping, snipping, Shut Down dialog, first-run defaults |
+| lapin-ux-ui | Shared widget styles (4 px push buttons, round slider thumbs, nav items, title bar) |
+| lapin-ux-shell | Taskbar, Start, tray, quick settings, desktop icons, clipboard/emoji, Super+X, Run, Alt+Tab, Task view, snapping, snipping, Shut Down dialog, first-run defaults |
 | lapin-ux-notifyd | Notification server, toasts, centre, agenda, Focus |
 | lapin-ux-session | Starts compositor, supervises components, sign-in sound, exports `FONTCONFIG_FILE` |
 | lapin-ux-taskmgr / -control / -update / -welcome | Task Manager, Control Panel, Update, Get Started |
@@ -16,11 +16,11 @@ Lapin UX is its own shell on top of cosmic-comp. Compositor changes stay in smal
 | Package | Upstream pin | What the patches do |
 |---|---|---|
 | lapin-ux-comp (cosmic-comp 8cb1802) | 5 patches | `lapin_shell` protocol v1-v3 (snap, attention, peek, night light, gestures, open animation, Alt reporting), title bars, night light on the KMS path |
-| lapin-ux-greeter (cosmic-greeter 80e8a10) | 0001-0007 | Windows 11 lock and sign-in faces, session gear, `/etc/pam.d/cosmic-greeter` |
+| lapin-ux-greeter (cosmic-greeter 80e8a10) | 0001-0007 | Lock and sign-in faces, session gear, `/etc/pam.d/cosmic-greeter` |
 | lapin-ux-osk (cosmic-osk 6b146a2) | 1 | Touch keyboard look |
 | lapin-ux-osd (cosmic-osd 4f96e98) | 1 | Volume/brightness pop-ups, admin prompt (own code in `src/lapin.rs`) |
 | lapin-ux-settings (cosmic-settings f1d00fc) | 0001-0013 | Settings app (code in `cosmic-settings/src/lapin/`) |
-| lapin-ux-portal (xdg-desktop-portal-cosmic f448ddf + cosmic-files 3cc4b80) | patch | Windows-style Open/Save dialog |
+| lapin-ux-portal (xdg-desktop-portal-cosmic f448ddf + cosmic-files 3cc4b80) | patch | Open/Save dialog with a tidy footer |
 | libcosmic 430f3d4 | 0001-0008 | Title bars, opt-in card lists, row icons, round slider thumbs, 4 px buttons |
 
 Pinned libcosmic for COSMIC apps is 430f3d4 (comp uses d922ac3). A single split PKGBUILD (`packaging/arch`) builds lapin-ux-desktop-git, -comp, -greeter, -osk, -osd, -settings, -portal; `pkgver()` comes from git. Patches live in `packaging/lapin-ux-*/`.

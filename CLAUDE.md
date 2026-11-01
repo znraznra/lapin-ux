@@ -4,6 +4,29 @@ Project context lives in the claude.ai Project docs (`claude/lapin-overview.md`
 first). This file holds the rules that keep already-shipped fixes from being
 undone. They apply to every change.
 
+## How Lapin UX is described (set 2026-11-01)
+
+Lapin UX is positioned as **a desktop you already know how to use: zero
+learning curve**, everything where people expect it. It is not pitched as a
+copy of, or a "road to", any other operating system.
+
+- Do not write "Windows 11", "Win11", "Windows-style", "like Windows" or "1:1"
+  in the README, `docs/` (including `docs/wiki/`), package descriptions,
+  installer text, UI strings or new commit messages. Say "familiar",
+  "zero learning curve", "the usual", or just describe the behaviour.
+- Call the key the **Super** key (Super+E, Super+X…), not "Win".
+- Phase 4 is "Zero learning curve" (it was "Road to a 1:1 …").
+- Exceptions that must keep their exact names: third-party credits and licences
+  (the Win11 icon theme by yeyushengfan258, the W11 Tail pointer pack and its
+  source URL, Microsoft's Selawik/Fluent), the trademark notice, and
+  functional identifiers (icon theme folder names `Win11`/`Win11-dark`,
+  `third_party/win11-icon-theme`, existing patch file names, code comments).
+  Do not rename those.
+- Keep the independence notice: not affiliated with or endorsed by Microsoft;
+  no Microsoft logos, artwork or proprietary fonts.
+- `docs/wiki/` is synced to the GitHub wiki by `.github/workflows/sync-wiki.yml`;
+  edit the pages there, not in the wiki editor.
+
 ## Before touching anything
 
 1. `git pull` first. Other sessions push to `main` too.

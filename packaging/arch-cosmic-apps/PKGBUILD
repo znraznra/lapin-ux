@@ -1,6 +1,6 @@
 # Maintainer: Lapin UX contributors
 #
-# Optional: COSMIC's own apps (Settings is Lapin's own package now) rebuilt with Windows 11 title bars (the app's
+# Optional: COSMIC's own apps (Settings is Lapin's own package now) rebuilt with familiar title bars (the app's
 # icon and the title at the left, instead of a centred title).
 #
 # Nothing in the apps themselves is changed. The only patch is a few lines in
@@ -18,7 +18,7 @@ pkgbase=lapin-ux-cosmic-apps
 pkgname=('lapin-ux-cosmic-files' 'lapin-ux-cosmic-term' 'lapin-ux-cosmic-edit' 'lapin-ux-cosmic-store')
 pkgver=1.11.0
 pkgrel=1
-pkgdesc="COSMIC apps with Windows 11 title bars for Lapin UX"
+pkgdesc="COSMIC apps with familiar title bars for Lapin UX"
 arch=('x86_64' 'aarch64')
 url="https://github.com/znraznra/lapin-ux"
 license=('GPL-3.0-only')
@@ -79,22 +79,22 @@ _install() {
 }
 
 package_lapin-ux-cosmic-files() {
-    pkgdesc="COSMIC Files with Windows 11 title bars (Lapin UX)"
+    pkgdesc="COSMIC Files with familiar title bars (Lapin UX)"
     provides=('cosmic-files'); conflicts=('cosmic-files')
     _install cosmic-files
 }
 package_lapin-ux-cosmic-term() {
-    pkgdesc="COSMIC Terminal with Windows 11 title bars (Lapin UX)"
+    pkgdesc="COSMIC Terminal with familiar title bars (Lapin UX)"
     provides=('cosmic-terminal'); conflicts=('cosmic-terminal')
     _install cosmic-term
 }
 package_lapin-ux-cosmic-edit() {
-    pkgdesc="COSMIC Text Editor with Windows 11 title bars (Lapin UX)"
+    pkgdesc="COSMIC Text Editor with familiar title bars (Lapin UX)"
     provides=('cosmic-text-editor'); conflicts=('cosmic-text-editor')
     _install cosmic-edit
 }
 package_lapin-ux-cosmic-store() {
-    pkgdesc="COSMIC Store with Windows 11 title bars (Lapin UX)"
+    pkgdesc="COSMIC Store with familiar title bars (Lapin UX)"
     provides=('cosmic-store'); conflicts=('cosmic-store')
     _install cosmic-store
 }

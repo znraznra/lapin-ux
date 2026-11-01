@@ -118,7 +118,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] A password copied from a password manager (KeePassXC etc.) does not appear
 - [ ] Super+. in a text field: type "heart", click one: it's inserted; it shows under "Most recently used" next time
 - [ ] Kaomoji and Symbols tabs insert what you click
-- [ ] Emoji look like Microsoft's Fluent Emoji (soft gradients, Windows 11 style), in the panel and in apps (e.g. a 😀 typed in Firefox or a GTK text field)
+- [ ] Emoji look like Microsoft's Fluent Emoji (soft gradients), in the panel and in apps (e.g. a 😀 typed in Firefox or a GTK text field)
 
 ### Quick settings
 - [ ] Network, volume and (on laptops) battery icons show left of the clock and match reality
@@ -180,7 +180,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 ### Look and feel
 - [ ] Interface text uses the Selawik font everywhere (shell, COSMIC Settings, GTK apps; `fc-match sans-serif` says Selawik)
 - [ ] Pick another interface font in COSMIC Settings: it switches straight back to Selawik
-- [ ] Apps, folders, files, shortcuts and desktop items use the full-colour Win11 icons (also in Start's Recommended list, search results and jump lists); tray, quick settings and menu glyphs are Fluent outline icons
+- [ ] Apps, folders, files, shortcuts and desktop items use the full-colour app icons (also in Start's Recommended list, search results and jump lists); tray, quick settings and menu glyphs are Fluent outline icons
 - [ ] Switching light/dark switches the icon theme between Lapin-UX and Lapin-UX-dark
 - [ ] An icon theme you picked yourself in COSMIC Settings is kept
 - [ ] Blue accent, rounded corners, Lapin UX wallpaper (first login only)
@@ -201,7 +201,7 @@ Mark each item ✅ / ❌. For ❌ note what happened instead.
 - [ ] A quick Alt+Tab tap flips between the last two windows; Alt+Shift+Tab goes backwards; Esc cancels
 - [ ] Ctrl+Alt+Del shows the security screen (Lock, Switch user, Sign out, Change a password, Task Manager; power at the bottom right)
 - [ ] Ctrl+Shift+Esc opens Task Manager: End task closes an app; Performance graphs move; Startup apps can be disabled
-- [ ] Alt+F4 closes the window in front; on the desktop it opens Shut Down Windows
+- [ ] Alt+F4 closes the window in front; on the desktop it opens the Shut Down dialog
 - [ ] Super+P shows Project (with a second monitor: Duplicate / Extend / Second screen only work)
 - [ ] With two keyboard layouts: the taskbar shows ENG / US; click to switch; Super+Space switches
 - [ ] Ctrl+Super+Enter starts / stops Narrator (Orca); Left Alt+Left Shift+Print Screen toggles contrast themes

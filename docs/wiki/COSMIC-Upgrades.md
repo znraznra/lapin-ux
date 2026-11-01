@@ -20,7 +20,7 @@ Lapin UX moved from COSMIC epoch-1.10.0 to **epoch-1.11.0** on 2026-10-21 (commi
 - Not rebuilt in the sandbox: cosmic-osd (only version/translation changes) and the portal (can't be built; gitlab.freedesktop.org is blocked).
 
 ## What 1.11 gave us
-Escape no longer closes COSMIC Files/Text Editor dialogs and search boxes (including our Open/Save dialogs); input-method/virtual-keyboard loop fix (touch keyboard + fcitx5); cosmic-randr KDL escaping of monitor serials (Win+P). Lapin's taskbar volume scrolling was aligned with COSMIC's whole-step behaviour.
+Escape no longer closes COSMIC Files/Text Editor dialogs and search boxes (including our Open/Save dialogs); input-method/virtual-keyboard loop fix (touch keyboard + fcitx5); cosmic-randr KDL escaping of monitor serials (Super+P). Lapin's taskbar volume scrolling was aligned with COSMIC's whole-step behaviour.
 
 ## Procedure for the next bump
 1. Dry-run all patches on the new epoch commits.

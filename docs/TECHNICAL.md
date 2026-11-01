@@ -2,10 +2,11 @@
 
 > The friendly overview, roadmap and screenshots are in the [README](../README.md). This page is the full technical detail: every feature and setting, architecture, building, testing and credits.
 
-A COSMIC-based DE written in Rust. Bringing the ease of use and familiarity
-of Windows UX without the need of plugins and console dependency for everything.
+A COSMIC-based DE written in Rust, designed for a zero learning curve:
+everything is where you expect it, with no plugins and no console needed for
+everyday tasks.
 
-A Linux desktop that feels familiar to anyone coming from Windows 11: a
+A Linux desktop that feels familiar from the first minute: a
 centered taskbar, a Start menu with search, pinned apps and recent files,
 toasts in the bottom-right corner, a system tray, and the keyboard shortcuts
 people already know. Written in Rust with [libcosmic]/iced, running on the
@@ -180,21 +181,21 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
 
 **Settings** (`lapin-ux-settings`, COSMIC Settings at epoch-1.11.0 with
 patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
-- Windows 11 layout: account card and colour category icons in the sidebar
+- Familiar layout: account card and colour category icons in the sidebar
   (Home, System, Bluetooth & devices, Network & internet, Personalization,
   Apps, Accounts, Time & language, Accessibility, Privacy & security,
   Update), Find a setting centred in the title bar, back arrow, breadcrumb
   page titles, category pages of rows, Home, and the System page header
   (wallpaper, PC name and model, Rename, Update's last check).
-- COSMIC's pages are re-parented under Windows' categories at start-up
-  (with Windows' names), not edited; old links (`cosmic-settings system`…)
+- COSMIC's pages are re-parented under the usual categories at start-up
+  (with their usual names), not edited; old links (`cosmic-settings system`…)
   open the matching category.
 - Inside pages: every setting its own card with an icon chosen from its
-  title, grey descriptions, On/Off beside switches, Windows-style drop-downs,
+  title, grey descriptions, On/Off beside switches, tidy drop-downs,
   round slider thumbs, 4 px buttons; Power mode and the primary mouse button
-  as drop-downs; Add buttons inside rows; About laid out like Windows with
+  as drop-downs; Add buttons inside rows; About laid out as a name card with
   Device and OS specification cards (Copy, links).
-- Windows' page layout (`lapin/settings.rs`): Personalization > Taskbar and
+- Page layout (`lapin/settings.rs`): Personalization > Taskbar and
   Start, System > Notifications, Display > Night light and System >
   Multitasking are Lapin pages that read and write the shell's
   `dev.lapinux.Shell` and the notification service's
@@ -213,7 +214,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   Personalization > Lock screen (`lock_wallpaper`, `no_signin_picture`, read
   by the greeter patch 0002; greeter patch 0003 draws the lock and sign-in
   screens in Selawik by name, since the sign-in screen's own user has no
-  font setting; patch 0004 gives the sign-in screen Windows-style corner
+  font setting; patch 0004 gives the sign-in screen rounded corner
   buttons — accessibility, keyboard layout, a gear to pick the desktop
   session (every installed Wayland/X11 session, so you can switch back to
   KDE, GNOME…) and power, each with a flyout), Accounts > Sign-in options (`lapin/signin.rs`: facial
@@ -237,10 +238,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   goes through `lapin_ux_core::system::settings_command(page)`: Lapin pages
   (`lapin-…`) open with `cosmic-settings lapin <id>`, falling back to the
   nearest COSMIC page when COSMIC's own Settings is installed. Start search,
-  Control Panel, Win+X (Installed apps, Power Options, System, Network
+  Control Panel, Super+X (Installed apps, Power Options, System, Network
   Connections, Settings), the taskbar menu's "Taskbar settings", desktop
   Display settings / Personalize, quick settings links, the notification
-  centre's "More notification settings" and Win+I (Settings Home) all open
+  centre's "More notification settings" and Super+I (Settings Home) all open
   the matching page.
 - All Lapin code is in `cosmic-settings/src/lapin/`; COSMIC's files get small
   hooks. The look inside pages comes from opt-in libcosmic patches
@@ -251,7 +252,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 **Pop-ups and admin prompt** (`lapin-ux-osd`, a patch on COSMIC's cosmic-osd)
 - Volume and brightness keys show a small rounded box 12 px above the
   taskbar: icon, thin bar, number.
-- When an app needs admin rights, polkit's request shows as Windows'
+- When an app needs admin rights, polkit's request shows as a clear
   "Do you want to allow this app to make changes to your device?": the screen
   dims, a card names the program, *Show more details* lists the action and
   command, and the password box sits above Yes / No.
@@ -266,13 +267,13 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   the patch applied to the build's private libcosmic copy (lockfiles stay
   frozen). GTK, Electron and Qt/KDE apps keep their own title bars.
 
-**Snipping** (Win+Shift+S or Print Screen)
+**Snipping** (Super+Shift+S or Print Screen)
 - The screen freezes and dims; pick Rectangle (drag), Window or Full screen
   from the toolbar. The snip is copied to the clipboard, saved in
   Pictures/Screenshots, and a notification shows it.
 
 **System tools**
-- **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Win+X): Processes (apps with
+- **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Super+X): Processes (apps with
   their child processes, background processes, CPU/memory/disk, End task, Run
   new task), Performance graphs, Startup apps (turn them on or off), Users
   (who is signed in, from logind, with their CPU and memory; Manage user
@@ -285,12 +286,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   button (polkit), shows progress and history, and offers a restart when the
   kernel or firmware changed. A background check notifies you when updates are waiting.
 - **Get Started**: on the first sign-in, connect to Wi-Fi, choose light or
-  dark mode, and optionally get the Windows 11-style pointers.
+  dark mode, and optionally install the extra mouse pointers.
 - Desktop icons: **Properties** (Alt+Enter), *This PC*, user folder, *Network*
   and *Control Panel* icons, *Open with ›* with **Choose another app** ("How do
   you want to open this file?"), *Compress to ZIP file*, *Show more options*.
-- Win+P (*Project*), Ctrl+Alt+Del security screen, Alt+F4 on the desktop opens
-  *Shut Down Windows*.
+- Super+P (*Project*), Ctrl+Alt+Del security screen, Alt+F4 on the desktop opens
+  *Shut Down* with your Linux's name.
 
 **Lock screen and sign-in** (`lapin-ux-greeter`, a patch on COSMIC's greeter)
 - Lock screen: big clock and date over the wallpaper; click or type to get the
@@ -304,14 +305,14 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 
 **Typing**
 - With several keyboard layouts or fcitx5 input methods, the taskbar shows
-  the current one (**ENG / US**, or あ, 拼…); click to pick, **Win+Space** for the next.
+  the current one (**ENG / US**, or あ, 拼…); click to pick, **Super+Space** for the next.
 - **Touch keyboard** (`lapin-ux-osk`, a patch on COSMIC's on-screen keyboard)
-  in Windows 11's style, with emoji and clipboard buttons; right-click the
+  with a familiar look, emoji and clipboard buttons; right-click the
   taskbar → *Show touch keyboard button*.
 
 **Accessibility**
 - Quick settings → Accessibility: Magnifier, Colour filters, **Narrator**
-  (Orca; Ctrl+Win+Enter). Contrast themes are turned off for now (Lapin UX
+  (Orca; Ctrl+Super+Enter). Contrast themes are turned off for now (Lapin UX
   has none of its own yet; COSMIC's high-contrast palette didn't work as
   one): no quick setting, no shortcut, hidden in Settings and on the lock
   screen; an upgrade turns a high-contrast palette off again.
@@ -322,7 +323,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   Screen reader shows **Install** (the admin prompt, then
   `pacman -S orca espeak-ng`) instead of a switch.
 - One owner for Orca (#18): the AT-SPI flag `org.a11y.Status
-  ScreenReaderEnabled` is the switch. Quick settings, Ctrl+Win+Enter and
+  ScreenReaderEnabled` is the switch. Quick settings, Ctrl+Super+Enter and
   Settings only set it (and `IsEnabled`, so Chromium/Electron apps turn their
   accessibility on); the shell watches it and starts or stops Orca. at-spi
   keeps the flags in `org.gnome.desktop.a11y.applications
@@ -344,11 +345,11 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,
   notifications (apps can ask for silence or their own sound), alarms, volume
   changes, emptying the Recycle Bin.
-- Windows 11-style pointers by JepriCreations, installed on request
+- Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
-- Every app's Open/Save dialog ends like Windows': *File name* with the file
+- Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
 
 **Session** (`lapin-ux-session`, `start-lapin-ux`)
@@ -480,7 +481,7 @@ display manager ──> start-lapin-ux ──> lapin-ux-session
 | `lapin-ux-control` | Control Panel | yes |
 | `lapin-ux-update` | Update (pacman + Flatpak + firmware) | yes |
 | `lapin-ux-welcome` | First-run setup | yes |
-| `lapin-ux-ui` | Shared Windows-style widget styles (4 px buttons, round slider thumbs, sidebar items, icon + title for title bars) | yes |
+| `lapin-ux-ui` | Shared widget styles (4 px buttons, round slider thumbs, sidebar items, icon + title for title bars) | yes |
 
 `lapin-ux-comp` (`packaging/lapin-ux-comp`) is upstream cosmic-comp at a
 pinned commit plus five patches adding `lapin_shell_v1` (`protocols/`, version 3): snap a
@@ -637,7 +638,7 @@ those terms.
 | Noto fonts (Arch packages) | Only characters Selawik lacks (CJK, other scripts) | SIL Open Font License 1.1 | installed as dependencies | [notofonts](https://github.com/notofonts) |
 | Borealis sound theme 0.9a, © 2004 Ivica Ico Bukvic | System sounds (sign-in, notifications, volume, Recycle Bin…) | Artistic License, with the author's note that commercial use is allowed only with GPL/LGPL software | `data/sounds/borealis/` (unmodified, from Ubuntu's `borealis-sound-theme` package; licence in `COPYING`, origin in `SOURCE`) | [ico.bukvic.net](http://ico.bukvic.net/Linux/Borealis_soundtheme/) |
 
-**Mouse pointers.** The Windows 11-style pointers are *Cursor Concept W11 Tail
+**Mouse pointers.** The optional pointers are *Cursor Concept W11 Tail
 HDPi*, **designed by JepriCreations**
 ([DeviantArt](https://www.deviantart.com/jepricreations),
 [jepricreations.com](https://jepricreations.com)). Their licence allows
@@ -650,7 +651,7 @@ and makes it your pointer.
 
 Installed packages put every licence in `/usr/share/licenses/lapin-ux-desktop-git/`.
 
-**Trademarks.** Microsoft, Windows, Windows 11, Fluent and Selawik are
+**Trademarks.** Microsoft, Windows, Fluent and Selawik are
 trademarks of Microsoft Corporation. "Selawik" is a Reserved Font Name under
 the OFL, so the font is shipped unmodified under its own name; a modified
 version would have to be renamed. Ubuntu and Yaru are trademarks of
@@ -659,8 +660,8 @@ app icons in the Win11 theme belong to their respective owners. These names
 are used only to identify the assets and what Lapin UX is compatible with or
 inspired by; Lapin UX is an independent open-source project and is not
 affiliated with, sponsored or endorsed by Microsoft, Canonical, System76 or
-any other trademark owner. Lapin UX ships no Microsoft logos, Windows
-artwork or proprietary fonts.
+any other trademark owner. Lapin UX ships no Microsoft logos, artwork or
+proprietary fonts.
 
 Don't want these defaults? Pick any other font or icon theme in COSMIC
 Settings; Lapin UX never overwrites your choice.

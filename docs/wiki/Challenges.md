@@ -7,8 +7,8 @@ Roadblocks met so far and how each was handled.
 - **Upstream churn.** COSMIC changes often. Pinning to epoch tags, building with upstream lockfiles and dry-running every patch on the next epoch (see [COSMIC Upgrades](COSMIC-Upgrades)) keeps rebasing cheap. 1.10 to 1.11 applied cleanly.
 - **libcosmic shared checkout.** In the sandbox the shared cargo checkout of libcosmic gets patched for Settings/greeter/osk builds, but Lapin's own crates must build against an unpatched copy. Reset and rebuild in the right order.
 
-## Proprietary Windows assets
-Segoe UI, Segoe Fluent Icons, Windows sounds and pointers can't be shipped. Replaced by Selawik, Fluent UI System Icons, Fluent Emoji, Borealis sounds, and the JepriCreations pointer pack, which can't be redistributed so `lapin-ux-cursors` downloads and converts it on the user's machine.
+## Proprietary assets we can't ship
+Segoe UI, Segoe Fluent Icons and Microsoft's sounds and pointers can't be shipped. Replaced by Selawik, Fluent UI System Icons, Fluent Emoji, Borealis sounds, and the JepriCreations pointer pack, which can't be redistributed so `lapin-ux-cursors` downloads and converts it on the user's machine.
 
 ## Testing without the hardware
 The sandbox only runs the nested (winit) compositor backend. That can't reproduce KMS-only code (#9), real session locking (#1), real keyboard modifier delivery (#22) or touch hardware. These need careful code reading and Tako's retest on real machines.

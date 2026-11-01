@@ -1,21 +1,21 @@
 # Lapin UX Whitepaper
 
-*A Windows 11-familiar desktop for Linux, built by patching COSMIC rather than replacing it.*
+*A zero-learning-curve desktop for Linux, built by patching COSMIC rather than replacing it.*
 
 Version of 2026-10-28, build `dca07a2`.
 
 ## Abstract
 
-Many people who want to leave Windows are put off by the unfamiliarity of Linux desktops, the need for plugins and extensions to get a familiar layout, and frequent trips to the terminal. Lapin UX is a desktop environment written in Rust that reproduces Windows 11's behaviour, layout and look on Linux, with no plugins and as little command-line use as possible. It is built with libcosmic/iced on the COSMIC compositor and targets Arch Linux first. This paper describes the goals, the engineering approach (own shell plus small patches against pinned COSMIC releases), the safeguards that let it coexist with other desktops, the testing and review method, what has been delivered, and what remains.
+Many people who would try Linux are put off by unfamiliar desktops, the need for plugins and extensions to get a layout they can read at a glance, and frequent trips to the terminal. Lapin UX is a desktop environment written in Rust whose one design goal is a zero learning curve: everything sits and behaves where people already expect it, with no plugins and as little command-line use as possible. It is built with libcosmic/iced on the COSMIC compositor and targets Arch Linux first. This paper describes the goals, the engineering approach (own shell plus small patches against pinned COSMIC releases), the safeguards that let it coexist with other desktops, the testing and review method, what has been delivered, and what remains.
 
 ## 1. Motivation
 
-Windows 11's interface is the most widely learned desktop. Linux desktops offer strong technical foundations but ask newcomers to relearn basic habits (where the taskbar, Start menu, Settings and Task Manager are, how Alt+Tab or Win+X behave). Existing "Windows-like" Linux themes usually restyle another desktop with extensions or plugins, which break on updates and rarely match behaviour.
+The most widely learned desktop habits are a taskbar along the bottom, a Start menu with search, a Settings app with a sidebar and a Task Manager one shortcut away. Linux desktops offer strong technical foundations but ask newcomers to relearn those habits (where things are, how Alt+Tab or Super+X behave). Existing "familiar-looking" Linux themes usually restyle another desktop with extensions or plugins, which break on updates and rarely match behaviour.
 
-Lapin UX takes the opposite approach: match Windows 11's behaviour first, then its look, and do it as a real desktop environment, not a theme.
+Lapin UX takes the opposite approach: get the behaviour people expect right first, then the look, and do it as a real desktop environment, not a theme.
 
 **Constraints**
-- No Microsoft logos, Windows artwork or proprietary fonts. Open look-alikes only (Selawik, Fluent UI System Icons, Fluent Emoji, Borealis sounds).
+- No Microsoft logos, artwork or proprietary fonts. Open look-alikes only (Selawik, Fluent UI System Icons, Fluent Emoji, Borealis sounds).
 - No plugins; as little command-line use as possible (one-step install, graphical uninstall paths, Settings pages instead of config files).
 - Must never harm other desktops installed alongside it, and must uninstall cleanly.
 
@@ -59,12 +59,12 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 ## 5. Results to date
 
 **Delivered (2026-10-28):**
-- A complete shell: taskbar, Start with search and preview, tray, notification centre, quick settings, Task view, snap layouts and groups, clipboard and emoji, Run, Win+X, Ctrl+Alt+Del, snipping.
-- A full Settings app with Windows 11's layout, forked from COSMIC Settings through five reviewed stages, plus Lapin pages (Taskbar, Start, Storage, Installed apps, Sign-in options, Privacy, Update).
+- A complete shell: taskbar, Start with search and preview, tray, notification centre, quick settings, Task view, snap layouts and groups, clipboard and emoji, Run, Super+X, Ctrl+Alt+Del, snipping.
+- A full Settings app laid out the way people expect, forked from COSMIC Settings through five reviewed stages, plus Lapin pages (Taskbar, Start, Storage, Installed apps, Sign-in options, Privacy, Update).
 - Lock and sign-in screens, touch keyboard, volume/brightness pop-ups, admin prompt, Open/Save dialogs, Update (pacman, Flatpak, firmware), Task Manager with Users and Services, Control Panel.
 - A one-step installer and clean uninstaller.
 
-**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Road to 1:1 16 of 19 (1 partial).
+**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 16 of 19 (1 partial).
 
 **Confirmed on real hardware:** install, pop-ups, Open/Save dialogs, touch keyboard in the session, firmware updates; of 30 filed hardware issues, 25 are fixed and closed, 2 are fixed and awaiting retest (#18, #29), and 3 are not started (#23, #24, #28).
 
@@ -79,7 +79,7 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 
 ## 7. Future work
 
-1. **File Explorer**: fork COSMIC Files with a Windows 11 command bar, breadcrumb bar, Home, Gallery and details pane; add the Open/Save navigation pane.
+1. **File Explorer**: fork COSMIC Files with a familiar command bar, breadcrumb bar, Home, Gallery and details pane; add the Open/Save navigation pane.
 2. **Store**: fork COSMIC Store into a Microsoft Store-style Home, sections and Library, sharing update code with Update.
 3. **Snip markup editor** (pen, highlighter, crop).
 4. **Snap-group shared-edge resize** in the compositor.
@@ -92,7 +92,7 @@ GTK and Qt app theming, widgets and Copilot, the newer Start layout, search high
 
 ## 9. Conclusion
 
-Lapin UX shows that a Windows 11-familiar desktop can be built on Linux as a real desktop environment: own shell, small patches on a pinned upstream, strict separation from other desktops, and an evidence-based review loop. The remaining work is the two large forks (Explorer and Store) and hardware verification of the most recent fixes.
+Lapin UX shows that a desktop with a zero learning curve can be built on Linux as a real desktop environment: own shell, small patches on a pinned upstream, strict separation from other desktops, and an evidence-based review loop. The remaining work is the two large forks (Explorer and Store) and hardware verification of the most recent fixes.
 
 ## Appendix: Key numbers
 

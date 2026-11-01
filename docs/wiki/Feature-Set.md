@@ -29,30 +29,30 @@ Alt+Tab with thumbnails, Task view, virtual desktops (renaming, per-desktop wall
 Icons with Recycle Bin, multi-select, cut/copy/paste, drag and drop, Properties, This PC, Network, Control Panel icons, classic "Show more options" menu, Open with picker.
 
 ## Settings app (fork of COSMIC Settings)
-Windows 11 frame (sidebar, Find a setting in the title bar, Home), cards for every setting, About laid out like Windows, plus Lapin pages: Taskbar, Start, Night light, Notifications, Multitasking, Storage, Clipboard, Lock screen, Installed apps, Sign-in options (fingerprint, Howdy face unlock, password), Privacy and security, Update (incl. firmware). Search across all pages. `cosmic-settings lapin <page-id>` opens any Lapin page.
+Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every setting, About laid out as a name card with specification cards, plus Lapin pages: Taskbar, Start, Night light, Notifications, Multitasking, Storage, Clipboard, Lock screen, Installed apps, Sign-in options (fingerprint, Howdy face unlock, password), Privacy and security, Update (incl. firmware). Search across all pages. `cosmic-settings lapin <page-id>` opens any Lapin page.
 
 ## System apps
 - **Task Manager**: Processes, Performance, Startup apps, Details, Users (logind), Services (systemd).
-- **Control Panel**: category view and Large icons with Win11 colour icons.
+- **Control Panel**: category view and Large icons with full-colour icons.
 - **Update**: pacman, Flatpak, fwupd firmware; history; restart prompt; background check.
 - **Get Started**: Wi-Fi, light/dark, optional pointers.
-- Snipping (Win+Shift+S): rectangle, window, full screen (no markup editor yet).
+- Snipping (Super+Shift+S): rectangle, window, full screen (no markup editor yet).
 - Clipboard history and emoji (Super+V, Super+.).
 
 ## Sign-in
 Lock and sign-in screens (`lapin-ux-greeter`): big clock, blurred panel, round picture, fingerprint via fprintd, Howdy face unlock, accessibility/keyboard/session/power flyouts, on-screen keyboard.
 
 ## Input and accessibility
-Input indicator with fcitx5, Win+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Narrator via Orca (offers to install it). Contrast themes are currently turned off.
+Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Narrator via Orca (offers to install it). Contrast themes are currently turned off.
 
 ## Pop-ups and prompts (`lapin-ux-osd`)
-Volume/brightness pop-ups and the admin (polkit) prompt in Windows 11's style.
+Volume/brightness pop-ups and the admin (polkit) prompt, clear and easy to read.
 
 ## Dialogs (`lapin-ux-portal`)
-Open/Save dialogs with a Windows-style footer and the asking app's icon in the title.
+Open/Save dialogs with a tidy footer and the asking app's icon in the title.
 
 ## Look and sound
-Selawik (session-only font), Fluent UI System Icons, Win11 icon theme, Fluent Emoji, Borealis sounds, pointers (opt-in download).
+Selawik (session-only font), Fluent UI System Icons, full-colour app icon theme, Fluent Emoji, Borealis sounds, pointers (opt-in download).
 
 ## Keyboard shortcuts
-Super (Start), +E, +D, +X, +R, +N, +A, +V, +., +Z, +Tab, +L, +1..9, +arrows, Alt+Tab, Ctrl+Alt+Del, Win+Shift+S, Win+I (Settings), Win+P.
+Super (Start), +E, +D, +X, +R, +N, +A, +V, +., +Z, +Tab, +L, +1..9, +arrows, Alt+Tab, Ctrl+Alt+Del, Super+Shift+S, Super+I (Settings), Super+P.
