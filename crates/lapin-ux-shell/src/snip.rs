@@ -77,7 +77,7 @@ impl Shell {
     /// Logical width of the screen the overlay covers (pixels are square,
     /// so the height follows from the picture).
     fn snip_screen(&self) -> (f32, f32) {
-        let w = self.bars.first().and_then(|b| b.output_width).map(|w| w as f32).unwrap_or(1920.0);
+        let w = self.main_bar().and_then(|b| b.output_width).map(|w| w as f32).unwrap_or(1920.0);
         (w, 0.0)
     }
 
@@ -88,7 +88,7 @@ impl Shell {
         match msg {
             SnipMsg::Open => {
                 // Freeze the screen first: take the picture, then show the overlay.
-                let output = self.bars.first().and_then(|b| b.output_name.clone());
+                let output = self.main_bar().and_then(|b| b.output_name.clone());
                 let close = Task::batch([self.close_start(), self.close_popup()]);
                 self.snip_pending = true;
                 self.request(WaylandRequest::Shot(output, None));

@@ -124,6 +124,47 @@ pub fn main_head(heads: &[Head]) -> Option<&Head> {
     heads.iter().find(|h| h.internal()).or_else(|| heads.first())
 }
 
+/// Settings > System > Display > "Make this my main display" (#31): the
+/// chosen monitor by connector name ("DP-1"), and its make and model so it's
+/// still found after moving to another port or dock. Empty: none chosen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MainDisplay {
+    pub name: String,
+    pub model: String,
+}
+
+impl MainDisplay {
+    /// "Make Model" as Lapin stores it, from a monitor's make and model.
+    pub fn model_of(make: &str, model: &str) -> String {
+        format!("{} {}", make.trim(), model.trim()).trim().to_string()
+    }
+}
+
+/// One monitor as seen by `pick_main`: connector name, "make model", and
+/// its top-left corner in the arrangement.
+pub type MainCandidate = (String, String, (i32, i32));
+
+/// Which of `outputs` is the main display: the chosen one (by name, else by
+/// make and model), else a laptop's own panel, else the one at the top left
+/// of the arrangement (first on a tie). The shell, notifications and
+/// Settings all use this rule, so they agree. `None` only with no outputs.
+pub fn pick_main(outputs: &[MainCandidate], chosen: &MainDisplay) -> Option<usize> {
+    if outputs.is_empty() {
+        return None;
+    }
+    let by_name = (!chosen.name.is_empty()).then(|| outputs.iter().position(|(n, _, _)| *n == chosen.name)).flatten();
+    let by_model = || {
+        (!chosen.model.is_empty()).then(|| outputs.iter().position(|(_, m, _)| *m == chosen.model)).flatten()
+    };
+    let internal = || {
+        outputs.iter().position(|(n, _, _)| ["eDP", "LVDS", "DSI"].iter().any(|p| n.starts_with(p)))
+    };
+    let top_left = || {
+        outputs.iter().enumerate().min_by_key(|(i, (_, _, (x, y)))| (*y, *x, *i)).map(|(i, _)| i)
+    };
+    by_name.or_else(by_model).or_else(internal).or_else(top_left)
+}
+
 /// Which choice the current setup matches (highlighted in the flyout).
 pub fn current_project(heads: &[Head]) -> Option<Project> {
     let main = main_head(heads)?;
@@ -211,6 +252,34 @@ pub fn transform_for_orientation(orientation: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn main_display_choice() {
+        let o = |v: &[(&str, &str)]| {
+            v.iter().enumerate().map(|(i, (a, b))| (a.to_string(), b.to_string(), (i as i32 * 1920, 0))).collect::<Vec<_>>()
+        };
+        let outs = o(&[("eDP-1", "BOE 0x0BCA"), ("DP-2", "Dell U2720Q"), ("HDMI-A-1", "LG 27GL850")]);
+        let none = MainDisplay::default();
+        assert_eq!(pick_main(&outs, &none), Some(0), "nothing chosen: the laptop panel");
+        let dell = MainDisplay { name: "DP-2".into(), model: "Dell U2720Q".into() };
+        assert_eq!(pick_main(&outs, &dell), Some(1));
+        // Same monitor on another port (dock): found by its model.
+        let moved = o(&[("eDP-1", "BOE 0x0BCA"), ("DP-5", "Dell U2720Q")]);
+        assert_eq!(pick_main(&moved, &dell), Some(1));
+        // Unplugged: back to the laptop panel, or the first monitor.
+        let desk = o(&[("HDMI-A-1", "LG 27GL850"), ("DP-3", "AOC 24G2")]);
+        assert_eq!(pick_main(&desk, &dell), Some(0));
+        assert_eq!(pick_main(&desk, &MainDisplay { name: "DP-3".into(), model: String::new() }), Some(1));
+        assert_eq!(pick_main(&[], &dell), None);
+        // Nothing chosen, no laptop panel: the top-left one, whatever order
+        // the monitors were listed in.
+        let listed = vec![
+            ("HDMI-A-1".to_string(), "LG".to_string(), (1920, 0)),
+            ("DP-3".to_string(), "AOC".to_string(), (0, 0)),
+        ];
+        assert_eq!(pick_main(&listed, &none), Some(1));
+        assert_eq!(MainDisplay::model_of(" Dell ", "U2720Q "), "Dell U2720Q");
+    }
+
     use super::*;
 
     const TWO: &str = r#"output "eDP-1" enabled=#true {

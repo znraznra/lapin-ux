@@ -51,6 +51,10 @@ pub struct Bar {
     pub output_width: Option<u32>,
     /// Monitor name (e.g. "eDP-1"), for per-monitor taskbar buttons.
     pub output_name: Option<String>,
+    /// "Make model", to find the main display after a port change (#31).
+    pub output_model: String,
+    /// Top-left corner in the arrangement (the default main display).
+    pub output_position: (i32, i32),
     /// Auto-hide: shown at full height right now.
     pub revealed: bool,
     pub hovered: bool,
@@ -431,12 +435,58 @@ impl Shell {
         c
     }
 
-    fn create_bar(&mut self, output: WlOutput, size: Option<(u32, u32)>, output_name: Option<String>) -> Task<Message> {
+    /// The main display's taskbar (#31): the monitor chosen in Settings >
+    /// Display, else the laptop panel, else the first. It has the tray and
+    /// the desktop icons.
+    pub(crate) fn main_bar(&self) -> Option<&Bar> {
+        let outputs: Vec<lapin_ux_core::display::MainCandidate> = self
+            .bars
+            .iter()
+            .map(|b| (b.output_name.clone().unwrap_or_default(), b.output_model.clone(), b.output_position))
+            .collect();
+        let chosen = lapin_ux_core::display::MainDisplay {
+            name: self.config.main_display.clone(),
+            model: self.config.main_display_model.clone(),
+        };
+        lapin_ux_core::display::pick_main(&outputs, &chosen).and_then(|i| self.bars.get(i))
+    }
+
+    pub(crate) fn is_main_bar(&self, id: window::Id) -> bool {
+        self.main_bar().is_some_and(|b| b.id == id)
+    }
+
+    /// Keep the desktop icons on the main display when it changes (chosen
+    /// in Settings, plugged in or unplugged).
+    pub(crate) fn desktop_follow_main(&mut self) -> Task<Message> {
+        let Some((output, h)) = self.main_bar().map(|b| (b.output.clone(), b.output_height.unwrap_or(720))) else {
+            return Task::none();
+        };
+        let w = self.main_bar().and_then(|b| b.output_width).unwrap_or(1920);
+        match &self.desktop {
+            Some(d) if d.output == output => Task::none(),
+            Some(_) => {
+                let gone = self.destroy_desktop();
+                Task::batch([gone, self.create_desktop(output, (w, h))])
+            }
+            None => self.create_desktop(output, (w, h)),
+        }
+    }
+
+    fn create_bar(
+        &mut self,
+        output: WlOutput,
+        size: Option<(u32, u32)>,
+        output_name: Option<String>,
+        output_model: String,
+        output_position: (i32, i32),
+    ) -> Task<Message> {
         let id = window::Id::unique();
         self.bars.push(Bar {
             id,
             output: output.clone(),
             output_name,
+            output_model,
+            output_position,
             output_height: size.map(|s| s.1),
             output_width: size.map(|s| s.0),
             revealed: !self.config.auto_hide,
@@ -1307,9 +1357,11 @@ impl Shell {
                     if !self.bars.iter().any(|b| b.output == output) {
                         let size = info.as_ref().and_then(|i| i.logical_size).map(|(w, h)| (w.max(0) as u32, h.max(0) as u32));
                         let name = info.as_ref().and_then(|i| i.name.clone());
-                        let bar = self.create_bar(output.clone(), size, name);
-                        // Desktop icons live on the first monitor, like the benchmark's main display.
-                        let desk = self.create_desktop(output, size.unwrap_or((1280, 720)));
+                        let model = info.as_ref().map(output_model).unwrap_or_default();
+                        let pos = info.as_ref().and_then(|i| i.logical_position).unwrap_or_default();
+                        let bar = self.create_bar(output.clone(), size, name, model, pos);
+                        // Desktop icons live on the main display (#31).
+                        let desk = self.desktop_follow_main();
                         return Task::batch([bar, desk]);
                     }
                 }
@@ -1320,10 +1372,18 @@ impl Shell {
                         if info.name.is_some() {
                             bar.output_name = info.name.clone();
                         }
+                        let model = output_model(&info);
+                        if !model.is_empty() {
+                            bar.output_model = model;
+                        }
+                        if let Some(pos) = info.logical_position {
+                            bar.output_position = pos;
+                        }
                     }
                     if let Some((w, h)) = info.logical_size {
                         self.desktop_resized(&output, (w.max(0) as u32, h.max(0) as u32));
                     }
+                    return self.desktop_follow_main();
                 }
                 OutputEvent::Removed => {
                     let mut tasks = Vec::new();
@@ -1334,13 +1394,8 @@ impl Shell {
                         let bar = self.bars.remove(pos);
                         tasks.push(destroy_layer_surface(bar.id));
                     }
-                    // Move the desktop to a remaining monitor.
-                    if self.desktop.is_none()
-                        && let Some(b) = self.bars.first()
-                    {
-                        let (o, h) = (b.output.clone(), b.output_height.unwrap_or(720));
-                        tasks.push(self.create_desktop(o, (1920, h)));
-                    }
+                    // Move the desktop to the (new) main display.
+                    tasks.push(self.desktop_follow_main());
                     return Task::batch(tasks);
                 }
             },
@@ -1423,7 +1478,12 @@ impl Shell {
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
                 let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
                 let apps_changed = cfg.show_other_desktop_apps != self.config.show_other_desktop_apps;
+                let main_changed = cfg.main_display != self.config.main_display
+                    || cfg.main_display_model != self.config.main_display_model;
                 self.config = cfg;
+                if main_changed {
+                    return self.desktop_follow_main();
+                }
                 if apps_changed {
                     self.catalog = Catalog::load(self.config.show_other_desktop_apps);
                 }
@@ -2026,4 +2086,9 @@ impl Shell {
         }
         Task::none()
     }
+}
+
+/// "Make Model" of a monitor, as Settings stores the main display (#31).
+fn output_model(info: &cosmic::cctk::sctk::output::OutputInfo) -> String {
+    lapin_ux_core::display::MainDisplay::model_of(&info.make, &info.model)
 }

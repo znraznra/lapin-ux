@@ -103,6 +103,11 @@ pub struct ShellConfig {
     /// ("dots", "circle", "rabbit", "distro" = the OS logo from os-release)
     /// or "custom" (the picture copied to ~/.local/share/lapin-ux/start-icon.*).
     pub start_icon: String,
+    /// Settings > System > Display > "Make this my main display" (#31):
+    /// its connector name ("DP-1") and "make model" (found again after a
+    /// port or dock change). Empty: the laptop panel, else the first monitor.
+    pub main_display: String,
+    pub main_display_model: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

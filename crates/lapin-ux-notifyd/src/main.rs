@@ -35,6 +35,8 @@ static AUTOSIZE: LazyLock<cosmic::widget::Id> = LazyLock::new(|| cosmic::widget:
 #[derive(Debug, Clone)]
 pub enum Message {
     Dbus(dbus::Event),
+    /// A monitor came, changed or went (toasts go to the main display, #31).
+    Output(wayland::OutputEvent, WlOutput),
     /// COSMIC's toolkit settings changed (icon theme).
     Toolkit(Box<cosmic::config::CosmicTk>),
     Tick,
@@ -86,6 +88,26 @@ pub struct App {
     local_id: u32,
     /// Replies being typed, by notification.
     pub replies: std::collections::HashMap<u32, String>,
+    /// Monitors: (output, connector name, "make model", position), for the
+    /// main display.
+    outputs: Vec<(WlOutput, String, String, (i32, i32))>,
+}
+
+type WlOutput = cosmic::cctk::sctk::reexports::client::protocol::wl_output::WlOutput;
+
+/// The main display (Settings > System > Display, #31) for toasts, as
+/// usual; the focused monitor when it isn't known.
+fn main_output(outputs: &[(WlOutput, String, String, (i32, i32))]) -> IcedOutput {
+    use cosmic::cosmic_config::ConfigGet;
+    let shell = cosmic::cosmic_config::Config::new(lapin_ux_core::ids::SHELL_APP_ID, 1).ok();
+    let get = |k: &str| shell.as_ref().and_then(|c| c.get::<String>(k).ok()).unwrap_or_default();
+    let chosen = lapin_ux_core::display::MainDisplay { name: get("main_display"), model: get("main_display_model") };
+    let list: Vec<lapin_ux_core::display::MainCandidate> =
+        outputs.iter().map(|(_, n, m, p)| (n.clone(), m.clone(), *p)).collect();
+    match lapin_ux_core::display::pick_main(&list, &chosen) {
+        Some(i) => IcedOutput::Output(outputs[i].0.clone()),
+        None => IcedOutput::Active,
+    }
 }
 
 impl App {
@@ -100,7 +122,7 @@ impl App {
                     layer: Layer::Overlay,
                     keyboard_interactivity: KeyboardInteractivity::OnDemand,
                     anchor: Anchor::BOTTOM | Anchor::RIGHT,
-                    output: IcedOutput::Active,
+                    output: main_output(&self.outputs),
                     namespace: "lapin-ux-notifications".into(),
                     margin: IcedMargin { top: 0, right: 12, bottom: 12, left: 0 },
                     size: Some((Some(WIDTH), Some(1))),
@@ -301,6 +323,7 @@ impl Application for App {
                 quiet,
                 local_id: 0,
                 replies: Default::default(),
+                outputs: Vec::new(),
             },
             quiet::load_events(sources),
         )
@@ -364,6 +387,9 @@ impl Application for App {
                 cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(wayland::Event::Layer(e, _, id))) => {
                     Some(Message::Layer(e, id))
                 }
+                cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(wayland::Event::Output(e, o))) => {
+                    Some(Message::Output(e, o))
+                }
                 cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(Named::Escape), .. }) => {
                     Some(Message::Escape(window))
                 }
@@ -381,6 +407,34 @@ impl Application for App {
         lapin_ux_core::crash::note(&message);
         let now = Instant::now();
         match message {
+            Message::Output(event, output) => {
+                use wayland::OutputEvent as E;
+                let model = |i: &cosmic::cctk::sctk::output::OutputInfo| {
+                    lapin_ux_core::display::MainDisplay::model_of(&i.make, &i.model)
+                };
+                match event {
+                    E::Created(info) => {
+                        let (n, m, p) = info
+                            .as_ref()
+                            .map(|i| (i.name.clone().unwrap_or_default(), model(i), i.logical_position.unwrap_or_default()))
+                            .unwrap_or_default();
+                        self.outputs.retain(|(o, ..)| *o != output);
+                        self.outputs.push((output, n, m, p));
+                    }
+                    E::InfoUpdate(info) => {
+                        if let Some(entry) = self.outputs.iter_mut().find(|(o, ..)| *o == output) {
+                            if let Some(n) = &info.name {
+                                entry.1 = n.clone();
+                            }
+                            entry.2 = model(&info);
+                            if let Some(p) = info.logical_position {
+                                entry.3 = p;
+                            }
+                        }
+                    }
+                    E::Removed => self.outputs.retain(|(o, ..)| *o != output),
+                }
+            }
             Message::Prefs(p) => return self.prefs_changed(*p),
             Message::Toolkit(tk) => {
                 if cosmic::icon_theme::default() != tk.icon_theme {

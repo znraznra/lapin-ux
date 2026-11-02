@@ -102,7 +102,7 @@ impl Shell {
 
     /// Desktops of the monitor the task view is on (the first one's if unsure).
     fn desktops(&self) -> Vec<&WorkspaceInfo> {
-        let out = self.bars.first().and_then(|b| b.output_name.clone());
+        let out = self.main_bar().and_then(|b| b.output_name.clone());
         let mine: Vec<&WorkspaceInfo> =
             self.desktops.list.iter().filter(|w| out.as_ref().is_none_or(|o| w.outputs.is_empty() || w.outputs.contains(o))).collect();
         if mine.is_empty() { self.desktops.list.iter().collect() } else { mine }

@@ -18,7 +18,7 @@ const RIGHT_SIDE: f32 = 330.0;
 impl Shell {
     /// Room left for app buttons on the main taskbar.
     fn button_space(&self) -> f32 {
-        let width = self.bars.first().and_then(|b| b.output_width).unwrap_or(1280) as f32;
+        let width = self.main_bar().and_then(|b| b.output_width).unwrap_or(1280) as f32;
         let mut fixed = 16.0 + 44.0 + 44.0; // padding, Start, Task view
         if self.config.show_search {
             fixed += 188.0;
@@ -29,7 +29,7 @@ impl Shell {
     }
 
     pub(crate) fn sync_taskbar_fit(&mut self) -> Task<Message> {
-        let main = self.bars.first().map(|b| b.output_name.clone());
+        let main = self.main_bar().map(|b| b.output_name.clone());
         let buttons = self.taskbar.buttons_for(main.clone().flatten().as_deref(), true, self.config.multi_display);
         let combined = buttons.len();
         let split: usize = buttons.iter().map(|b| b.windows.len().max(1)).sum();

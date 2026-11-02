@@ -166,7 +166,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
 
     // Task buttons get their own row so the widget tree keeps a stable
     // shape when the search box is toggled or buttons come and go.
-    let main = shell.bars.first().is_some_and(|b| b.id == bar.id);
+    let main = shell.is_main_bar(bar.id);
     let mut buttons = shell.taskbar.buttons_for(bar.output_name.as_deref(), main, shell.config.multi_display);
     // Only windows on the desktop in view, like the benchmark's default.
     let here = shell
@@ -227,9 +227,11 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
     .on_press(Message::ClockClick(bar.id));
 
-    // Tray: hidden icons behind ^, chosen ones inline.
+    // Tray: hidden icons behind ^, chosen ones inline. Only on the main
+    // display's taskbar, as usual (#31); the others keep the clock.
     let mut tray: Vec<Element<'_, Message>> = Vec::new();
-    if shell.tray.iter().any(|t| !shell.tray_inline(t)) {
+    let main_bar = shell.is_main_bar(bar.id);
+    if main_bar && shell.tray.iter().any(|t| !shell.tray_inline(t)) {
         let open = matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::TrayOverflow));
         let btn = button::custom(container(icon::from_name("pan-up-symbolic").size(16)).center(Length::Fill))
             .width(28)
@@ -240,7 +242,9 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .on_press(Message::TrayOverflow(bar.id));
         tray.push(track(shell, rect_key(bar.id, "tray-overflow"), btn));
     }
-    tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
+    if main_bar {
+        tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
+    }
     let mut right = row::with_capacity(4).spacing(2).align_y(Alignment::Center);
     right = right.push(row::with_children(tray).spacing(0).align_y(Alignment::Center));
     let status = crate::quick::status_icons(shell);
