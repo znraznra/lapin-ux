@@ -218,6 +218,10 @@ The full list is in the [technical reference](docs/TECHNICAL.md).
 
 Building, testing, settings, the architecture in detail and how the COSMIC changes are kept as patches: [docs/TECHNICAL.md](docs/TECHNICAL.md) and [TESTING.md](TESTING.md).
 
+## Community
+
+Everyone is welcome, and nobody should have to feel out of their depth. Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before joining in; it also says how to report a problem privately.
+
 ## License
 
 Lapin UX's own code and original artwork (Start mark, wallpapers) are
