@@ -29,7 +29,7 @@ The goal is a zero learning curve: if you can use a computer, you can use Lapin 
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
 
-*Last updated: 1 November 2026 (progress figures as of build `3e2dc63`).*
+*Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
 
 ## Take the tour
 
@@ -96,7 +96,7 @@ flowchart LR
 ### Phase 1 — core desktop (done)
 
 - [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice
-- [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor, Show desktop corner
+- [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor with a main display you choose, Show desktop corner
 - [x] System tray with app menus, older X11 and Wine tray icons included
 - [x] Clock with calendar, seconds if you want them
 - [x] Start: type to search, pinned apps and folders, All apps, Recommended, account and power menus, Uninstall
@@ -104,7 +104,7 @@ flowchart LR
 - [x] Start slides up as it opens, without touching the taskbar, and slides across to All apps and back
 - [x] Notifications: pop-ups, notification centre, agenda, Focus, Do not disturb on a schedule
 - [x] Wallpaper and theme: accent colour, rounded corners, frosted panels
-- [x] Look: Selawik font, Fluent Emoji, full-colour app icons
+- [x] Look: Selawik font, Fluent Emoji, full-colour app icons, sharper text (smoothing and contrast in Settings > Fonts)
 - [x] Session: starts everything and restarts anything that crashes
 - [x] Arch package and one-step installer *(installs on a real Arch-based PC; first test's fixes waiting for a retest)*
 

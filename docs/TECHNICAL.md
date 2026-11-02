@@ -50,6 +50,15 @@ COSMIC compositor. Arch Linux first.
 - **Task view** button (Super+Tab). Several monitors: *Show taskbar apps on*
   (all taskbars / main and where open / where open). Only the current
   desktop's windows are shown.
+- **Main display** (several monitors, #31): Settings > System > Display >
+  *Make this my main display* (Lapin keys `main_display` and
+  `main_display_model` in `dev.lapinux.Shell`: connector name, and make +
+  model to find it after a port change). The main display has the tray, the
+  desktop icons and notification toasts; other taskbars keep the clock. With
+  none chosen (or the chosen one unplugged): the laptop panel, else the
+  top-left monitor (`lapin_ux_core::display::pick_main`, shared by the shell,
+  notifications and Settings). The OSD, admin prompt, lock screen and new
+  windows don't follow it yet.
 - System tray (StatusNotifierItem): left-click activates, right-click opens
   the app's menu with checkmarks, disabled items and submenus (or, for an
   item without a menu, asks the app for one with `ContextMenu`). Discord,
@@ -349,6 +358,21 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   keyboard focus inside a surface (Orca follows the window, not the focused
   button). Apps that were already running when Narrator came on need a
   restart to turn their own accessibility on.
+
+**Text** (#40)
+- Settings > Personalization > Fonts. *Text smoothing* (Sharper RGB / Sharper
+  BGR / Standard) for GTK, Qt, Firefox and Electron: GTK's
+  `font-antialiasing`, `font-rgba-order`, `font-hinting` (swapped per
+  session; the shell sets RGB once) and `~/.config/lapin-ux/fonts.conf`,
+  included last by the session font setup, whose own default is
+  `rgba=rgb`, `lcdfilter=lcddefault`, `hintstyle=hintslight` (before the
+  system's setup, so the user's or distribution's choice wins).
+- *Text contrast* for Lapin's own apps: `packaging/cryoglyph` patches iced's
+  glyph shader with an enhanced-contrast curve
+  `a' = a(k+1)/(ak+1)`, k = contrast × (1 − ½·luminance of the text colour).
+  Read at app start from `LAPIN_UX_TEXT_CONTRAST` or `dev.lapinux.Shell`
+  `text_contrast` (default 0.5); 0 outside a Lapin session. Grayscale only:
+  no subpixel rendering in Lapin's own apps yet.
 
 **Sounds and pointers**
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,
