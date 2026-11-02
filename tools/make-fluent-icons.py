@@ -268,6 +268,7 @@ MAP = {
     "preferences-desktop-appearance": ("categories", "paint_brush", "regular"),
     "preferences-desktop-wallpaper": ("categories", "image", "regular"),
     "preferences-desktop-display": ("categories", "desktop", "regular"),
+    "preferences-desktop-font": ("categories", "text_font", "regular"),
     "preferences-desktop-locale": ("categories", "local_language", "regular"),
     "preferences-desktop-keyboard": ("categories", "keyboard", "regular"),
     "preferences-desktop-default-applications": ("categories", "apps", "regular"),

@@ -297,8 +297,25 @@ dconf write /org/gnome/desktop/interface/cursor-theme "'Cursor-Concept-W11-Tail-
 bash $DS enter; bash $DS leave
 check "Lapin's value written outside isn't taken as the other desktop's" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Ice'\" ]"
 }
+scenO() {
+echo "O: text smoothing Lapin UX turns on stays in Lapin UX (#40)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+AA=/org/gnome/desktop/interface/font-antialiasing; RO=/org/gnome/desktop/interface/font-rgba-order
+dconf write $AA "'grayscale'"
+bash $U --snapshot; bash $DS enter
+dconf write $AA "'rgba'"; dconf write $RO "'rgb'"
+bash $DS leave
+check "other desktop: its own smoothing (grayscale, no order set)" "[ \"\$(dconf read $AA)\" = \"'grayscale'\" ] && [ -z \"\$(dconf read $RO)\" ]"
+bash $DS enter
+check "Lapin UX: subpixel RGB" "[ \"\$(dconf read $AA)\" = \"'rgba'\" ] && [ \"\$(dconf read $RO)\" = \"'rgb'\" ]"
+bash $DS leave
+mkdir -p $HOME/.config/lapin-ux; echo '<fontconfig/>' > $HOME/.config/lapin-ux/fonts.conf
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "after uninstall: grayscale again" "[ \"\$(dconf read $AA)\" = \"'grayscale'\" ]"
+check "Lapin's own font file removed" "[ ! -e $HOME/.config/lapin-ux ]"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N; do
+for x in A B C D E F G H I J K L M N O; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

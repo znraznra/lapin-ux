@@ -1,0 +1,13 @@
+Patch to cryoglyph, the text renderer of libcosmic's iced (#40): Lapin UX's
+"text contrast" (Settings > Personalization > Fonts), a darker, crisper edge
+curve applied in the glyph shader. It only takes effect in a Lapin UX session
+(XDG_CURRENT_DESKTOP contains LapinUX); elsewhere the shader constant is 0 and
+text renders exactly as upstream. The value comes from LAPIN_UX_TEXT_CONTRAST
+(testing) or ~/.config/cosmic/dev.lapinux.Shell/v1/text_contrast, default 0.5.
+
+Applied by packaging/arch/PKGBUILD (_patch_cryoglyph) to the cryoglyph copy in
+Lapin's private cargo home (cargo-lapin) and Settings' (cargo-settings).
+
+In a sandbox: `git apply` it in ~/.cargo/git/checkouts/cryoglyph-*/e429a02,
+then `cargo clean -p cryoglyph` (debug) or `cargo clean --release -p cryoglyph`
+in each project before building: cargo doesn't notice edited git checkouts.

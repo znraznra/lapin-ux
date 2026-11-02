@@ -108,6 +108,11 @@ copy of, or a "road to", any other operating system.
   `lapin_ux_ui::a11y::group(name, ...)`, and hide decorative duplicates with
   `lapin_ux_ui::a11y::hidden`. Never pass a stateful widget straight into
   `tracker.container()`; use `track()` (#29).
+- Text contrast (#40): iced's text renderer cryoglyph is patched too
+  (`packaging/cryoglyph/`, same two cargo homes, `_patch_cryoglyph`). It is a
+  shader constant that stays 0 outside a Lapin session. In a sandbox keep it
+  applied to `~/.cargo/git/checkouts/cryoglyph-*/e429a02` and run
+  `cargo clean -p cryoglyph` after changing it (cargo doesn't notice).
 
 ## Bugs from real hardware
 
@@ -123,7 +128,7 @@ checked here.
 ## Checks before pushing
 
 - `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (needs
-  dconf; 76 checks): all checks must pass. Add a scenario for any new shared setting.
+  dconf; 80 checks): all checks must pass. Add a scenario for any new shared setting.
 - `shellcheck -S warning tools/lapin-ux-uninstall`.
 - Forks you touched: `cargo check --locked` (or a build) at the pinned commit
   with all patches applied.

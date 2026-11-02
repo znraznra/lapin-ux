@@ -1,0 +1,83 @@
+diff --git a/src/cache.rs b/src/cache.rs
+index f66164d..7222749 100644
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -229,7 +229,10 @@ impl Cache {
+                             blend: Some(BlendState::ALPHA_BLENDING),
+                             write_mask: ColorWrites::default(),
+                         })],
+-                        compilation_options: PipelineCompilationOptions::default(),
++                        compilation_options: PipelineCompilationOptions {
++                            constants: &[("text_contrast", text_contrast())],
++                            ..PipelineCompilationOptions::default()
++                        },
+                     }),
+                     primitive: PrimitiveState {
+                         topology: PrimitiveTopology::TriangleStrip,
+@@ -248,3 +251,33 @@ impl Cache {
+             .clone()
+     }
+ }
++
++/// Lapin UX (#40): text contrast for this program, read when it starts.
++/// Only in a Lapin UX session: `LAPIN_UX_TEXT_CONTRAST` (for testing), else
++/// Settings > Personalization > Fonts (`dev.lapinux.Shell` `text_contrast`),
++/// else the default below. Anywhere else 0, so text renders as upstream.
++fn text_contrast() -> f64 {
++    static VALUE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
++    *VALUE.get_or_init(|| {
++        let lapin = std::env::var("XDG_CURRENT_DESKTOP")
++            .is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"));
++        if !lapin {
++            return 0.0;
++        }
++        let from_settings = || {
++            let config = std::env::var_os("XDG_CONFIG_HOME")
++                .map(std::path::PathBuf::from)
++                .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
++            std::fs::read_to_string(config.join("cosmic/dev.lapinux.Shell/v1/text_contrast")).ok()
++        };
++        std::env::var("LAPIN_UX_TEXT_CONTRAST")
++            .ok()
++            .or_else(from_settings)
++            .and_then(|v| v.trim().parse::<f64>().ok())
++            .filter(|v| v.is_finite())
++            .map(|v| v.clamp(0.0, 2.0))
++            .unwrap_or(LAPIN_DEFAULT_TEXT_CONTRAST)
++    })
++}
++
++const LAPIN_DEFAULT_TEXT_CONTRAST: f64 = 0.5;
+diff --git a/src/shader.wgsl b/src/shader.wgsl
+index 1813a66..fd47cee 100644
+--- a/src/shader.wgsl
++++ b/src/shader.wgsl
+@@ -15,6 +15,9 @@ struct VertexOutput {
+     @location(2) @interpolate(flat) content_type: u32,
+ };
+ 
++// Lapin UX (#40): how much to strengthen glyph edges (0 = unchanged).
++override text_contrast: f32 = 0.0;
++
+ struct Params {
+     screen_resolution: vec2<u32>,
+     _pad: vec2<u32>,
+@@ -119,7 +122,17 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
+             return textureSampleLevel(color_atlas_texture, atlas_sampler, in_frag.uv, 0.0);
+         }
+         case 1u: {
+-            return vec4<f32>(in_frag.color.rgb, in_frag.color.a * textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x);
++            var coverage = textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x;
++            if text_contrast > 0.0 {
++                // Lapin UX (#40): darker, crisper glyph edges, the
++                // "enhanced contrast" curve of other desktops' text
++                // renderers. Light text on dark gets half as much, so it
++                // doesn't look bold.
++                let luma = dot(in_frag.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
++                let k = text_contrast * mix(1.0, 0.5, luma);
++                coverage = coverage * (k + 1.0) / (coverage * k + 1.0);
++            }
++            return vec4<f32>(in_frag.color.rgb, in_frag.color.a * coverage);
+         }
+         default: {
+             return vec4<f32>(0.0);

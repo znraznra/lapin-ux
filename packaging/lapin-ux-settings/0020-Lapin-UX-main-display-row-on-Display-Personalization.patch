@@ -1,0 +1,317 @@
+From 94abc904d91d1a620d8de54d1f62f61d247e5873 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 2 Nov 2026 11:58:00 +0800
+Subject: [PATCH] Lapin UX: main display row on Display, Personalization >
+ Fonts
+
+Display: "Make this my main display" for the selected monitor (saved for
+Lapin's shell and notifications; default: laptop panel, else the top-left
+monitor). Fonts: text smoothing for apps using the system's font settings
+(GTK keys + Lapin's session font file) and Lapin's own text contrast.
+Refs #31, Refs #40
+---
+ cosmic-settings/src/lapin/categories.rs  |   1 +
+ cosmic-settings/src/lapin/icons.rs       |   3 +
+ cosmic-settings/src/lapin/search.rs      |   4 +
+ cosmic-settings/src/lapin/settings.rs    | 124 +++++++++++++++++++++++
+ cosmic-settings/src/pages/display/mod.rs |  38 +++++++
+ 5 files changed, 170 insertions(+)
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 43dae86..eb625b9 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -105,6 +105,7 @@ const SPECS: &[Spec] = &[
+             c("lapin-lock-screen", "system-lock-screen-symbolic", "Lock screen", "Lock screen images, sign-in screen"),
+             c("lapin-start", "view-app-grid-symbolic", "Start", "Recent items, search, web results"),
+             c("lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins"),
++            c("lapin-fonts", "preferences-desktop-font-symbolic", "Fonts", "Text smoothing, text contrast"),
+         ],
+     },
+     Spec {
+diff --git a/cosmic-settings/src/lapin/icons.rs b/cosmic-settings/src/lapin/icons.rs
+index fd6e305..a95b4d7 100644
+--- a/cosmic-settings/src/lapin/icons.rs
++++ b/cosmic-settings/src/lapin/icons.rs
+@@ -63,6 +63,9 @@ const RULES: &[(&str, &str)] = &[
+     ("airplane", "airplane-mode-symbolic"),
+     ("vpn", "network-vpn-symbolic"),
+     // Time & language
++    ("main display", "preferences-desktop-display-symbolic"),
++    ("text smoothing", "preferences-desktop-font-symbolic"),
++    ("text contrast", "preferences-desktop-font-symbolic"),
+     ("time zone", "web-browser-symbolic"),
+     ("24-hour", "preferences-system-time-symbolic"),
+     ("seconds in the taskbar clock", "preferences-system-time-symbolic"),
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index d4d3611..b8d5917 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -37,6 +37,10 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-taskbar", "Show desktop corner"),
+     ("lapin-taskbar", "Show seconds in system tray clock"),
+     ("time-date", "Show seconds in the taskbar clock"),
++    ("display", "Make this my main display"),
++    ("lapin-fonts", "Text smoothing"),
++    ("lapin-fonts", "Text contrast"),
++    ("lapin-fonts", "Sharper text"),
+     ("lapin-pointer", "Mouse pointer style"),
+     ("lapin-pointer", "Busy pointer colour"),
+     ("lapin-pointer", "Mouse pointer size"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index a850237..a848ba0 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -135,6 +135,10 @@ pub struct Prefs {
+     /// The pointer tool is running, or why it failed last.
+     pub pointer_busy_now: bool,
+     pub pointer_error: Option<String>,
++    /// Personalization > Fonts (#40): "rgb" / "bgr" / "grayscale" for apps
++    /// using the system's font settings, and Lapin's own text contrast (0–2).
++    pub text_smoothing: String,
++    pub text_contrast: f64,
+ }
+ 
+ impl Prefs {
+@@ -187,6 +191,8 @@ impl Prefs {
+             pointer_size: get(&shell, "pointer_size").unwrap_or(24),
+             pointer_busy_now: false,
+             pointer_error: None,
++            text_smoothing: get(&shell, "text_smoothing").unwrap_or_else(|| "rgb".into()),
++            text_contrast: get(&shell, "text_contrast").unwrap_or(TEXT_CONTRAST_DEFAULT),
+         }
+     }
+ 
+@@ -226,6 +232,10 @@ pub enum Msg {
+     PointerSize(u32),
+     PointerSizeDone,
+     PointerDone(Result<(), String>),
++    // Personalization > Fonts (#40)
++    TextSmoothing(usize),
++    TextContrast(u32),
++    TextContrastDone,
+     // Personalization > Start
+     RecentItems(bool),
+     OtherApps(bool),
+@@ -259,6 +269,37 @@ pub fn set_taskbar_seconds(on: bool) {
+     save(SHELL, "clock_seconds", &on);
+ }
+ 
++/// Settings > System > Display > "Make this my main display" (#31): the
++/// chosen monitor's connector name and "make model" (Lapin's shell and
++/// notifications read them; a monitor moved to another port is found by
++/// its model).
++pub fn main_display() -> (String, String) {
++    let c = Config::new(SHELL, 1).ok();
++    let get = |k: &str| c.as_ref().and_then(|c| c.get::<String>(k).ok()).unwrap_or_default();
++    (get("main_display"), get("main_display_model"))
++}
++
++pub fn set_main_display(name: &str, model: &str) {
++    save(SHELL, "main_display", &name.to_string());
++    save(SHELL, "main_display_model", &model.to_string());
++}
++
++/// "Make Model", the same way the shell writes it.
++pub fn display_model(make: Option<&str>, model: &str) -> String {
++    format!("{} {}", make.unwrap_or("").trim(), model.trim()).trim().to_string()
++}
++
++/// Which of `outputs` (connector name, "make model", top-left corner) is
++/// the main display: the chosen one by name, else by model, else a laptop
++/// panel, else the top-left one (the same rule as the shell's).
++pub fn pick_main(outputs: &[(String, String, (i32, i32))], chosen: &(String, String)) -> Option<usize> {
++    let by_name = (!chosen.0.is_empty()).then(|| outputs.iter().position(|(n, _, _)| *n == chosen.0)).flatten();
++    by_name
++        .or_else(|| (!chosen.1.is_empty()).then(|| outputs.iter().position(|(_, m, _)| *m == chosen.1)).flatten())
++        .or_else(|| outputs.iter().position(|(n, _, _)| ["eDP", "LVDS", "DSI"].iter().any(|p| n.starts_with(p))))
++        .or_else(|| outputs.iter().enumerate().min_by_key(|(i, (_, _, (x, y)))| (*y, *x, *i)).map(|(i, _)| i))
++}
++
+ fn save<T: Serialize>(id: &str, key: &str, value: &T) {
+     if let Ok(c) = Config::new(id, 1)
+         && let Err(e) = c.set(key, value)
+@@ -323,6 +364,13 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+             p.pointer_busy_now = false;
+             p.pointer_error = r.err();
+         }
++        Msg::TextSmoothing(i) => {
++            p.text_smoothing = TEXT_SMOOTHING.get(i).map_or("rgb", |(id, _)| *id).into();
++            save(SHELL, "text_smoothing", &p.text_smoothing);
++            apply_text_smoothing(&p.text_smoothing);
++        }
++        Msg::TextContrast(step) => p.text_contrast = step as f64 * TEXT_CONTRAST_STEP,
++        Msg::TextContrastDone => save(SHELL, "text_contrast", &p.text_contrast),
+         Msg::OtherApps(v) => (p.other_apps = v, save(SHELL, "show_other_desktop_apps", &v)).1,
+         Msg::StartIcon(i) => {
+             let id = START_ICONS.get(i).map_or("", |(id, _)| *id);
+@@ -714,6 +762,81 @@ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     rows
+ }
+ 
++// --- Personalization > Fonts (#40) --------------------------------------------
++
++/// How apps that use the system's font settings (GTK, Qt, Firefox,
++/// Electron) smooth text.
++const TEXT_SMOOTHING: [(&str, &str); 3] = [
++    ("rgb", "Sharper (most screens)"),
++    ("bgr", "Sharper (BGR screens)"),
++    ("grayscale", "Standard"),
++];
++/// Lapin's own text contrast: 0 = as drawn, steps of 0.25 up to 2.
++const TEXT_CONTRAST_STEP: f64 = 0.25;
++const TEXT_CONTRAST_DEFAULT: f64 = 0.5;
++
++/// GTK's settings (swapped per session, so other desktops keep theirs) and
++/// Lapin's session font file (~/.config/lapin-ux/fonts.conf, read only in
++/// the Lapin session) for Qt, Firefox and Electron.
++fn apply_text_smoothing(mode: &str) {
++    let (aa, order, rgba) = match mode {
++        "bgr" => ("rgba", "bgr", "bgr"),
++        "grayscale" => ("grayscale", "rgb", "none"),
++        _ => ("rgba", "rgb", "rgb"),
++    };
++    for (key, value) in [("font-antialiasing", aa), ("font-rgba-order", order), ("font-hinting", "slight")] {
++        let _ = std::process::Command::new("gsettings")
++            .args(["set", "org.gnome.desktop.interface", key, value])
++            .status();
++    }
++    let Some(config) = dirs::config_dir() else { return };
++    let dir = config.join("lapin-ux");
++    let _ = std::fs::create_dir_all(&dir);
++    let xml = format!(
++        "<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n\
++         <!-- Written by Settings > Personalization > Fonts; used only in the Lapin UX session. -->\n\
++         <fontconfig>\n  <match target=\"font\">\n\
++         \x20   <edit name=\"antialias\" mode=\"assign\"><bool>true</bool></edit>\n\
++         \x20   <edit name=\"rgba\" mode=\"assign\"><const>{rgba}</const></edit>\n\
++         \x20 </match>\n</fontconfig>\n"
++    );
++    if let Err(e) = std::fs::write(dir.join("fonts.conf"), xml) {
++        tracing::warn!("Lapin Settings: writing the font settings: {e}");
++    }
++}
++
++fn font_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
++    let names: &'static [&'static str] = NAMES.get_or_init(|| TEXT_SMOOTHING.iter().map(|(_, n)| *n).collect());
++    let selected = TEXT_SMOOTHING.iter().position(|(id, _)| *id == p.text_smoothing).unwrap_or(0);
++    let step = (p.text_contrast / TEXT_CONTRAST_STEP).round().clamp(0.0, 8.0) as u32;
++    let label = if step == 0 { "Off".to_string() } else { step.to_string() };
++    vec![
++        settings::item::builder("Text smoothing")
++            .description("Sharper suits most screens; pick Standard if letters show coloured edges")
++            .control(widget::dropdown(names, Some(selected), |i| m(Msg::TextSmoothing(i))))
++            .apply(Element::from)
++            .into_list_item(),
++        settings::item::builder("Text contrast")
++            .description("Darker, crisper letters in Lapin UX's own apps. Reopen an app to see it")
++            .control(
++                widget::row::with_capacity(2)
++                    .spacing(12)
++                    .align_y(cosmic::iced::Alignment::Center)
++                    .push(widget::text::body(label))
++                    .push(
++                        widget::slider(0..=8u32, step, |v| m(Msg::TextContrast(v)))
++                            .on_release(m(Msg::TextContrastDone))
++                            .width(Length::Fixed(250.0)),
++                    ),
++            )
++            .apply(Element::from)
++            .into_list_item(),
++    ]
++}
++
++lapin_page!(Fonts, "lapin-fonts", "preferences-desktop-font-symbolic", "Fonts", "Text smoothing, text contrast", [("", font_rows)]);
++
+ lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, colour, size", [("", pointer_rows)]);
+ 
+ /// Start button pictures (ids the shell knows) and their names.
+@@ -1073,6 +1196,7 @@ pub fn register(pages: &mut Binder<PMsg>) {
+     let _ = pages.register::<Clipboard>();
+     let _ = pages.register::<LockScreen>();
+     let _ = pages.register::<Pointer>();
++    let _ = pages.register::<Fonts>();
+     let _ = pages.register::<super::apps::Page>();
+     let _ = pages.register::<super::storage::Page>();
+     let _ = pages.register::<super::storage::TempPage>();
+diff --git a/cosmic-settings/src/pages/display/mod.rs b/cosmic-settings/src/pages/display/mod.rs
+index 4f5836c..50939bf 100644
+--- a/cosmic-settings/src/pages/display/mod.rs
++++ b/cosmic-settings/src/pages/display/mod.rs
+@@ -65,6 +65,8 @@ pub enum Mirroring {
+ 
+ #[derive(Clone, Debug)]
+ pub enum Message {
++    /// Lapin UX: "Make this my main display" for the selected one (#31).
++    LapinMainDisplay(bool),
+     /// Change placement of display
+     Position(OutputKey, i32, i32),
+     /// Changes the active display being configured.
+@@ -153,6 +155,8 @@ pub struct Page {
+     dialog_countdown: usize,
+     show_display_options: bool,
+     adjusted_scale: u32,
++    /// Lapin UX: the main display chosen (connector name, "make model"), #31.
++    lapin_main: (String, String),
+ }
+ 
+ impl Default for Page {
+@@ -175,6 +179,7 @@ impl Default for Page {
+             dialog_countdown: 0,
+             show_display_options: true,
+             adjusted_scale: 0,
++            lapin_main: if crate::lapin::enabled() { crate::lapin::settings::main_display() } else { Default::default() },
+         }
+     }
+ }
+@@ -554,6 +559,16 @@ impl Page {
+ 
+             Message::DisplayToggle(enable) => return self.toggle_display(enable),
+ 
++            // Lapin UX (#31): only turning it on means something, as usual:
++            // another display is made main from its own row.
++            Message::LapinMainDisplay(on) => {
++                if on && let Some(output) = self.list.outputs.get(self.active_display) {
++                    let model = crate::lapin::settings::display_model(output.make.as_deref(), &output.model);
++                    crate::lapin::settings::set_main_display(&output.name, &model);
++                    self.lapin_main = (output.name.clone(), model);
++                }
++            }
++
+             Message::Mirroring(mirroring) => match mirroring {
+                 Mirroring::Disable => {
+                     for k in self.mirror_map.keys() {
+@@ -1392,6 +1407,29 @@ pub fn display_configuration() -> Section<crate::pages::Message> {
+                     list_column()
+                 };
+ 
++                // Lapin UX (#31): the main display gets the tray, the desktop
++                // icons and notifications.
++                if crate::lapin::enabled() && active_output.enabled {
++                    let enabled: Vec<(OutputKey, (String, String, (i32, i32)))> = page
++                        .list
++                        .outputs
++                        .iter()
++                        .filter(|(_, o)| o.enabled)
++                        .map(|(k, o)| {
++                            let model = crate::lapin::settings::display_model(o.make.as_deref(), &o.model);
++                            (k, (o.name.clone(), model, (o.position.0, o.position.1)))
++                        })
++                        .collect();
++                    let names: Vec<(String, String, (i32, i32))> = enabled.iter().map(|(_, n)| n.clone()).collect();
++                    let is_main = crate::lapin::settings::pick_main(&names, &page.lapin_main)
++                        .is_some_and(|i| enabled[i].0 == active_id);
++                    display_enable = display_enable.add(
++                        widget::settings::item::builder("Make this my main display")
++                            .description("Shows the tray, desktop icons and notifications on this display")
++                            .toggler(is_main, Message::LapinMainDisplay),
++                    );
++                }
++
+                 if let Some(items) = display_options {
+                     for item in items {
+                         display_enable = display_enable.add(item);
+-- 
+2.43.0
+

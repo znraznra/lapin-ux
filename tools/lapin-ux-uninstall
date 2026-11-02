@@ -67,9 +67,10 @@ COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_the
 # slash is under /org/gnome/desktop/. The screen reader keys are what the
 # AT-SPI "screen reader on" and "accessibility on" flags are kept in (#18):
 # Narrator in Lapin UX mustn't start Orca in another desktop. cursor-size is
-# Settings > Accessibility > Mouse pointer > Size (#24).
+# Settings > Accessibility > Mouse pointer > Size (#24). The three font-*
+# keys are text smoothing (#40): Lapin turns subpixel smoothing on for itself.
 GKEYS=(font-name document-font-name icon-theme cursor-theme cursor-size toolkit-accessibility
-       a11y/applications/screen-reader-enabled)
+       a11y/applications/screen-reader-enabled font-antialiasing font-rgba-order font-hinting)
 GPATH=/org/gnome/desktop/interface
 gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/$1" ;; esac; }
 
@@ -166,6 +167,7 @@ describe() {
     case "$1:${2#*/}" in
     dconf:toolkit-accessibility) echo "app accessibility (for the screen reader)" ;;
     dconf:applications/screen-reader-enabled) echo "screen reader on/off" ;;
+    dconf:font-antialiasing|dconf:font-rgba-order|dconf:font-hinting) echo "GTK text smoothing ($2)" ;;
     dconf:*) echo "GTK $2" ;;
     cosmic:interface_font) echo "COSMIC font" ;;
     cosmic:icon_theme) echo "COSMIC icons" ;;
@@ -445,7 +447,7 @@ restore_settings() {
 
     # Lapin UX's own files.
     local -a own=()
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"

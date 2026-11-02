@@ -75,6 +75,7 @@ prepare() {
     # can be patched for screen readers (#44) without touching ~/.cargo.
     CARGO_HOME="$srcdir/cargo-lapin" cargo fetch --locked --target "$host"
     _patch_iced_a11y "$srcdir/cargo-lapin"
+    _patch_cryoglyph "$srcdir/cargo-lapin"
 
     cd "$srcdir/cosmic-comp"
     git reset -q --hard && git clean -fdq   # also drop files our patches added
@@ -112,6 +113,7 @@ prepare() {
     CARGO_HOME="$srcdir/cargo-settings" cargo fetch --locked --target "$host"
     _patch_libcosmic "$srcdir/cargo-settings"
     _patch_iced_a11y "$srcdir/cargo-settings"
+    _patch_cryoglyph "$srcdir/cargo-settings"
 
     cd "$srcdir/cosmic-files"
     git reset -q --hard && git clean -fdq
@@ -149,6 +151,20 @@ _patch_iced_a11y() {
         patched=1
     done
     [ "$patched" = 1 ] || { echo "libcosmic's iced not found in $1" >&2; return 1; }
+}
+
+# Lapin's text contrast (#40) in iced's text renderer (cryoglyph). Changes
+# nothing outside a Lapin UX session.
+_patch_cryoglyph() {
+    local dir patched=0
+    for dir in "$1"/git/checkouts/cryoglyph-*/*/; do
+        [ -f "$dir/src/cache.rs" ] || continue
+        if ! grep -q "text_contrast" "$dir/src/cache.rs"; then
+            for p in "$_src"/packaging/cryoglyph/*.patch; do git -C "$dir" apply "$p"; done
+        fi
+        patched=1
+    done
+    [ "$patched" = 1 ] || { echo "cryoglyph not found in $1" >&2; return 1; }
 }
 
 _files_patch='patch."https://github.com/pop-os/cosmic-files".cosmic-files.path="../cosmic-files"'

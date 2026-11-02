@@ -212,7 +212,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 16;
+pub const DEFAULTS_VERSION: u32 = 17;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -346,6 +346,9 @@ pub fn apply_upgrade(from: u32) {
         if let Err(e) = set_high_contrast(false) {
             tracing::warn!("could not turn contrast themes off: {e}");
         }
+    }
+    if from < 17 {
+        apply_text_smoothing();
     }
     match apply_keybindings() {
         Ok(true) => tracing::info!("updated keyboard shortcuts"),
@@ -517,7 +520,21 @@ fn ensure_mode() -> bool {
     }
 }
 
+/// Sharper text in GTK apps (#40): subpixel smoothing in RGB order with
+/// slight hinting, the usual setting for LCD screens. Fontconfig apps (Qt,
+/// Firefox, Electron) get the same from Lapin's session font setup. These
+/// GTK keys are shared with other desktops, so the session swap keeps
+/// Lapin's copy separate (tools/lapin-ux-uninstall). Settings >
+/// Personalization > Fonts changes them later.
+fn apply_text_smoothing() {
+    gsettings("font-antialiasing", "rgba");
+    gsettings("font-rgba-order", "rgb");
+    gsettings("font-hinting", "slight");
+    tracing::info!("applied default text smoothing");
+}
+
 pub fn apply_first_run() {
+    apply_text_smoothing();
     let dark = ensure_mode();
     for (what, res) in [
         ("dark theme", apply_theme_variant(true)),
