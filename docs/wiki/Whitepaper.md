@@ -64,7 +64,7 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 - Lock and sign-in screens, touch keyboard, volume/brightness pop-ups, admin prompt, Open/Save dialogs, Update (pacman, Flatpak, firmware), Task Manager with Users and Services, Control Panel.
 - A one-step installer and clean uninstaller.
 
-**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 16 of 19 (1 partial).
+**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 15 of 19 (2 partial; Narrator paused).
 
 **Confirmed on real hardware:** install, pop-ups, Open/Save dialogs, touch keyboard in the session, firmware updates; of 30 filed hardware issues, 25 are fixed and closed, 2 are fixed and awaiting retest (#18, #29), and 3 are not started (#23, #24, #28).
 

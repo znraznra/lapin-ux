@@ -24,7 +24,7 @@ Workflow: fix, comment what changed and what to retest, label `fixed: needs rete
 | #15 | Task Manager panel scrolls | Only the graph resizes | Closed |
 | #16 | Taskbar search only opens Start | Real text field | Closed |
 | #17 | Start button icon | Presets, OS logo, custom picture | Closed |
-| #18 | Accessibility > Vision does nothing | Screen reader offers to install Orca (dca07a2) | Awaiting retest |
+| #18 | Accessibility > Vision does nothing | Screen reader offers to install Orca (dca07a2); Narrator paused since 8 Nov | Paused |
 | #19 | Clock ignores 24-hour switch | Follows COSMIC `military_time` | Closed |
 | #20 | Calendar grid never shows | No full-height blur; grid when expanded | Closed |
 | #21 | Pointers fail | Pinned v2 commit b14dd9e, reason and Try again | Closed |
@@ -33,14 +33,29 @@ Workflow: fix, comment what changed and what to retest, label `fixed: needs rete
 ## Later issues
 | Issue | Problem | Status |
 |---|---|---|
-| #23 | Other desktops get Lapin's icons | Not started |
+| #23 | Other desktops get Lapin's icons | Per-session swap; empty copies no longer applied (a5002b1), awaiting retest |
 | #24 | Pointer settings page (style, busy colour, size, download) | Not started |
 | #25 | Lock screen blurred only behind the sign-in panel | Closed |
 | #26 | Slim clock without seconds | Closed |
 | #27 | Contrast themes turned off until real themes exist | Closed |
-| #28 | X11 pop-ups over the taskbar | Not started (`_NET_WORKAREA`) |
+| #28 | X11 pop-ups over the taskbar | `_NET_WORKAREA` (comp patch 0007): right on the desktop; ThinkPad still off, needs info |
 | #29 | Shell crash "Downcast widget state" ~1 s after start | Fixed in 3e2dc63, awaiting retest |
 | #30 | Blur behind sign-in panel only the first time | Fixed in 23d1e34, closed |
+| #31 | Choose the main display | Display 1 by default, notifications (Settings 0021), awaiting retest |
+| #32, #34 | Tray flicker; left taskbar ghost and dead zone (Arc) | GL backend on Arc, far fewer redraws (182f930, be19a35); dead zone needs a log |
+| #40 | Sharper text | Fonts page with smoothing, contrast, system and monospace font, awaiting retest |
+| #42 | Windows stretched when opening | Comp patch 0008: no 2/3-screen shrink after mapping, awaiting retest |
+| #44 | Screen reader doesn't read Lapin UX | iced a11y patch; Narrator paused since 8 Nov |
+| #46 | Lapin lost its own look after updating | Empty saved copies; repaired at every start (a5002b1, e381f2f), awaiting retest |
+| #47 | Preview shows only 2 windows | Rows as wide as the screen (e381f2f), awaiting retest |
+| #48 | Settings: typing keeps one letter | Settings 0021, awaiting retest |
+| #49 | install.sh stops on a package conflict | Replaces stock parts itself (182f930), awaiting retest |
+| #50 | Re-enabled monitor shows no signal | Intermittent on the Arc desktop, needs a log |
+| #51 | Sluggish shell and Start animation | Motion gate and redraw filter (be19a35), awaiting retest |
+| #52 | Black tray icons | Single-colour icons tinted (54e7af6), awaiting retest |
+| #53 | Print Screen does nothing | Every route opens the snipping bar (13f4a5b), awaiting retest |
+| #55, #56 | Opaque taskbar; rabbit Start icon | Done (41a45cf), awaiting retest |
+| #54, #57, #58 | Lock blur fade; custom pointers; system sounds | Requests, not started |
 
 ## Confirmed working on real hardware
 Install via `./install.sh`, volume/brightness pop-ups, Open/Save dialogs (portal builds and works), touch keyboard in the session, firmware updates in Update.

@@ -35,9 +35,18 @@ COSMIC compositor. Arch Linux first.
   taskbar takes the keyboard only meanwhile); Enter shows the results in
   Start; Esc or clicking away clears it.
 - Start button picture: Settings > Personalization > Taskbar > Start button
-  icon (Lapin UX's, Dots, Circle, Rabbit, the OS logo from os-release
-  `LOGO=`, or a custom SVG/PNG copied to `~/.local/share/lapin-ux`);
-  `start_icon` in `dev.lapinux.Shell`.
+  icon (the rabbit, Lapin UX's own and the default; Squares, Dots, Circle,
+  the OS logo from os-release `LOGO=`, or a custom SVG/PNG copied to
+  `~/.local/share/lapin-ux`); `start_icon` in `dev.lapinux.Shell` (`""` =
+  the rabbit, which is also shown when a chosen picture is missing, #56).
+- Opaque by default, with no blur behind it (#55). Personalization > Colors >
+  *Transparency effects* (`transparency_effects` in `dev.lapinux.Shell`,
+  off by default; Lapin session only) makes it see-through (82 %) and
+  blurred.
+- Tray icons drawn in one dark colour without being named `-symbolic`
+  (Steam's `steam_tray_mono`, `-mono`/`-panel` variants, black SVGs, black
+  pixmaps) are tinted like the taskbar's own icons (#52,
+  `lapin_ux_core::tray_look`): SVGs as symbolic, bitmaps recoloured.
 - All windows of an app share a button. Click: open / focus / minimize;
   several windows: a window picker. Middle-click: new instance.
 - Accent "pill" under the focused app, short dash for background apps.
@@ -289,6 +298,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - The screen freezes and dims; pick Rectangle (drag), Window or Full screen
   from the toolbar. The snip is copied to the clipboard, saved in
   Pictures/Screenshots, and a notification shows it.
+- The picture is of the screen with the focused window (else the main
+  display), and the overlay opens on that screen. COSMIC's own *Screenshot*
+  system action also points at `lapin-ux-shell snip` (`system_actions`, swapped
+  per session), so Print never falls back to `cosmic-screenshot` (#53). If
+  no picture arrives within 3 s a notification says so; every press logs
+  "screenshot requested".
 
 **System tools**
 - **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Super+X): Processes (apps with
@@ -329,6 +344,11 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   taskbar → *Show touch keyboard button*.
 
 **Accessibility**
+- **Narrator is paused** until further notice (`screen_reader::PAUSED` in the
+  shell): no quick settings tile, Ctrl+Super+Enter does nothing, search
+  doesn't offer it, Settings > Accessibility > Vision hides the screen reader
+  rows in the Lapin session, and a running screen reader is turned off. What
+  follows describes it for when it comes back.
 - Quick settings → Accessibility: Magnifier, Colour filters, **Narrator**
   (Orca; Ctrl+Super+Enter). Contrast themes are turned off for now (Lapin UX
   has none of its own yet; COSMIC's high-contrast palette didn't work as
@@ -360,7 +380,15 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   restart to turn their own accessibility on.
 
 **Text** (#40)
-- Settings > Personalization > Fonts. *Text smoothing* (Sharper RGB / Sharper
+- Settings > Personalization > Fonts starts with *System font* and
+  *Monospace font* (in the Lapin session they're not on Colors). The system
+  font sets COSMIC's `interface_font`, GTK's `font-name`/`document-font-name`
+  and Lapin's `system_font` (`""` = Selawik), which the shell keeps instead of
+  resetting it to Selawik; Settings saves `system_font` first because the
+  shell reacts to the font change. The monospace font sets COSMIC's
+  `monospace_font` and GTK's `monospace-font-name`. All are swapped per
+  session.
+- *Text smoothing* (Sharper RGB / Sharper
   BGR / Standard) for GTK, Qt, Firefox and Electron: GTK's
   `font-antialiasing`, `font-rgba-order`, `font-hinting` (swapped per
   session; the shell sets RGB once) and `~/.config/lapin-ux/fonts.conf`,
@@ -406,11 +434,27 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   tables (`debug = "line-tables-only"`, PKGBUILD `!strip`) so backtraces
   name files and lines; `start-lapin-ux` sets `RUST_BACKTRACE=1` and logs
   the installed build.
-- Redraw diagnostics (#32, #34): `touch ~/.local/state/lapin-ux/debug-redraw`
+- Redraw diagnostics (#32, #34, #51): `touch ~/.local/state/lapin-ux/debug-redraw`
   (or `LAPIN_UX_DEBUG_REDRAW=1`) before signing in makes the shell log to
-  `session.log` its message count every 5 s, every tracked position change,
+  `session.log` its message count every 5 s (with the busiest message kinds,
+  the view build time per surface and the redraws done and skipped), every
+  tracked position change,
   every pop-up/Start/catcher opened or closed (with its anchor), and which
   surface each click lands on. Delete the file to turn it off.
+- Less work per frame (#51): every message makes iced rebuild and redraw
+  every shell surface, so the shell keeps messages few. Pointer motion is a
+  message only while the left button is held or at the Show desktop corner
+  (`pointer_gate`); otherwise the position is stored and handled just before
+  the next message. A batch of only animation frames (and position updates)
+  redraws only the surfaces that move, through the hook added by
+  `packaging/libcosmic-a11y/0002` (`iced::window::REDRAW_FILTER`);
+  `LAPIN_UX_REDRAW_ALL=1` turns that off.
+- Graphics: on Intel Arc (PCI vendor 0x8086 with device 0x56xx/0xe2xx, or the
+  `xe` driver) `start-lapin-ux` sets `WGPU_BACKEND=gl` (#34);
+  `LAPIN_UX_WGPU_BACKEND` overrides it.
+- Repair at every start (#46): the shell puts back Lapin's icon theme,
+  wallpaper, shortcuts, Super key and focus policy when they're unset or
+  empty, and the per-session swap never applies or saves an empty copy.
 - XDG autostart ("startup apps") through `lapin-ux-session.target`. Other
   desktops' own parts in /etc/xdg/autostart (settings daemons, polkit
   agents, panels, session-manager plumbing; rule in

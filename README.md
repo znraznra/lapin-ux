@@ -27,7 +27,7 @@ The goal is a zero learning curve: if you can use a computer, you can use Lapin 
 | 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
 | 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `██████████` 9 of 9 |
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
-| 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 16 of 19, 1 partly |
+| 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
 
 *Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
 
@@ -95,7 +95,7 @@ flowchart LR
 
 ### Phase 1 — core desktop (done)
 
-- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice
+- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice (the rabbit by default), solid by default with Transparency effects to make it see-through
 - [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor with a main display you choose, Show desktop corner
 - [x] System tray with app menus, older X11 and Wine tray icons included
 - [x] Clock with calendar, seconds if you want them
@@ -103,8 +103,8 @@ flowchart LR
 - [x] Search: apps, Settings pages, files, text inside documents, the web
 - [x] Start slides up as it opens, without touching the taskbar, and slides across to All apps and back
 - [x] Notifications: pop-ups, notification centre, agenda, Focus, Do not disturb on a schedule
-- [x] Wallpaper and theme: accent colour, rounded corners, frosted panels
-- [x] Look: Selawik font, Fluent Emoji, full-colour app icons, sharper text (smoothing and contrast in Settings > Fonts)
+- [x] Wallpaper and theme: accent colour, rounded corners, an opaque taskbar (see-through if you turn on Transparency effects)
+- [x] Look: Selawik font, Fluent Emoji, full-colour app icons, sharper text (system and monospace font, smoothing and contrast in Settings > Fonts)
 - [x] Session: starts everything and restarts anything that crashes
 - [x] Arch package and one-step installer *(installs on a real Arch-based PC; first test's fixes waiting for a retest)*
 
@@ -129,7 +129,7 @@ flowchart LR
 - [x] Firmware updates (BIOS, SSDs, docks) *(not yet tried with real firmware)*
 - [x] Control Panel — every item opens the matching Settings page
 
-### Phase 4 — zero learning curve (16 of 19, 1 partly)
+### Phase 4 — zero learning curve (15 of 19, 2 partly)
 
 - [x] Night light and desktop peek
 - [x] Touchpad gestures *(untested on a real touchpad)*
@@ -145,7 +145,7 @@ flowchart LR
 - [ ] Snip markup editor (pen, highlighter, crop)
 - [x] Keyboard layout switcher and input methods (Japanese, Chinese…)
 - [x] Touch keyboard
-- [x] Narrator, Magnifier, colour filters *(contrast themes off for now: none of our own yet)*
+- [~] Magnifier and colour filters; Narrator — *paused for now (it didn't work reliably); contrast themes off for now: none of our own yet*
 - [x] System sounds and pointers (style, busy colour and size in Settings)
 - [ ] **Store**
 - [x] A clear admin prompt
@@ -190,7 +190,7 @@ cd lapin-ux
 ./install.sh
 ```
 
-1. The script installs everything it needs; there is nothing to install by hand.
+1. The script installs everything it needs; there is nothing to install by hand. If COSMIC's own lock screen, pop-ups, touch keyboard, Settings or file dialogs are installed, it says so and replaces them (uninstalling puts them back).
 2. Log out, pick **Lapin UX** on the sign-in screen, and sign in.
 3. To remove it, sign out of Lapin UX, log into your other desktop and run `lapin-ux-uninstall` (or `./uninstall.sh` from this folder). While it's installed, Lapin UX's look (font, icons, pointer, wallpaper, colours, shortcuts, pop-ups, dialogs) only applies inside the Lapin UX session; your other desktops, real COSMIC included, keep their own settings. Uninstalling puts your fonts, icons, pointer, wallpaper and shortcuts back the way they were before Lapin UX, removes its packages and files, brings back COSMIC's own parts if you use COSMIC, and always leaves you a working login screen (even if you remove it with plain pacman). Add `--dry-run` to see what it would do first.
 

@@ -43,7 +43,7 @@ Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every
 Lock and sign-in screens (`lapin-ux-greeter`): big clock, blurred panel, round picture, fingerprint via fprintd, Howdy face unlock, accessibility/keyboard/session/power flyouts, on-screen keyboard.
 
 ## Input and accessibility
-Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Narrator via Orca (offers to install it). Contrast themes are currently turned off.
+Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters. Narrator (via Orca) is paused for now. Contrast themes are currently turned off.
 
 ## Pop-ups and prompts (`lapin-ux-osd`)
 Volume/brightness pop-ups and the admin (polkit) prompt, clear and easy to read.
