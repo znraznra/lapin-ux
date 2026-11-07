@@ -1,0 +1,149 @@
+From 66de712ff479b55b9a28758df5c3e7b7c17e5956 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 23:10:15 +0800
+Subject: [PATCH] Lapin UX: windows open at their own size, without a jump
+
+cosmic-comp shrank a new floating window that was bigger than 2/3 of the
+output and sent it a smaller size right after it appeared, so large apps
+opened at one size and then jumped to another (and the open animation
+played again). In the Lapin session the limit is the whole output, the
+animation waits 60 ms before it shows and restarts from the new size if
+the app resizes within 500 ms. COSMIC's own session is unchanged.
+
+Refs #42
+---
+ src/shell/layout/floating/mod.rs | 67 +++++++++++++++++++++++++-------
+ 1 file changed, 53 insertions(+), 14 deletions(-)
+
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index 600dda3..6869d2f 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -58,6 +58,12 @@ const SHAKE_ANIMATION_DURATION: Duration = Duration::from_millis(320);
+ /// Lapin UX: a new window fades in while growing from 92% of its size.
+ const OPEN_ANIMATION_DURATION: Duration = Duration::from_millis(200);
+ const OPEN_ANIMATION_START_SCALE: f64 = 0.92;
++/// Lapin UX (#42): a new window stays hidden this long before it fades in,
++/// and if it changes size in its first `OPEN_SETTLE` (an app restoring its
++/// saved size right after mapping), the animation starts again at the new
++/// size, so only the final size is ever shown growing in.
++const OPEN_HOLD: Duration = Duration::from_millis(60);
++const OPEN_SETTLE: Duration = Duration::from_millis(500);
+ const SHAKE_AMPLITUDE: f32 = 10.0;
+ 
+ #[derive(Debug, Default)]
+@@ -95,9 +101,29 @@ enum Animation {
+     Open {
+         start: Instant,
+         geometry: Rectangle<i32, Local>,
++        mapped_at: Instant,
+     },
+ }
+ 
++/// Lapin UX: running in the Lapin UX session (its changes stay out of
++/// COSMIC's own session).
++fn lapin_session() -> bool {
++    static LAPIN: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++    });
++    *LAPIN
++}
++
++/// Lapin UX (#42): how far an open animation is (0–1), after its hold.
++fn open_progress(start: &Instant) -> f64 {
++    Instant::now()
++        .duration_since(*start)
++        .saturating_sub(OPEN_HOLD)
++        .min(OPEN_ANIMATION_DURATION)
++        .as_secs_f64()
++        / OPEN_ANIMATION_DURATION.as_secs_f64()
++}
++
+ impl Animation {
+     fn start(&self) -> &Instant {
+         match self {
+@@ -113,12 +139,10 @@ impl Animation {
+         match self {
+             Animation::Tiled { .. } | Animation::Shake { .. } => 1.0,
+             Animation::Open { start, .. } => {
+-                let percentage = Instant::now()
+-                    .duration_since(*start)
+-                    .min(OPEN_ANIMATION_DURATION)
+-                    .as_secs_f32()
+-                    / OPEN_ANIMATION_DURATION.as_secs_f32();
+-                ease(EaseOutCubic, 0.0, 1.0, percentage)
++                if Instant::now().duration_since(*start) < OPEN_HOLD {
++                    return 0.0;
++                }
++                ease(EaseOutCubic, 0.0, 1.0, open_progress(start) as f32)
+             }
+             Animation::Minimize { start, .. } => {
+                 let percentage = Instant::now()
+@@ -194,11 +218,7 @@ impl Animation {
+                 // Scale the current geometry, so a resize during the
+                 // animation is followed, aspect ratio kept (#42).
+                 let geometry = &current_geometry;
+-                let progress = Instant::now()
+-                    .duration_since(*start)
+-                    .min(OPEN_ANIMATION_DURATION)
+-                    .as_secs_f64()
+-                    / OPEN_ANIMATION_DURATION.as_secs_f64();
++                let progress = open_progress(start);
+                 let scale: f64 = ease(EaseOutCubic, OPEN_ANIMATION_START_SCALE, 1.0, progress);
+                 let w = (geometry.size.w as f64 * scale).round() as i32;
+                 let h = (geometry.size.h as f64 * scale).round() as i32;
+@@ -523,10 +543,15 @@ impl FloatingLayout {
+         {
+             win_geo.size = size;
+         } else {
++            // Lapin UX (#42): a window opens at the size it asks for, as
++            // usual, as long as it fits on the screen. Shrinking anything
++            // over two-thirds of the screen right after it appeared made
++            // apps that reopen at their last size visibly jump.
++            let (num, den) = if lapin_session() { (1, 1) } else { (2, 3) };
+             let max_size = mapped.max_size().unwrap_or(
+                 (
+-                    min_size.w.max(output_geometry.size.w / 3 * 2),
+-                    min_size.h.max(output_geometry.size.h / 3 * 2),
++                    min_size.w.max(output_geometry.size.w / den * num),
++                    min_size.h.max(output_geometry.size.h / den * num),
+                 )
+                     .into(),
+             );
+@@ -1518,6 +1543,7 @@ impl FloatingLayout {
+             Animation::Open {
+                 start: Instant::now(),
+                 geometry: geometry.as_local(),
++                mapped_at: Instant::now(),
+             },
+         );
+         self.dirty.store(true, Ordering::SeqCst);
+@@ -1529,11 +1555,24 @@ impl FloatingLayout {
+ 
+     pub fn update_animation_state(&mut self) {
+         let was_empty = self.animations.is_empty();
++        // Lapin UX (#42): a window that resized itself right after mapping
++        // starts its open animation again at the new size.
++        for (elem, anim) in self.animations.iter_mut() {
++            if let Animation::Open { start, geometry, mapped_at } = anim
++                && mapped_at.elapsed() < OPEN_SETTLE
++                && let Some(current) = self.space.element_geometry(elem)
++                && current.as_local().size != geometry.size
++            {
++                *geometry = current.as_local();
++                *start = Instant::now();
++                self.dirty.store(true, Ordering::SeqCst);
++            }
++        }
+         self.animations.retain(|_, anim| {
+             let duration = match anim {
+                 Animation::Tiled { .. } => ANIMATION_DURATION,
+                 Animation::Shake { .. } => SHAKE_ANIMATION_DURATION,
+-                Animation::Open { .. } => OPEN_ANIMATION_DURATION,
++                Animation::Open { .. } => OPEN_HOLD + OPEN_ANIMATION_DURATION,
+                 _ => MINIMIZE_ANIMATION_DURATION,
+             };
+             Instant::now().duration_since(*anim.start()) < duration
+-- 
+2.43.0
+
