@@ -314,8 +314,52 @@ bash $U --settings-only --yes > $HOME/out.txt 2>&1
 check "after uninstall: grayscale again" "[ \"\$(dconf read $AA)\" = \"'grayscale'\" ]"
 check "Lapin's own font file removed" "[ ! -e $HOME/.config/lapin-ux ]"
 }
+scenP() {
+echo "P: Lapin's own copy holds empty files (#46): Lapin gets its look back, other desktops keep theirs"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+C=$HOME/.config/cosmic; I=$HOME/.local/state/lapin-ux/lapin-desktop/cosmic
+mkdir -p $C/com.system76.CosmicTk/v1
+echo '"Papirus"' > $C/com.system76.CosmicTk/v1/icon_theme
+bash $U --snapshot; bash $DS enter
+lapin_writes
+bash $DS leave
+check "other desktop: its own icons" "grep -q Papirus $C/com.system76.CosmicTk/v1/icon_theme"
+# What Tako's laptop had: Lapin's copy of these settings empty since set-up.
+for k in com.system76.CosmicTk__icon_theme com.system76.CosmicSettings.Shortcuts__system_actions com.system76.CosmicBackground__all; do : > $I/$k; done
+bash $DS enter
+check "empty copies aren't applied: icon theme, Super key, wallpaper unset (the shell puts Lapin's back)" "[ ! -e $C/com.system76.CosmicTk/v1/icon_theme ] && [ ! -e $C/com.system76.CosmicSettings.Shortcuts/v1/system_actions ] && [ ! -e $C/com.system76.CosmicBackground/v1/all ]"
+check "the empty copies are gone from Lapin's copy" "[ ! -e $I/com.system76.CosmicTk__icon_theme ] && [ ! -e $I/com.system76.CosmicBackground__all ]"
+check "the rest of Lapin's look still applied" "grep -q Selawik $C/com.system76.CosmicTk/v1/interface_font"
+# The shell repairs them (stand-in), then a session ends with one of them
+# half-written (empty): Lapin's good copy is kept.
+echo '"Lapin-UX-dark"' > $C/com.system76.CosmicTk/v1/icon_theme
+bash $DS leave; bash $DS enter
+: > $C/com.system76.CosmicTk/v1/icon_theme
+bash $DS leave
+check "an empty live value isn't saved as Lapin's" "grep -q Lapin-UX-dark $I/com.system76.CosmicTk__icon_theme"
+check "other desktop: still its own icons" "grep -q Papirus $C/com.system76.CosmicTk/v1/icon_theme"
+bash $DS enter
+check "next Lapin session: Lapin's icons" "grep -q Lapin-UX-dark $C/com.system76.CosmicTk/v1/icon_theme"
+bash $DS leave
+}
+scenQ() {
+echo "Q: fonts picked on Lapin's Fonts page stay in Lapin UX (#40)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+C=$HOME/.config/cosmic; M=$C/com.system76.CosmicTk/v1/monospace_font; GM=/org/gnome/desktop/interface/monospace-font-name
+mkdir -p $C/com.system76.CosmicTk/v1
+echo '(family: "Fira Mono", weight: Normal)' > $M
+dconf write $GM "'Fira Mono 10'"
+bash $U --snapshot; bash $DS enter
+echo '(family: "Cascadia Mono", weight: Normal)' > $M
+dconf write $GM "'Cascadia Mono 10'"
+bash $DS leave
+check "other desktop: its own monospace fonts (COSMIC and GTK)" "grep -q 'Fira Mono' $M && [ \"\$(dconf read $GM)\" = \"'Fira Mono 10'\" ]"
+bash $DS enter
+check "Lapin UX: the one picked there" "grep -q 'Cascadia Mono' $M && [ \"\$(dconf read $GM)\" = \"'Cascadia Mono 10'\" ]"
+bash $DS leave
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O; do
+for x in A B C D E F G H I J K L M N O P Q; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

@@ -58,7 +58,7 @@ ACTIVE="$STATE/lapin-active"        # Lapin UX's copy is the one in place
 THEME_DIRS=(com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Dark.Builder
             com.system76.CosmicTheme.Light com.system76.CosmicTheme.Light.Builder)
 # Single COSMIC settings. same-on-all before all: deciding "all" may look at it.
-COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_theme
+COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/monospace_font com.system76.CosmicTk/icon_theme
              com.system76.CosmicTheme.Mode/is_dark
              com.system76.CosmicBackground/same-on-all com.system76.CosmicBackground/all
              com.system76.CosmicSettings.Shortcuts/custom com.system76.CosmicSettings.Shortcuts/system_actions
@@ -70,7 +70,8 @@ COSMIC_KEYS=(com.system76.CosmicTk/interface_font com.system76.CosmicTk/icon_the
 # Settings > Accessibility > Mouse pointer > Size (#24). The three font-*
 # keys are text smoothing (#40): Lapin turns subpixel smoothing on for itself.
 GKEYS=(font-name document-font-name icon-theme cursor-theme cursor-size toolkit-accessibility
-       a11y/applications/screen-reader-enabled font-antialiasing font-rgba-order font-hinting)
+       a11y/applications/screen-reader-enabled font-antialiasing font-rgba-order font-hinting
+       monospace-font-name)
 GPATH=/org/gnome/desktop/interface
 gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/$1" ;; esac; }
 
@@ -170,6 +171,7 @@ describe() {
     dconf:font-antialiasing|dconf:font-rgba-order|dconf:font-hinting) echo "GTK text smoothing ($2)" ;;
     dconf:*) echo "GTK $2" ;;
     cosmic:interface_font) echo "COSMIC font" ;;
+    cosmic:monospace_font) echo "COSMIC monospace font" ;;
     cosmic:icon_theme) echo "COSMIC icons" ;;
     cosmic:is_dark) echo "COSMIC light/dark mode" ;;
     cosmic:all) echo "COSMIC wallpaper" ;;
@@ -192,7 +194,28 @@ item_save() {   # kind name dest
         return 0
     fi
     f=$(item_path "$1" "$2")
-    if [ -e "$f" ]; then cp -a "$f" "$3"; else : > "$3.absent"; fi
+    # An empty file is an unset setting (COSMIC reads it as its default): save
+    # it as absent, never as an empty copy that would later wipe the value (#46).
+    if has_value "$f"; then cp -a "$f" "$3"; else : > "$3.absent"; fi
+}
+# A saved or live value that holds something: a non-empty file, or a folder
+# with something in it.
+has_value() {   # path
+    if [ -d "$1" ]; then [ -n "$(ls -A "$1" 2>/dev/null)" ]; else [ -s "$1" ]; fi
+}
+# Settings Lapin UX always sets in its own session; its shell puts them back
+# at every start when they're unset (#46). Lapin's copy of them must never be
+# "unset": an empty or missing copy means Lapin's look was lost, not chosen.
+LAPIN_SETS=(com.system76.CosmicTk/icon_theme com.system76.CosmicTk/interface_font
+            com.system76.CosmicTheme.Mode/is_dark
+            com.system76.CosmicBackground/same-on-all com.system76.CosmicBackground/all
+            com.system76.CosmicSettings.Shortcuts/custom com.system76.CosmicSettings.Shortcuts/system_actions
+            com.system76.CosmicComp/activation_policy)
+lapin_sets() {   # kind name
+    local k
+    [ "$1" = cosmic ] || return 1
+    for k in "${LAPIN_SETS[@]}"; do [ "$k" = "$2" ] && return 0; done
+    return 1
 }
 # Make the live value what src holds.
 item_apply() {   # kind name src
@@ -205,8 +228,14 @@ item_apply() {   # kind name src
     f=$(item_path "$1" "$2")
     if [ -e "$3.absent" ]; then
         run rm -rf "$f"
-    elif [ -e "$3" ]; then
+    elif [ -d "$3" ]; then
         run rm -rf "$f"; run mkdir -p "$(dirname "$f")"; run cp -a "$3" "$f"
+    elif [ -e "$3" ]; then
+        # Copy next to it, then rename over it: the setting is never seen
+        # (or left, after a power cut) half-written or empty (#46).
+        run mkdir -p "$(dirname "$f")"
+        run cp -a "$3" "$f.lapin-new" && run sync -- "$f.lapin-new" 2>/dev/null
+        run mv -f "$f.lapin-new" "$f"
     fi
 }
 # Back to the desktop's own default.
@@ -363,7 +392,15 @@ enter_session() {
             fi
         else
             item_save "$kind" "$name" "$out"
-            saved "$in" && item_apply "$kind" "$name" "$in"
+            if lapin_sets "$kind" "$name" && ! has_value "$in"; then
+                # Lapin's copy is missing, empty or "unset" (#46): drop it and
+                # clear the setting, so Lapin UX's shell puts its own value
+                # back instead of the session inheriting another desktop's.
+                rm -rf "$in" "$in.absent"
+                item_default "$kind" "$name"
+            elif saved "$in"; then
+                item_apply "$kind" "$name" "$in"
+            fi
         fi
     done < <(items)
     mkdir -p "$STATE" && date -Iseconds > "$ACTIVE"
@@ -374,7 +411,13 @@ leave_session() {
     if [ -f "$ACTIVE" ]; then
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
-            item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
+            # A setting Lapin always sets but that's unset right now (a crash,
+            # a half-written file): keep Lapin's previous copy instead (#46).
+            if lapin_sets "$kind" "$name" && ! has_value "$(item_path "$kind" "$name")"; then
+                :
+            else
+                item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
+            fi
             if saved "$out"; then say "  $(describe "$kind" "$name"): back to the other desktops' own"; item_apply "$kind" "$name" "$out"; fi
         done < <(items)
         run rm -f "$ACTIVE"
