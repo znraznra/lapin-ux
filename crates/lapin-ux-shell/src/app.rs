@@ -499,7 +499,8 @@ impl Shell {
             vec![Rectangle { x: 0.0, y: h - crate::autohide::STRIP as f32, width: 100_000.0, height: crate::autohide::STRIP as f32 }]
         });
         let task = cosmic::surface::surface_task(app_layer_shell(
-            move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id)), ..Default::default() },
+            // Opaque by default (#55): blur only with transparency effects on.
+            move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id) && shell.config.transparency_effects), ..Default::default() },
             move |_: &mut Shell| SctkLayerSurfaceSettings {
                 id,
                 layer: Layer::Top,
@@ -973,6 +974,7 @@ impl Application for Shell {
     fn init(core: Core, _flags: crate::Args) -> (Self, Task<Message>) {
         let config_handle = config::shell_config();
         let mut cfg: ShellConfig = config::load(config_handle.as_ref());
+        crate::style::set_transparency(cfg.transparency_effects);
         let catalog = Catalog::load(cfg.show_other_desktop_apps);
         if !cfg.initialized {
             crate::defaults::apply_first_run();
@@ -1476,6 +1478,7 @@ impl Shell {
                 let apps_changed = cfg.show_other_desktop_apps != self.config.show_other_desktop_apps;
                 let main_changed = cfg.main_display != self.config.main_display
                     || cfg.main_display_model != self.config.main_display_model;
+                crate::style::set_transparency(cfg.transparency_effects);
                 self.config = cfg;
                 if main_changed {
                     return self.desktop_follow_main();

@@ -42,11 +42,23 @@ fn with_alpha(c: impl Into<Color>, a: f32) -> Color {
     c
 }
 
+static TRANSPARENT_TASKBAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// "Transparency effects" (off by default: the taskbar is opaque, #55).
+pub fn set_transparency(on: bool) {
+    TRANSPARENT_TASKBAR.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn transparency() -> bool {
+    TRANSPARENT_TASKBAR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn taskbar_bg() -> theme::Container<'static> {
     theme::Container::custom(|t| {
         let c = t.cosmic();
+        let alpha = if transparency() { 0.82 } else { 1.0 };
         container::Style {
-            background: Some(Background::Color(with_alpha(c.background(true).base, 0.82))),
+            background: Some(Background::Color(with_alpha(c.background(true).base, alpha))),
             border: Border { color: with_alpha(c.bg_divider(), 0.6), width: 0.0, radius: 0.0.into() },
             text_color: Some(c.on_bg_color().into()),
             icon_color: Some(c.on_bg_color().into()),

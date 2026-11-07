@@ -61,17 +61,21 @@ const START_RABBIT: &[u8] = include_bytes!("../../../data/icons/start/rabbit.svg
 
 /// The Start button's picture for the `start_icon` setting, falling back to
 /// Lapin UX's own when a chosen picture is missing.
+/// The Start button picture. The rabbit is Lapin UX's own (the default,
+/// and what's shown when a chosen picture is missing, #56); "squares" is
+/// the earlier default.
 pub fn start_icon(choice: &str) -> icon::Handle {
     match choice {
+        "squares" => icon::from_svg_bytes(START_ICON),
         "dots" => icon::from_svg_bytes(START_DOTS),
         "circle" => icon::from_svg_bytes(START_CIRCLE),
-        "rabbit" => icon::from_svg_bytes(START_RABBIT),
         "distro" => match lapin_ux_core::system::os_info().logo {
             Some(logo) => icon::from_name(logo).size(64).handle(),
-            None => icon::from_svg_bytes(START_ICON),
+            None => icon::from_svg_bytes(START_RABBIT),
         },
-        "custom" => custom_start_icon().map(icon::from_path).unwrap_or_else(|| icon::from_svg_bytes(START_ICON)),
-        _ => icon::from_svg_bytes(START_ICON),
+        "custom" => custom_start_icon().map(icon::from_path).unwrap_or_else(|| icon::from_svg_bytes(START_RABBIT)),
+        // "" (the default) and "rabbit".
+        _ => icon::from_svg_bytes(START_RABBIT),
     }
 }
 
