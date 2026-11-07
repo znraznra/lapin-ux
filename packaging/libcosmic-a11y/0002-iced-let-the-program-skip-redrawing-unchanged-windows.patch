@@ -1,0 +1,37 @@
+diff --git a/core/src/window.rs b/core/src/window.rs
+index d0e741d8..d9753d89 100644
+--- a/core/src/window.rs
++++ b/core/src/window.rs
+@@ -23,3 +23,8 @@ pub use redraw_request::RedrawRequest;
+ pub use screenshot::Screenshot;
+ pub use settings::Settings;
+ pub use user_attention::UserAttention;
++
++/// Lapin UX: picks which windows to redraw after a batch of messages
++/// (given every open window). Unset, all of them are redrawn, as before.
++pub static REDRAW_FILTER: std::sync::OnceLock<fn(&[Id]) -> Vec<Id>> =
++    std::sync::OnceLock::new();
+diff --git a/winit/src/lib.rs b/winit/src/lib.rs
+index bbb5a027..dd0e5de5 100644
+--- a/winit/src/lib.rs
++++ b/winit/src/lib.rs
+@@ -1622,8 +1622,17 @@ async fn run_instance<P>(
+                             || dnd_surface_id == Some(id)
+                     });
+ 
+-                    for (_id, window) in window_manager.iter_mut() {
+-                        window.raw.request_redraw();
++                    // Lapin UX: the program may leave windows whose
++                    // content didn't change out of this redraw.
++                    let redraw = crate::core::window::REDRAW_FILTER.get().map(|filter| {
++                        let ids: Vec<window::Id> =
++                            window_manager.iter_mut().map(|(id, _)| id).collect();
++                        filter(&ids)
++                    });
++                    for (id, window) in window_manager.iter_mut() {
++                        if redraw.as_ref().is_none_or(|r| r.contains(&id)) {
++                            window.raw.request_redraw();
++                        }
+                     }
+                 }
+ 

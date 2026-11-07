@@ -34,6 +34,7 @@ mod panels;
 mod previews;
 mod properties;
 mod quick;
+mod pointer_gate;
 mod redraw_debug;
 mod screen_reader;
 mod snap;
@@ -85,6 +86,11 @@ fn main() -> cosmic::iced::Result {
                 .unwrap_or_else(|_| "warn,lapin_ux_shell=info".into()),
         )
         .init();
+    // Redraw only the surfaces that move during an animation (#51);
+    // LAPIN_UX_REDRAW_ALL=1 turns that off, for comparing.
+    if std::env::var("LAPIN_UX_REDRAW_ALL").is_err() {
+        anim::install_redraw_filter();
+    }
 
     let action = std::env::args().nth(1);
     let args: Vec<String> = std::env::args().skip(2).collect();

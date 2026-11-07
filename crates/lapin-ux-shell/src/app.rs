@@ -1103,50 +1103,13 @@ impl Application for Shell {
     }
 
     fn view_window(&self, id: window::Id) -> Element<'_, Message> {
-        use lapin_ux_ui::a11y::group;
-        // Each surface is named for screen readers (#44): Wayland panels and
-        // pop-ups have no window title to read.
-        if let Some(bar) = self.bars.iter().find(|b| b.id == id) {
-            return group("Taskbar", crate::taskbar_view::taskbar(self, bar));
+        if !*crate::redraw_debug::ON {
+            return view_surface(self, id);
         }
-        if self.catcher == Some(id) {
-            return crate::catcher::view();
-        }
-        if self.desktop.as_ref().is_some_and(|d| d.id == id) {
-            return group("Desktop", crate::desktop::view(self));
-        }
-        if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
-            return crate::desktop::rename_view(self);
-        }
-        if let Some(start) = self.start.as_ref().filter(|s| s.id == id) {
-            return group("Start", crate::start_view::start_menu(self, start));
-        }
-        if let Some(panel) = self.panel.as_ref().filter(|p| p.id == id) {
-            return group(crate::panels::a11y_name(&panel.kind), crate::panels::view(self, panel));
-        }
-        if let Some(sub) = self.sub.as_ref().filter(|p| p.id == id) {
-            return cosmic::widget::autosize::autosize(crate::taskbar_view::popup(self, sub), crate::submenu::SUB_AUTOSIZE.clone())
-                .min_width(1.0)
-                .min_height(1.0)
-                .max_width(440.0)
-                .max_height(720.0)
-                .into();
-        }
-        if let Some(popup) = self.popup.as_ref().filter(|p| p.id == id) {
-            // Popups size themselves to their content. Window previews may
-            // be as wide as the screen (#47).
-            let max_w = match popup.kind {
-                PopupKind::Preview(_) | PopupKind::Windows(_) => crate::previews::preview_max_width(self).max(440.0),
-                _ => 440.0,
-            };
-            return cosmic::widget::autosize::autosize(group(popup_a11y_name(&popup.kind), crate::taskbar_view::popup(self, popup)), POPUP_AUTOSIZE.clone())
-                .min_width(1.0)
-                .min_height(1.0)
-                .max_width(max_w)
-                .max_height(720.0)
-                .into();
-        }
-        cosmic::widget::Space::new().into()
+        let started = Instant::now();
+        let element = view_surface(self, id);
+        crate::redraw_debug::view(surface_kind(self, id), started.elapsed());
+        element
     }
 
     fn style(&self) -> Option<cosmic::iced::theme::Style> {
@@ -1275,13 +1238,17 @@ impl Application for Shell {
                     Some(Message::Preview(crate::previews::PreviewMsg::SurfaceLeft(window)))
                 }
                 cosmic::iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => Some(Message::Modifiers(window, m)),
+                // Motion is a message only when it has to be handled now
+                // (#51); otherwise it waits for the next message.
                 cosmic::iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                    Some(Message::BarPointer(window, Pointer::Move(position)))
+                    crate::pointer_gate::moved(window, position).then_some(Message::BarPointer(window, Pointer::Move(position)))
                 }
                 cosmic::iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                    crate::pointer_gate::button(true);
                     Some(Message::BarPointer(window, Pointer::Down))
                 }
                 cosmic::iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                    crate::pointer_gate::button(false);
                     Some(Message::BarPointer(window, Pointer::Up))
                 }
                 _ => None,
@@ -1291,7 +1258,7 @@ impl Application for Shell {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         if *crate::redraw_debug::ON {
-            crate::redraw_debug::message();
+            crate::redraw_debug::message(&message);
             if let Message::Rect(RectangleUpdate::Rectangle((k, r))) = &message {
                 crate::redraw_debug::rect(k, r);
             }
@@ -1301,8 +1268,22 @@ impl Application for Shell {
         if !matches!(message, Message::AnimTick | Message::Rect(_)) {
             lapin_ux_core::crash::note(&message);
         }
+        // Where the pointer went since the last message, first (#51).
+        let caught_up = match crate::pointer_gate::take_pending() {
+            Some((id, p)) => self.handle(Message::BarPointer(id, Pointer::Move(p))),
+            None => Task::none(),
+        };
+        let moves_only = crate::anim::redraws_only_moving(&message);
         let task = self.handle(message);
-        Task::batch([task, self.sync_catcher(), self.sync_autohide(), self.sync_taskbar_fit()])
+        self.note_redraw(moves_only);
+        crate::pointer_gate::sync(
+            self.bars.iter().map(|b| (b.id, b.output_width)),
+            self.config.show_desktop_corner,
+            self.extras.in_corner,
+        );
+        // Animation frames change nothing the taskbar's fit depends on.
+        let fit = if moves_only { Task::none() } else { self.sync_taskbar_fit() };
+        Task::batch([caught_up, task, self.sync_catcher(), self.sync_autohide(), fit])
     }
 }
 
@@ -2106,4 +2087,68 @@ impl Shell {
 /// "Make Model" of a monitor, as Settings stores the main display (#31).
 fn output_model(info: &cosmic::cctk::sctk::output::OutputInfo) -> String {
     lapin_ux_core::display::MainDisplay::model_of(&info.make, &info.model)
+}
+
+/// What a surface is, for the redraw diagnostics.
+fn surface_kind(shell: &Shell, id: window::Id) -> &'static str {
+    if shell.bars.iter().any(|b| b.id == id) {
+        "taskbar"
+    } else if shell.desktop.as_ref().is_some_and(|d| d.id == id) {
+        "desktop"
+    } else if shell.start.as_ref().is_some_and(|s| s.id == id) {
+        "start"
+    } else if shell.panel.as_ref().is_some_and(|p| p.id == id) {
+        "panel"
+    } else if shell.popup.as_ref().is_some_and(|p| p.id == id) || shell.sub.as_ref().is_some_and(|p| p.id == id) {
+        "popup"
+    } else {
+        "other"
+    }
+}
+
+fn view_surface(shell: &Shell, id: window::Id) -> Element<'_, Message> {
+    use lapin_ux_ui::a11y::group;
+    // Each surface is named for screen readers (#44): Wayland panels and
+    // pop-ups have no window title to read.
+    if let Some(bar) = shell.bars.iter().find(|b| b.id == id) {
+        return group("Taskbar", crate::taskbar_view::taskbar(shell, bar));
+    }
+    if shell.catcher == Some(id) {
+        return crate::catcher::view();
+    }
+    if shell.desktop.as_ref().is_some_and(|d| d.id == id) {
+        return group("Desktop", crate::desktop::view(shell));
+    }
+    if shell.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
+        return crate::desktop::rename_view(shell);
+    }
+    if let Some(start) = shell.start.as_ref().filter(|s| s.id == id) {
+        return group("Start", crate::start_view::start_menu(shell, start));
+    }
+    if let Some(panel) = shell.panel.as_ref().filter(|p| p.id == id) {
+        return group(crate::panels::a11y_name(&panel.kind), crate::panels::view(shell, panel));
+    }
+    if let Some(sub) = shell.sub.as_ref().filter(|p| p.id == id) {
+        return cosmic::widget::autosize::autosize(crate::taskbar_view::popup(shell, sub), crate::submenu::SUB_AUTOSIZE.clone())
+            .min_width(1.0)
+            .min_height(1.0)
+            .max_width(440.0)
+            .max_height(720.0)
+            .into();
+    }
+    if let Some(popup) = shell.popup.as_ref().filter(|p| p.id == id) {
+        // Popups size themselves to their content. Window previews may
+        // be as wide as the screen (#47).
+        let max_w = match popup.kind {
+            PopupKind::Preview(_) | PopupKind::Windows(_) => crate::previews::preview_max_width(shell).max(440.0),
+            _ => 440.0,
+        };
+        return cosmic::widget::autosize::autosize(group(popup_a11y_name(&popup.kind), crate::taskbar_view::popup(shell, popup)), POPUP_AUTOSIZE.clone())
+            .min_width(1.0)
+            .min_height(1.0)
+            .max_width(max_w)
+            .max_height(720.0)
+            .into();
+    }
+    cosmic::widget::Space::new().into()
 }

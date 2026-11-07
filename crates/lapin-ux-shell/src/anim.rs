@@ -122,3 +122,60 @@ impl Shell {
         (START_DROP * (1.0 - ease_out(t))).round()
     }
 }
+
+// ---- Redraw only what moves (#51) ---------------------------------------
+//
+// After every batch of messages iced redraws every shell surface: both
+// desktops, the full-screen click catcher, the taskbars. During Start's
+// slide that's every frame, and each redraw makes the compositor redo whole
+// screens (and the blur behind the taskbar). A batch made only of animation
+// frames (and position updates, which change nothing on screen) redraws just
+// the surfaces that are moving; any other message redraws everything.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+
+static REDRAW_ALL: AtomicBool = AtomicBool::new(true);
+static MOVING: Mutex<Vec<window::Id>> = Mutex::new(Vec::new());
+
+/// Hand iced the filter (once, at start).
+pub fn install_redraw_filter() {
+    let _ = cosmic::iced::window::REDRAW_FILTER.set(redraw_filter);
+}
+
+fn redraw_filter(ids: &[window::Id]) -> Vec<window::Id> {
+    let all = REDRAW_ALL.swap(false, Relaxed);
+    let moving = MOVING.lock().map(|m| m.clone()).unwrap_or_default();
+    let keep: Vec<window::Id> =
+        if all || moving.is_empty() { ids.to_vec() } else { ids.iter().copied().filter(|id| moving.contains(id)).collect() };
+    if *crate::redraw_debug::ON {
+        crate::redraw_debug::redraws(keep.len(), ids.len() - keep.len());
+    }
+    keep
+}
+
+/// Whether a message can leave still surfaces as they are.
+pub fn redraws_only_moving(message: &Message) -> bool {
+    matches!(message, Message::AnimTick | Message::Rect(_))
+}
+
+impl Shell {
+    /// Called for every message: decides what the next redraw covers.
+    pub(crate) fn note_redraw(&self, message_moves_only: bool) {
+        if !message_moves_only || !self.anims.active() {
+            REDRAW_ALL.store(true, Relaxed);
+        }
+        let mut moving = Vec::new();
+        if let Some(start) = &self.start
+            && (self.anims.start.is_some() || self.anims.page.is_some())
+        {
+            moving.push(start.id);
+        }
+        if !self.anims.launches.is_empty() {
+            moving.extend(self.bars.iter().map(|b| b.id));
+        }
+        if let Ok(mut m) = MOVING.lock() {
+            *m = moving;
+        }
+    }
+}

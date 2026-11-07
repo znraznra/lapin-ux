@@ -1,9 +1,16 @@
 Patches to libcosmic's bundled iced (the `iced/` folder of the libcosmic
-checkout, its own git repository) so screen readers can read libcosmic
-apps (#44). Applied with `git -C <libcosmic>/iced apply` by
-packaging/arch/PKGBUILD to every libcosmic copy that is built: Lapin UX's
-own crates (private cargo home `cargo-lapin`) and the Settings fork
-(`cargo-settings`). They change nothing unless the `a11y` feature is on.
+checkout, its own git repository). Applied in order with
+`git -C <libcosmic>/iced apply` by packaging/arch/PKGBUILD to every
+libcosmic copy that is built: Lapin UX's own crates (private cargo home
+`cargo-lapin`) and the Settings fork (`cargo-settings`).
+
+- 0001: screen readers can read libcosmic apps (#44). Changes nothing
+  unless the `a11y` feature is on.
+- 0002: a program may pick which windows are redrawn after a batch of
+  messages (`iced::window::REDRAW_FILTER`). Lapin UX's shell uses it to
+  redraw only the surfaces that move during an animation (#51). Unset (as
+  in Settings), every window is redrawn, as before.
 
 In a sandbox: apply to ~/.cargo/git/checkouts/libcosmic-*/430f3d4/iced,
-then `cargo clean -p iced_winit -p iced_widget` before building.
+then `cargo clean -p iced_core -p iced_winit -p iced_widget` before
+building (cargo doesn't notice changes inside git checkouts).
