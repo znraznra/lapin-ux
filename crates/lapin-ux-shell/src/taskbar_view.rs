@@ -470,21 +470,41 @@ fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry)
 
 /// Turn a tray icon update into a drawable icon: a themed name when the app
 /// gives one, otherwise the largest ARGB pixmap converted to RGBA.
+/// Single-colour icons are tinted like the taskbar's own (#52): SVGs are
+/// drawn as symbolic, bitmaps get their pixels recoloured.
 pub fn tray_icon(update: crate::tray::IconUpdate) -> icon::Handle {
+    use lapin_ux_core::tray_look;
     if let Some(name) = update.name.as_deref() {
         let path = std::path::Path::new(name);
-        if path.is_absolute() && path.exists() {
-            return icon::from_path(path.to_path_buf());
+        let found = if path.is_absolute() && path.exists() {
+            Some(path.to_path_buf())
+        } else {
+            let mut b = icon::from_name(name.to_string()).prefer_svg(true).size(if tray_look::name_is_mono(name) { 16 } else { 128 });
+            if let Some(p) = update.theme_path.clone() {
+                b = b.with_extra_paths(vec![p]);
+            }
+            b.path()
+        };
+        let Some(found) = found else {
+            return icon::from_name("application-x-executable").handle();
+        };
+        let named_mono = tray_look::name_is_mono(name) || tray_look::path_is_mono(&found);
+        let svg = found.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
+        if svg {
+            let mono = named_mono
+                || std::fs::metadata(&found).is_ok_and(|m| m.len() < 256 * 1024)
+                    && std::fs::read_to_string(&found).is_ok_and(|s| tray_look::svg_is_mono(&s));
+            let mut h = icon::from_path(found);
+            h.symbolic = mono;
+            return h;
         }
-        let mut b = icon::from_name(name.to_string())
-            .prefer_svg(true)
-            // App icons in full colour; symbolic status icons stay symbolic.
-            .size(if name.ends_with("-symbolic") { 16 } else { 128 })
-            .fallback(Some(icon::IconFallback::Names(vec!["application-x-executable".into()])));
-        if let Some(p) = update.theme_path {
-            b = b.with_extra_paths(vec![p]);
+        if let Some((w, h, mut rgba)) = load_png(&found)
+            && (named_mono || tray_look::pixmap_is_dark_mono(&rgba))
+        {
+            tray_look::tint_pixmap(&mut rgba, tray_fg());
+            return icon::from_raster_pixels(w, h, rgba);
         }
-        return b.handle();
+        return icon::from_path(found);
     }
     let best = update
         .pixmap
@@ -498,10 +518,27 @@ pub fn tray_icon(update: crate::tray::IconUpdate) -> icon::Handle {
             for px in p.bytes.chunks_exact_mut(4) {
                 px.rotate_left(1); // ARGB (network order) -> RGBA
             }
+            if lapin_ux_core::tray_look::pixmap_is_dark_mono(&p.bytes) {
+                lapin_ux_core::tray_look::tint_pixmap(&mut p.bytes, tray_fg());
+            }
             icon::from_raster_pixels(p.width as u32, p.height as u32, p.bytes)
         }
         None => icon::from_name("image-missing-symbolic").handle(),
     }
+}
+
+/// The colour of the taskbar's own icons and text.
+fn tray_fg() -> (u8, u8, u8) {
+    if cosmic::theme::is_dark() { (255, 255, 255) } else { (28, 28, 28) }
+}
+
+/// A PNG as RGBA, for recolouring.
+fn load_png(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+        return None;
+    }
+    let img = image::open(path).ok()?.to_rgba8();
+    Some((img.width(), img.height(), img.into_raw()))
 }
 
 fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {

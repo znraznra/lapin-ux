@@ -33,6 +33,7 @@ pub mod sysmon;
 pub mod system;
 pub mod taskbar;
 pub mod thumb;
+pub mod tray_look;
 pub mod updates;
 
 /// Reverse-DNS identifiers. Change these in one place when the project gets
