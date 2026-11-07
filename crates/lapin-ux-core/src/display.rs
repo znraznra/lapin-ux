@@ -145,9 +145,10 @@ impl MainDisplay {
 pub type MainCandidate = (String, String, (i32, i32));
 
 /// Which of `outputs` is the main display: the chosen one (by name, else by
-/// make and model), else a laptop's own panel, else the one at the top left
-/// of the arrangement (first on a tie). The shell, notifications and
-/// Settings all use this rule, so they agree. `None` only with no outputs.
+/// make and model), else Display 1, the default (Tako, 7 Nov review): the
+/// monitor Settings > Display numbers 1, i.e. the first connector name in
+/// sorted order. The shell, notifications and Settings all use this rule,
+/// so they agree. `None` only with no outputs.
 pub fn pick_main(outputs: &[MainCandidate], chosen: &MainDisplay) -> Option<usize> {
     if outputs.is_empty() {
         return None;
@@ -156,13 +157,13 @@ pub fn pick_main(outputs: &[MainCandidate], chosen: &MainDisplay) -> Option<usiz
     let by_model = || {
         (!chosen.model.is_empty()).then(|| outputs.iter().position(|(_, m, _)| *m == chosen.model)).flatten()
     };
-    let internal = || {
-        outputs.iter().position(|(n, _, _)| ["eDP", "LVDS", "DSI"].iter().any(|p| n.starts_with(p)))
-    };
-    let top_left = || {
-        outputs.iter().enumerate().min_by_key(|(i, (_, _, (x, y)))| (*y, *x, *i)).map(|(i, _)| i)
-    };
-    by_name.or_else(by_model).or_else(internal).or_else(top_left)
+    by_name.or_else(by_model).or_else(|| display_one(outputs))
+}
+
+/// Display 1 as Settings > Display numbers it: the first connector name in
+/// sorted order (first listed on a tie).
+pub fn display_one(outputs: &[MainCandidate]) -> Option<usize> {
+    outputs.iter().enumerate().min_by(|(i, (a, ..)), (j, (b, ..))| a.cmp(b).then(i.cmp(j))).map(|(i, _)| i)
 }
 
 /// Which choice the current setup matches (highlighted in the flyout).
@@ -257,28 +258,22 @@ mod tests {
         let o = |v: &[(&str, &str)]| {
             v.iter().enumerate().map(|(i, (a, b))| (a.to_string(), b.to_string(), (i as i32 * 1920, 0))).collect::<Vec<_>>()
         };
-        let outs = o(&[("eDP-1", "BOE 0x0BCA"), ("DP-2", "Dell U2720Q"), ("HDMI-A-1", "LG 27GL850")]);
+        let outs = o(&[("HDMI-A-1", "LG 27GL850"), ("DP-2", "Dell U2720Q"), ("eDP-1", "BOE 0x0BCA")]);
         let none = MainDisplay::default();
-        assert_eq!(pick_main(&outs, &none), Some(0), "nothing chosen: the laptop panel");
-        let dell = MainDisplay { name: "DP-2".into(), model: "Dell U2720Q".into() };
-        assert_eq!(pick_main(&outs, &dell), Some(1));
+        // Nothing chosen: Display 1, the first connector name in order.
+        assert_eq!(pick_main(&outs, &none), Some(1));
+        let lg = MainDisplay { name: "HDMI-A-1".into(), model: "LG 27GL850".into() };
+        assert_eq!(pick_main(&outs, &lg), Some(0));
         // Same monitor on another port (dock): found by its model.
-        let moved = o(&[("eDP-1", "BOE 0x0BCA"), ("DP-5", "Dell U2720Q")]);
-        assert_eq!(pick_main(&moved, &dell), Some(1));
-        // Unplugged: back to the laptop panel, or the first monitor.
-        let desk = o(&[("HDMI-A-1", "LG 27GL850"), ("DP-3", "AOC 24G2")]);
-        assert_eq!(pick_main(&desk, &dell), Some(0));
-        assert_eq!(pick_main(&desk, &MainDisplay { name: "DP-3".into(), model: String::new() }), Some(1));
-        assert_eq!(pick_main(&[], &dell), None);
-        // Nothing chosen, no laptop panel: the top-left one, whatever order
-        // the monitors were listed in.
-        let listed = vec![
-            ("HDMI-A-1".to_string(), "LG".to_string(), (1920, 0)),
-            ("DP-3".to_string(), "AOC".to_string(), (0, 0)),
-        ];
-        assert_eq!(pick_main(&listed, &none), Some(1));
+        let moved = o(&[("DP-1", "AOC 24G2"), ("HDMI-A-2", "LG 27GL850")]);
+        assert_eq!(pick_main(&moved, &lg), Some(1));
+        // Unplugged: back to Display 1.
+        let desk = o(&[("HDMI-A-1", "AOC 24G2"), ("DP-3", "Dell")]);
+        assert_eq!(pick_main(&desk, &MainDisplay { name: "DP-9".into(), model: "Gone".into() }), Some(1));
+        assert_eq!(pick_main(&[], &lg), None);
         assert_eq!(MainDisplay::model_of(" Dell ", "U2720Q "), "Dell U2720Q");
     }
+
 
     use super::*;
 

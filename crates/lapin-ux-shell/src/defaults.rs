@@ -112,7 +112,7 @@ fn apply_wallpaper(dark: bool) -> Result<bool, cosmic_config::Error> {
         tracing::info!(path = %file.display(), "default wallpaper not installed; leaving wallpaper unchanged");
         return Ok(false);
     }
-    if cfg_path("com.system76.CosmicBackground").join("all").exists() {
+    if has_value(&cfg_path("com.system76.CosmicBackground").join("all")) {
         tracing::info!("a wallpaper is already configured; leaving it");
         return Ok(false);
     }
@@ -308,7 +308,7 @@ fn apply_keybindings() -> Result<bool, cosmic_config::Error> {
 fn apply_activation_policy() -> Result<bool, cosmic_config::Error> {
     let dir = cfg_path("com.system76.CosmicComp");
     let file = dir.join("activation_policy");
-    if file.exists() {
+    if has_value(&file) {
         return Ok(false);
     }
     std::fs::create_dir_all(&dir).map_err(cosmic_config::Error::Io)?;
@@ -386,7 +386,12 @@ fn font_installed(family: &str) -> bool {
 /// GTK/COSMIC font back when the session ends (lapin-ux-desktop-settings).
 pub fn enforce_font() -> Result<bool, cosmic_config::Error> {
     use cosmic::config::CosmicTk;
-    let family = if font_installed(UI_FONT) {
+    // A system font chosen in Settings > Personalization > Fonts is kept
+    // (#40, 7 Nov review); Selawik is the default.
+    let chosen = chosen_system_font().filter(|f| font_installed(f));
+    let family = if let Some(f) = chosen.as_deref() {
+        f
+    } else if font_installed(UI_FONT) {
         UI_FONT
     } else if font_installed(FALLBACK_UI_FONT) {
         FALLBACK_UI_FONT
@@ -427,9 +432,19 @@ pub fn enforce_font_at_start() {
         Ok(_) => {}
         Err(e) => tracing::warn!("could not set the interface font: {e}"),
     }
-    if font_installed(UI_FONT) {
-        gsettings_fonts(UI_FONT);
+    match chosen_system_font().filter(|f| font_installed(f)) {
+        Some(f) => gsettings_fonts(&f),
+        None if font_installed(UI_FONT) => gsettings_fonts(UI_FONT),
+        None => {}
     }
+}
+
+/// The system font picked in Settings > Personalization > Fonts, if any.
+fn chosen_system_font() -> Option<String> {
+    use cosmic_config::ConfigGet;
+    let cfg = cosmic_config::Config::new(lapin_ux_core::ids::SHELL_APP_ID, 1).ok()?;
+    let family: String = cfg.get("system_font").ok()?;
+    (!family.trim().is_empty()).then_some(family)
 }
 
 fn icon_theme_installed(name: &str) -> bool {
@@ -531,6 +546,37 @@ fn apply_text_smoothing() {
     gsettings("font-rgba-order", "rgb");
     gsettings("font-hinting", "slight");
     tracing::info!("applied default text smoothing");
+}
+
+/// A setting file that holds something. An empty one is unset: COSMIC reads
+/// it as its own default (#46).
+fn has_value(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() > 0)
+}
+
+/// Lapin UX's essential look, checked at every start (#46): the icon theme,
+/// wallpaper, Super key, shortcuts, focus policy and light/dark mode are put
+/// back when they're unset or empty (e.g. after the per-session copy lost
+/// them). A value the user chose, even another icon theme, is left alone.
+pub fn repair_at_start() {
+    let dark = ensure_mode();
+    let tk_icons = cfg_path("com.system76.CosmicTk").join("icon_theme");
+    if !has_value(&tk_icons) {
+        let _ = std::fs::remove_file(&tk_icons);
+        log_repair("icon theme", apply_icon_theme(dark));
+    }
+    log_repair("wallpaper", apply_wallpaper(dark));
+    log_repair("Super key", apply_shortcuts());
+    log_repair("keyboard shortcuts", apply_keybindings());
+    log_repair("focus requests", apply_activation_policy());
+}
+
+fn log_repair(what: &str, res: Result<bool, cosmic_config::Error>) {
+    match res {
+        Ok(true) => tracing::warn!("{what} was unset; put Lapin UX's back"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("could not check the {what}: {e}"),
+    }
 }
 
 pub fn apply_first_run() {

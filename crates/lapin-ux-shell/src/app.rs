@@ -656,12 +656,20 @@ impl Shell {
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         // Hover previews must not take the pointer or keyboard.
         let grab = !matches!(kind, PopupKind::Preview(_));
+        let max_w = match kind {
+            PopupKind::Preview(_) | PopupKind::Windows(_) => {
+                let screen = self.bars.iter().find(|b| b.id == parent).and_then(|b| b.output_width).unwrap_or(1280);
+                (screen as f32 - 24.0).max(440.0)
+            }
+            _ => 440.0,
+        };
         let settings = SctkPopupSettings {
             parent,
             id,
             positioner: SctkPositioner {
                 size: None,
-                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(440.0).max_height(720.0),
+                // Window previews may be as wide as the screen (#47).
+                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(max_w).max_height(720.0),
                 anchor_rect: Rectangle {
                     x: r.x as i32,
                     y: r.y as i32,
@@ -1002,6 +1010,7 @@ impl Application for Shell {
             }
             let _ = std::process::Command::new("lapin-ux-welcome").spawn();
         }
+        crate::defaults::repair_at_start();
         crate::defaults::sync_icon_variant();
         crate::defaults::enforce_font_at_start();
         // The toolkit read the icon theme before the defaults above could set it.
@@ -1124,11 +1133,16 @@ impl Application for Shell {
                 .into();
         }
         if let Some(popup) = self.popup.as_ref().filter(|p| p.id == id) {
-            // Popups size themselves to their content.
+            // Popups size themselves to their content. Window previews may
+            // be as wide as the screen (#47).
+            let max_w = match popup.kind {
+                PopupKind::Preview(_) | PopupKind::Windows(_) => crate::previews::preview_max_width(self).max(440.0),
+                _ => 440.0,
+            };
             return cosmic::widget::autosize::autosize(group(popup_a11y_name(&popup.kind), crate::taskbar_view::popup(self, popup)), POPUP_AUTOSIZE.clone())
                 .min_width(1.0)
                 .min_height(1.0)
-                .max_width(440.0)
+                .max_width(max_w)
                 .max_height(720.0)
                 .into();
         }
@@ -1160,6 +1174,7 @@ impl Application for Shell {
                 "snip" => self.update(Message::Snip(crate::snip::SnipMsg::Open)),
                 "input-next" => self.update(Message::Input(crate::input::InputMsg::Next)),
                 // Ctrl+Win+Enter: Narrator (Orca) on / off.
+                "narrator" if crate::screen_reader::PAUSED => Task::none(),
                 "narrator" => {
                     let on = !(self.quick.screen_reader || crate::quick::orca_running());
                     self.update(Message::Quick(crate::quick::QuickMsg::ScreenReader(on)))

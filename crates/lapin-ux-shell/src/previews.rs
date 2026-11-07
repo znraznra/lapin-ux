@@ -337,8 +337,39 @@ pub fn has_cards(shell: &Shell, app: &str) -> bool {
     shell.taskbar.windows().iter().any(|w| w.app == app)
 }
 
+/// Widest a hover preview may be: its screen, less a margin (#47).
+pub fn preview_max_width(shell: &Shell) -> f32 {
+    let screen = shell
+        .popup
+        .as_ref()
+        .and_then(|p| shell.bars.iter().find(|b| b.id == p.parent))
+        .or_else(|| shell.main_bar())
+        .and_then(|b| b.output_width)
+        .unwrap_or(1280);
+    (screen as f32 - 24.0).max(240.0)
+}
+
+/// Card width and cards per row for `n` cards: full size while they fit
+/// side by side, then smaller (down to 150 px), then more rows (#47).
+fn card_layout(n: usize, max_w: f32) -> (f32, usize) {
+    let n = n.max(1) as f32;
+    let room = max_w - 8.0;
+    let w = (room / n - 4.0).clamp(150.0, 220.0);
+    let per_row = ((room + 4.0) / (w + 4.0)).floor().max(1.0) as usize;
+    (w, per_row)
+}
+
 /// Hover preview above a taskbar button: one card per window.
 pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
+    let windows = shell.taskbar.windows().iter().filter(|w| w.app == app).count();
+    let groups = shell
+        .snap_groups
+        .iter()
+        .filter(|g| g.iter().any(|h| shell.taskbar.windows().iter().any(|w| w.handle == *h && w.app == app)))
+        .count();
+    let (card_w, per_row) = card_layout(windows + groups, preview_max_width(shell));
+    let pic_w = card_w - 20.0;
+    let pic_h = (pic_w * 0.6).round();
     let mut cards: Vec<Element<'a, Message>> = shell
         .taskbar
         .windows()
@@ -357,8 +388,8 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
             ])
             .spacing(8)
             .align_y(Alignment::Center);
-            button::custom(column::with_children(vec![head.into(), picture(shell, w.handle, app, 200.0, 120.0)]).spacing(6))
-                .width(220)
+            button::custom(column::with_children(vec![head.into(), picture(shell, w.handle, app, pic_w, pic_h)]).spacing(6))
+                .width(card_w)
                 .padding(8)
                 .class(style::flat_button(w.active))
                 .on_press(Message::ActivateWindow(w.handle))
@@ -376,7 +407,7 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
             .spacing(8)
             .align_y(Alignment::Center);
         let pics = row::with_children(
-            members.iter().map(|w| small_picture(shell, w.handle, &w.app, 200.0 / n - 2.0, 120.0)).collect::<Vec<_>>(),
+            members.iter().map(|w| small_picture(shell, w.handle, &w.app, pic_w / n - 2.0, pic_h)).collect::<Vec<_>>(),
         )
         .spacing(2);
         // The hovered app's window comes up last, with the focus.
@@ -384,7 +415,7 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
         order.push(mine.handle);
         cards.push(
             button::custom(column::with_children(vec![head.into(), pics.into()]).spacing(6))
-                .width(220)
+                .width(card_w)
                 .padding(8)
                 .class(style::flat_button(false))
                 .on_press(Message::Snap(crate::snap::SnapMsg::RestoreGroup(order)))
@@ -397,7 +428,13 @@ pub fn preview<'a>(shell: &'a Shell, app: &'a str) -> Element<'a, Message> {
     if cards.is_empty() {
         cards.push(cosmic::widget::Space::new().width(Length::Fixed(220.0)).height(Length::Fixed(40.0)).into());
     }
-    let body = container(row::with_children(cards).spacing(4)).padding(4).class(style::panel_bg());
+    // Rows of cards, as many per row as fit on the screen (#47).
+    let mut rows = column::with_capacity(cards.len() / per_row + 1).spacing(4);
+    let mut cards = cards.into_iter().peekable();
+    while cards.peek().is_some() {
+        rows = rows.push(row::with_children(cards.by_ref().take(per_row).collect::<Vec<_>>()).spacing(4));
+    }
+    let body = container(rows).padding(4).class(style::panel_bg());
     mouse_area(body)
         .on_enter(Message::Preview(PreviewMsg::PopupHover(true)))
         .on_exit(Message::Preview(PreviewMsg::PopupHover(false)))
@@ -448,4 +485,22 @@ pub fn switcher<'a>(shell: &'a Shell, a: &'a AltTab) -> Element<'a, Message> {
 pub fn switcher_width(n: usize) -> u32 {
     let cols = n.clamp(1, 5) as u32;
     cols * 240 + (cols - 1) * 8 + 24
+}
+
+#[cfg(test)]
+mod tests {
+    use super::card_layout;
+
+    #[test]
+    fn every_window_gets_a_card() {
+        // Two or three fit at full size on a 1280 px screen.
+        assert_eq!(card_layout(3, 1256.0), (220.0, 5));
+        // Twelve shrink to fit one row on a wide screen…
+        let (w, per_row) = card_layout(12, 1896.0);
+        assert!(w < 220.0 && w >= 150.0 && per_row >= 12, "{w} {per_row}");
+        // …and wrap into rows on a narrow one, never hiding any.
+        let (w, per_row) = card_layout(12, 1256.0);
+        assert_eq!(w, 150.0);
+        assert!(per_row * 2 >= 12 && per_row < 12);
+    }
 }

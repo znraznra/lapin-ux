@@ -596,6 +596,7 @@ impl Shell {
                     cosmic::Action::App(Message::Noop)
                 });
             }
+            QuickMsg::ScreenReader(_) if crate::screen_reader::PAUSED => {}
             QuickMsg::ScreenReader(on) => {
                 q.screen_reader = on;
                 // Set the flag (so Orca, Settings and apps agree), then match
@@ -605,6 +606,17 @@ impl Shell {
                     crate::screen_reader::follow(on);
                     cosmic::Action::App(Message::Noop)
                 });
+            }
+            QuickMsg::ReaderFlag(on) if crate::screen_reader::PAUSED => {
+                // Narrator is paused: don't start Orca, and turn a flag left
+                // on (an earlier session, Settings) off again.
+                q.screen_reader = false;
+                if on {
+                    return Task::future(async {
+                        crate::screen_reader::set(false).await;
+                        cosmic::Action::App(Message::Noop)
+                    });
+                }
             }
             QuickMsg::ReaderFlag(on) => {
                 q.screen_reader = on;
@@ -1428,7 +1440,7 @@ fn accessibility_page<'a>(shell: &'a Shell) -> Element<'a, Message> {
         list = list.push(switch_row("zoom-in-symbolic", "Magnifier", q.a11y.magnifier, |on| Message::Quick(QuickMsg::Magnifier(on))));
         list = list.push(switch_row("color-select-symbolic", "Color filters", q.a11y.filter_on, |on| Message::Quick(QuickMsg::ColorFilter(on))));
     }
-    if lapin_ux_core::system::screen_reader_ready() {
+    if !crate::screen_reader::PAUSED && lapin_ux_core::system::screen_reader_ready() {
         list = list.push(switch_row("audio-speakers-symbolic", "Narrator", q.screen_reader, |on| Message::Quick(QuickMsg::ScreenReader(on))));
     }
     // Contrast themes are off for now: Lapin UX has no contrast themes of its

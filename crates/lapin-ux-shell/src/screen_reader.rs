@@ -18,6 +18,12 @@
 //! per session (tools/lapin-ux-uninstall).
 
 use cosmic::iced::{self, Subscription};
+
+/// Narrator is paused until further notice (#18, #44; Tako, 2026-11-02): no
+/// quick settings tile, Ctrl+Super+Enter does nothing, Lapin UX never starts
+/// Orca, and a screen reader flag left on is turned off. Set to false to
+/// bring it back.
+pub const PAUSED: bool = true;
 use futures::{SinkExt, StreamExt};
 
 #[zbus::proxy(interface = "org.a11y.Status", default_service = "org.a11y.Bus", default_path = "/org/a11y/bus")]
