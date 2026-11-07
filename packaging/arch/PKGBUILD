@@ -30,6 +30,10 @@ makedepends=(
     'pipewire'
 )
 # Everything below is pinned to COSMIC's stable release epoch-1.11.0.
+# The COSMIC version Lapin's replacements stand in for: versioned provides,
+# so packages that need e.g. xdg-desktop-portal-cosmic>=1:1.11 are satisfied
+# and pacman never pulls the stock part back in (#49).
+_cosmic_ver='1:1.11.0'
 # Lapin UX's compositor: upstream cosmic-comp plus our patches.
 _comp_commit=8cb1802caada438bb5cc7670dfabdaca5fad0502
 # The lock and sign-in screens: upstream cosmic-greeter plus our patches.
@@ -334,7 +338,7 @@ package_lapin-ux-greeter() {
     url="https://github.com/pop-os/cosmic-greeter"
     license=('GPL-3.0-only')
     depends=('cosmic-comp' 'cosmic-icon-theme' 'greetd' 'pam' 'dav1d' 'libinput' 'libxkbcommon' 'systemd-libs' 'wayland')
-    provides=('cosmic-greeter')
+    provides=("cosmic-greeter=$_cosmic_ver")
     conflicts=('cosmic-greeter')
     # The lock screen signs in through the "cosmic-greeter" PAM service.
     backup=('etc/pam.d/cosmic-greeter')
@@ -350,7 +354,7 @@ package_lapin-ux-osk() {
     url="https://github.com/pop-os/cosmic-osk"
     license=('GPL-3.0-only')
     depends=('libxkbcommon' 'wayland' 'systemd-libs')
-    provides=('cosmic-osk')
+    provides=("cosmic-osk=$_cosmic_ver")
     conflicts=('cosmic-osk')
     cd "$srcdir/cosmic-osk"
     just rootdir="$pkgdir" install
@@ -362,7 +366,7 @@ package_lapin-ux-osd() {
     url="https://github.com/pop-os/cosmic-osd"
     license=('GPL-3.0-only')
     depends=('libxkbcommon' 'wayland' 'polkit' 'pipewire')
-    provides=('cosmic-osd')
+    provides=("cosmic-osd=$_cosmic_ver")
     conflicts=('cosmic-osd')
     cd "$srcdir/cosmic-osd"
     just rootdir="$pkgdir" install
@@ -389,7 +393,7 @@ package_lapin-ux-settings() {
                 'xdg-desktop-portal: app permissions in Privacy & security'
                 'orca: Screen reader in Accessibility > Vision'
                 'espeak-ng: voice for the screen reader (Orca is silent without one)')
-    provides=('cosmic-settings')
+    provides=("cosmic-settings=$_cosmic_ver")
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"
     CARGO_HOME="$srcdir/cargo-settings" just rootdir="$pkgdir" install
@@ -401,7 +405,7 @@ package_lapin-ux-portal() {
     url="https://github.com/pop-os/xdg-desktop-portal-cosmic"
     license=('GPL-3.0-only')
     depends=('xdg-desktop-portal' 'pipewire' 'libxkbcommon' 'wayland' 'mesa')
-    provides=('xdg-desktop-portal-cosmic')
+    provides=("xdg-desktop-portal-cosmic=$_cosmic_ver")
     conflicts=('xdg-desktop-portal-cosmic')
     cd "$srcdir/xdg-desktop-portal-cosmic"
     just rootdir="$pkgdir" install

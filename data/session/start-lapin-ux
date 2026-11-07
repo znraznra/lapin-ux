@@ -63,6 +63,27 @@ if [ -f /usr/share/lapin-ux/fonts.conf ] && [ -z "${FONTCONFIG_FILE:-}" ]; then
     export FONTCONFIG_FILE=/usr/share/lapin-ux/fonts.conf
 fi
 
+# Graphics path for Lapin's apps (#34, #32). On Intel Arc cards, wgpu's
+# Vulkan path leaves stale pictures on the taskbar (ghosting, a flickering
+# overflow flyout); its OpenGL path draws them correctly. Other GPUs keep the
+# default. LAPIN_UX_WGPU_BACKEND (vulkan, gl, …) overrides the choice.
+intel_arc() {
+    for dev in /sys/class/drm/card[0-9]*/device; do
+        vendor=$(cat "$dev/vendor" 2>/dev/null); id=$(cat "$dev/device" 2>/dev/null)
+        driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
+        [ "$vendor" = 0x8086 ] || continue
+        # Arc A-series (0x56xx), B-series (0xe2xx), or anything on the xe driver.
+        case "$id" in 0x56*|0xe2*) return 0 ;; esac
+        [ "$driver" = xe ] && return 0
+    done
+    return 1
+}
+if [ -n "${LAPIN_UX_WGPU_BACKEND:-}" ]; then
+    export WGPU_BACKEND="$LAPIN_UX_WGPU_BACKEND"
+elif [ -z "${WGPU_BACKEND:-}" ] && intel_arc; then
+    export WGPU_BACKEND=gl
+fi
+
 # Mouse pointer size from Settings > Accessibility > Mouse pointer (#24): the
 # compositor and apps read it once when they start. Only this session's
 # environment; other desktops keep their own.
@@ -78,6 +99,7 @@ if command -v systemctl >/dev/null; then
     systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
     [ -n "${FONTCONFIG_FILE:-}" ] && systemctl --user import-environment FONTCONFIG_FILE
     [ -n "${XCURSOR_SIZE:-}" ] && systemctl --user import-environment XCURSOR_SIZE
+    [ -n "${WGPU_BACKEND:-}" ] && systemctl --user import-environment WGPU_BACKEND
 fi
 
 # Keep a log of this session (and the previous one) for bug reports:
@@ -88,6 +110,7 @@ if mkdir -p "$LOG_DIR" 2>/dev/null; then
     exec >>"$LOG_DIR/session.log" 2>&1
 fi
 echo "=== Lapin UX session start $(date -Iseconds) ==="
+echo "graphics: WGPU_BACKEND=${WGPU_BACKEND:-default}"
 pacman -Q lapin-ux-desktop-git 2>/dev/null || true   # which build this is
 # Crash reports with a backtrace (each Lapin program also writes
 # crash-<program>.txt next to this log). Set here because the login shell

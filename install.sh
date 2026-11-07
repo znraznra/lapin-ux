@@ -61,8 +61,28 @@ restore_pkgver() {
 }
 restore_pkgver
 trap restore_pkgver EXIT
-makepkg -si --noconfirm --needed
+# Build (pulling in build dependencies), then install in one pacman step.
+# Some of Lapin UX's packages stand in for COSMIC's own parts (its portal,
+# greeter, OSD, touch keyboard, Settings). When the stock one is installed,
+# pacman asks whether to replace it, and --noconfirm would answer "no" and
+# stop everything (#49). Answering yes to that one question (--ask 4) swaps
+# them in the same transaction, so nothing is ever left missing.
+makepkg -s --noconfirm --needed
 restore_pkgver
+mapfile -t built < <(makepkg --packagelist | while read -r f; do [ -f "$f" ] && echo "$f"; done)
+if [ ${#built[@]} -eq 0 ]; then
+    echo "The build didn't produce any packages." >&2
+    exit 1
+fi
+replaced=()
+for stock in cosmic-greeter cosmic-osk cosmic-osd cosmic-settings xdg-desktop-portal-cosmic; do
+    # -Q matches installed package names only, not what Lapin's provide.
+    pacman -Qq "$stock" >/dev/null 2>&1 && replaced+=("$stock")
+done
+if [ ${#replaced[@]} -gt 0 ]; then
+    echo "Replacing COSMIC's own ${replaced[*]} with Lapin UX's versions (they come back if you uninstall Lapin UX)."
+fi
+sudo pacman -U --noconfirm --needed --ask 4 "${built[@]}"
 
 # Optional extra mouse pointers. Their author (JepriCreations) doesn't
 # allow the files to be redistributed, so they're downloaded and converted
