@@ -243,6 +243,11 @@ impl Shell {
         let focus_run = matches!(kind, PanelKind::Run { .. });
         // Task view covers the whole screen.
         let full = matches!(kind, PanelKind::TaskView(_) | PanelKind::Security { .. } | PanelKind::Snip(_));
+        // The snipping overlay goes on the screen its picture was taken of.
+        let output = match &kind {
+            PanelKind::Snip(_) => self.snip_bar().map_or(IcedOutput::Active, |b| IcedOutput::Output(b.output.clone())),
+            _ => IcedOutput::Active,
+        };
         self.panel = Some(Panel { id, kind });
         let r = if full { 0 } else { style::PANEL_RADIUS as u32 };
         tasks.push(cosmic::surface::surface_task(app_layer_shell(
@@ -256,7 +261,7 @@ impl Shell {
                 layer: Layer::Overlay,
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
                 anchor,
-                output: IcedOutput::Active,
+                output: output.clone(),
                 namespace: "lapin-ux-panel".into(),
                 margin,
                 size: if full { Some((None, None)) } else { Some((Some(width), Some(1))) },

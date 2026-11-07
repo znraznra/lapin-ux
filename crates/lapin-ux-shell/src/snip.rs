@@ -42,6 +42,8 @@ pub struct SnipPanel {
 #[derive(Clone)]
 pub enum SnipMsg {
     Open,
+    /// The screen picture didn't arrive in time.
+    Timeout,
     Shot(Option<WindowId>, u32, u32, Arc<Vec<u8>>),
     Mode(Mode),
     Press,
@@ -58,6 +60,7 @@ impl std::fmt::Debug for SnipMsg {
             SnipMsg::Move(p) => write!(f, "Move({}, {})", p.x, p.y),
             SnipMsg::Open => write!(f, "Open"),
             SnipMsg::Mode(m) => write!(f, "Mode({m:?})"),
+            SnipMsg::Timeout => write!(f, "Timeout"),
             SnipMsg::Press => write!(f, "Press"),
             SnipMsg::Release => write!(f, "Release"),
             SnipMsg::Window(w) => write!(f, "Window({w:?})"),
@@ -74,10 +77,17 @@ impl Shell {
         }
     }
 
+    /// The screen being worked on: the one with the focused window, else the
+    /// main display (#53). The picture and the overlay both use it.
+    pub(crate) fn snip_bar(&self) -> Option<&crate::app::Bar> {
+        let active = self.taskbar.windows().iter().find(|w| w.active && !w.minimized).and_then(|w| w.outputs.first().cloned());
+        active.and_then(|name| self.bars.iter().find(|b| b.output_name.as_deref() == Some(name.as_str()))).or_else(|| self.main_bar())
+    }
+
     /// Logical width of the screen the overlay covers (pixels are square,
     /// so the height follows from the picture).
     fn snip_screen(&self) -> (f32, f32) {
-        let w = self.main_bar().and_then(|b| b.output_width).map(|w| w as f32).unwrap_or(1920.0);
+        let w = self.snip_bar().and_then(|b| b.output_width).map(|w| w as f32).unwrap_or(1920.0);
         (w, 0.0)
     }
 
@@ -88,12 +98,27 @@ impl Shell {
         match msg {
             SnipMsg::Open => {
                 // Freeze the screen first: take the picture, then show the overlay.
-                let output = self.main_bar().and_then(|b| b.output_name.clone());
+                let output = self.snip_bar().and_then(|b| b.output_name.clone());
+                tracing::info!(?output, "screenshot requested");
                 let close = Task::batch([self.close_start(), self.close_popup()]);
                 self.snip_pending = true;
                 self.request(WaylandRequest::Shot(output, None));
-                return close;
+                let timeout = Task::future(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    cosmic::Action::App(Message::Snip(SnipMsg::Timeout))
+                });
+                return Task::batch([close, timeout]);
             }
+            SnipMsg::Timeout if self.snip_pending => {
+                // Never fail silently (#53): say so, and leave a line in the log.
+                self.snip_pending = false;
+                tracing::warn!("screenshot: the compositor sent no picture of the screen");
+                return Task::future(async {
+                    notify("Couldn't take a screenshot", "The screen picture didn't arrive. Try again, or sign out and back in.".into(), None).await;
+                    cosmic::Action::App(Message::Noop)
+                });
+            }
+            SnipMsg::Timeout => {}
             SnipMsg::Shot(None, w, h, rgba) if self.snip_pending => {
                 self.snip_pending = false;
                 let image = widget::image::Handle::from_rgba(w, h, rgba.as_ref().clone());
@@ -230,10 +255,17 @@ async fn copy_png(path: &std::path::Path) {
 }
 
 async fn notify_saved(path: &std::path::Path) {
+    let folder = path.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    notify("Screenshot copied to clipboard", format!("Saved to {folder}"), Some(path)).await;
+}
+
+async fn notify(summary: &str, body: String, image: Option<&std::path::Path>) {
     let Ok(conn) = zbus::Connection::session().await else { return };
     let mut hints: std::collections::HashMap<&str, zbus::zvariant::Value> = std::collections::HashMap::new();
-    let p = path.display().to_string();
-    hints.insert("image-path", p.as_str().into());
+    let p = image.map(|p| p.display().to_string()).unwrap_or_default();
+    if image.is_some() {
+        hints.insert("image-path", p.as_str().into());
+    }
     hints.insert("suppress-sound", true.into());
     let _ = conn
         .call_method(
@@ -245,8 +277,8 @@ async fn notify_saved(path: &std::path::Path) {
                 "Snipping Tool",
                 0u32,
                 "applets-screenshooter-symbolic",
-                "Screenshot copied to clipboard",
-                format!("Saved to {}", path.parent().map(|d| d.display().to_string()).unwrap_or_default()),
+                summary,
+                body,
                 Vec::<&str>::new(),
                 hints,
                 -1i32,

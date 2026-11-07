@@ -177,7 +177,7 @@ describe() {
     cosmic:all) echo "COSMIC wallpaper" ;;
     cosmic:same-on-all) echo "COSMIC wallpaper (same on all screens)" ;;
     cosmic:custom) echo "COSMIC keyboard shortcuts" ;;
-    cosmic:system_actions) echo "COSMIC Super key" ;;
+    cosmic:system_actions) echo "COSMIC Super key and screenshot key" ;;
     cosmic:activation_policy) echo "COSMIC focus policy" ;;
     cosmicdir:*) echo "COSMIC colours and corners (${2#com.system76.CosmicTheme.})" ;;
     pointer:*) echo "default pointer" ;;

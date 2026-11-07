@@ -195,18 +195,31 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
     enum System {
         AppLibrary,
         Launcher,
+        Screenshot,
     }
     let cfg = cosmic_config::Config::new("com.system76.CosmicSettings.Shortcuts", 1)?;
     // The user file is merged over the system defaults by the compositor.
-    // If the user already customised system actions, leave them alone.
+    // If the user customised system actions themselves, leave them alone;
+    // a file holding only Lapin UX's own commands is ours to update.
     let user_file = cfg_path("com.system76.CosmicSettings.Shortcuts").join("system_actions");
-    if std::fs::read_to_string(&user_file).is_ok_and(|s| !s.trim().is_empty()) {
-        tracing::info!("user has custom system actions; not changing the Super key binding");
-        return Ok(false);
+    let existing = std::fs::read_to_string(&user_file).unwrap_or_default();
+    if !existing.trim().is_empty() {
+        // Every command in it (the quoted values) is one of ours.
+        let ours = existing.split('"').skip(1).step_by(2).all(|v| v.starts_with("lapin-ux-shell "));
+        if !ours {
+            tracing::info!("user has custom system actions; not changing the Super key binding");
+            return Ok(false);
+        }
     }
     let mut map = BTreeMap::new();
     map.insert(System::Launcher, "lapin-ux-shell start".to_string());
     map.insert(System::AppLibrary, "lapin-ux-shell start".to_string());
+    // COSMIC's own Print binding (and anything else asking for a screenshot)
+    // opens Lapin UX's snipping overlay too (#53).
+    map.insert(System::Screenshot, "lapin-ux-shell snip".to_string());
+    if existing.contains("Screenshot") && existing.contains("lapin-ux-shell snip") && existing.contains("Launcher") {
+        return Ok(false);
+    }
     cfg.set("system_actions", map)?;
     Ok(true)
 }
