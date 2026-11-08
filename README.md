@@ -220,7 +220,7 @@ Building, testing, settings, the architecture in detail and how the COSMIC chang
 
 ## Community
 
-Everyone is welcome, and nobody should have to feel out of their depth. Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before joining in; it also says how to report a problem privately.
+Everyone is welcome, and nobody should have to feel out of their depth. Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before joining in; it also says how to report a problem privately. Found a security problem? Please don't post it publicly: follow the [Security Policy](SECURITY.md).
 
 ## License
 
