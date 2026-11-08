@@ -12,4 +12,4 @@ labels: enhancement
 **What do you do instead today?**
 
 **Anything else**
-<!-- Screenshots, links, how another desktop handles it. Please check the "Not planned" part of the README roadmap first: a few things are left out on purpose. -->
+<!-- Screenshots, links, how another desktop handles it. Please check the "Not planned" part of the roadmap (docs/ROADMAP.md) first: a few things are left out on purpose. -->

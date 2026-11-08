@@ -1,6 +1,6 @@
 # Lapin UX — technical reference
 
-> The friendly overview, roadmap and screenshots are in the [README](../README.md). This page is the full technical detail: every feature and setting, architecture, building, testing and credits.
+> The friendly overview is in the [README](../README.md), with [screenshots](SCREENSHOTS.md) and the [roadmap](ROADMAP.md) on their own pages. This page is the full technical detail: every feature and setting, architecture, building, testing and credits.
 
 A COSMIC-based DE written in Rust, designed for a zero learning curve:
 everything is where you expect it, with no plugins and no console needed for
@@ -717,7 +717,7 @@ The working name is easy to change: `crates/lapin-ux-core/src/lib.rs` (`ids`),
 
 ## Not done yet
 
-See the [roadmap in the README](../README.md#roadmap).
+See the [roadmap](ROADMAP.md).
 
 ## License
 

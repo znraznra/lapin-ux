@@ -22,7 +22,7 @@ If you're not sure whether it's a bug, ask in Discussions.
 
 ## Suggesting a feature
 
-Open an issue with the **Feature request** template. Say what you were trying to do and where it got in the way, not only the feature you'd like. A few things are left out on purpose, so check the "Not planned" part of the [README roadmap](README.md#roadmap) first.
+Open an issue with the **Feature request** template. Say what you were trying to do and where it got in the way, not only the feature you'd like. A few things are left out on purpose, so check the "Not planned" part of the [roadmap](docs/ROADMAP.md) first.
 
 For anything big, please talk to us in an issue before you spend time on it.
 
