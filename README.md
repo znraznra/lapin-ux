@@ -2,15 +2,37 @@
 
 **A Linux desktop you already know how to use.**
 
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) ![Status: preview](https://img.shields.io/badge/status-preview-orange) ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-b7410e) ![Platform: Arch Linux](https://img.shields.io/badge/platform-Arch%20Linux-1793d1)
+
 Lapin UX is built so there is nothing to learn: the taskbar, the Start menu with search, quick settings, notifications, snap layouts, Task Manager, Control Panel and the keyboard shortcuts are all where your hands and eyes expect them. Sit down, sign in and get on with your day. No plugins to hunt down and no terminal needed for everyday tasks. It is written in Rust on top of [COSMIC](https://github.com/pop-os/cosmic-epoch), and it runs on Arch Linux first.
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Status:** the everyday desktop is built and reviewed screen by screen, and the first test on a real Arch-based PC (CachyOS) is under way: it installs, and the [bugs that test found](https://github.com/znraznra/lapin-ux/issues) are fixed and waiting for a retest, so treat it as a preview. The new [Settings app](#settings), laid out the way you'd expect, is finished; File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
+> **Status:** the everyday desktop is built and reviewed screen by screen, and the first test on a real Arch-based PC (CachyOS) is under way: it installs, and the [bugs that test found](https://github.com/znraznra/lapin-ux/issues) are fixed and waiting for a retest, so treat it as a preview. The new [Settings app](#settings-app), laid out the way you'd expect, is finished; File Explorer, a Store and a snip markup editor are still to come (see the [roadmap](#roadmap)).
 >
-> Lapin UX is designed around habits people already have, not anyone's files. It ships no Microsoft logos, artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#license)). It is an independent project, not affiliated with or endorsed by Microsoft.
+> Lapin UX is designed around habits people already have, not anyone's files. It ships no Microsoft logos, artwork or proprietary fonts; everything it includes is open source under its own licence (see [Credits](#credits-and-trademarks)). It is an independent project, not affiliated with or endorsed by Microsoft.
 
-## Why it feels familiar
+## Contents
+
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Settings app](#settings-app)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Uninstall](#uninstall)
+- [Try it without installing](#try-it-without-installing)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Documentation](#documentation)
+- [How it fits together](#how-it-fits-together)
+- [Roadmap](#roadmap)
+- [Building from source](#building-from-source)
+- [Contributing](#contributing)
+- [Getting help](#getting-help)
+- [Security](#security)
+- [License](#license)
+- [Credits and trademarks](#credits-and-trademarks)
+
+## Features
 
 The goal is a zero learning curve: if you can use a computer, you can use Lapin UX.
 
@@ -20,18 +42,7 @@ The goal is a zero learning curve: if you can use a computer, you can use Lapin 
 - **No setup chores.** One installer, nothing to add by hand, everyday tasks in Settings instead of config files.
 - **Safe to try.** It lives next to your other desktops and puts everything back when you remove it.
 
-## At a glance
-
-| Phase | What it covers | Progress |
-|---|---|---|
-| 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
-| 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `██████████` 9 of 9 |
-| 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
-| 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
-
-*Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
-
-## Take the tour
+## Screenshots
 
 | | |
 |---|---|
@@ -51,7 +62,7 @@ The goal is a zero learning curve: if you can use a computer, you can use Lapin 
 | ![Touch keyboard](docs/tour/touch-keyboard.webp) **Touch keyboard** — for tablets and touch screens. | ![Clipboard history](docs/tour/clipboard-history.webp) **Clipboard history** — Super+V brings back what you copied earlier. |
 | ![Task Manager performance](docs/tour/task-manager-performance.webp) **Task Manager: Performance** — live CPU, memory, disk and network graphs. | |
 
-## Settings
+## Settings app
 
 A Settings app laid out the way you'd expect (a sidebar of categories, a Home page, every setting its own card), built from COSMIC Settings so every setting keeps working the same way underneath. It was made in five stages, each one reviewed screen by screen before the next started.
 
@@ -77,9 +88,105 @@ A Settings app laid out the way you'd expect (a sidebar of categories, a Home pa
 
 Under plain COSMIC the same app still looks like COSMIC Settings: the new layout switches on only in a Lapin UX session.
 
+## Requirements
+
+- **Arch Linux or an Arch-based distribution.** CachyOS is the first one tested.
+- **A graphics setup that runs a Wayland session.** Multiple monitors, touchpads and several graphics cards are exactly what the preview still needs testing on.
+- **Rust 1.93 or newer to build.** The installer adds Rust if it's missing, and the first build takes 10 to 20 minutes.
+
+Not sure? `sh tools/preflight.sh` checks your machine and changes nothing.
+
+## Install
+
+```sh
+git clone https://github.com/znraznra/lapin-ux.git
+cd lapin-ux
+./install.sh
+```
+
+1. The script installs everything it needs; there is nothing to install by hand. If COSMIC's own lock screen, pop-ups, touch keyboard, Settings or file dialogs are installed, it says so and replaces them (uninstalling puts them back).
+2. Log out, pick **Lapin UX** on the sign-in screen, and sign in.
+
+Found something that doesn't work? The [test checklist](TESTING.md) lists what to check.
+
+## Uninstall
+
+Sign out of Lapin UX, log into your other desktop and run `lapin-ux-uninstall` (or `./uninstall.sh` from the install folder). While it's installed, Lapin UX's look (font, icons, pointer, wallpaper, colours, shortcuts, pop-ups, dialogs) only applies inside the Lapin UX session; your other desktops, real COSMIC included, keep their own settings. Uninstalling puts your fonts, icons, pointer, wallpaper and shortcuts back the way they were before Lapin UX, removes its packages and files, brings back COSMIC's own parts if you use COSMIC, and always leaves you a working login screen (even if you remove it with plain pacman). Add `--dry-run` to see what it would do first.
+
+## Try it without installing
+
+Inside any Wayland session with `cosmic-comp` installed, build and run Lapin UX in a window, with nothing installed and your settings untouched:
+
+```sh
+cargo build
+XDG_CONFIG_HOME="$(mktemp -d)" PATH="$PWD/target/debug:$PATH" XDG_CURRENT_DESKTOP=LapinUX:COSMIC \
+  dbus-run-session -- target/debug/lapin-ux-session
+```
+
+The step-by-step test checklist is in [TESTING.md](TESTING.md), and the details are in [Try it without installing](docs/TECHNICAL.md#try-it-without-installing).
+
+## Keyboard shortcuts
+
+| Keys | What happens |
+|---|---|
+| Super | Start |
+| Super + E / D / L | Files / show the desktop / lock |
+| Super + A / N | Quick settings / notifications |
+| Super + V / . | Clipboard history / emoji |
+| Super + Tab | Task view |
+| Super + Z, Super + arrows | Snap layouts, snap a window |
+| Alt + Tab | Switch windows |
+| Super + Shift + S | Snip part of the screen |
+| Ctrl + Shift + Esc | Task Manager |
+| Ctrl + Alt + Del | Lock, sign out, Task Manager |
+| Power button | Sleep on a laptop, shut down on a desktop PC |
+
+The full list is in the [technical reference](docs/TECHNICAL.md).
+
+## Documentation
+
+- [Wiki](https://github.com/znraznra/lapin-ux/wiki): feature set, roadmap, challenges, design decisions and the [white paper](docs/wiki/Whitepaper.md)
+- [Technical reference](docs/TECHNICAL.md): every part in detail
+- [Test checklist](TESTING.md): how to try it and what to check
+- [Credits and licensing](docs/wiki/Credits-and-Licensing.md)
+
+## How it fits together
+
+```mermaid
+flowchart TB
+    subgraph always["Always running"]
+        session["Session<br/>starts and watches everything"]
+        comp["Compositor<br/>COSMIC's, with Lapin changes:<br/>windows, snapping, night light"]
+        shell["Shell<br/>taskbar, Start, quick settings,<br/>desktop, Task view"]
+        notify["Notifications"]
+        session --> comp
+        session --> shell
+        session --> notify
+        shell <-->|Lapin's own protocol| comp
+    end
+    subgraph opened["Opened when needed"]
+        apps["Lapin apps<br/>Task Manager, Control Panel,<br/>Update, Get Started"]
+        cosmic["COSMIC programs with Lapin changes<br/>Settings, lock and sign-in, touch keyboard,<br/>Open/Save dialogs, volume pop-ups,<br/>admin prompt, COSMIC app title bars"]
+    end
+    shared["Shared building blocks<br/>logic and shared controls"]
+    shell --> shared
+    apps --> shared
+```
+
+Lapin UX is built on COSMIC, System76's Rust desktop. It writes its own taskbar, Start menu and apps, and reuses COSMIC's compositor and services, carrying small Lapin changes on top of a few COSMIC programs. Each change is kept in its own file and pinned to COSMIC's stable releases, so COSMIC updates don't break it. The [technical reference](docs/TECHNICAL.md) explains every part.
+
 ## Roadmap
 
 The work is split into four phases. Green is done, yellow is partly done, grey is still to build.
+
+| Phase | What it covers | Progress |
+|---|---|---|
+| 1. Core desktop | Taskbar, Start, notifications, tray, wallpaper and theme | `██████████` 12 of 12 |
+| 2. Settings and multitasking | Settings, quick settings, notification centre, Alt+Tab, Task view, snapping | `██████████` 9 of 9 |
+| 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
+| 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
+
+*Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
 
 ```mermaid
 flowchart LR
@@ -117,7 +224,7 @@ flowchart LR
 - [x] Task view, virtual desktops, names and wallpaper per desktop
 - [x] Snapping, snap layouts, Snap assist, snap groups
 - [x] Drag to reorder pinned apps
-- [x] **Settings app** laid out the way you'd expect — *all 5 stages done (frame, categories, Home, the look inside every page, About, the page layout with Taskbar, Start, Notifications, Night light and Multitasking pages; Installed apps, Storage, Clipboard, Lock screen, Sign-in options, Privacy & security and Update inside Settings; search and links from everywhere); see [Settings](#settings)*
+- [x] **Settings app** laid out the way you'd expect — *all 5 stages done (frame, categories, Home, the look inside every page, About, the page layout with Taskbar, Start, Notifications, Night light and Multitasking pages; Installed apps, Storage, Clipboard, Lock screen, Sign-in options, Privacy & security and Update inside Settings; search and links from everywhere); see [Settings](#settings-app)*
 - [x] Volume and brightness pop-ups
 
 ### Phase 3 — system apps (4 of 6, 1 partly)
@@ -157,70 +264,30 @@ flowchart LR
 
 Left out on purpose: theming of GTK 3, GTK 4 and KDE (Qt) apps, the newer Start layout, search highlights, widgets and Copilot, and a closing animation for windows. Parked for later: live captions, Super+H voice typing and see-through (Mica) app windows. Some things aren't included because they belong to other companies' services or files: Microsoft account, OneDrive, Phone Link, and the Segoe fonts and sounds (open look-alikes are used instead, and Nextcloud or KDE Connect cover the same jobs).
 
-## How it fits together
-
-```mermaid
-flowchart TB
-    subgraph always["Always running"]
-        session["Session<br/>starts and watches everything"]
-        comp["Compositor<br/>COSMIC's, with Lapin changes:<br/>windows, snapping, night light"]
-        shell["Shell<br/>taskbar, Start, quick settings,<br/>desktop, Task view"]
-        notify["Notifications"]
-        session --> comp
-        session --> shell
-        session --> notify
-        shell <-->|Lapin's own protocol| comp
-    end
-    subgraph opened["Opened when needed"]
-        apps["Lapin apps<br/>Task Manager, Control Panel,<br/>Update, Get Started"]
-        cosmic["COSMIC programs with Lapin changes<br/>Settings, lock and sign-in, touch keyboard,<br/>Open/Save dialogs, volume pop-ups,<br/>admin prompt, COSMIC app title bars"]
-    end
-    shared["Shared building blocks<br/>logic and shared controls"]
-    shell --> shared
-    apps --> shared
-```
-
-Lapin UX is built on COSMIC, System76's Rust desktop. It writes its own taskbar, Start menu and apps, and reuses COSMIC's compositor and services, carrying small Lapin changes on top of a few COSMIC programs. Each change is kept in its own file and pinned to COSMIC's stable releases, so COSMIC updates don't break it. The [technical reference](docs/TECHNICAL.md) explains every part.
-
-## Install (Arch Linux)
+## Building from source
 
 ```sh
 git clone https://github.com/znraznra/lapin-ux.git
 cd lapin-ux
-./install.sh
+sh tools/preflight.sh
+cargo build
+cargo test --workspace
 ```
 
-1. The script installs everything it needs; there is nothing to install by hand. If COSMIC's own lock screen, pop-ups, touch keyboard, Settings or file dialogs are installed, it says so and replaces them (uninstalling puts them back).
-2. Log out, pick **Lapin UX** on the sign-in screen, and sign in.
-3. To remove it, sign out of Lapin UX, log into your other desktop and run `lapin-ux-uninstall` (or `./uninstall.sh` from this folder). While it's installed, Lapin UX's look (font, icons, pointer, wallpaper, colours, shortcuts, pop-ups, dialogs) only applies inside the Lapin UX session; your other desktops, real COSMIC included, keep their own settings. Uninstalling puts your fonts, icons, pointer, wallpaper and shortcuts back the way they were before Lapin UX, removes its packages and files, brings back COSMIC's own parts if you use COSMIC, and always leaves you a working login screen (even if you remove it with plain pacman). Add `--dry-run` to see what it would do first.
+Building, testing, settings, the architecture in detail and how the COSMIC changes are kept as patches are in [docs/TECHNICAL.md](docs/TECHNICAL.md) and [TESTING.md](TESTING.md).
 
-Want to try it first without installing? See [Try it without installing](docs/TECHNICAL.md#try-it-without-installing). Found something that doesn't work? The [test checklist](TESTING.md) lists what to check.
+## Contributing
 
-## Keyboard shortcuts
+Everyone is welcome, and nobody should have to feel out of their depth. Testing it on your hardware and telling us what broke is as valuable as code. See [CONTRIBUTING.md](CONTRIBUTING.md), and please read the [Code of Conduct](CODE_OF_CONDUCT.md) before joining in; it also says how to report a problem privately.
 
-| Keys | What happens |
-|---|---|
-| Super | Start |
-| Super + E / D / L | Files / show the desktop / lock |
-| Super + A / N | Quick settings / notifications |
-| Super + V / . | Clipboard history / emoji |
-| Super + Tab | Task view |
-| Super + Z, Super + arrows | Snap layouts, snap a window |
-| Alt + Tab | Switch windows |
-| Super + Shift + S | Snip part of the screen |
-| Ctrl + Shift + Esc | Task Manager |
-| Ctrl + Alt + Del | Lock, sign out, Task Manager |
-| Power button | Sleep on a laptop, shut down on a desktop PC |
+## Getting help
 
-The full list is in the [technical reference](docs/TECHNICAL.md).
+- Questions and ideas: [Discussions](https://github.com/znraznra/lapin-ux/discussions)
+- Bugs and feature requests: [Issues](https://github.com/znraznra/lapin-ux/issues)
 
-## For developers
+## Security
 
-Building, testing, settings, the architecture in detail and how the COSMIC changes are kept as patches: [docs/TECHNICAL.md](docs/TECHNICAL.md) and [TESTING.md](TESTING.md).
-
-## Community
-
-Everyone is welcome, and nobody should have to feel out of their depth. Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md). Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before joining in; it also says how to report a problem privately. Found a security problem? Please don't post it publicly: follow the [Security Policy](SECURITY.md).
+Found a security problem? Please don't post it publicly: follow the [Security Policy](SECURITY.md).
 
 ## License
 
@@ -228,7 +295,7 @@ Lapin UX's own code and original artwork (Start mark, wallpapers) are
 GPL-3.0-only. Window tracking, the tray watcher/menus and the session start
 script are adapted from System76's GPL-3.0 COSMIC projects; see file headers.
 
-## Third-party assets and trademarks
+## Credits and trademarks
 
 Lapin UX uses the following open-source assets by default. Each is used under
 its own licence, which is shipped with it; nothing here changes or adds to
