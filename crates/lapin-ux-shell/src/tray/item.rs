@@ -35,6 +35,37 @@ pub struct IconUpdate {
     pub title: Option<String>,
     /// The app's stable tray id (e.g. "discord"); bus names change every run.
     pub id: Option<String>,
+    /// "ApplicationStatus", "Communications", "SystemServices" or "Hardware".
+    pub category: Option<String>,
+    /// The owning process: name, executable and the start of its command
+    /// line, to find the app it belongs to (#52).
+    pub process: Vec<String>,
+}
+
+/// Name, executable and first command-line words of the process that owns
+/// a bus name.
+async fn owner_process(p: &StatusNotifierItemProxy<'static>) -> Vec<String> {
+    let conn = p.inner().connection();
+    let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await else { return Vec::new() };
+    let dest = p.inner().destination().to_owned();
+    let Ok(pid) = dbus.get_connection_unix_process_id(dest).await else { return Vec::new() };
+    let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let mut out = Vec::new();
+    if let Ok(comm) = std::fs::read_to_string(proc.join("comm")) {
+        out.push(comm.trim().to_string());
+    }
+    if let Ok(exe) = std::fs::read_link(proc.join("exe")) {
+        out.push(exe.to_string_lossy().into_owned());
+    }
+    if let Ok(cmd) = std::fs::read(proc.join("cmdline")) {
+        out.extend(
+            cmd.split(|b| *b == 0)
+                .filter(|a| !a.is_empty() && !a.starts_with(b"-"))
+                .take(3)
+                .map(|a| String::from_utf8_lossy(a).into_owned()),
+        );
+    }
+    out
 }
 
 impl TrayItem {
@@ -87,6 +118,8 @@ impl TrayItem {
                 theme_path: p.icon_theme_path().await.ok().filter(|s| !s.is_empty()).map(PathBuf::from),
                 title: p.title().await.ok().filter(|t| !t.is_empty()),
                 id: p.id().await.ok().filter(|t| !t.is_empty()),
+                category: p.category().await.ok().filter(|t| !t.is_empty()),
+                process: owner_process(&p).await,
             }
         }
         struct Key(StatusNotifierItemProxy<'static>, String);
@@ -147,6 +180,8 @@ pub trait StatusNotifierItem {
     fn title(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn id(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn category(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn menu(&self) -> zbus::Result<zvariant::OwnedObjectPath>;
     #[zbus(property)]

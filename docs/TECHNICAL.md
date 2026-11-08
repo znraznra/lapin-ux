@@ -43,10 +43,16 @@ COSMIC compositor. Arch Linux first.
   *Transparency effects* (`transparency_effects` in `dev.lapinux.Shell`,
   off by default; Lapin session only) makes it see-through (82 %) and
   blurred.
-- Tray icons drawn in one dark colour without being named `-symbolic`
-  (Steam's `steam_tray_mono`, `-mono`/`-panel` variants, black SVGs, black
-  pixmaps) are tinted like the taskbar's own icons (#52,
-  `lapin_ux_core::tray_look`): SVGs as symbolic, bitmaps recoloured.
+- Apps' single-colour tray icons (Steam's black `steam_tray_mono`,
+  Electron apps' black icons, `-mono`/`-panel` variants, black SVGs or
+  pixmaps) show the **app's own full-colour icon** instead (#52,
+  `lapin_ux_core::tray_look`): the item's id, title and owning process
+  (name, executable, command-line paths; Electron's generic
+  `chrome_status_icon_N` ids are skipped) are matched to an installed app
+  by desktop id, window class, executable or name. With no match they're
+  tinted like the taskbar's own icons. Only items whose category is
+  ApplicationStatus or Communications count as apps; status icons
+  (SystemServices, Hardware: network, Bluetooth…) are drawn as sent.
 - All windows of an app share a button. Click: open / focus / minimize;
   several windows: a window picker. Middle-click: new instance.
 - Accent "pill" under the focused app, short dash for background apps.

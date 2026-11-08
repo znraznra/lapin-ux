@@ -1996,7 +1996,29 @@ impl Shell {
                     if update.id.is_some() {
                         t.id = update.id.clone();
                     }
-                    t.icon = Some(crate::taskbar_view::tray_icon(update));
+                    // An app's own colour icon, for apps whose tray icon is
+                    // single-colour (#52).
+                    let catalog = &self.catalog;
+                    let clues = lapin_ux_core::tray_look::clues(update.id.as_deref(), update.title.as_deref(), &update.process);
+                    let app_icon = move || {
+                        let keys: Vec<lapin_ux_core::tray_look::AppKey> = catalog
+                            .apps()
+                            .iter()
+                            .map(|a| lapin_ux_core::tray_look::AppKey {
+                                id: &a.data.id,
+                                name: &a.data.name,
+                                wm_class: a.data.wm_class.as_deref(),
+                                exec: a.data.exec.as_deref(),
+                            })
+                            .collect();
+                        let app = &catalog.apps()[lapin_ux_core::tray_look::match_app(&clues, &keys)?];
+                        tracing::debug!(app = %app.data.id, "tray: the app's own icon for a single-colour tray icon");
+                        Some(match &app.data.icon {
+                            cosmic::desktop::fde::IconSource::Name(n) => cosmic::widget::icon::from_name(n.clone()).size(128).handle(),
+                            cosmic::desktop::fde::IconSource::Path(p) => cosmic::widget::icon::from_path(p.clone()),
+                        })
+                    };
+                    t.icon = Some(crate::taskbar_view::tray_icon(update, app_icon));
                 }
             }
             Message::TrayLayout(name, layout) => {

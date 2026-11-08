@@ -153,3 +153,117 @@ mod tests {
         assert_eq!(p[11], 0);
     }
 }
+
+// ---- Apps' own icons instead of black tray icons (#52, 8 Nov) ------------
+
+/// Status-notifier categories that belong to apps (Steam, Discord, chat
+/// and Electron apps). "SystemServices" and "Hardware" items (network,
+/// Bluetooth, battery…) are status icons and keep their own pictures.
+pub fn category_is_app(category: Option<&str>) -> bool {
+    matches!(category, None | Some("ApplicationStatus") | Some("Communications"))
+}
+
+/// Words that say nothing about which app it is.
+fn generic(word: &str) -> bool {
+    word.len() < 3
+        || word.starts_with("chrome_status_icon")
+        || word.starts_with("status_icon")
+        || [
+            "electron", "python", "python3", "java", "node", "bash", "sh", "chrome", "chromium", "app", "app.asar",
+            "resources", "usr", "lib", "lib64", "bin", "opt", "share", "local", "home", "wine", "wine64",
+            "wine-preloader", "wine64-preloader", "flatpak", "bwrap", "appimage", "tray", "systray", "indicator",
+        ]
+        .contains(&word)
+}
+
+/// Clues about a tray item's app, lowercased: its tray id and title, the
+/// owning process's name, executable and the path parts of its command
+/// line (Electron apps run as "electron /usr/lib/claude-desktop/app.asar").
+pub fn clues(id: Option<&str>, title: Option<&str>, process: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |w: &str| {
+        let w = w.trim().to_ascii_lowercase();
+        let w = w.trim_end_matches(".exe").trim_end_matches(".asar").trim_end_matches(".appimage").to_string();
+        if !generic(&w) && !out.contains(&w) {
+            out.push(w);
+        }
+    };
+    for s in [id, title].into_iter().flatten() {
+        push(s);
+    }
+    for p in process {
+        for part in p.split('/') {
+            push(part);
+        }
+    }
+    out
+}
+
+/// An installed app, as far as matching goes.
+pub struct AppKey<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub wm_class: Option<&'a str>,
+    pub exec: Option<&'a str>,
+}
+
+/// The installed app a tray item belongs to: the first clue that names an
+/// app by desktop id (or its last part, "com.valvesoftware.Steam" →
+/// "steam"), window class, executable or name.
+pub fn match_app(clues: &[String], apps: &[AppKey]) -> Option<usize> {
+    let exec_name = |e: &str| {
+        let first = e.split_whitespace().find(|t| !t.contains('=') && *t != "env").unwrap_or("");
+        first.rsplit('/').next().unwrap_or(first).to_ascii_lowercase()
+    };
+    for clue in clues {
+        let found = apps.iter().position(|a| {
+            let id = a.id.to_ascii_lowercase();
+            id == *clue
+                || id.rsplit('.').next() == Some(clue.as_str())
+                || a.wm_class.is_some_and(|w| w.eq_ignore_ascii_case(clue))
+                || a.exec.is_some_and(|e| exec_name(e) == *clue)
+                || a.name.eq_ignore_ascii_case(clue)
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+
+    fn apps() -> Vec<AppKey<'static>> {
+        vec![
+            AppKey { id: "firefox", name: "Firefox", wm_class: Some("firefox"), exec: Some("firefox %u") },
+            AppKey { id: "steam", name: "Steam", wm_class: Some("steam"), exec: Some("/usr/bin/steam-runtime %U") },
+            AppKey { id: "claude-desktop", name: "Claude", wm_class: Some("Claude"), exec: Some("claude-desktop %u") },
+            AppKey { id: "com.discordapp.Discord", name: "Discord", wm_class: None, exec: Some("flatpak run com.discordapp.Discord") },
+        ]
+    }
+
+    #[test]
+    fn finds_the_app() {
+        let a = apps();
+        assert_eq!(match_app(&clues(Some("steam"), Some("Steam"), &[]), &a), Some(1));
+        // Electron: generic tray id, the app shows in the command line.
+        let c = clues(Some("chrome_status_icon_1"), None, &["/usr/lib/electron/electron".into(), "/usr/lib/claude-desktop/app.asar".into()]);
+        assert_eq!(match_app(&c, &a), Some(2));
+        // By window class / name, case-insensitive.
+        assert_eq!(match_app(&clues(None, Some("claude"), &[]), &a), Some(2));
+        // Flatpak id's last part.
+        assert_eq!(match_app(&clues(Some("discord"), None, &[]), &a), Some(3));
+        assert_eq!(match_app(&clues(Some("nm-applet"), None, &["/usr/bin/nm-applet".into()]), &a), None);
+    }
+
+    #[test]
+    fn categories() {
+        assert!(category_is_app(Some("ApplicationStatus")));
+        assert!(category_is_app(Some("Communications")));
+        assert!(category_is_app(None));
+        assert!(!category_is_app(Some("SystemServices")));
+        assert!(!category_is_app(Some("Hardware")));
+    }
+}
