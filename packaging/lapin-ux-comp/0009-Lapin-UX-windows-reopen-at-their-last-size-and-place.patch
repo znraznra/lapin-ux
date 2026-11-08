@@ -1,0 +1,245 @@
+From fee8a8dab4f5e23b13bb9dbcf0ab657e4abaa578 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 14:24:27 +0800
+Subject: [PATCH] Lapin UX: windows reopen at their last size and place
+
+Wayland apps can't place their own windows, and cosmic-comp only keeps a
+window's geometry while it exists. In the Lapin session the floating
+layout now notes each app's window size and position (per app id, with
+the output) and saves them to $XDG_STATE_HOME/lapin-ux/window-geometry
+when a window closes; a new window of that app opens there when nothing
+else decides its place (no position asked for, not a dialog, not a
+window coming back from minimize). Kept on screen; centred on another
+output. Maximized and snapped windows aren't noted.
+
+Refs #42
+---
+ src/shell/element/surface.rs     |   8 ++
+ src/shell/layout/floating/mod.rs | 161 +++++++++++++++++++++++++++++++
+ 2 files changed, 169 insertions(+)
+
+diff --git a/src/shell/element/surface.rs b/src/shell/element/surface.rs
+index 58cdd8b..1a5ed19 100644
+--- a/src/shell/element/surface.rs
++++ b/src/shell/element/surface.rs
+@@ -1014,6 +1014,14 @@ impl CosmicSurface {
+         }
+     }
+ 
++    /// Lapin UX: a dialog or other window that belongs to a parent window.
++    pub fn has_parent(&self) -> bool {
++        match self.0.underlying_surface() {
++            WindowSurface::Wayland(toplevel) => toplevel.parent().is_some(),
++            WindowSurface::X11(surface) => surface.is_transient_for().is_some(),
++        }
++    }
++
+     pub fn is_parent_of(&self, child: &CosmicSurface) -> bool {
+         match child.0.underlying_surface() {
+             WindowSurface::Wayland(toplevel) => {
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index 6869d2f..9fa510f 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -76,6 +76,8 @@ pub struct FloatingLayout {
+     dirty: AtomicBool,
+     pub theme: cosmic::Theme,
+     pub appearance: AppearanceConfig,
++    /// Lapin UX (#42): windows seen at the last refresh (one fewer = closed).
++    lapin_windows: usize,
+ }
+ 
+ #[derive(Debug)]
+@@ -105,6 +107,79 @@ enum Animation {
+     },
+ }
+ 
++/// Lapin UX (#42): each app's last window size and position (on which
++/// output), so a window reopens where it was, as people expect. Kept in
++/// `$XDG_STATE_HOME/lapin-ux/window-geometry`, one line per app id:
++/// `app_id<TAB>output<TAB>x<TAB>y<TAB>w<TAB>h` (output-local coordinates).
++mod remembered {
++    use std::collections::HashMap;
++    use std::sync::{LazyLock, Mutex};
++
++    pub type Geo = (String, i32, i32, i32, i32);
++
++    fn file() -> Option<std::path::PathBuf> {
++        let state = std::env::var_os("XDG_STATE_HOME")
++            .map(std::path::PathBuf::from)
++            .filter(|p| p.is_absolute())
++            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))?;
++        Some(state.join("lapin-ux/window-geometry"))
++    }
++
++    static STORE: LazyLock<Mutex<HashMap<String, Geo>>> = LazyLock::new(|| {
++        let mut map = HashMap::new();
++        if let Some(text) = file().and_then(|f| std::fs::read_to_string(f).ok()) {
++            for line in text.lines() {
++                let f: Vec<&str> = line.split('\t').collect();
++                if let [app, output, x, y, w, h] = f[..]
++                    && let (Ok(x), Ok(y), Ok(w), Ok(h)) = (x.parse(), y.parse(), w.parse(), h.parse())
++                {
++                    map.insert(app.to_string(), (output.to_string(), x, y, w, h));
++                }
++            }
++        }
++        Mutex::new(map)
++    });
++
++    pub fn get(app: &str) -> Option<Geo> {
++        STORE.lock().ok()?.get(app).cloned()
++    }
++
++    static DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++    /// Note where an app's window is now (memory only).
++    pub fn note(app: &str, geo: Geo) {
++        let Ok(mut map) = STORE.lock() else { return };
++        if map.get(app) != Some(&geo) {
++            map.insert(app.to_string(), geo);
++            DIRTY.store(true, std::sync::atomic::Ordering::Relaxed);
++        }
++    }
++
++    pub fn set(app: &str, geo: Geo) {
++        note(app, geo);
++        flush();
++    }
++
++    /// Write the notes to disk if anything changed (when a window closes).
++    pub fn flush() {
++        if !DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed) {
++            return;
++        }
++        let Ok(map) = STORE.lock() else { return };
++        tracing::info!(apps = map.len(), "Lapin UX: saving where apps' windows were");
++        let mut lines: Vec<String> =
++            map.iter().map(|(a, (o, x, y, w, h))| format!("{a}\t{o}\t{x}\t{y}\t{w}\t{h}")).collect();
++        lines.sort();
++        if let Some(f) = file() {
++            let _ = std::fs::create_dir_all(f.parent().unwrap_or(&f));
++            let tmp = f.with_extension("new");
++            if std::fs::write(&tmp, lines.join("\n") + "\n").is_ok() {
++                let _ = std::fs::rename(&tmp, &f);
++            }
++        }
++    }
++}
++
+ /// Lapin UX: running in the Lapin UX session (its changes stay out of
+ /// COSMIC's own session).
+ fn lapin_session() -> bool {
+@@ -537,9 +612,50 @@ impl FloatingLayout {
+         let last_geometry = *mapped.last_geometry.lock().unwrap();
+         let min_size = mapped.min_size().unwrap_or((320, 240).into());
+ 
++        // Lapin UX (#42): a new window of an app opens at the size and place
++        // its last window had, when nothing else decides them (no position
++        // asked for, not a dialog, not a window coming back).
++        let remembered = (lapin_session()
++            && position.is_none()
++            && size.is_none()
++            && prev.is_none()
++            && anchor.is_none()
++            && last_geometry.is_none()
++            && already_mapped.is_none()
++            && !mapped.active_window().has_parent())
++        .then(|| remembered::get(&mapped.active_window().app_id()))
++        .flatten()
++        .map(|(out, x, y, w, h)| {
++            let zone = output_geometry.as_local();
++            let max = mapped.max_size().filter(|m| m.w > 0 && m.h > 0);
++            let mut w = w.clamp(min_size.w.min(zone.size.w), zone.size.w);
++            let mut h = h.clamp(min_size.h.min(zone.size.h), zone.size.h);
++            if let Some(m) = max {
++                w = w.min(m.w);
++                h = h.min(m.h);
++            }
++            let size = Size::<i32, Local>::from((w, h));
++            // Same output: the same place, kept on screen; another output:
++            // centred there.
++            let loc = if out == output.name() {
++                Point::<i32, Local>::from((
++                    x.clamp(zone.loc.x, zone.loc.x + zone.size.w - w),
++                    y.clamp(zone.loc.y, zone.loc.y + zone.size.h - h),
++                ))
++            } else {
++                Point::<i32, Local>::from((zone.loc.x + (zone.size.w - w) / 2, zone.loc.y + (zone.size.h - h) / 2))
++            };
++            (size, loc)
++        });
++        if let Some(r) = remembered {
++            tracing::info!(app = %mapped.active_window().app_id(), place = ?r, "Lapin UX: window reopens where it was");
++        }
++        let position = position.or(remembered.map(|(_, loc)| loc));
++
+         if let Some(size) = size
+             .map(SizeExt::as_local)
+             .or(last_geometry.map(|g| g.size))
++            .or(remembered.map(|(size, _)| size))
+         {
+             win_geo.size = size;
+         } else {
+@@ -826,6 +942,16 @@ impl FloatingLayout {
+                 mapped_geometry.size = server_size.as_local();
+             }
+             *window.last_geometry.lock().unwrap() = Some(mapped_geometry);
++            // Lapin UX (#42): remember where the app's window was.
++            if lapin_session() && !window.active_window().has_parent() {
++                let app = window.active_window().app_id();
++                tracing::debug!(%app, geometry = ?mapped_geometry, "Lapin UX: remembering the window's place");
++                if !app.is_empty() {
++                    let output = self.space.outputs().next().map(|o| o.name()).unwrap_or_default();
++                    let g = mapped_geometry;
++                    remembered::set(&app, (output, g.loc.x, g.loc.y, g.size.w, g.size.h));
++                }
++            }
+         }
+ 
+         self.space.unmap_elem(window);
+@@ -1510,6 +1636,41 @@ impl FloatingLayout {
+ 
+     #[profiling::function]
+     pub fn refresh(&mut self) {
++        // Lapin UX (#42): keep note of where each app's window is; a closed
++        // window may be dropped here before `unmap` sees it, so its last
++        // place is written to disk as soon as one is gone.
++        if lapin_session() {
++            let output = self.space.outputs().next().map(|o| o.name()).unwrap_or_default();
++            let mut gone = false;
++            let alive = self.space.elements().filter(|e| e.alive()).count();
++            // A closed window may already be out of the space: one fewer is
++            // enough to save.
++            if alive < self.lapin_windows {
++                gone = true;
++            }
++            self.lapin_windows = alive;
++            for e in self.space.elements() {
++                if !e.alive() {
++                    gone = true;
++                    continue;
++                }
++                if e.is_maximized(false)
++                    || e.floating_tiled.lock().unwrap().is_some()
++                    || e.active_window().has_parent()
++                {
++                    continue;
++                }
++                let app = e.active_window().app_id();
++                if let Some(g) = self.space.element_geometry(e).map(RectExt::as_local)
++                    && !app.is_empty()
++                {
++                    remembered::note(&app, (output.clone(), g.loc.x, g.loc.y, g.size.w, g.size.h));
++                }
++            }
++            if gone {
++                remembered::flush();
++            }
++        }
+         self.space.refresh();
+ 
+         if let Some(pos) = self.spawn_order.iter().position(|w| !w.alive()) {
+-- 
+2.43.0
+

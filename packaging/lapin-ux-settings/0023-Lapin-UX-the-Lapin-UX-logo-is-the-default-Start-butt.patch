@@ -1,0 +1,55 @@
+From e79105afc644bed95bf1058ea61541bb4555c344 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 14:24:29 +0800
+Subject: [PATCH] Lapin UX: the Lapin UX logo is the default Start button
+ picture
+
+Taskbar > Start button icon lists "Lapin UX" (the official logo) first as
+the default; the rabbit becomes a preset next to Squares, Dots and Circle.
+
+Refs #56
+---
+ cosmic-settings/src/lapin/settings.rs | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 2ce2fd1..a2f1c34 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -963,13 +963,14 @@ lapin_page!(Fonts, "lapin-fonts", "preferences-desktop-font-symbolic", "Fonts",
+ lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, colour, size", [("", pointer_rows)]);
+ 
+ /// Start button pictures (ids the shell knows) and their names.
+-/// The rabbit is Lapin UX's own and the default (#56); "squares" was the
+-/// earlier default. A saved "rabbit" shows as the default.
+-const START_ICONS: [(&str, &str); 6] = [
+-    ("", "Rabbit (Lapin UX)"),
++/// The official Lapin UX logo is the default (#56); "squares" was the
++/// earlier default.
++const START_ICONS: [(&str, &str); 7] = [
++    ("", "Lapin UX"),
+     ("squares", "Squares"),
+     ("dots", "Dots"),
+     ("circle", "Circle"),
++    ("rabbit", "Rabbit"),
+     ("distro", "My system's logo"),
+     ("custom", "Custom picture…"),
+ ];
+@@ -985,11 +986,11 @@ fn start_icon_preview(id: &str) -> widget::icon::Handle {
+             });
+             match logo {
+                 Some(l) => widget::icon::from_name(l).size(32).handle(),
+-                None => preset("rabbit"),
++                None => preset("lapin-ux"),
+             }
+         }
+-        "custom" => custom_start_icon().map(widget::icon::from_path).unwrap_or_else(|| preset("rabbit")),
+-        "" | "rabbit" => preset("rabbit"),
++        "custom" => custom_start_icon().map(widget::icon::from_path).unwrap_or_else(|| preset("lapin-ux")),
++        "" => preset("lapin-ux"),
+         "squares" => preset("default"),
+         other => preset(other),
+     }
+-- 
+2.43.0
+
