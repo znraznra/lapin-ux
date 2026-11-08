@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/znraznra/lapin-ux/discussions
+    about: Not sure it's a bug, or just need help? Ask here. No question is too basic.
+  - name: Report a security problem privately
+    url: https://github.com/znraznra/lapin-ux/security/advisories/new
+    about: Please don't post security problems publicly. See the Security Policy.
