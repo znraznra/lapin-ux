@@ -14,6 +14,10 @@ copy of, or a "road to", any other operating system.
   in the README, `docs/` (including `docs/wiki/`), package descriptions,
   installer text, UI strings or new commit messages. Say "familiar",
   "zero learning curve", "the usual", or just describe the behaviour.
+- One exception, set 2026-11-08: the white paper (`docs/wiki/Whitepaper.md`) and
+  the first GitHub Discussions post may name **Windows 11 24H2** once, as the
+  familiarity and ease-of-use reference, for transparency. It is a yardstick,
+  not a goal to clone, so keep it out of the README headline and everywhere else.
 - Call the key the **Super** key (Super+E, Super+X…), not "Win".
 - Phase 4 is "Zero learning curve" (it was "Road to a 1:1 …").
 - Exceptions that must keep their exact names: third-party credits and licences

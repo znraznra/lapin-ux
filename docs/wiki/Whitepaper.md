@@ -12,6 +12,8 @@ Many people who would try Linux are put off by unfamiliar desktops, the need for
 
 The most widely learned desktop habits are a taskbar along the bottom, a Start menu with search, a Settings app with a sidebar and a Task Manager one shortcut away. Linux desktops offer strong technical foundations but ask newcomers to relearn those habits (where things are, how Alt+Tab or Super+X behave). Existing "familiar-looking" Linux themes usually restyle another desktop with extensions or plugins, which break on updates and rarely match behaviour.
 
+**A note on the reference point.** For transparency: when this paper talks about "where people expect things", the yardstick for overall familiarity and ease of use is Windows 11 24H2. It is used to judge whether something feels familiar, not as a goal to clone it. Lapin UX is an independent project, not affiliated with or endorsed by Microsoft, and ships no Microsoft logos, artwork or proprietary fonts.
+
 Lapin UX takes the opposite approach: get the behaviour people expect right first, then the look, and do it as a real desktop environment, not a theme.
 
 **Constraints**
