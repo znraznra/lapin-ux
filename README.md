@@ -25,7 +25,7 @@ Lapin UX is built so there is nothing to learn: the taskbar, Start menu with sea
 
 ![The Start menu open on the Lapin UX desktop](docs/tour/start-menu.webp)
 
-> **Preview.** The everyday desktop and the Settings app are built. The first real-PC test (CachyOS) installed fine; the [bugs it found](https://github.com/znraznra/lapin-ux/issues) are fixed and waiting for a retest. Still to come: File Explorer, a Store and a snip markup editor.
+> **Preview, updated 8 November 2026.** The everyday desktop and the Settings app are built, and it installs and runs on a real Arch-based PC (CachyOS). Every bug reported so far has a fix waiting for a retest, apart from a few that need more details from testers (see the [open issues](https://github.com/znraznra/lapin-ux/issues)). Still to come: File Explorer, a Store and a snip markup editor. Paused for now: the screen reader (Narrator).
 
 ## Features
 
@@ -75,7 +75,7 @@ Full list in the [technical reference](docs/TECHNICAL.md).
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
 
-*Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
+*Last updated: 8 November 2026 (progress figures as of build `41a45cf`).*
 
 [Full roadmap, phase by phase →](docs/ROADMAP.md)
 

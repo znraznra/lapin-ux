@@ -11,7 +11,7 @@ The work is split into four phases. Green is done, yellow is partly done, grey i
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
 
-*Last updated: 2 November 2026 (progress figures as of build `8326c84`).*
+*Last updated: 8 November 2026 (progress figures as of build `41a45cf`).*
 
 ```mermaid
 flowchart LR
@@ -24,6 +24,18 @@ flowchart LR
     classDef partly fill:#f9a825,color:#000,stroke:#f57f17
     classDef todo fill:#9e9e9e,color:#fff,stroke:#616161
 ```
+
+## What's next
+
+In this order:
+
+1. **Retest on real hardware.** Every reported bug has a fix waiting for someone to confirm it. Help here is the most valuable thing right now; see [CONTRIBUTING.md](../CONTRIBUTING.md).
+2. **File Explorer**, then the **Store** (both built on COSMIC's own apps).
+3. **Snip markup editor** (pen, highlighter, crop).
+
+Requests waiting their turn: choose the taskbar's position on screen ([#41](https://github.com/znraznra/lapin-ux/issues/41)), fade the lock screen blur in and out ([#54](https://github.com/znraznra/lapin-ux/issues/54)), add your own mouse pointers ([#57](https://github.com/znraznra/lapin-ux/issues/57)) and customise system sounds ([#58](https://github.com/znraznra/lapin-ux/issues/58)).
+
+Needs more details from testers: the tray and left-aligned taskbar flicker ([#32](https://github.com/znraznra/lapin-ux/issues/32), [#34](https://github.com/znraznra/lapin-ux/issues/34)) and a monitor with no signal after turning it back on ([#50](https://github.com/znraznra/lapin-ux/issues/50)).
 
 ## Phase 1 — core desktop (done)
 
