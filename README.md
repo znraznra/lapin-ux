@@ -4,7 +4,7 @@
 
 <h1 align="center">Lapin UX</h1>
 
-<p align="center"><b>A Linux desktop you already know how to use.</b></p>
+<p align="center"><b>Making the Linux leap easier with a desktop you already know how to use.</b></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
