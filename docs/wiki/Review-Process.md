@@ -20,5 +20,7 @@ Every visible change goes through a screenshot gallery review before it counts a
 | Round 20 | 272-276 | Approved 2026-10-27 |
 | Round 21 | 277-288 | 11 right; #288 changed (screen reader needs Orca) |
 | Round 22 (Version 31) | 289-292 | Screen reader install flow (#18) and #29 crash-fix retest card |
+| Rounds 24-26 | 295-319 | Fixes for issues #23-#45, then main display (#31) and sharper text (#40) |
+| Round 29 (Version 39) | 331-344 | Fixes for the 2 and 7 November reviews and issues #46-#58 |
 
-Everything through #287 is approved; next round starts at #293. Hardware-retest items are shown as checklist cards.
+Hardware-retest items are shown as checklist cards, and each fixed issue on GitHub says what to retest.

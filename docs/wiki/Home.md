@@ -16,7 +16,7 @@ Repository: https://github.com/znraznra/lapin-ux (branch `main`)
 | [Feature Set](Feature-Set) | Everything built, by area |
 | [Architecture](Architecture) | Crates, forks, patches, pinned upstream commits |
 | [Challenges](Challenges) | Roadblocks and how they were solved |
-| [Real-Hardware Issues](Real-Hardware-Issues) | GitHub issues #1-#30 from Arch/CachyOS testing |
+| [Real-Hardware Issues](Real-Hardware-Issues) | GitHub issues #1-#58 from Arch/CachyOS testing |
 | [Coexistence and Uninstall](Coexistence-and-Uninstall) | Rules that keep other desktops (incl. real COSMIC) untouched |
 | [Design Decisions](Design-Decisions) | Standing decisions from review rounds |
 | [COSMIC Upgrades](COSMIC-Upgrades) | Moving from epoch-1.10.0 to 1.11.0 |
@@ -24,16 +24,16 @@ Repository: https://github.com/znraznra/lapin-ux (branch `main`)
 | [Review Process](Review-Process) | The screenshot gallery workflow and round history |
 | [Credits and Licensing](Credits-and-Licensing) | Third-party assets |
 
-## Status at a glance (2026-10-28, build `dca07a2`)
+## Status at a glance (2026-11-08, build `41a45cf`)
 
 | Phase | Scope | Done | Partial | Not started |
 |---|---|---|---|---|
 | 1 Core desktop | Taskbar, Start, notifications, tray, wallpaper, theme | 12 | 0 | 0 |
 | 2 Settings and multitasking | Settings app, quick settings, Alt+Tab/Task view, snapping | 9 | 0 | 0 |
 | 3 System apps | File manager, Update, Control Panel | 4 | 1 | 1 |
-| 4 Zero learning curve | Everything else | 16 | 1 | 2 |
+| 4 Zero learning curve | Everything else | 15 | 2 | 2 |
 
-Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), snip markup editor, file dialog navigation pane, snap-group shared-edge resize, #23/#24/#28.
+Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), snip markup editor, file dialog navigation pane, snap-group shared-edge resize. Every reported bug has a fix waiting for a hardware retest, except a few that need details from testers. Narrator is paused.
 
 ## Ground rules for contributors
 

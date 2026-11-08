@@ -8,7 +8,8 @@ Everything built so far, by area. The authoritative long version lives in `docs/
 - Accent pill under the focused app; jump lists, app actions, pin/unpin, **End task**.
 - Badges and progress bars (Unity LauncherEntry); attention flash.
 - Task view button, tray (StatusNotifierItem), clock (follows COSMIC's 24-hour switch; unset = 12 h), show-desktop sliver, auto-hide.
-- Start button icon presets, OS logo or a custom picture.
+- Start button icon presets, OS logo or a custom picture (the rabbit by default). Opaque by default; Transparency effects in Settings > Colors make it see-through.
+- Main display choice: tray, desktop icons and notifications follow it. Older X11 and Wine tray icons show in the tray.
 
 ## Start menu
 - Type-to-search ranking (initials, generic names, keywords, executables); Settings pages, files, folders, document contents, web.
@@ -43,7 +44,7 @@ Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every
 Lock and sign-in screens (`lapin-ux-greeter`): big clock, blurred panel, round picture, fingerprint via fprintd, Howdy face unlock, accessibility/keyboard/session/power flyouts, on-screen keyboard.
 
 ## Input and accessibility
-Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters. Narrator (via Orca) is paused for now. Contrast themes are currently turned off.
+Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Mouse pointer page (style, busy colour, size). Narrator (via Orca) is paused for now and hidden everywhere. Contrast themes are currently turned off.
 
 ## Pop-ups and prompts (`lapin-ux-osd`)
 Volume/brightness pop-ups and the admin (polkit) prompt, clear and easy to read.
@@ -52,7 +53,7 @@ Volume/brightness pop-ups and the admin (polkit) prompt, clear and easy to read.
 Open/Save dialogs with a tidy footer and the asking app's icon in the title.
 
 ## Look and sound
-Selawik (session-only font), Fluent UI System Icons, full-colour app icon theme, Fluent Emoji, Borealis sounds, pointers (opt-in download).
+Selawik (session-only font; system and monospace font and text smoothing on the Fonts page), Fluent UI System Icons, full-colour app icon theme, Fluent Emoji, Borealis sounds, pointers (opt-in download).
 
 ## Keyboard shortcuts
 Super (Start), +E, +D, +X, +R, +N, +A, +V, +., +Z, +Tab, +L, +1..9, +arrows, Alt+Tab, Ctrl+Alt+Del, Super+Shift+S, Super+I (Settings), Super+P.

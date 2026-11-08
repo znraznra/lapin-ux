@@ -2,7 +2,7 @@
 
 *A zero-learning-curve desktop for Linux, built by patching COSMIC rather than replacing it.*
 
-Version of 2026-10-28, build `dca07a2`.
+Version of 2026-11-08, build `41a45cf`.
 
 ## Abstract
 
@@ -58,15 +58,16 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 
 ## 5. Results to date
 
-**Delivered (2026-10-28):**
+**Delivered (2026-11-08):**
 - A complete shell: taskbar, Start with search and preview, tray, notification centre, quick settings, Task view, snap layouts and groups, clipboard and emoji, Run, Super+X, Ctrl+Alt+Del, snipping.
 - A full Settings app laid out the way people expect, forked from COSMIC Settings through five reviewed stages, plus Lapin pages (Taskbar, Start, Storage, Installed apps, Sign-in options, Privacy, Update).
 - Lock and sign-in screens, touch keyboard, volume/brightness pop-ups, admin prompt, Open/Save dialogs, Update (pacman, Flatpak, firmware), Task Manager with Users and Services, Control Panel.
 - A one-step installer and clean uninstaller.
+- Since 28 October: main display choice, a Fonts page with sharper text, older X11 and Wine tray icons, a Mouse pointer page, an opaque taskbar by default, the rabbit as the default Start icon, and fixes for every issue filed up to #58.
 
 **Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 15 of 19 (2 partial; Narrator paused).
 
-**Confirmed on real hardware:** install, pop-ups, Open/Save dialogs, touch keyboard in the session, firmware updates; of 30 filed hardware issues, 25 are fixed and closed, 2 are fixed and awaiting retest (#18, #29), and 3 are not started (#23, #24, #28).
+**Confirmed on real hardware:** install, pop-ups, Open/Save dialogs, touch keyboard in the session, firmware updates; 58 hardware issues have been filed. Every bug has a fix, and most are labelled "fixed: needs retest" until the owner confirms them on real hardware (23 issues are still open). A few need more details from testers (#32, #34, #50), the screen reader (#18, #44) is paused, and four requests are not started (#41, #54, #57, #58).
 
 ## 6. Limitations and risks
 
@@ -83,7 +84,7 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 2. **Store**: fork COSMIC Store into a Microsoft Store-style Home, sections and Library, sharing update code with Update.
 3. **Snip markup editor** (pen, highlighter, crop).
 4. **Snap-group shared-edge resize** in the compositor.
-5. Pointer settings, icon scoping for other desktops, X11 work-area support (issues #23, #24, #28).
+5. Requests from testing: taskbar position, lock screen blur fade, your own mouse pointers and customisable system sounds (#41, #54, #57, #58).
 6. Real contrast themes; possibly live captions and voice typing (parked).
 
 ## 8. Explicitly out of scope
@@ -98,9 +99,9 @@ Lapin UX shows that a desktop with a zero learning curve can be built on Linux a
 
 | Item | Value |
 |---|---|
-| Unit tests (lapin-ux-core) | 99 |
-| Uninstall checks | 55 |
+| Unit tests (lapin-ux-core) | 112 |
+| Uninstall checks | 89 |
 | Settings unit tests | 13 |
-| Review rounds / screens | 22 / 292 |
-| Hardware issues filed / open fixes awaiting retest | 30 / 2 (#18, #29) plus 3 not started (#23, #24, #28) |
+| Review rounds / screens | 29 / 344 |
+| Hardware issues filed / still open | 58 / 23 (mostly fixes awaiting retest) |
 | Pinned COSMIC release | epoch-1.11.0 |

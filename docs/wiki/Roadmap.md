@@ -2,17 +2,17 @@
 
 Status words: **Done** = built, sandbox-tested, approved in review. **Partial**. **Not started**. **Left out** = deliberately excluded (don't build or propose). **Parked** = optional, later. **Out of reach** = needs Microsoft services/files.
 
-Last updated 2026-10-28, build `dca07a2`.
+Last updated 2026-11-08, build `41a45cf`.
 
 ## Phase 1: Core desktop (12/12 done)
-- Taskbar (centred/left, pinning, grouped buttons, jump lists, End task, badges, progress, attention flash, labels, small buttons, auto-hide, one per monitor, show-desktop sliver)
-- System tray with overflow and app menus (apps using only the old XEmbed tray don't show)
+- Taskbar (centred/left, pinning, grouped buttons, jump lists, End task, badges, progress, attention flash, labels, small buttons, auto-hide, one per monitor with a main display you choose, show-desktop sliver, Start picture of your choice: the rabbit by default; opaque by default, see-through with Transparency effects)
+- System tray with overflow and app menus, including older X11 and Wine tray icons (XEmbed)
 - Clock and calendar
 - Start: search, pinned grid with folders, All apps, Recommended, account/power menus, Uninstall
 - Start search: apps, Settings pages, files, document contents (needs LocalSearch), web
 - Start slide-up animation (opens 4 px above the taskbar, rests 12 px above)
 - Notifications: server, toasts, centre, agenda, Focus, Do not disturb schedule, per-app settings
-- Wallpaper (original light/dark artwork), theme (accent, corners, frosted surfaces, Selawik, Fluent Emoji, full-colour app icons + Fluent icons)
+- Wallpaper (original light/dark artwork), theme (accent, corners, Selawik, Fluent Emoji, full-colour app icons + Fluent icons), sharper text with a Fonts page
 - Session supervision and sign out
 - Arch packaging and one-step installer (verified on real hardware)
 
@@ -30,17 +30,17 @@ Last updated 2026-10-28, build `dca07a2`.
 - Partial: Open/Save dialogs (tidy footer and title done; navigation pane is still COSMIC's)
 - **Not started: File Explorer** (fork of COSMIC Files; command bar, Home, Gallery, details pane)
 
-## Phase 4: Zero learning curve (16 done, 1 partial, 2 not started)
-- Done: Night light and desktop peek, touchpad gestures, open/minimize/restore animations, Super+X/Run/Super+P/Ctrl+Alt+Del/Alt+F4, lock and sign-in screens, first-run setup, desktop icons/properties, Task Manager (incl. Users and Services), snipping tool, input indicator, touch keyboard, accessibility, sounds and pointers, admin prompt, search preview pane
-- Partial: title bars (GTK, Electron, Qt apps keep theirs by choice)
+## Phase 4: Zero learning curve (15 done, 2 partial, 2 not started)
+- Done: Night light and desktop peek, touchpad gestures, open/minimize/restore animations, Super+X/Run/Super+P/Ctrl+Alt+Del/Alt+F4, lock and sign-in screens, first-run setup, desktop icons/properties, Task Manager (incl. Users and Services), snipping tool, input indicator, touch keyboard, Magnifier and colour filters, sounds and pointers, admin prompt, search preview pane
+- Partial: title bars (GTK, Electron, Qt apps keep theirs by choice); accessibility (Narrator paused since 2 Nov and hidden everywhere, contrast themes off)
 - Not started: **Store** (fork of COSMIC Store), **snip markup editor**
 
 ## What's left (suggested order)
-1. Tako's hardware retest of fixed issues (see [Real-Hardware Issues](Real-Hardware-Issues))
-2. #23 other desktops get Lapin's icons; #24 mouse pointer settings page; #28 X11 pop-ups over the taskbar (needs `_NET_WORKAREA` in cosmic-comp's X11 WM)
-3. File Explorer (+ dialog navigation pane), gated on the Lapin session
-4. Store, gated on the Lapin session; add to `LAPIN_PKGS`/`STOCK` in the uninstaller if it replaces cosmic-store
-5. Snip markup editor (COSMIC has none: own small editor)
+1. Hardware retest of every fixed issue (see [Real-Hardware Issues](Real-Hardware-Issues)); #32/#34 and #50 also need logs or details from testers
+2. File Explorer (+ dialog navigation pane), gated on the Lapin session
+3. Store, gated on the Lapin session; add to `LAPIN_PKGS`/`STOCK` in the uninstaller if it replaces cosmic-store
+4. Snip markup editor (COSMIC has none: own small editor)
+5. Requests: taskbar position (#41), lock screen blur fade (#54), your own mouse pointers (#57), customisable system sounds (#58)
 6. Snap-group shared-edge resize (new grab in COSMIC's compositor; changes often upstream)
 
 ## Left out (confirmed 2026-10-20, don't build or propose)
