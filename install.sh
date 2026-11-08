@@ -67,9 +67,23 @@ trap restore_pkgver EXIT
 # pacman asks whether to replace it, and --noconfirm would answer "no" and
 # stop everything (#49). Answering yes to that one question (--ask 4) swaps
 # them in the same transaction, so nothing is ever left missing.
-makepkg -s --noconfirm --needed
+# The version this checkout builds as (same formula as pkgver() in the PKGBUILD).
+ver="0.1.0.r$(git rev-list --count HEAD).g$(git rev-parse --short=7 HEAD)"
+base=$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
+# makepkg --packagelist names the files (honouring PKGDEST); swap in that version.
+mapfile -t want < <(makepkg --packagelist | sed "s/-${base//./\\.}-/-${ver}-/")
+have=0
+for f in "${want[@]}"; do [ -f "$f" ] && have=$((have + 1)); done
+if [ ${#want[@]} -gt 0 ] && [ "$have" -eq ${#want[@]} ]; then
+    # Already built from this exact commit (e.g. the install step was
+    # interrupted last time): just install it.
+    echo "Lapin UX $ver is already built; installing it."
+else
+    makepkg -s --noconfirm --needed -f
+fi
 restore_pkgver
-mapfile -t built < <(makepkg --packagelist | while read -r f; do [ -f "$f" ] && echo "$f"; done)
+built=()
+for f in "${want[@]}"; do [ -f "$f" ] && built+=("$f"); done
 if [ ${#built[@]} -eq 0 ]; then
     echo "The build didn't produce any packages." >&2
     exit 1
