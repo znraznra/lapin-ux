@@ -20,7 +20,9 @@ use crate::app::{Message, Shell};
 
 impl Shell {
     pub(crate) fn sync_catcher(&mut self) -> Task<Message> {
-        let wanted = self.start.is_some() || self.panel.is_some();
+        // For Start, only once it's on screen: creating this full-screen
+        // surface at the same time held Start back (#51).
+        let wanted = (self.start.is_some() && self.start_visible()) || self.panel.is_some();
         match (wanted, self.catcher) {
             (true, None) => {
                 let id = window::Id::unique();

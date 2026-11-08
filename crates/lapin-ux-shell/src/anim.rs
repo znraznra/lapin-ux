@@ -69,6 +69,11 @@ impl Shell {
         }
     }
 
+    /// Start has appeared (or its slide gave up waiting for it).
+    pub(crate) fn start_visible(&self) -> bool {
+        self.anims.start_shown || self.anims.start.is_none()
+    }
+
     pub(crate) fn anim_launched(&mut self, app: &str) {
         self.anims.launches.insert(app.to_string(), Instant::now());
     }

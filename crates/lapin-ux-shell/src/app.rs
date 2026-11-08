@@ -532,10 +532,12 @@ impl Shell {
             .map(|h| h.saturating_sub(style::taskbar_height() + 24).min(style::START_HEIGHT))
             .unwrap_or(style::START_HEIGHT)
             .max(360);
+        let t0 = Instant::now();
         if self.catalog.changed_on_disk() {
             self.catalog = Catalog::load(self.config.show_other_desktop_apps);
         }
         let index = self.refresh_file_index();
+        tracing::info!(ms = t0.elapsed().as_millis() as u64, "Start: prepared");
         self.start = Some(StartMenu {
             id,
             query: String::new(),
