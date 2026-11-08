@@ -102,8 +102,8 @@ pub struct ShellConfig {
     /// Settings > Personalization > Colors > "Transparency effects": a
     /// see-through, blurred taskbar. Off by default: opaque (#55).
     pub transparency_effects: bool,
-    /// Settings > Taskbar > "Start button icon": "" (Lapin UX's rabbit), a preset
-    /// ("squares", "dots", "circle", "distro" = the OS logo from os-release)
+    /// Settings > Taskbar > "Start button icon": "" (the Lapin UX logo), a preset
+    /// ("squares", "dots", "circle", "rabbit", "distro" = the OS logo from os-release)
     /// or "custom" (the picture copied to ~/.local/share/lapin-ux/start-icon.*).
     pub start_icon: String,
     /// Settings > System > Display > "Make this my main display" (#31):

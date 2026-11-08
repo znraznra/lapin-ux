@@ -61,6 +61,9 @@ impl Shell {
 
     pub(crate) fn anim_start_shown(&mut self, id: window::Id) {
         if !self.anims.start_shown && self.anims.start.is_some_and(|(s, _)| s == id) {
+            if let Some((_, asked)) = self.anims.start {
+                tracing::info!(ms = asked.elapsed().as_millis() as u64, "Start on screen");
+            }
             self.anims.start = Some((id, Instant::now()));
             self.anims.start_shown = true;
         }

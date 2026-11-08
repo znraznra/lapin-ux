@@ -127,10 +127,10 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
                 let page = |e: Element<'a, Message>| container(e).width(w).height(Length::Fill);
                 let (a, ax, b, bx) = if to == StartPage::AllApps {
                     // Pinned leaves to the left, All apps comes from the right.
-                    (home(shell, start), -off, all_apps(shell, start), w - off)
+                    (home(shell, start), -off, all_apps(shell, start, true), w - off)
                 } else {
                     // All apps leaves to the right, Pinned comes from the left.
-                    (all_apps(shell, start), off, home(shell, start), off - w)
+                    (all_apps(shell, start, true), off, home(shell, start), off - w)
                 };
                 container(
                     cosmic::iced::widget::stack![
@@ -148,7 +148,7 @@ pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Mes
             .into(),
             None => match start.page {
                 StartPage::Home => home(shell, start),
-                StartPage::AllApps => all_apps(shell, start),
+                StartPage::AllApps => all_apps(shell, start, false),
             },
         }
     };
@@ -266,17 +266,29 @@ fn home<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
     .into()
 }
 
-fn all_apps<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
+/// Rows built while All apps slides in or out (#51). The slide always shows
+/// the list from the top and Start is at most ~720 px tall, so this covers
+/// what's visible; building every installed app's row each frame made the
+/// slide choppy on slower machines.
+const SLIDE_ROWS: usize = 24;
+
+fn all_apps<'a>(shell: &'a Shell, start: &'a StartMenu, sliding: bool) -> Element<'a, Message> {
     let apps = shell.catalog.apps();
     let names: Vec<&str> = apps.iter().map(|a| a.data.name.as_str()).collect();
     let mut list = column::with_capacity(apps.len() + 30).spacing(2);
     let mut index = 0usize;
-    for section in lapin_ux_core::apps::alphabet_sections(&names) {
+    let mut rows = 0usize;
+    'sections: for section in lapin_ux_core::apps::alphabet_sections(&names) {
         list = list.push(container(text::heading(section.header)).padding([10, 12, 4, 12]));
+        rows += 1;
         for i in section.items {
+            if sliding && rows >= SLIDE_ROWS {
+                break 'sections;
+            }
             let id = apps[i].data.id.as_str();
             list = list.push(list_row(shell, start, id, None, start.selected == Some(index)));
             index += 1;
+            rows += 1;
         }
     }
 
@@ -297,7 +309,12 @@ fn all_apps<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> 
             .align_y(Alignment::Center)
             .into(),
         widget::Space::new().height(8).into(),
-        scrollable(list).height(Length::Fill).into(),
+        if sliding {
+            // Same place as the list will have, without a scroll area to set up each frame.
+            container(list).height(Length::Fill).clip(true).into()
+        } else {
+            scrollable(list).height(Length::Fill).into()
+        },
     ])
     .height(Length::Fill)
     .into()

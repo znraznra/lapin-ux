@@ -1987,6 +1987,9 @@ impl Shell {
                     if matches!(&self.popup, Some(Popup { kind: PopupKind::TrayMenu(n), .. }) if *n == name) {
                         return self.close_popup();
                     }
+                    if matches!(&self.sub, Some(Popup { kind: PopupKind::TrayMenu(n), .. }) if *n == name) {
+                        return self.close_submenu();
+                    }
                 }
                 crate::tray::Event::Error(e) => tracing::debug!("tray: {e}"),
             },
@@ -2052,10 +2055,17 @@ impl Shell {
                 } else {
                     rect_key(bar, "tray-overflow")
                 };
+                // In the drawer, the menu opens beside the icon and the drawer
+                // stays open until a press outside both (8 Nov review).
+                let in_drawer = !self.tray_inline(t) && matches!(&self.popup, Some(Popup { kind: PopupKind::TrayOverflow, .. }));
                 match t.item.menu_proxy().cloned() {
                     Some(menu) => {
                         self.tray_menu_path.clear();
-                        let open = self.open_popup(bar, &anchor_key, PopupKind::TrayMenu(name));
+                        let open = if in_drawer {
+                            self.open_submenu_at(&crate::taskbar_view::overflow_item_key(&name), PopupKind::TrayMenu(name), true)
+                        } else {
+                            self.open_popup(bar, &anchor_key, PopupKind::TrayMenu(name))
+                        };
                         let prepare = Task::future(async move {
                             let _ = menu.about_to_show(0).await;
                             cosmic::Action::App(Message::Noop)

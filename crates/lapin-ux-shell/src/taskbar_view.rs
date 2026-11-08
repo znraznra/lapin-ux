@@ -58,24 +58,26 @@ const TASK_VIEW_ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewB
 const START_DOTS: &[u8] = include_bytes!("../../../data/icons/start/dots.svg");
 const START_CIRCLE: &[u8] = include_bytes!("../../../data/icons/start/circle.svg");
 const START_RABBIT: &[u8] = include_bytes!("../../../data/icons/start/rabbit.svg");
+/// The official Lapin UX logo (docs/assets/lapin-ux-logo.svg).
+pub const START_LOGO: &[u8] = include_bytes!("../../../data/icons/start/lapin-ux.svg");
 
 /// The Start button's picture for the `start_icon` setting, falling back to
 /// Lapin UX's own when a chosen picture is missing.
-/// The Start button picture. The rabbit is Lapin UX's own (the default,
-/// and what's shown when a chosen picture is missing, #56); "squares" is
+/// The Start button picture. The official Lapin UX logo is the default,
+/// and what's shown when a chosen picture is missing (#56); "squares" is
 /// the earlier default.
 pub fn start_icon(choice: &str) -> icon::Handle {
     match choice {
         "squares" => icon::from_svg_bytes(START_ICON),
         "dots" => icon::from_svg_bytes(START_DOTS),
         "circle" => icon::from_svg_bytes(START_CIRCLE),
+        "rabbit" => icon::from_svg_bytes(START_RABBIT),
         "distro" => match lapin_ux_core::system::os_info().logo {
             Some(logo) => icon::from_name(logo).size(64).handle(),
-            None => icon::from_svg_bytes(START_RABBIT),
+            None => icon::from_svg_bytes(START_LOGO),
         },
-        "custom" => custom_start_icon().map(icon::from_path).unwrap_or_else(|| icon::from_svg_bytes(START_RABBIT)),
-        // "" (the default) and "rabbit".
-        _ => icon::from_svg_bytes(START_RABBIT),
+        "custom" => custom_start_icon().map(icon::from_path).unwrap_or_else(|| icon::from_svg_bytes(START_LOGO)),
+        _ => icon::from_svg_bytes(START_LOGO),
     }
 }
 
@@ -755,6 +757,11 @@ fn taskbar_displays(shell: &Shell) -> Element<'_, Message> {
     panel(column::with_children(items).spacing(2), 0.0)
 }
 
+/// Where an icon sits in the tray drawer (for its menu's position).
+pub fn overflow_item_key(name: &str) -> String {
+    format!("tray-item:{name}")
+}
+
 fn tray_overflow(shell: &Shell, bar: cosmic::iced::window::Id) -> Element<'_, Message> {
     let hidden: Vec<&crate::app::TrayEntry> = shell.tray.iter().filter(|t| !shell.tray_inline(t)).collect();
     let mut grid = column::with_capacity(4).spacing(2);
@@ -766,13 +773,21 @@ fn tray_overflow(shell: &Shell, bar: cosmic::iced::window::Id) -> Element<'_, Me
                 Some(h) => icon(h.clone()).size(16).into(),
                 None => icon::from_name("image-missing-symbolic").size(16).into(),
             };
+            // Highlighted while its right-click menu is open beside it.
+            let menu_open = matches!(&shell.sub, Some(Popup { kind: PopupKind::TrayMenu(n), .. }) if *n == name);
             let btn = button::custom(container(content).center(Length::Fill))
                 .width(40)
                 .height(40)
                 .padding(0)
-                .class(style::flat_button(false))
+                .class(style::flat_button(menu_open))
                 .on_press(Message::TrayClick(bar, name.clone()));
-            r = r.push(mouse_area(btn).on_right_press(Message::TrayContext(bar, name.clone())));
+            let area = mouse_area(btn).on_right_press(Message::TrayContext(bar, name.clone()));
+            // Tracked so the icon's menu opens beside it, over the drawer.
+            let el: Element<'_, Message> = match shell.popup.as_ref() {
+                Some(p) => track(shell, rect_key(p.id, &overflow_item_key(&name)), area),
+                None => area.into(),
+            };
+            r = r.push(el);
         }
         grid = grid.push(r);
     }

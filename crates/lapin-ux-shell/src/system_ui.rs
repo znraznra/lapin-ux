@@ -260,7 +260,7 @@ const BANNER_HEIGHT: f32 = 72.0;
 fn os_banner() -> Element<'static, Message> {
     let logo: Element<'static, Message> = match OS.logo.as_deref() {
         Some(name) => icon::from_name(name).size(40).into(),
-        None => icon(icon::from_svg_bytes(crate::taskbar_view::START_ICON)).size(40).into(),
+        None => icon(icon::from_svg_bytes(crate::taskbar_view::START_LOGO)).size(40).into(),
     };
     container(
         row::with_children(vec![logo, text::title3(OS.pretty_name.as_str()).font(cosmic::font::default()).into()])

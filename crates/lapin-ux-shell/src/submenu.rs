@@ -23,6 +23,12 @@ impl Shell {
     /// Open `kind` as a submenu beside the item tracked as `item` in the
     /// current popup. Re-opening the same submenu is a no-op.
     pub(crate) fn open_submenu(&mut self, item: &str, kind: PopupKind) -> Task<Message> {
+        self.open_submenu_at(item, kind, false)
+    }
+
+    /// `up`: grow upwards from the item (menus of tray icons in the drawer,
+    /// which sits right above the taskbar).
+    pub(crate) fn open_submenu_at(&mut self, item: &str, kind: PopupKind, up: bool) -> Task<Message> {
         let Some(parent) = self.popup.as_ref().map(|p| p.id) else { return Task::none() };
         if self.sub.as_ref().is_some_and(|s| s.kind == kind) {
             return Task::none();
@@ -38,10 +44,10 @@ impl Shell {
                 size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(440.0).max_height(720.0),
                 anchor_rect: Rectangle { x: r.x as i32, y: r.y as i32, width: (r.width as i32).max(1), height: (r.height as i32).max(1) },
                 anchor: PAnchor::TopRight,
-                gravity: Gravity::BottomRight,
+                gravity: if up { Gravity::TopRight } else { Gravity::BottomRight },
                 // slide_y | flip_x | resize_y
                 constraint_adjustment: 2 | 4 | 32,
-                offset: (2, -4),
+                offset: if up { (2, 0) } else { (2, -4) },
                 reactive: true,
             },
             parent_size: None,

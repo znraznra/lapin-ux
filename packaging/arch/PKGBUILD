@@ -265,7 +265,7 @@ package_lapin-ux-desktop-git() {
     install -Dm644 data/portals/lapin-ux-portals.conf "$pkgdir/usr/share/xdg-desktop-portal/lapin-ux-portals.conf"
     install -Dm644 data/wallpapers/lapin-ux-dark.jpg  "$pkgdir/usr/share/backgrounds/lapin-ux/lapin-ux-dark.jpg"
     install -Dm644 data/wallpapers/lapin-ux-light.jpg "$pkgdir/usr/share/backgrounds/lapin-ux/lapin-ux-light.jpg"
-    install -Dm644 data/icons/lapin-ux-start.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
+    install -Dm644 data/icons/start/lapin-ux.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.lapinux.Shell.svg"
     # Start button icon presets (shown in Settings > Taskbar).
     install -Dm644 data/icons/lapin-ux-start.svg "$pkgdir/usr/share/lapin-ux/start-icons/default.svg"
     install -Dm644 -t "$pkgdir/usr/share/lapin-ux/start-icons" data/icons/start/*.svg
