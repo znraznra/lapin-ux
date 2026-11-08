@@ -35,10 +35,14 @@ COSMIC compositor. Arch Linux first.
   taskbar takes the keyboard only meanwhile); Enter shows the results in
   Start; Esc or clicking away clears it.
 - Start button picture: Settings > Personalization > Taskbar > Start button
-  icon (the rabbit, Lapin UX's own and the default; Squares, Dots, Circle,
-  the OS logo from os-release `LOGO=`, or a custom SVG/PNG copied to
-  `~/.local/share/lapin-ux`); `start_icon` in `dev.lapinux.Shell` (`""` =
-  the rabbit, which is also shown when a chosen picture is missing, #56).
+  icon (the official Lapin UX logo, `docs/assets/lapin-ux-logo.svg`, as the
+  default; Squares, Dots, Circle, Rabbit, the OS logo from os-release
+  `LOGO=`, or a custom SVG/PNG copied to `~/.local/share/lapin-ux`);
+  `start_icon` in `dev.lapinux.Shell` (`""` = the logo, which is also shown
+  when a chosen picture is missing and is the app icon `dev.lapinux.Shell`,
+  #56).
+- Right-clicking an icon in the tray drawer (^) opens its menu beside it,
+  growing upwards; the drawer stays open until a press outside both.
 - Opaque by default, with no blur behind it (#55). Personalization > Colors >
   *Transparency effects* (`transparency_effects` in `dev.lapinux.Shell`,
   off by default; Lapin session only) makes it see-through (82 %) and
@@ -193,6 +197,13 @@ edge brings it back, and it stays while Start, a menu or a panel is open.
   add them back from the Add list.
 - Notifications show **progress bars** and an **inline reply** box (KDE's
   inline-reply extension).
+
+**Windows reopen where they were** (`lapin-ux-comp` 0009, #42): in the Lapin
+session the compositor notes each app's window size and position (with
+the output) and saves them to `$XDG_STATE_HOME/lapin-ux/window-geometry`
+when a window closes; the app's next window opens there (kept on screen,
+centred on another output). Dialogs, maximized and snapped windows,
+windows coming back from minimize and positions apps ask for are left alone.
 
 **Task view and snapping**
 - Task view: windows of the current desktop as thumbnails, desktops below

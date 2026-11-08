@@ -39,7 +39,7 @@ Needs more details from testers: the tray and left-aligned taskbar flicker ([#32
 
 ## Phase 1 — core desktop (done)
 
-- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice (the rabbit by default), solid by default with Transparency effects to make it see-through
+- [x] Taskbar: centred or left icons, pinned and running apps, window picker, jump lists, End task, badges and progress, attention flash, a search box you can type in, a Start button picture of your choice (the Lapin UX logo by default), solid by default with Transparency effects to make it see-through
 - [x] Taskbar labels, smaller buttons, auto-hide, one taskbar per monitor with a main display you choose, Show desktop corner
 - [x] System tray with app menus, older X11 and Wine tray icons included
 - [x] Clock with calendar, seconds if you want them
