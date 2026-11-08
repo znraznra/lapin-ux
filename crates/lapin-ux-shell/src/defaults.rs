@@ -225,7 +225,7 @@ fn apply_shortcuts() -> Result<bool, cosmic_config::Error> {
 }
 
 /// Bump when the generated shortcuts (or other upgradeable defaults) change.
-pub const DEFAULTS_VERSION: u32 = 17;
+pub const DEFAULTS_VERSION: u32 = 18;
 
 const MARKER: &str = "// Managed by Lapin UX. Delete this line to keep your own edits from being replaced.";
 
@@ -272,6 +272,8 @@ pub fn windows_style_shortcuts() -> String {
         // Snipping overlay (Rectangle / Window / Full screen).
         r#"(modifiers: [Super, Shift], key: "s"): Spawn("lapin-ux-shell snip"),"#.to_string(),
         r#"(modifiers: [], key: "Print"): Spawn("lapin-ux-shell snip"),"#.to_string(),
+        // The screenshot key some keyboards (Chromebook-style) have instead (#53).
+        r#"(modifiers: [], key: "XF86SelectiveScreenshot"): Spawn("lapin-ux-shell snip"),"#.to_string(),
         // Security options screen (Lock, Switch user, Sign out, Task Manager…).
         r#"(modifiers: [Ctrl, Alt], key: "Delete"): Spawn("lapin-ux-shell security"),"#.to_string(),
         // Closes the window in front; on the desktop, the Shut Down dialog.

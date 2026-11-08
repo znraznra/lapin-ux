@@ -1,0 +1,86 @@
+From 468a873658952993a48230f97f868a42c69f39f1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 18:13:56 +0800
+Subject: [PATCH] Lapin UX: log Print Screen keys and why a window opens where
+ it does
+
+In the Lapin session only:
+- A Print Screen key press (Print, Sys_Req, the screenshot key, or the
+  usual Print Screen keycodes) logs its keycode, key names and modifiers,
+  to find keyboards whose key matches no shortcut.
+- Every new window logs whether it reopened where its app's last window
+  was, and if not, why (no saved place yet, a dialog, placed by the app).
+- Saving the remembered places is logged too.
+
+Refs #53, Refs #42
+---
+ src/input/mod.rs                 | 16 ++++++++++++++++
+ src/shell/layout/floating/mod.rs | 18 +++++++++++++++---
+ 2 files changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index aeb4dd4..3310668 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -2385,6 +2385,22 @@ impl State {
+         let key_matches = |binding_key: Keysym| -> bool {
+             raw_syms.contains(&binding_key) || latin_sym.is_some_and(|sym| sym == binding_key)
+         };
++        // Lapin UX (#53): say what a Print Screen key sends, so a key that
++        // matches no shortcut can be found in the session log.
++        if key_state == KeyState::Pressed
++            && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++            && (matches!(keycode.raw(), 107 | 218)
++                || raw_syms.iter().any(|s| {
++                    matches!(*s, Keysym::Print | Keysym::Sys_Req) || matches!(s.raw(), 0x1008127a | 0x1008ff2d)
++                }))
++        {
++            tracing::warn!(
++                keycode = keycode.raw(),
++                syms = ?raw_syms.iter().map(|s| s.name().unwrap_or_default()).collect::<Vec<_>>(),
++                ctrl = modifiers.ctrl, alt = modifiers.alt, shift = modifiers.shift, logo = modifiers.logo,
++                "Lapin UX: Print Screen key pressed"
++            );
++        }
+ 
+         let mut shell = self.common.shell.write();
+ 
+diff --git a/src/shell/layout/floating/mod.rs b/src/shell/layout/floating/mod.rs
+index 9fa510f..672d893 100644
+--- a/src/shell/layout/floating/mod.rs
++++ b/src/shell/layout/floating/mod.rs
+@@ -166,7 +166,7 @@ mod remembered {
+             return;
+         }
+         let Ok(map) = STORE.lock() else { return };
+-        tracing::info!(apps = map.len(), "Lapin UX: saving where apps' windows were");
++        tracing::warn!(apps = map.len(), "Lapin UX: saving where apps' windows were");
+         let mut lines: Vec<String> =
+             map.iter().map(|(a, (o, x, y, w, h))| format!("{a}\t{o}\t{x}\t{y}\t{w}\t{h}")).collect();
+         lines.sort();
+@@ -647,8 +647,20 @@ impl FloatingLayout {
+             };
+             (size, loc)
+         });
+-        if let Some(r) = remembered {
+-            tracing::info!(app = %mapped.active_window().app_id(), place = ?r, "Lapin UX: window reopens where it was");
++        // Lapin UX (#42): one line per new window, to see in the session log
++        // why an app did or didn't reopen where it was.
++        if lapin_session() && already_mapped.is_none() && last_geometry.is_none() {
++            let app = mapped.active_window().app_id();
++            let why = if remembered.is_some() {
++                "reopens where it was"
++            } else if mapped.active_window().has_parent() || anchor.is_some() {
++                "dialog: placed by its app's window"
++            } else if position.is_some() || size.is_some() || prev.is_some() {
++                "placed by the app or a move"
++            } else {
++                "no saved place yet"
++            };
++            tracing::warn!(%app, place = ?remembered, "Lapin UX: new window: {why}");
+         }
+         let position = position.or(remembered.map(|(_, loc)| loc));
+ 
+-- 
+2.43.0
+
