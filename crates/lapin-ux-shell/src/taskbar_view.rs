@@ -12,7 +12,6 @@ use crate::config::TaskbarAlignment;
 use crate::style;
 use crate::wayland::WindowId as Handle;
 
-pub const START_ICON: &[u8] = include_bytes!("../../../data/icons/lapin-ux-start.svg");
 
 /// Report where `content` is drawn (for pop-ups, previews, drag and drop).
 ///
@@ -57,21 +56,18 @@ const TASK_VIEW_ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewB
 /// artwork; never Microsoft's logo.
 const START_DOTS: &[u8] = include_bytes!("../../../data/icons/start/dots.svg");
 const START_CIRCLE: &[u8] = include_bytes!("../../../data/icons/start/circle.svg");
-const START_RABBIT: &[u8] = include_bytes!("../../../data/icons/start/rabbit.svg");
 /// The official Lapin UX logo (docs/assets/lapin-ux-logo.svg).
 pub const START_LOGO: &[u8] = include_bytes!("../../../data/icons/start/lapin-ux.svg");
 
 /// The Start button's picture for the `start_icon` setting, falling back to
 /// Lapin UX's own when a chosen picture is missing.
-/// The Start button picture. The official Lapin UX logo is the default,
-/// and what's shown when a chosen picture is missing (#56); "squares" is
-/// the earlier default.
+/// The Start button picture. The official Lapin UX logo is the default and
+/// what's shown when a chosen picture is missing (#56); it's the only Lapin
+/// UX icon (#60), so the retired "squares" and "rabbit" choices show it too.
 pub fn start_icon(choice: &str) -> icon::Handle {
     match choice {
-        "squares" => icon::from_svg_bytes(START_ICON),
         "dots" => icon::from_svg_bytes(START_DOTS),
         "circle" => icon::from_svg_bytes(START_CIRCLE),
-        "rabbit" => icon::from_svg_bytes(START_RABBIT),
         "distro" => match lapin_ux_core::system::os_info().logo {
             Some(logo) => icon::from_name(logo).size(64).handle(),
             None => icon::from_svg_bytes(START_LOGO),
@@ -1020,4 +1016,13 @@ fn notify_badge(state: crate::notify_client::State) -> Element<'static, Message>
             }
         }))
         .into()
+}
+
+#[cfg(test)]
+mod logo_tests {
+    /// The shipped Start icon is the official logo, byte for byte (#60).
+    #[test]
+    fn start_icon_is_the_official_logo() {
+        assert_eq!(super::START_LOGO, include_bytes!("../../../docs/assets/lapin-ux-logo.svg"));
+    }
 }
