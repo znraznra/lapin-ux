@@ -242,9 +242,11 @@ impl IconSize {
     fn metrics(self) -> (f32, f32, u16) {
         match self {
             // Room for a two-line name under the icon (#43).
-            IconSize::Small => (76.0, 92.0, 32),
-            IconSize::Medium => (92.0, 108.0, 48),
-            IconSize::Large => (120.0, 140.0, 72),
+            // Tight two-line names (#64): padding, icon, 2 px gap, two
+            // 15 px lines and the shadow, plus the cell's margin.
+            IconSize::Small => (76.0, 80.0, 32),
+            IconSize::Medium => (92.0, 96.0, 48),
+            IconSize::Large => (120.0, 120.0, 72),
         }
     }
 }
@@ -1178,6 +1180,8 @@ fn label<'a>(s: String, width: f32) -> Element<'a, Message> {
     // shadow's offset), so they wrap at the same places.
     let line = |s: String, color: Color| {
         text::body(s)
+            .size(LABEL_SIZE)
+            .line_height(cosmic::iced::widget::text::LineHeight::Absolute(LABEL_LINE.into()))
             .width(Length::Fill)
             .wrapping(Wrapping::WordOrGlyph)
             .align_x(Alignment::Center)
@@ -1189,9 +1193,10 @@ fn label<'a>(s: String, width: f32) -> Element<'a, Message> {
     cosmic::iced::widget::stack![lapin_ux_ui::a11y::hidden(shadow), front].into()
 }
 
-/// Text size and line height of desktop labels (`text::body`).
-const LABEL_SIZE: f32 = 14.0;
-const LABEL_LINE: f32 = 14.0 * 1.3;
+/// Text size and line height of desktop labels: the familiar tight two-line
+/// names, lines about 1.15x the text size (#64; menus keep their spacing).
+const LABEL_SIZE: f32 = 13.0;
+const LABEL_LINE: f32 = 15.0;
 
 /// `s` as it fits in `lines` lines of `width` in the interface font, like
 /// Windows: wrapped at words (inside a word only when one word is wider
@@ -1317,12 +1322,12 @@ pub fn view(shell: &Shell) -> Element<'_, Message> {
                         // name over the icons below (an overlay, see below).
                         label(fit_label(&s.label, cw - 9.0, 2), cw - 8.0)
                     };
-                    let body = column::with_children(vec![picture, caption]).spacing(4).align_x(Alignment::Center);
+                    let body = column::with_children(vec![picture, caption]).spacing(2).align_x(Alignment::Center);
                     let dim = dragging.is_some_and(|g| g.path == s.item.path);
                     let boxed = container(body)
                         .width(cw - 4.0)
                         .height(ch - 4.0)
-                        .padding([6, 2])
+                        .padding([4, 2])
                         .align_x(Alignment::Center)
                         .class(cell_style(selected && !dim, is_target));
                     let path = s.item.path.clone();
