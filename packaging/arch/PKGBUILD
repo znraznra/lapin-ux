@@ -130,28 +130,43 @@ prepare() {
     cargo fetch --config "$_files_patch" --target "$host"
 }
 
-# Applies Lapin's libcosmic patch to every libcosmic copy in a cargo home.
+# Patches for cargo's git checkouts (#61). Each checkout records which patch
+# set it holds (a hash of the patch files). When that differs (a patch was
+# added or changed since the last build, or an older build folder has no
+# record), the checkout goes back to its pristine state, every patch is
+# applied again, and the cargo home is marked so build() recompiles the
+# patched crates: cargo doesn't notice changes inside its git checkouts.
+_patch_checkout() { # dir home patches...
+    local dir=$1 home=$2 want; shift 2
+    want=$(cat "$@" | sha256sum | cut -d' ' -f1)
+    [ "$(cat "$dir/.lapin-patches" 2>/dev/null)" = "$want" ] && return 0
+    git -C "$dir" checkout -q -- .
+    git -C "$dir" clean -fdq -e .cargo-ok -e .lapin-patches
+    local p
+    for p in "$@"; do git -C "$dir" apply "$p" || return 1; done
+    echo "$want" > "$dir/.lapin-patches"
+    touch "$srcdir/.repatched-$(basename "$home")"
+}
+
+# Lapin's libcosmic patches (title bars, Settings' look) on every libcosmic
+# copy in a cargo home.
 _patch_libcosmic() {
     local dir patched=0
     for dir in "$1"/git/checkouts/libcosmic-*/*/; do
         [ -f "$dir/src/widget/header_bar.rs" ] || continue
-        if [ ! -f "$dir/src/lapin.rs" ]; then
-            for p in "$_src"/packaging/lapin-ux-libcosmic/*.patch; do git -C "$dir" apply "$p"; done
-        fi
+        _patch_checkout "$dir" "$1" "$_src"/packaging/lapin-ux-libcosmic/*.patch || return 1
         patched=1
     done
     [ "$patched" = 1 ] || { echo "libcosmic not found in $1" >&2; return 1; }
 }
 
-# Screen readers (#44): libcosmic's bundled iced sends its widget tree to
-# AT-SPI. Applied to every libcosmic copy in a cargo home (once).
+# Screen readers (#44) and the redraw filter (#51): libcosmic's bundled iced
+# (its own git checkout, in libcosmic's iced/ folder).
 _patch_iced_a11y() {
     local dir patched=0
     for dir in "$1"/git/checkouts/libcosmic-*/*/iced/; do
         [ -f "$dir/winit/src/lib.rs" ] || continue
-        if ! grep -q "Control::A11yUpdate" "$dir/winit/src/lib.rs"; then
-            for p in "$_src"/packaging/libcosmic-a11y/*.patch; do git -C "$dir" apply "$p"; done
-        fi
+        _patch_checkout "$dir" "$1" "$_src"/packaging/libcosmic-a11y/*.patch || return 1
         patched=1
     done
     [ "$patched" = 1 ] || { echo "libcosmic's iced not found in $1" >&2; return 1; }
@@ -163,12 +178,23 @@ _patch_cryoglyph() {
     local dir patched=0
     for dir in "$1"/git/checkouts/cryoglyph-*/*/; do
         [ -f "$dir/src/cache.rs" ] || continue
-        if ! grep -q "text_contrast" "$dir/src/cache.rs"; then
-            for p in "$_src"/packaging/cryoglyph/*.patch; do git -C "$dir" apply "$p"; done
-        fi
+        _patch_checkout "$dir" "$1" "$_src"/packaging/cryoglyph/*.patch || return 1
         patched=1
     done
     [ "$patched" = 1 ] || { echo "cryoglyph not found in $1" >&2; return 1; }
+}
+
+# After re-patching a cargo home, make cargo rebuild the patched crates (and,
+# through them, everything that uses them) in that build's target folder.
+_clean_repatched() { # home target-dir
+    local flag c
+    flag="$srcdir/.repatched-$(basename "$1")"
+    [ -f "$flag" ] || return 0
+    for c in libcosmic iced iced_core iced_futures iced_graphics iced_renderer iced_runtime \
+        iced_tiny_skia iced_wgpu iced_widget iced_winit iced_accessibility cryoglyph; do
+        CARGO_HOME="$1" CARGO_TARGET_DIR="$2" cargo clean --frozen --release -p "$c" >/dev/null 2>&1 || true
+    done
+    rm -f "$flag"
 }
 
 _files_patch='patch."https://github.com/pop-os/cosmic-files".cosmic-files.path="../cosmic-files"'
@@ -176,6 +202,7 @@ _files_patch='patch."https://github.com/pop-os/cosmic-files".cosmic-files.path="
 build() {
     export RUSTUP_TOOLCHAIN=stable
     cd "$_src"
+    _clean_repatched "$srcdir/cargo-lapin" "$srcdir/target"
     CARGO_HOME="$srcdir/cargo-lapin" CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release --workspace
     [ -f data/wallpapers/lapin-ux-dark.jpg ] || python tools/make-wallpaper.py data/wallpapers
 
@@ -192,6 +219,7 @@ build() {
     just build-release --frozen
 
     cd "$srcdir/cosmic-settings"
+    _clean_repatched "$srcdir/cargo-settings" "$srcdir/cosmic-settings/target"
     CARGO_HOME="$srcdir/cargo-settings" just build-release --frozen
 
     cd "$srcdir/xdg-desktop-portal-cosmic"
