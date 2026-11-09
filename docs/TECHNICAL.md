@@ -266,8 +266,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   Clipboard (shell keys `no_clipboard_history`, action `clipboard-clear`),
   Personalization > Lock screen (`lock_wallpaper`, `no_signin_picture`, read
   by the greeter patch 0002; greeter patch 0003 draws the lock and sign-in
-  screens in Selawik by name, since the sign-in screen's own user has no
-  font setting; patch 0004 gives the sign-in screen rounded corner
+  screens in the system font by name (Selawik unless one is picked on
+  Fonts: patch 0008 reads `system_font` from `dev.lapinux.Shell`, the
+  user's own on the lock screen and the last user's on the sign-in screen,
+  #62), since the sign-in screen's own user has no font setting; patch 0004 gives the sign-in screen rounded corner
   buttons — accessibility, keyboard layout, a gear to pick the desktop
   session (every installed Wayland/X11 session, so you can switch back to
   KDE, GNOME…) and power, each with a flyout), Accounts > Sign-in options (`lapin/signin.rs`: facial
@@ -361,6 +363,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   service; `lapin-ux-greeter` ships `/etc/pam.d/cosmic-greeter` in Arch's
   style (`include system-local-login`; Arch has none, and without it every
   unlock fails). Account pictures are cut to a circle when loaded.
+- Opening the sign-in panel is a 200 ms eased move (#54): the dark veil
+  fades in as the panel rises 24 px into place, and Esc fades it back out
+  over the clock face (greeter patch 0008, `lapin::Fade`). The compositor
+  grows the blur behind it over the same 200 ms and back
+  (`lapin-ux-comp` 0011, `LapinBlurFade`, lock surfaces in the Lapin
+  session only).
 
 **Typing**
 - With several keyboard layouts or fcitx5 input methods, the taskbar shows

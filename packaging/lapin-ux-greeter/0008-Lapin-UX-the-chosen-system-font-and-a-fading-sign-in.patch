@@ -1,0 +1,387 @@
+From 1c6761df779572218b308e2e52623f6a1ebd1030 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 18:50:31 +0800
+Subject: [PATCH] Lapin UX: the chosen system font, and a fading sign-in panel
+
+The lock screen uses the system font picked in Settings > Personalization >
+Fonts (Lapin's system_font), and the sign-in screen the last user's; Selawik
+stays the default (#62). On the lock screen the sign-in panel's veil fades in
+over 200 ms as the panel rises into place, and fades out over the clock face
+on Esc, in step with the compositor's blur (#54).
+
+Refs #62, Refs #54
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ daemon/src/lib.rs         |  10 ++-
+ examples/lapin_preview.rs |   4 +-
+ src/greeter.rs            |  13 +++-
+ src/lapin.rs              | 129 +++++++++++++++++++++++++++++++++-----
+ src/locker.rs             |  23 ++++++-
+ 5 files changed, 161 insertions(+), 18 deletions(-)
+
+diff --git a/daemon/src/lib.rs b/daemon/src/lib.rs
+index 2470a68..4034afa 100644
+--- a/daemon/src/lib.rs
++++ b/daemon/src/lib.rs
+@@ -110,6 +110,10 @@ pub struct LapinLock {
+     pub wallpaper: Option<PathBuf>,
+     /// "Show the lock screen background picture on the sign-in screen" off.
+     pub plain_signin: bool,
++    /// The system font chosen in Settings > Personalization > Fonts ("" =
++    /// Selawik), so the lock and sign-in screens use it too (#62).
++    #[serde(default)]
++    pub system_font: String,
+ }
+ 
+ impl LapinLock {
+@@ -123,7 +127,11 @@ impl LapinLock {
+             .filter(|p| !p.is_empty())
+             .map(PathBuf::from)
+             .filter(|p| p.is_file());
+-        Self { wallpaper, plain_signin: c.get::<bool>("no_signin_picture").unwrap_or(false) }
++        Self {
++            wallpaper,
++            plain_signin: c.get::<bool>("no_signin_picture").unwrap_or(false),
++            system_font: c.get::<String>("system_font").unwrap_or_default(),
++        }
+     }
+ 
+     /// Show the lock picture on every screen instead of the wallpaper.
+diff --git a/examples/lapin_preview.rs b/examples/lapin_preview.rs
+index a516cdb..c1e6274 100644
+--- a/examples/lapin_preview.rs
++++ b/examples/lapin_preview.rs
+@@ -70,7 +70,7 @@ fn face<'a>(signin: bool, value: String, bg: widget::image::Handle, avatar: Opti
+                 lapin::corner_flyout("emblem-system-symbolic", menu == "session", Msg::Reveal, Some("Desktop session"), sessions),
+                 lapin::corner_flyout("system-shutdown-symbolic", menu == "power", Msg::Reveal, None, power),
+             ]).spacing(8).align_y(cosmic::iced::Alignment::Center);
+-            lapin::sign_in(lapin::avatar(avatar.as_ref(), lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale, std::env::var("LAPIN_PLAIN").is_ok())
++            lapin::sign_in(lapin::avatar(avatar.as_ref(), lapin::PICTURE * scale), "Alex Lee".into(), input.into(), widget::text("").into(), widget::space::horizontal().width(0).into(), corner.into(), scale, std::env::var("LAPIN_PLAIN").is_ok(), std::env::var("LAPIN_FADE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+         };
+         widget::container(
+             cosmic::iced::widget::stack![
+@@ -83,5 +83,7 @@ fn face<'a>(signin: bool, value: String, bg: widget::image::Handle, avatar: Opti
+ 
+ fn main() -> cosmic::iced::Result {
+     let signin = std::env::args().any(|a| a == "signin");
++    // LAPIN_FONT=family: the system font chosen in Settings (#62).
++    lapin::set_font(&std::env::var("LAPIN_FONT").unwrap_or_default());
+     cosmic::app::run::<App>(Settings::default().size(Size::new(1200.0, 720.0)).client_decorations(false), signin)
+ }
+diff --git a/src/greeter.rs b/src/greeter.rs
+index 7b5cc15..079c554 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -312,6 +312,17 @@ pub fn main() -> Result<(), Box<dyn Error>> {
+         logind_available: false,
+     };
+ 
++    // The sign-in screen follows the system font the last signed-in user
++    // chose (#62), else the only user's; Selawik when none was chosen.
++    {
++        let last = flags.greeter_config.last_user.map(|u| u.get());
++        let data = last
++            .and_then(|uid| flags.user_datas.iter().find(|d| d.uid == uid))
++            .or_else(|| (flags.user_datas.len() == 1).then(|| &flags.user_datas[0]));
++        if let Some(d) = data {
++            crate::lapin::set_font(&d.lapin_lock.system_font);
++        }
++    }
+     let settings = Settings::default().no_main_window(true).default_font(crate::lapin::font(cosmic::iced::font::Weight::Normal));
+ 
+     cosmic::app::run::<App>(settings, flags)?;
+@@ -1025,7 +1036,7 @@ impl App {
+                 )
+                 .push(button_row)
+                 .align_y(Alignment::Center);
+-            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale, plain)
++            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale, plain, 1.0)
+         };
+         let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((id, false), menu))
+diff --git a/src/lapin.rs b/src/lapin.rs
+index d3ab157..61310f5 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -18,16 +18,120 @@ pub fn scale(screen_height: f32) -> f32 {
+     (screen_height / 1080.0).clamp(0.4, 2.0)
+ }
+ 
++/// How long the sign-in panel takes to appear or go (#54); the compositor
++/// grows the blur behind it over the same time.
++pub const FADE: std::time::Duration = std::time::Duration::from_millis(200);
++
++/// The move between the clock face (0) and the sign-in panel (1), eased.
++#[derive(Debug, Default)]
++pub struct Fade {
++    on: bool,
++    since: Option<std::time::Instant>,
++}
++
++impl Fade {
++    fn raw(&self, now: std::time::Instant) -> f32 {
++        let Some(since) = self.since else {
++            return if self.on { 1.0 } else { 0.0 };
++        };
++        let t = (now.saturating_duration_since(since).as_secs_f32() / FADE.as_secs_f32()).clamp(0.0, 1.0);
++        if self.on { t } else { 1.0 - t }
++    }
++
++    /// Head for the sign-in panel (true) or the clock face (false), from
++    /// wherever it is now.
++    pub fn set(&mut self, on: bool) {
++        if on == self.on {
++            return;
++        }
++        let now = std::time::Instant::now();
++        let p = self.raw(now);
++        let left = if on { p } else { 1.0 - p };
++        self.on = on;
++        self.since = Some(now - FADE.mul_f32(left));
++    }
++
++    /// Straight to a state, without animating (a new lock).
++    pub fn reset(&mut self, on: bool) {
++        *self = Self { on, since: None };
++    }
++
++    /// 0..=1 towards the sign-in panel, eased out.
++    pub fn progress(&self) -> f32 {
++        let p = self.raw(std::time::Instant::now());
++        1.0 - (1.0 - p) * (1.0 - p)
++    }
++
++    /// Still moving: frames are needed. Stops itself once it arrives.
++    pub fn running(&mut self) -> bool {
++        if self.since.is_some() {
++            let p = self.raw(std::time::Instant::now());
++            if (self.on && p >= 1.0) || (!self.on && p <= 0.0) {
++                self.since = None;
++            }
++        }
++        self.since.is_some()
++    }
++
++    pub fn is_running(&self) -> bool {
++        self.since.is_some()
++    }
++}
++
++/// What dims the wallpaper behind the sign-in panel at `t` (0..=1): a dark
++/// veil, or with the picture turned off for sign-in (Settings > Lock
++/// screen) a solid colour from the accent.
++fn backdrop(t: f32, plain: bool, theme: &cosmic::Theme) -> Color {
++    if plain {
++        let a: Color = theme.cosmic().accent_color().into();
++        Color::from_rgba(a.r * 0.35, a.g * 0.35, a.b * 0.35, t)
++    } else {
++        Color::from_rgba(0.0, 0.0, 0.0, 0.42 * t)
++    }
++}
++
++/// The clock face while the sign-in panel is going away: the backdrop
++/// fades out over it (#54).
++pub fn fading<'a, M: 'static>(content: Element<'a, M>, t: f32, plain: bool) -> Element<'a, M> {
++    if t <= 0.0 {
++        return content;
++    }
++    widget::container(content)
++        .width(Length::Fill)
++        .height(Length::Fill)
++        .class(theme::Container::custom(move |th| widget::container::Style {
++            background: Some(Background::Color(backdrop(t, plain, th))),
++            ..Default::default()
++        }))
++        .into()
++}
++
+ /// Account picture size on the sign-in panel.
+ pub const PICTURE: f32 = 192.0;
+ 
+ /// The lock screen: time and date, top centre.
+-/// Lapin UX's one system font, Selawik, by name: the sign-in screen runs
+-/// as the greeter's own user, whose desktop settings don't choose a font.
++/// The default system font, Selawik, by name: the sign-in screen runs as
++/// the greeter's own user, whose desktop settings don't choose a font.
+ pub const FONT_NAME: &str = "Selawik";
+ 
++static CHOSEN_FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
++
++/// The system font chosen in Settings > Personalization > Fonts (#62), for
++/// the lock screen (the user's own) or the sign-in screen (the last user's).
++/// Empty = Selawik. Set once, before the screens are drawn.
++pub fn set_font(family: &str) {
++    let family = family.trim();
++    if !family.is_empty() {
++        let _ = CHOSEN_FONT.set(Box::leak(family.to_string().into_boxed_str()));
++    }
++}
++
++pub fn font_name() -> &'static str {
++    CHOSEN_FONT.get().copied().unwrap_or(FONT_NAME)
++}
++
+ pub fn font(weight: iced::font::Weight) -> iced::Font {
+-    iced::Font { family: iced::font::Family::Name(FONT_NAME), weight, ..iced::Font::DEFAULT }
++    iced::Font { family: iced::font::Family::Name(font_name()), weight, ..iced::Font::DEFAULT }
+ }
+ 
+ pub fn lock_face<'a, M: Clone + 'static>(time: String, date: String, status: Element<'a, M>, reveal: M, scale: f32) -> Element<'a, M> {
+@@ -83,6 +187,7 @@ pub fn sign_in<'a, M: 'static>(
+     bottom_right: Element<'a, M>,
+     scale: f32,
+     plain: bool,
++    t: f32,
+ ) -> Element<'a, M> {
+     let box_width = 296.0 * scale;
+     let panel = widget::column::with_capacity(5)
+@@ -95,7 +200,9 @@ pub fn sign_in<'a, M: 'static>(
+         .spacing(12.0 * scale);
+     // The panel sits at the dead centre of the screen; the corner rows are
+     // drawn on a layer above it so they don't push it off centre.
+-    let centred = widget::container(panel).center(Length::Fill);
++    // It rises into place as it appears (#54).
++    let rise = (1.0 - t) * 24.0 * scale;
++    let centred = widget::container(panel).center(Length::Fill).padding(iced::Padding { top: rise, ..Default::default() });
+     let corners = widget::column::with_capacity(2)
+         .push(widget::space::vertical().height(Length::Fill))
+         .push(
+@@ -112,16 +219,10 @@ pub fn sign_in<'a, M: 'static>(
+     widget::container(page)
+         .width(Length::Fill)
+         .height(Length::Fill)
+-        .class(theme::Container::custom(move |t| widget::container::Style {
+-            // Windows blurs the wallpaper here; a dark veil reads the same.
+-            // With the picture turned off for sign-in (Settings > Lock
+-            // screen), a solid colour from the accent, as on Windows.
+-            background: Some(Background::Color(if plain {
+-                let a: Color = t.cosmic().accent_color().into();
+-                Color::from_rgb(a.r * 0.35, a.g * 0.35, a.b * 0.35)
+-            } else {
+-                Color::from_rgba(0.0, 0.0, 0.0, 0.42)
+-            })),
++        .class(theme::Container::custom(move |th| widget::container::Style {
++            // The compositor blurs the wallpaper behind it; the veil (or
++            // the plain colour) fades in with it.
++            background: Some(Background::Color(backdrop(t, plain, th))),
+             text_color: Some(Color::WHITE),
+             icon_color: Some(Color::WHITE),
+             ..Default::default()
+diff --git a/src/locker.rs b/src/locker.rs
+index 486fd71..e50cbbd 100644
+--- a/src/locker.rs
++++ b/src/locker.rs
+@@ -91,6 +91,8 @@ pub fn main(user: pwd::Passwd) -> Result<(), Box<dyn std::error::Error>> {
+         logind_available: false,
+     };
+ 
++    // The user's own system font (#62); Selawik when none was chosen.
++    crate::lapin::set_font(&cosmic_greeter_daemon::LapinLock::read().system_font);
+     let settings = Settings::default().no_main_window(true).default_font(crate::lapin::font(cosmic::iced::font::Weight::Normal));
+ 
+     cosmic::app::run::<App>(settings, flags)?;
+@@ -280,6 +282,8 @@ pub enum Message {
+     Unlock,
+     /// Lapin UX: leave the clock face for the sign-in panel.
+     Reveal,
++    /// Lapin UX: a frame of the move between the two (#54).
++    FadeFrame,
+ }
+ 
+ impl From<common::Message> for Message {
+@@ -319,6 +323,8 @@ pub struct App {
+     authenticating: bool,
+     /// Lapin UX: the sign-in panel is showing (else the clock face).
+     signing_in: bool,
++    /// Lapin UX: how far the sign-in panel has appeared (#54).
++    fade: crate::lapin::Fade,
+ }
+ 
+ impl App {
+@@ -353,7 +359,7 @@ impl App {
+         }
+         let scale = crate::lapin::scale(self.common.window_size.get(&surface_id).map_or(1080.0, |s| s.height));
+         if !self.signing_in {
+-            return crate::lapin::lock_face(
++            let face = crate::lapin::lock_face(
+                 crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
+                 self.common.time.format_date(),
+                 widget::container(status_row).class(theme::Container::custom(|_| widget::container::Style {
+@@ -364,6 +370,7 @@ impl App {
+                 Message::Reveal,
+                 scale,
+             );
++            return crate::lapin::fading(face, self.fade.progress(), self.flags.user_data.lapin_lock.plain_signin);
+         }
+ 
+             //TODO: move code for custom dropdowns to libcosmic
+@@ -567,6 +574,7 @@ impl App {
+             corner.into(),
+             scale,
+             self.flags.user_data.lapin_lock.plain_signin,
++            self.fade.progress(),
+         );
+         if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((surface_id, false), menu))
+@@ -623,6 +631,7 @@ impl cosmic::Application for App {
+             value_tx_opt: None,
+             authenticating: false,
+             signing_in: false,
++            fade: Default::default(),
+         };
+ 
+         let task = if cfg!(feature = "logind") && app.flags.logind_available {
+@@ -649,8 +658,12 @@ impl cosmic::Application for App {
+     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
+         match message {
+             Message::None => {}
++            Message::FadeFrame => {
++                self.fade.running();
++            }
+             Message::Reveal => {
+                 self.signing_in = true;
++                self.fade.set(true);
+                 let blur = self.reblur();
+                 if let Some(surface_id) = self.common.active_surface_id_opt
+                     && let Some(id) = self.common.surface_names.get(&surface_id).and_then(|n| self.common.text_input_ids.get(n))
+@@ -662,6 +675,7 @@ impl cosmic::Application for App {
+             Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
+                 // Back to the clock, like Windows: the picture is sharp again.
+                 self.signing_in = false;
++                self.fade.set(false);
+                 if let Some((_, _, Some(value))) = &mut self.common.prompt_opt {
+                     value.clear();
+                 }
+@@ -681,6 +695,7 @@ impl cosmic::Application for App {
+                 let mut opened = Task::none();
+                 if matches!(common_message, common::Message::Key(..)) && !self.signing_in {
+                     self.signing_in = true;
++                    self.fade.set(true);
+                     opened = self.reblur();
+                 }
+                 if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
+@@ -867,6 +882,7 @@ impl cosmic::Application for App {
+                     }
+                     // Lapin UX: every lock starts on the clock face, unblurred.
+                     self.signing_in = false;
++                    self.fade.reset(false);
+                     self.common.rectangles.clear();
+ 
+                     let username = self.flags.user_data.name.clone();
+@@ -1235,6 +1251,11 @@ impl cosmic::Application for App {
+             subscriptions.push(crate::logind::subscription());
+         }
+ 
++        // Lapin UX: frames while the sign-in panel appears or goes (#54).
++        if self.fade.is_running() {
++            subscriptions.push(cosmic::iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::FadeFrame));
++        }
++
+         Subscription::batch(subscriptions)
+     }
+ }
+-- 
+2.43.0
+

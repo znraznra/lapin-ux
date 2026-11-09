@@ -1,0 +1,170 @@
+From 75bdbd3c3b10b4c39876c068185c700fb071a990 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 18:46:18 +0800
+Subject: [PATCH] Lapin UX: the lock screen's blur fades in and out
+
+In a Lapin UX session the blur behind the lock screen's sign-in panel grows
+from sharp to full strength over 200 ms (eased) when the panel opens, and
+back when it closes, instead of switching in one frame. The lock screen
+fades its veil over the same time, and those frames redraw the blur.
+
+Refs #54
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ src/backend/render/mod.rs                 | 21 ++++++
+ src/backend/render/wayland/blur_effect.rs | 84 ++++++++++++++++++++++-
+ 2 files changed, 102 insertions(+), 3 deletions(-)
+
+diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
+index ac8f760..fc9985f 100644
+--- a/src/backend/render/mod.rs
++++ b/src/backend/render/mod.rs
+@@ -1108,6 +1108,20 @@ fn session_lock_elements<R>(
+ {
+     if let Some(surface) = lock_surface {
+         let scale = Scale::from(output.current_scale().fractional_scale());
++        // Lapin UX (#54): the lock screen's blur fades in and out.
++        if lapin_session() {
++            smithay::wayland::compositor::with_surface_tree_downward(
++                surface.wl_surface(),
++                (),
++                |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
++                |_, states, _| {
++                    states
++                        .data_map
++                        .insert_if_missing_threadsafe(self::wayland::blur_effect::LapinBlurFade::default);
++                },
++                |_, _, _| true,
++            );
++        }
+         push_render_elements_from_surface_tree(
+             renderer,
+             surface.wl_surface(),
+@@ -1126,6 +1140,13 @@ fn session_lock_elements<R>(
+     }
+ }
+ 
++fn lapin_session() -> bool {
++    static LAPIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *LAPIN.get_or_init(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++    })
++}
++
+ // Used for mirroring and postprocessing
+ #[derive(Debug)]
+ pub struct PostprocessState {
+diff --git a/src/backend/render/wayland/blur_effect.rs b/src/backend/render/wayland/blur_effect.rs
+index b8a7935..9128da9 100644
+--- a/src/backend/render/wayland/blur_effect.rs
++++ b/src/backend/render/wayland/blur_effect.rs
+@@ -31,6 +31,71 @@ use crate::{
+     wayland::handlers::background_effect::ComputedBlurRegionCachedState,
+ };
+ 
++/// Lapin UX (#54): put on the surfaces of the lock screen, so its blur
++/// grows from sharp to full (and back) over `LapinBlurFade::DURATION`
++/// instead of switching at once. The lock screen fades its own veil over the
++/// same time, and those frames are what redraw the blur as it changes.
++#[derive(Debug, Default)]
++pub struct LapinBlurFade(pub Mutex<BlurFadeState>);
++
++#[derive(Debug, Default)]
++pub struct BlurFadeState {
++    on: bool,
++    since: Option<std::time::Instant>,
++    last: Option<Vec<Rectangle<i32, Logical>>>,
++}
++
++impl LapinBlurFade {
++    pub const DURATION: std::time::Duration = std::time::Duration::from_millis(200);
++}
++
++impl BlurFadeState {
++    /// How far the blur is towards full (0..=1) right now.
++    fn progress(&self, now: std::time::Instant) -> f64 {
++        let Some(since) = self.since else {
++            return if self.on { 1.0 } else { 0.0 };
++        };
++        let t = (now.saturating_duration_since(since).as_secs_f64()
++            / LapinBlurFade::DURATION.as_secs_f64())
++        .clamp(0.0, 1.0);
++        if self.on { t } else { 1.0 - t }
++    }
++
++    /// The region and strength to draw now, given the surface's region.
++    fn step(
++        &mut self,
++        current: Option<Vec<Rectangle<i32, Logical>>>,
++        strength: usize,
++    ) -> Option<(Vec<Rectangle<i32, Logical>>, usize)> {
++        let now = std::time::Instant::now();
++        let p = self.progress(now);
++        let want = current.is_some();
++        if want != self.on {
++            // Turn around from where it is, so a quick open/close doesn't jump.
++            let left = if want { p } else { 1.0 - p };
++            self.on = want;
++            self.since = Some(now - LapinBlurFade::DURATION.mul_f64(left));
++        }
++        if let Some(region) = current {
++            self.last = Some(region);
++        }
++        let p = self.progress(now);
++        if p >= 1.0 || p <= 0.0 {
++            self.since = None;
++        }
++        // Ease out: most of the change happens early, like other animations.
++        let eased = 1.0 - (1.0 - p) * (1.0 - p);
++        let strength = (strength as f64 * eased).round() as usize;
++        if strength == 0 {
++            if !self.on {
++                self.last = None;
++            }
++            return None;
++        }
++        self.last.clone().map(|region| (region, strength))
++    }
++}
++
+ pub static BLUR_DOWNSAMPLE_SHADER: &str = include_str!("../shaders/blur_downsample.frag");
+ pub static BLUR_UPSAMPLE_SHADER: &str = include_str!("../shaders/blur_upsample.frag");
+ 
+@@ -190,8 +255,21 @@ impl BlurElement {
+         strength: usize,
+     ) -> Result<Option<Self>, R::Error> {
+         let mut blur_region_state = states.cached_state.get::<ComputedBlurRegionCachedState>();
+-        let Some(region) = blur_region_state.current().blur_region.as_ref() else {
+-            return Ok(None);
++        let current = blur_region_state.current().blur_region.clone();
++
++        // Lapin UX (#54): the lock screen's blur fades in and out.
++        let (region, strength) = match states.data_map.get::<LapinBlurFade>() {
++            Some(fade) => {
++                let mut fade = fade.0.lock().unwrap();
++                match fade.step(current, strength) {
++                    Some(step) => step,
++                    None => return Ok(None),
++                }
++            }
++            None => match current {
++                Some(region) => (region, strength),
++                None => return Ok(None),
++            },
+         };
+ 
+         let state = states
+@@ -202,7 +280,7 @@ impl BlurElement {
+             renderer,
+             &mut state.lock().unwrap(),
+             geometry,
+-            region,
++            &region,
+             output_scale,
+             radii,
+             strength,
+-- 
+2.43.0
+
