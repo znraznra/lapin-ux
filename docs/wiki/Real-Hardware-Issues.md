@@ -54,8 +54,12 @@ Workflow: fix, comment what changed and what to retest, label `fixed: needs rete
 | #51 | Sluggish shell and Start animation | Motion gate and redraw filter (be19a35), awaiting retest |
 | #52 | Black tray icons | Single-colour icons tinted (54e7af6), awaiting retest |
 | #53 | Print Screen does nothing | Every route opens the snipping bar (13f4a5b), awaiting retest |
-| #55, #56 | Opaque taskbar; rabbit Start icon | Done (41a45cf), awaiting retest |
-| #54, #57, #58 | Lock blur fade; custom pointers; system sounds | Requests, not started |
+| #55, #56 | Opaque taskbar; Lapin UX logo as the Start icon | Done (41a45cf, 79b6647), awaiting retest |
+| #61 | Builds failed after a pull (patch added later) | Done (234240b), awaiting retest |
+| #60, #63, #64 | One logo; About Lapin UX card; tighter desktop names | Done (2e7933d, fd6564f, f5a0ba9), awaiting retest |
+| #57 | Any installed pointer theme (first stage) | Done (fd6564f), awaiting retest; later stages parked |
+| #62, #54 | Lock screen follows the chosen font; blur fades in and out | Done (879469e), awaiting retest |
+| #41, #58 | Taskbar position; system sound choices | Parked for a later phase |
 
 ## Confirmed working on real hardware
 Install via `./install.sh`, volume/brightness pop-ups, Open/Save dialogs (portal builds and works), touch keyboard in the session, firmware updates in Update.

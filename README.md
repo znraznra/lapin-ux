@@ -75,7 +75,7 @@ Full list in the [technical reference](docs/TECHNICAL.md).
 | 3. System apps | File Explorer, Update, Control Panel | `███████░░░` 4 of 6, 1 partly |
 | 4. Zero learning curve | Lock and sign-in, Task Manager, snipping, touch keyboard, accessibility, sounds… | `████████░░` 15 of 19, 2 partly |
 
-*Last updated: 8 November 2026 (progress figures as of build `41a45cf`).*
+*Last updated: 9 November 2026 (progress figures as of build `879469e`).*
 
 [Full roadmap, phase by phase →](docs/ROADMAP.md)
 
