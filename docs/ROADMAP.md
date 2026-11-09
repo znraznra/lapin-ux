@@ -25,17 +25,27 @@ flowchart LR
     classDef todo fill:#9e9e9e,color:#fff,stroke:#616161
 ```
 
+## Track it on GitHub
+
+Each phase is a [milestone](https://github.com/znraznra/lapin-ux/milestones), and each big item is a tracking issue with sub-issues, so progress shows as a bar.
+
+| Milestone | Tracking issue | State |
+|---|---|---|
+| [Phase 1: Core desktop](https://github.com/znraznra/lapin-ux/milestone/1) | [#66](https://github.com/znraznra/lapin-ux/issues/66) | Done |
+| [Phase 2: Settings and multitasking](https://github.com/znraznra/lapin-ux/milestone/2) | [#67](https://github.com/znraznra/lapin-ux/issues/67) | Done |
+| [Phase 3: System apps](https://github.com/znraznra/lapin-ux/milestone/3) | [#68](https://github.com/znraznra/lapin-ux/issues/68) | Open: [File Explorer #71](https://github.com/znraznra/lapin-ux/issues/71), [Open/Save navigation pane #76](https://github.com/znraznra/lapin-ux/issues/76) |
+| [Phase 4: Zero learning curve](https://github.com/znraznra/lapin-ux/milestone/4) | [#69](https://github.com/znraznra/lapin-ux/issues/69) | Open: [Store #77](https://github.com/znraznra/lapin-ux/issues/77), [Snip markup editor #78](https://github.com/znraznra/lapin-ux/issues/78), [Accessibility #79](https://github.com/znraznra/lapin-ux/issues/79), requests [#41](https://github.com/znraznra/lapin-ux/issues/41), [#57](https://github.com/znraznra/lapin-ux/issues/57), [#58](https://github.com/znraznra/lapin-ux/issues/58) |
+| [Hardware retest](https://github.com/znraznra/lapin-ux/milestone/5) | [#70](https://github.com/znraznra/lapin-ux/issues/70) | Gate before File Explorer: every fix waits here until confirmed on real hardware |
+
+Needs more details from testers: [#32](https://github.com/znraznra/lapin-ux/issues/32), [#34](https://github.com/znraznra/lapin-ux/issues/34) and [#50](https://github.com/znraznra/lapin-ux/issues/50).
+
 ## What's next
 
 In this order:
 
-1. **Retest on real hardware.** Every reported bug has a fix waiting for someone to confirm it. Help here is the most valuable thing right now; see [CONTRIBUTING.md](../CONTRIBUTING.md).
-2. **File Explorer**, then the **Store** (both built on COSMIC's own apps).
-3. **Snip markup editor** (pen, highlighter, crop).
-
-Requests waiting their turn: choose the taskbar's position on screen ([#41](https://github.com/znraznra/lapin-ux/issues/41)), fade the lock screen blur in and out ([#54](https://github.com/znraznra/lapin-ux/issues/54)), add your own mouse pointers ([#57](https://github.com/znraznra/lapin-ux/issues/57)) and customise system sounds ([#58](https://github.com/znraznra/lapin-ux/issues/58)).
-
-Needs more details from testers: the tray and left-aligned taskbar flicker ([#32](https://github.com/znraznra/lapin-ux/issues/32), [#34](https://github.com/znraznra/lapin-ux/issues/34)) and a monitor with no signal after turning it back on ([#50](https://github.com/znraznra/lapin-ux/issues/50)).
+1. **Retest on real hardware** ([#70](https://github.com/znraznra/lapin-ux/issues/70)). Help here is the most valuable thing right now; see [CONTRIBUTING.md](../CONTRIBUTING.md).
+2. **File Explorer** ([#71](https://github.com/znraznra/lapin-ux/issues/71)), then the **Store** ([#77](https://github.com/znraznra/lapin-ux/issues/77)).
+3. **Snip markup editor** ([#78](https://github.com/znraznra/lapin-ux/issues/78)).
 
 ## Phase 1 — core desktop (done)
 

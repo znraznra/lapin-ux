@@ -77,7 +77,7 @@ Full list in the [technical reference](docs/TECHNICAL.md).
 
 *Last updated: 9 November 2026 (progress figures as of build `879469e`).*
 
-[Full roadmap, phase by phase →](docs/ROADMAP.md)
+[Full roadmap, phase by phase →](docs/ROADMAP.md) · [Milestones on GitHub](https://github.com/znraznra/lapin-ux/milestones)
 
 ## Documentation
 
