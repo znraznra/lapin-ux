@@ -8,7 +8,7 @@ Everything built so far, by area. The authoritative long version lives in `docs/
 - Accent pill under the focused app; jump lists, app actions, pin/unpin, **End task**.
 - Badges and progress bars (Unity LauncherEntry); attention flash.
 - Task view button, tray (StatusNotifierItem), clock (follows COSMIC's 24-hour switch; unset = 12 h), show-desktop sliver, auto-hide.
-- Start button icon presets, OS logo or a custom picture (the rabbit by default). Opaque by default; Transparency effects in Settings > Colors make it see-through.
+- Start button icon presets, OS logo or a custom picture (the Lapin UX logo by default). Opaque by default; Transparency effects in Settings > Colors make it see-through.
 - Main display choice: tray, desktop icons and notifications follow it. Older X11 and Wine tray icons show in the tray.
 
 ## Start menu

@@ -1,0 +1,454 @@
+From 1cf65dfb0ad57f8e55f790346c6b2e7900359648 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 18:35:37 +0800
+Subject: [PATCH] Lapin UX: About Lapin UX card, official Start logo list, any
+ installed pointer theme
+
+About gets an "About Lapin UX" card (version, build, licence, credits,
+links) read from /usr/share/lapin-ux (#63). The Start button list drops the
+old Squares and Rabbit pictures: the Lapin UX logo is the default (#60).
+Mouse pointer style lists every pointer theme installed on the computer and
+applies it with lapin-ux-cursors --theme (#57).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pcon9Yg6dsbuT1QQmuecS1
+---
+ cosmic-settings/src/lapin/about.rs    | 193 +++++++++++++++++++++++++-
+ cosmic-settings/src/lapin/search.rs   |   3 +
+ cosmic-settings/src/lapin/settings.rs |  92 ++++++++++--
+ 3 files changed, 273 insertions(+), 15 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/about.rs b/cosmic-settings/src/lapin/about.rs
+index a15833d..4ffc80f 100644
+--- a/cosmic-settings/src/lapin/about.rs
++++ b/cosmic-settings/src/lapin/about.rs
+@@ -20,6 +20,8 @@ pub enum Msg {
+     ToggleOs,
+     CopyDevice,
+     CopyOs,
++    ToggleLapin,
++    CopyLapin,
+     /// A web page from os-release (home page, support…).
+     Open(String),
+     /// A Lapin UX app (Task Manager, Control Panel).
+@@ -38,18 +40,98 @@ pub struct Extra {
+     pub os_logo: Option<String>,
+     pub installed_on: String,
+     pub links: Vec<(String, String)>,
++    /// About Lapin UX (#63).
++    pub lapin: LapinInfo,
++}
++
++/// Where the package puts Lapin UX's own data.
++const DATA: &str = "/usr/share/lapin-ux";
++const LICENSE: &str = "/usr/share/licenses/lapin-ux-desktop-git/LICENSE";
++
++/// One line of the credits: what, what for, under which licence, where from.
++#[derive(Clone, Debug, Default, PartialEq)]
++pub struct Credit {
++    pub name: String,
++    pub used_for: String,
++    pub licence: String,
++    pub url: Option<String>,
++}
++
++#[derive(Clone, Debug, Default)]
++pub struct LapinInfo {
++    /// e.g. "0.1.0.r123.g5daa943" (written by the package).
++    pub version: String,
++    pub commit: Option<String>,
++    pub credits: Vec<Credit>,
++}
++
++/// The build commit inside a package version ("….g5daa943").
++pub fn commit_of(version: &str) -> Option<String> {
++    let g = version.rsplit('.').next()?.strip_prefix('g')?;
++    (g.len() >= 7 && g.chars().all(|c| c.is_ascii_hexdigit())).then(|| g.to_string())
++}
++
++/// The credits table in CREDITS.md (shipped with the package, the same file
++/// as in the repository): one row per asset, `| Asset | Used for | Licence |
++/// Where | Source |`, the source being a Markdown link.
++pub fn parse_credits(md: &str) -> Vec<Credit> {
++    let strip = |c: &str| c.trim().replace("**", "").replace('`', "");
++    md.lines()
++        .filter(|l| l.starts_with("| ") && !l.starts_with("| Asset") && !l.starts_with("|---"))
++        .filter_map(|l| {
++            let cells: Vec<&str> = l.trim_matches('|').split(" | ").collect();
++            let [name, used_for, licence, _where, source] = cells[..] else { return None };
++            let url = source.split_once("](").and_then(|(_, rest)| rest.split_once(')')).map(|(u, _)| u.to_string());
++            Some(Credit { name: strip(name), used_for: strip(used_for), licence: strip(licence), url })
++        })
++        .collect()
++}
++
++/// The optional pointer pack, when it's installed (it's downloaded on the
++/// user's computer, never shipped).
++fn pointer_pack_installed() -> bool {
++    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
++    [home.join(".local/share/icons"), home.join(".icons"), "/usr/share/icons".into()]
++        .iter()
++        .filter_map(|d| std::fs::read_dir(d).ok())
++        .flatten()
++        .flatten()
++        .any(|e| e.file_name().to_string_lossy().starts_with("Cursor-Concept"))
++}
++
++impl LapinInfo {
++    pub fn read() -> Self {
++        let version = read(format!("{DATA}/version")).unwrap_or_default();
++        let mut credits = read(format!("{DATA}/CREDITS.md")).map(|m| parse_credits(&m)).unwrap_or_default();
++        credits.push(Credit {
++            name: "COSMIC, \u{a9} System76".into(),
++            used_for: "The compositor, Settings, pop-ups, lock screen and file dialogs Lapin UX builds on".into(),
++            licence: "GPL-3.0".into(),
++            url: Some("https://github.com/pop-os".into()),
++        });
++        if pointer_pack_installed() {
++            credits.push(Credit {
++                name: "Cursor Concept W11 Tail HDPi, designed by JepriCreations".into(),
++                used_for: "The extra mouse pointers (downloaded on this computer, not redistributed)".into(),
++                licence: "Personal use".into(),
++                url: Some("https://jepricreations.com".into()),
++            });
++        }
++        LapinInfo { commit: commit_of(&version), version, credits }
++    }
+ }
+ 
+ #[derive(Clone, Debug)]
+ pub struct State {
+     pub device_open: bool,
+     pub os_open: bool,
++    pub lapin_open: bool,
+     pub extra: Extra,
+ }
+ 
+ impl Default for State {
+     fn default() -> Self {
+-        State { device_open: true, os_open: true, extra: Extra::default() }
++        State { device_open: true, os_open: true, lapin_open: false, extra: Extra::default() }
+     }
+ }
+ 
+@@ -167,6 +249,7 @@ impl Extra {
+             os_logo: get("LOGO"),
+             installed_on: installed_on(),
+             links,
++            lapin: LapinInfo::read(),
+         }
+     }
+ }
+@@ -198,6 +281,19 @@ fn os_rows(page: &Page) -> Vec<(&'static str, String)> {
+     v
+ }
+ 
++const PROJECT: &str = "https://github.com/znraznra/lapin-ux";
++
++fn lapin_rows(page: &Page) -> Vec<(&'static str, String)> {
++    let l = &page.lapin.extra.lapin;
++    let mut v = vec![
++        ("Version", if l.version.is_empty() { "Development build".to_string() } else { l.version.clone() }),
++        ("Build", l.commit.clone().unwrap_or_default()),
++        ("License", "GNU General Public License v3.0 only".to_string()),
++    ];
++    v.retain(|(_, value)| !value.is_empty());
++    v
++}
++
+ fn as_text(title: &str, rows: &[(&'static str, String)]) -> String {
+     let mut s = format!("{title}\n\n");
+     for (k, v) in rows {
+@@ -211,6 +307,8 @@ impl Page {
+         match msg {
+             Msg::ToggleDevice => self.lapin.device_open = !self.lapin.device_open,
+             Msg::ToggleOs => self.lapin.os_open = !self.lapin.os_open,
++            Msg::ToggleLapin => self.lapin.lapin_open = !self.lapin.lapin_open,
++            Msg::CopyLapin => return cosmic::iced::clipboard::write(as_text("Lapin UX", &lapin_rows(self))),
+             Msg::CopyDevice => return cosmic::iced::clipboard::write(as_text("Device specifications", &device_rows(self))),
+             Msg::CopyOs => {
+                 let title = format!("{} specifications", self.lapin.extra.os_name);
+@@ -366,7 +464,78 @@ pub fn view(page: &Page) -> Element<'_, AboutMsg> {
+         os_links,
+     );
+ 
+-    column::with_capacity(3).spacing(4).push(top).push(device).push(os).into()
++    column::with_capacity(4).spacing(4).push(top).push(device).push(os).push(about_lapin(page)).into()
++}
++
++/// About Lapin UX (#63): version and build, credits, license, links.
++fn about_lapin(page: &Page) -> Element<'_, AboutMsg> {
++    let l = &page.lapin.extra.lapin;
++    let open = page.lapin.lapin_open;
++    let head = button::custom(
++        row::with_capacity(4)
++            .spacing(16)
++            .align_y(Alignment::Center)
++            .push(icon::from_name("dev.lapinux.Shell").size(24))
++            .push(text::body("About Lapin UX").width(Length::Fill))
++            .push(button::standard("Copy").on_press(msg(Msg::CopyLapin)))
++            .push(icon::from_name(if open { "pan-up-symbolic" } else { "pan-down-symbolic" }).size(16)),
++    )
++    .padding([14, 16])
++    .width(Length::Fill)
++    .class(super::style::nav_item(false))
++    .on_press(msg(Msg::ToggleLapin));
++    let mut col = column::with_capacity(8).push(head);
++    if open {
++        col = col.push(widget::divider::horizontal::default()).push(facts(lapin_rows(page)));
++        if let Some(c) = &l.commit {
++            col = col.push(
++                container(link(format!("Build {c} on GitHub"), Msg::Open(format!("{PROJECT}/commit/{c}")))).padding([0, 16, 12, 68]),
++            );
++        }
++        // Credits: one row per asset.
++        let mut credits = column::with_capacity(l.credits.len() + 1).spacing(12).push(text::heading("Credits"));
++        for c in &l.credits {
++            let mut info = column::with_capacity(2).spacing(2).push(text::body(c.name.clone())).push(
++                text::caption(format!("{} \u{b7} {}", c.used_for, c.licence)).class(super::style::quiet()),
++            );
++            if let Some(url) = &c.url {
++                info = info.push(link("Source".into(), Msg::Open(url.clone())));
++            }
++            credits = credits.push(info);
++        }
++        col = col.push(widget::divider::horizontal::default()).push(container(credits).padding([16, 16, 18, 68]).width(Length::Fill));
++        // License and the independence notice.
++        let licence = column::with_capacity(4)
++            .spacing(8)
++            .push(text::heading("License"))
++            .push(text::body(
++                "Lapin UX is free software: you can share and change it under the terms of the GNU General Public License, version 3 only. Each asset above keeps its own licence.",
++            ))
++            .push(
++                row::with_capacity(2)
++                    .spacing(24)
++                    .push(link("View license".into(), Msg::Open(LICENSE.into())))
++                    .push(link("gnu.org/licenses/gpl-3.0".into(), Msg::Open("https://www.gnu.org/licenses/gpl-3.0.html".into()))),
++            )
++            .push(
++                text::caption(
++                    "Lapin UX is an independent open-source project. It is not affiliated with, sponsored or endorsed by Microsoft, Canonical, System76 or any other trademark owner.",
++                )
++                .class(super::style::quiet()),
++            );
++        col = col.push(widget::divider::horizontal::default()).push(container(licence).padding([16, 16, 18, 68]).width(Length::Fill));
++        let strip = row::with_capacity(4)
++            .spacing(32)
++            .align_y(Alignment::Center)
++            .push(text::heading("Related links"))
++            .push(link("Project page".into(), Msg::Open(PROJECT.into())))
++            .push(link("Report a problem".into(), Msg::Open(format!("{PROJECT}/issues"))))
++            .push(link("Wiki".into(), Msg::Open(format!("{PROJECT}/wiki"))));
++        col = col.push(widget::divider::horizontal::default()).push(
++            container(strip).padding([16, 16]).width(Length::Fill).class(super::style::link_strip()),
++        );
++    }
++    card(col)
+ }
+ 
+ #[cfg(test)]
+@@ -380,6 +549,26 @@ mod tests {
+         assert_eq!(ram_text(None, Some(8_169_000)), "7.79 GB usable");
+     }
+ 
++    #[test]
++    fn lapin_version_and_credits() {
++        assert_eq!(commit_of("0.1.0.r123.g5daa943"), Some("5daa943".into()));
++        assert_eq!(commit_of("0.1.0"), None);
++        let md = "| Asset | Used for | Licence | Where | Source |\n|---|---|---|---|---|\n| Selawik 1.01, \u{a9} Microsoft Corporation | Interface font | SIL Open Font License 1.1 | `data/fonts/selawik/` | [microsoft/Selawik](https://github.com/microsoft/Selawik) |\n";
++        let c = parse_credits(md);
++        assert_eq!(c.len(), 1);
++        assert_eq!(c[0].licence, "SIL Open Font License 1.1");
++        assert_eq!(c[0].url.as_deref(), Some("https://github.com/microsoft/Selawik"));
++    }
++
++    /// The repository's CREDITS.md parses into one row per table line.
++    #[test]
++    fn repository_credits() {
++        if let Ok(md) = std::fs::read_to_string("../../lapin-ux/CREDITS.md") {
++            let rows = md.lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Asset")).count();
++            assert_eq!(parse_credits(&md).len(), rows);
++        }
++    }
++
+     #[test]
+     fn device_id() {
+         assert_eq!(guid("0123456789abcdef0123456789abcdef"), "01234567-89AB-CDEF-0123-456789ABCDEF");
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 8280339..88cc993 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -83,6 +83,9 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-update-history", "Update history"),
+     ("about", "Rename this PC"),
+     ("about", "Device specifications"),
++    ("about", "About Lapin UX"),
++    ("about", "Credits"),
++    ("about", "License"),
+ ];
+ 
+ fn path(pages: &Binder<crate::pages::Message>, page: Entity, include_self: bool) -> String {
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index a2f1c34..8b7d912 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -382,8 +382,12 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+         Msg::Apps(_) | Msg::Storage(_) | Msg::Update(_) | Msg::Privacy(_) | Msg::SignIn(_) => {}
+         Msg::RecentItems(v) => (p.recent_items = v, save(SHELL, "no_recent_items", &!v)).1,
+         Msg::PointerStyle(i) => {
+-            let style = POINTER_STYLES.get(i).map_or("light", |(id, _)| *id);
+-            p.pointer_style = style.into();
++            // The three fixed choices, then every installed theme (#57).
++            let style = match POINTER_STYLES.get(i) {
++                Some((id, _)) => id.to_string(),
++                None => pointer_themes().get(i - POINTER_STYLES.len()).map_or("system".into(), |(dir, _)| format!("theme:{dir}")),
++            };
++            p.pointer_style = style;
+             save(SHELL, "pointer_style", &p.pointer_style);
+             return run_pointer_tool(p);
+         }
+@@ -735,13 +739,60 @@ const POINTER_BUSY: [&str; 11] =
+ const POINTER_SIZE_MIN: u32 = 24;
+ const POINTER_SIZE_STEP: u32 = 8;
+ 
++/// Folders pointer themes are installed in, most personal first.
++fn icon_dirs() -> Vec<std::path::PathBuf> {
++    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
++    let data_home = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
++    let mut dirs = vec![data_home.join("icons"), home.join(".icons")];
++    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
++    dirs.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| std::path::PathBuf::from(d).join("icons")));
++    dirs
++}
++
++/// Every installed pointer theme (a folder with `cursors/`), as (folder,
++/// name from its index.theme), sorted by name. The extra pointers (listed
++/// on their own) and the `default` link aren't included (#57).
++fn pointer_themes() -> &'static [(String, String)] {
++    static THEMES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
++    THEMES.get_or_init(|| {
++        let mut found: Vec<(String, String)> = Vec::new();
++        for dir in icon_dirs() {
++            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
++            for e in entries.flatten() {
++                let folder = e.file_name().to_string_lossy().into_owned();
++                if folder == "default" || folder.starts_with("Cursor-Concept") || found.iter().any(|(f, _)| *f == folder) {
++                    continue;
++                }
++                if !e.path().join("cursors").is_dir() {
++                    continue;
++                }
++                let name = std::fs::read_to_string(e.path().join("index.theme"))
++                    .ok()
++                    .and_then(|t| t.lines().find_map(|l| l.strip_prefix("Name=").map(|n| n.trim().to_string())))
++                    .filter(|n| !n.is_empty())
++                    .unwrap_or_else(|| folder.clone());
++                found.push((folder, name));
++            }
++        }
++        found.sort_by_key(|(_, n)| n.to_lowercase());
++        found
++    })
++}
++
+ /// What's in use now, for accounts that set it before this page existed.
+ fn pointer_style_now() -> String {
+     let default = std::env::var_os("HOME")
+         .map(|h| std::path::PathBuf::from(h).join(".local/share/icons/default/index.theme"))
+         .and_then(|p| std::fs::read_to_string(p).ok())
+         .unwrap_or_default();
+-    if default.contains("Cursor-Concept-W11") { "light".into() } else { "system".into() }
++    if default.contains("Cursor-Concept-W11") {
++        return "light".into();
++    }
++    let inherits = default.lines().find_map(|l| l.strip_prefix("Inherits=")).map(|v| v.trim().to_string());
++    match inherits {
++        Some(t) if pointer_themes().iter().any(|(f, _)| *f == t) => format!("theme:{t}"),
++        _ => "system".into(),
++    }
+ }
+ 
+ /// Runs lapin-ux-cursors for the chosen style and busy colour (it downloads
+@@ -752,6 +803,10 @@ fn run_pointer_tool(p: &mut Prefs) -> cosmic::app::Task<crate::Message> {
+     let mut args: Vec<String> = Vec::new();
+     match p.pointer_style.as_str() {
+         "system" => args.push("--system".into()),
++        style if style.starts_with("theme:") => {
++            args.push("--theme".into());
++            args.push(style.trim_start_matches("theme:").to_string());
++        }
+         style => {
+             if style == "dark" {
+                 args.push("--dark".into());
+@@ -775,14 +830,27 @@ fn run_pointer_tool(p: &mut Prefs) -> cosmic::app::Task<crate::Message> {
+ 
+ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     static STYLES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+-    let styles: &'static [&'static str] = STYLES.get_or_init(|| POINTER_STYLES.iter().map(|(_, n)| *n).collect());
+-    let style_i = POINTER_STYLES.iter().position(|(id, _)| *id == p.pointer_style).unwrap_or(2);
++    let styles: &'static [&'static str] = STYLES.get_or_init(|| {
++        let mut v: Vec<&'static str> = POINTER_STYLES.iter().map(|(_, n)| *n).collect();
++        v.extend(pointer_themes().iter().map(|(_, n)| &*Box::leak(n.clone().into_boxed_str())));
++        v
++    });
++    let style_i = POINTER_STYLES
++        .iter()
++        .position(|(id, _)| *id == p.pointer_style)
++        .or_else(|| {
++            let t = p.pointer_style.strip_prefix("theme:")?;
++            pointer_themes().iter().position(|(f, _)| f == t).map(|i| i + POINTER_STYLES.len())
++        })
++        .unwrap_or(2);
+     let status = if p.pointer_busy_now {
+         "Getting the pointers…".to_string()
+     } else if let Some(e) = &p.pointer_error {
+         format!("They couldn't be installed: {e}")
+     } else if p.pointer_style == "system" {
+         "The pointer your system uses in every desktop".to_string()
++    } else if p.pointer_style.starts_with("theme:") {
++        "A pointer theme installed on this computer".to_string()
+     } else {
+         "\u{201C}Cursor Concept W11 Tail HDPi\u{201D} by JepriCreations, downloaded and converted on this computer".to_string()
+     };
+@@ -793,7 +861,7 @@ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+             .apply(Element::from)
+             .into_list_item(),
+     ];
+-    if p.pointer_style != "system" {
++    if matches!(p.pointer_style.as_str(), "light" | "dark") {
+         let busy_i = POINTER_BUSY.iter().position(|b| *b == p.pointer_busy).unwrap_or(0);
+         rows.push(
+             settings::item::builder("Busy pointer colour")
+@@ -963,14 +1031,13 @@ lapin_page!(Fonts, "lapin-fonts", "preferences-desktop-font-symbolic", "Fonts",
+ lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, colour, size", [("", pointer_rows)]);
+ 
+ /// Start button pictures (ids the shell knows) and their names.
+-/// The official Lapin UX logo is the default (#56); "squares" was the
+-/// earlier default.
+-const START_ICONS: [(&str, &str); 7] = [
++/// The official Lapin UX logo is the default (#56) and the only Lapin UX
++/// icon (#60): the earlier "squares" and "rabbit" pictures are gone, and a
++/// saved choice of either shows the logo.
++const START_ICONS: [(&str, &str); 5] = [
+     ("", "Lapin UX"),
+-    ("squares", "Squares"),
+     ("dots", "Dots"),
+     ("circle", "Circle"),
+-    ("rabbit", "Rabbit"),
+     ("distro", "My system's logo"),
+     ("custom", "Custom picture…"),
+ ];
+@@ -990,8 +1057,7 @@ fn start_icon_preview(id: &str) -> widget::icon::Handle {
+             }
+         }
+         "custom" => custom_start_icon().map(widget::icon::from_path).unwrap_or_else(|| preset("lapin-ux")),
+-        "" => preset("lapin-ux"),
+-        "squares" => preset("default"),
++        "" | "rabbit" | "squares" => preset("lapin-ux"),
+         other => preset(other),
+     }
+ }
+-- 
+2.43.0
+

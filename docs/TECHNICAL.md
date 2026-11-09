@@ -36,7 +36,7 @@ COSMIC compositor. Arch Linux first.
   Start; Esc or clicking away clears it.
 - Start button picture: Settings > Personalization > Taskbar > Start button
   icon (the official Lapin UX logo, `docs/assets/lapin-ux-logo.svg`, as the
-  default; Squares, Dots, Circle, Rabbit, the OS logo from os-release
+  default; Dots, Circle, the OS logo from os-release
   `LOGO=`, or a custom SVG/PNG copied to `~/.local/share/lapin-ux`);
   `start_icon` in `dev.lapinux.Shell` (`""` = the logo, which is also shown
   when a chosen picture is missing and is the app icon `dev.lapinux.Shell`,
@@ -144,6 +144,9 @@ COSMIC compositor. Arch Linux first.
 - Click selects; Ctrl-click, Shift-click and dragging a box select several.
   Double-click / Enter opens, drag moves icons (remembered), F2 renames in
   place, Delete moves to the Trash, picture files show thumbnails.
+- Names are 13 px with tight lines (15 px), up to two lines under the icon,
+  and the full name on hover/selection (#64). Cells: small 76×80, medium
+  92×96, large 120×120.
 - **Cut / Copy / Paste** (Ctrl+X/C/V, works with file managers), Ctrl+A.
 - **Drag and drop**: icons drag into apps as files; files and links from
   apps drop onto the desktop (links become shortcuts) or onto folders.
@@ -238,7 +241,13 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   title, grey descriptions, On/Off beside switches, tidy drop-downs,
   round slider thumbs, 4 px buttons; Power mode and the primary mouse button
   as drop-downs; Add buttons inside rows; About laid out as a name card with
-  Device and OS specification cards (Copy, links).
+  Device and OS specification cards (Copy, links), then an **About Lapin
+  UX** card (#63): version and build from `/usr/share/lapin-ux/version`
+  (the package's `pkgver`, its `.gHASH` links to the commit), the GPL-3.0
+  licence, credits read from the table in `/usr/share/lapin-ux/CREDITS.md`
+  (plus COSMIC, and the extra pointers when installed), the independence
+  notice and project links. Search finds it as About Lapin UX, Credits and
+  License.
 - Page layout (`lapin/settings.rs`): Personalization > Taskbar and
   Start, System > Notifications, Display > Night light and System >
   Multitasking are Lapin pages that read and write the shell's
@@ -426,8 +435,9 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
 - Settings > Accessibility > Mouse pointer (#24): style (the extra pointers,
-  light or dark, or the system's: `lapin-ux-cursors [--dark] --variant V` or
-  `--system`), the busy pointer's colour (the pack's variants) and size
+  light or dark, the system's, or any pointer theme installed on the
+  computer (#57; folders with `cursors/` in the icon paths):
+  `lapin-ux-cursors [--dark] --variant V`, `--system` or `--theme NAME`), the busy pointer's colour (the pack's variants) and size
   (24–80 px). The pack is kept in `~/.cache/lapin-ux/cursor-pack` after the
   first download. The size is Lapin's `pointer_size` (exported as
   `XCURSOR_SIZE` by `start-lapin-ux`, read by the compositor and apps at

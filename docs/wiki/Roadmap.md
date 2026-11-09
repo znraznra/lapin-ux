@@ -5,7 +5,7 @@ Status words: **Done** = built, sandbox-tested, approved in review. **Partial**.
 Last updated 2026-11-08, build `41a45cf`.
 
 ## Phase 1: Core desktop (12/12 done)
-- Taskbar (centred/left, pinning, grouped buttons, jump lists, End task, badges, progress, attention flash, labels, small buttons, auto-hide, one per monitor with a main display you choose, show-desktop sliver, Start picture of your choice: the rabbit by default; opaque by default, see-through with Transparency effects)
+- Taskbar (centred/left, pinning, grouped buttons, jump lists, End task, badges, progress, attention flash, labels, small buttons, auto-hide, one per monitor with a main display you choose, show-desktop sliver, Start picture of your choice: the Lapin UX logo by default; opaque by default, see-through with Transparency effects)
 - System tray with overflow and app menus, including older X11 and Wine tray icons (XEmbed)
 - Clock and calendar
 - Start: search, pinned grid with folders, All apps, Recommended, account/power menus, Uninstall

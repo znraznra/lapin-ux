@@ -4,6 +4,7 @@
 
     lapin-ux-cursors [--dark] [--variant NAME] [--from DIR]
     lapin-ux-cursors --system        (back to the system's own pointer)
+    lapin-ux-cursors --theme NAME    (any installed pointer theme, by folder name)
 
 Cursor design by JepriCreations — https://www.deviantart.com/jepricreations
 and https://jepricreations.com. Its author doesn't allow the cursor files to
@@ -239,6 +240,26 @@ def cached_pack():
     return assets
 
 
+def theme_dirs():
+    """Folders pointer themes are installed in, most personal first."""
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    dirs = [os.path.join(data_home, "icons"), os.path.expanduser("~/.icons")]
+    for d in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":"):
+        if d:
+            dirs.append(os.path.join(d, "icons"))
+    return dirs
+
+
+def use_theme(name):
+    """Make an installed pointer theme (a folder with cursors/ in an icons
+    folder) the pointer (#57)."""
+    if not name or "/" in name or name in (".", "..", "default"):
+        sys.exit(f"Not a pointer theme name: {name!r}")
+    if not any(os.path.isdir(os.path.join(d, name, "cursors")) for d in theme_dirs()):
+        sys.exit(f"No pointer theme called {name!r} is installed.")
+    set_pointer(name)
+
+
 def use_system():
     """Stop using the pack: the system's pointer again (the pack stays
     installed, so switching back is quick)."""
@@ -252,9 +273,20 @@ def main():
     ap.add_argument("--from", dest="src", help="a folder that already holds the pack")
     ap.add_argument("--no-default", action="store_true", help="install, but don't make it your pointer")
     ap.add_argument("--system", action="store_true", help="go back to the system's own pointer")
+    ap.add_argument("--theme", help="use an installed pointer theme (its folder name)")
     args = ap.parse_args()
     if args.system:
         use_system()
+        return
+    if args.theme:
+        # The restore point first, as below, so uninstalling can put the
+        # old pointer back.
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lapin-ux-uninstall")
+        try:
+            subprocess.run([here if os.path.exists(here) else "lapin-ux-uninstall", "--snapshot"], check=False)
+        except OSError:
+            pass
+        use_theme(args.theme)
         return
     try:
         import PIL  # noqa: F401
