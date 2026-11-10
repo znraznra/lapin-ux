@@ -1,6 +1,6 @@
 # Roadmap
 
-[Back to the README](../README.md) · [Screenshots](SCREENSHOTS.md)
+[Back to the README](../README.md) · [Screenshots](SCREENSHOTS.md) · [Work log](WORKLOG.md)
 
 The work is split into four phases. Green is done, yellow is partly done, grey is still to build.
 
