@@ -4,6 +4,8 @@
 
 Jump to: [The desktop](#the-desktop) · [The Settings app](#the-settings-app)
 
+> **How current are these?** The pictures below were taken between 20 and 21 October 2026. Since then the Start button, taskbar, lock screen, desktop icons, tray menus and Settings have changed a little, and the next round of pictures will come from the latest build (`879469e`). The list of screens to retake is in [#84](https://github.com/znraznra/lapin-ux/issues/84). Descriptions on this page are kept up to date; a picture may still show the older look.
+
 ## The desktop
 
 | | |
