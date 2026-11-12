@@ -37,6 +37,7 @@ mod quick;
 mod pointer_gate;
 mod redraw_debug;
 mod screen_reader;
+mod single;
 mod snap;
 mod snip;
 mod start_pins;
@@ -106,6 +107,21 @@ fn main() -> cosmic::iced::Result {
         let err = std::process::Command::new("cosmic-launcher").exec();
         eprintln!("lapin-ux-shell: not in an Lapin UX session and cosmic-launcher failed: {err}");
         return Ok(());
+    }
+
+    // Only the session starts the shell (#83): a shortcut's subcommand
+    // never turns into a second one.
+    match action.as_deref() {
+        Some(a) => {
+            if !single::shell_ready_for_command(a) {
+                return Ok(());
+            }
+        }
+        None => {
+            if !single::take_shell_lock() {
+                return Ok(());
+            }
+        }
     }
 
     cosmic::app::run_single_instance::<app::Shell>(
