@@ -132,8 +132,10 @@ checked here.
 ## Pull requests and CodeRabbit
 
 Work goes to a branch and a pull request, not straight to `main`. CodeRabbit
-reviews every PR against `main` using `.coderabbit.yaml`, which checks the rules
-in this file.
+reviews PRs against `main` using `.coderabbit.yaml`, which checks the rules in
+this file. Files matched by `path_filters` in `.coderabbit.yaml`, including
+`packaging/**/*.patch`, are not reviewed. Changes limited to those files need a
+separate review.
 
 - One branch per round or fix (e.g. `round-32`, `fix-64-desktop-names`). Reference
   issues as `Refs #N` in commits and in the PR description, and list what to

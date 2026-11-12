@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md) · [Roadmap](ROADMAP.md)
 
-The days Lapin UX was actually worked on, taken from the commit history of `main`. Sixteen working days between 15 October and 10 November 2026, about 165 commits. Days with no commits are left out.
+The days Lapin UX was actually worked on, taken from the commit history of `main`. Seventeen working days between 15 October and 12 November 2026, about 165 commits. Days with no commits are left out.
 
 | Day | What moved | Phase |
 |---|---|---|
@@ -22,6 +22,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 8 Nov | Print Screen, a faster shell, tray icon tints, opaque taskbar, rabbit Start icon. Security Policy, contributing guide and templates. README restructured, logo added. Slogan changed. | Retest, Docs |
 | Mon 9 Nov | The official logo is the one Lapin UX icon. Lock screen follows the chosen font and its blur fades. About Lapin UX card in Settings. | Retest |
 | Tue 10 Nov | Milestones, tracking issues and sub-issues created on GitHub. | Docs |
+| Thu 12 Nov | Work now goes through pull requests. CodeRabbit reviews them using `.coderabbit.yaml`, and `main` is protected against deletion, force pushes and direct pushes. | Docs |
 
 ## Phase dates
 
