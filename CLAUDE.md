@@ -123,8 +123,9 @@ copy of, or a "road to", any other operating system.
 Tako's reports are GitHub issues (read them with `gh api
 'repos/znraznra/lapin-ux/issues?state=all&per_page=100'`; GraphQL is blocked
 in Claude sessions). A fix gets a comment saying what changed and what to
-retest, and the `fixed: needs retest` label; reference issues as `Refs #N`
-(not `Fixes`), since they're closed only after Tako retests on hardware.
+retest, and the `fixed: needs retest` label (once the fix's PR is merged, see
+"Pull requests and CodeRabbit"); reference issues as `Refs #N` (not `Fixes`),
+since they're closed only after Tako retests on hardware.
 The sandbox runs only the nested compositor: KMS-only paths, real locking,
 real keyboards' compositor shortcuts (Alt+Tab) and touch hardware can't be
 checked here.
@@ -137,9 +138,24 @@ this file. Files matched by `path_filters` in `.coderabbit.yaml`, including
 `packaging/**/*.patch`, are not reviewed, even when the same PR also changes
 reviewed files. Every excluded file needs a separate review.
 
-- One branch per round or fix (e.g. `round-32`, `fix-64-desktop-names`). Reference
-  issues as `Refs #N` in commits and in the PR description, and list what to
-  retest.
+- One branch and PR per issue, or per small group of related issues (e.g.
+  `fix-64-desktop-names`), not one big PR per round, so each can be reviewed and
+  merged on its own. Reference issues as `Refs #N` in commits and in the PR
+  description, and list what to retest.
+- Tako retests with `git pull && ./install.sh`, which builds from `main`, so a
+  fix only counts as ready to retest once its PR is merged. Add the
+  `fixed: needs retest` label and the "what changed, what to retest" comment on
+  the issue after the merge, not when the PR is opened (link the PR in it).
+- Put repo docs that the change affects (`README.md`, `docs/TECHNICAL.md`,
+  `docs/WORKLOG.md`, `docs/wiki/`) in the same PR. The claude.ai Project docs
+  live outside the repo and are updated after the merge.
+- A PR that touches `packaging/**/*.patch` says in its description that the
+  patches were rebuilt from the pinned commit and that `git diff packaging/`
+  shows only the intended change, since CodeRabbit doesn't review those files.
+- Run the "Checks before pushing" below before opening the PR, so the review
+  isn't spent on things a local run catches.
+- Anything automated (scheduled tasks, other sessions) must use a branch and PR
+  too, since direct pushes to `main` are blocked.
 - Merge with a regular merge or rebase, not squash, so each commit keeps its
   `Co-Authored-By` and `Claude-Session` lines (the worklog is built from them).
 - Opening a PR: `gh pr create` may hit the blocked GraphQL API, so use REST:
@@ -153,7 +169,7 @@ reviewed files. Every excluded file needs a separate review.
 - CodeRabbit cannot run anything. KMS paths, locking, multi-monitor, touch and
   GPU timing still need Tako's hardware retest.
 
-## Checks before pushing
+## Checks before pushing (and before opening a PR)
 
 - `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (needs
   dconf; 89 checks): all checks must pass. Add a scenario for any new shared setting.
