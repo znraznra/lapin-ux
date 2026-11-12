@@ -36,6 +36,7 @@ impl Shell {
         let close = self.close_submenu();
         let r = self.rects.get(&rect_key(parent, item)).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         let id = window::Id::unique();
+        self.popup_opened_at = std::time::Instant::now();
         let settings = SctkPopupSettings {
             parent,
             id,

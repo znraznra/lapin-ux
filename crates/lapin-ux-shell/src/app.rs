@@ -324,6 +324,17 @@ pub struct Shell {
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
     pub popup_dismissed: Option<(PopupKind, Instant)>,
+    /// Surfaces iced asked for a view of that the shell doesn't track, and
+    /// when each was first seen (#34). A pop-up closed before its creation
+    /// went through is created afterwards with nobody holding it: invisible,
+    /// but it keeps its input region and swallows clicks. `view_surface`
+    /// notes them (it only has `&Shell`, hence the lock) and `sweep_strays`
+    /// destroys them.
+    pub(crate) strays: std::sync::Mutex<HashMap<window::Id, Instant>>,
+    /// When a pop-up was last asked for: a destroy sent while another
+    /// pop-up's creation is still queued can cancel that one (iced keeps a
+    /// single pending pop-up), so strays are only swept when none is.
+    pub(crate) popup_opened_at: Instant,
     pub rects: HashMap<String, Rectangle>,
     pub tracker: Option<RectangleTracker<String>>,
     pub clock: ClockStyle,
@@ -621,6 +632,12 @@ impl Shell {
         if self.catcher == Some(id) {
             return "click catcher".into();
         }
+        if self.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
+            return "desktop rename box".into();
+        }
+        if self.strays.lock().is_ok_and(|s| s.contains_key(&id)) {
+            return format!("stray surface {id:?} (no owner, to be destroyed)");
+        }
         format!("unknown surface {id:?}")
     }
 
@@ -637,6 +654,36 @@ impl Shell {
         }
     }
 
+    /// Destroy pop-ups nobody owns (#34). Hover previews open and close within
+    /// a few hundred milliseconds, and a close that arrives before the
+    /// pop-up's creation has gone through destroys nothing (iced ignores a
+    /// destroy for an id it doesn't know yet); the pop-up then appears with
+    /// no owner. Its view is the empty fallback of `view_surface`, which
+    /// notes it; here it's destroyed, once it has had time to exist.
+    pub(crate) fn sweep_strays(&mut self) -> Task<Message> {
+        // A destroy for an unknown id also drops iced's one pending pop-up,
+        // so wait until nothing is being created.
+        if self.popup_opened_at.elapsed() < Duration::from_millis(800) {
+            return Task::none();
+        }
+        let Ok(mut strays) = self.strays.lock() else { return Task::none() };
+        let due: Vec<window::Id> = strays.iter().filter(|(_, at)| at.elapsed() > Duration::from_millis(800)).map(|(id, _)| *id).collect();
+        // Entries of surfaces that were really destroyed are never viewed again.
+        strays.retain(|id, _| !due.contains(id));
+        drop(strays);
+        let tasks: Vec<Task<Message>> = due
+            .into_iter()
+            .map(|id| {
+                tracing::warn!(?id, "destroying a pop-up the shell had lost track of (#34)");
+                if *crate::redraw_debug::ON {
+                    crate::redraw_debug::surface("stray pop-up destroyed", id);
+                }
+                destroy_popup(id)
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
     /// Open a popup anchored above the tracked rectangle `key` on surface `parent`.
     pub(crate) fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
         // The press that closed this very menu was the click on its button.
@@ -649,6 +696,7 @@ impl Shell {
             return close; // second click on the same thing closes it
         }
         let id = window::Id::unique();
+        self.popup_opened_at = Instant::now();
         let r = self.rects.get(key).copied().unwrap_or(Rectangle { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         if *crate::redraw_debug::ON {
             crate::redraw_debug::surface("pop-up opened", (&kind, parent, key, r, self.rects.contains_key(key)));
@@ -1036,6 +1084,8 @@ impl Application for Shell {
             catcher: None,
             popup: None,
             popup_dismissed: None,
+            strays: std::sync::Mutex::new(HashMap::new()),
+            popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
             tracker: None,
             clock: ClockStyle::from_env_and_settings(),
@@ -1502,6 +1552,7 @@ impl Shell {
                 self.clock.hour12 = !lapin_ux_core::clock::settings_24h().unwrap_or(false);
                 self.desktop_tick();
                 self.extras_tick();
+                return self.sweep_strays();
             }
             Message::Rect(u) => match u {
                 RectangleUpdate::Init(t) => self.tracker = Some(t),
@@ -2186,6 +2237,13 @@ fn view_surface(shell: &Shell, id: window::Id) -> Element<'_, Message> {
             .max_width(max_w)
             .max_height(720.0)
             .into();
+    }
+    // A surface the shell doesn't track (#34): noted so it can be destroyed.
+    if let Ok(mut strays) = shell.strays.lock()
+        && let std::collections::hash_map::Entry::Vacant(e) = strays.entry(id)
+    {
+        e.insert(Instant::now());
+        tracing::debug!(?id, "view asked for a surface the shell doesn't track");
     }
     cosmic::widget::Space::new().into()
 }
