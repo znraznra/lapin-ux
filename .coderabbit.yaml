@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit settings for Lapin UX. The rules it checks are the ones in
+# CLAUDE.md, so keep the two in step.
+
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # Rounds can have many fix-up commits, so never pause the review.
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    base_branches:
+      - "^main$"
+
+  # Patch files are a diff of a diff with no upstream context, and the rest is
+  # generated or binary-ish, so none of it is worth a review.
+  path_filters:
+    - "!packaging/**/*.patch"
+    - "!Cargo.lock"
+    - "!docs/tour/**"
+    - "!docs/assets/**"
+    - "!third_party/**"
+    - "!**/*.webp"
+    - "!**/*.png"
+    - "!**/*.svg"
+
+  path_instructions:
+    - path: "tools/lapin-ux-uninstall"
+      instructions: |
+        This script swaps shared settings per session and restores them on
+        uninstall. Flag any change that could leave a user without a working
+        login or lose a user's own settings. Every new setting it handles needs
+        an entry in `items()`, a `key_is_lapins` test where Lapin's value is
+        recognisable, and a scenario in `tools/test-uninstall/run.sh`. Empty
+        values count as missing and must never be saved or applied. A new Lapin
+        package that replaces a COSMIC package must be listed in `LAPIN_PKGS`
+        and `STOCK`.
+
+    - path: "tools/test-uninstall/**"
+      instructions: |
+        Check that new scenarios really cover the new shared setting and don't
+        just pass trivially.
+
+    - path: "crates/**/*.rs"
+      instructions: |
+        Any new code that writes a COSMIC (`com.system76.*`) or GTK/dconf
+        setting must also be added to `items()` in `tools/lapin-ux-uninstall`.
+        Lapin's own settings belong under `dev.lapinux.*`. Lapin looks and
+        behaviour in a COSMIC fork must be gated on the Lapin session
+        (`XDG_CURRENT_DESKTOP` containing `LapinUX`) with COSMIC's own path left
+        intact. Never pass a stateful widget straight into `tracker.container()`
+        (use `track()`). Icon-only buttons need `.name(...)`, new shell surfaces
+        need `lapin_ux_ui::a11y::group`. Also flag panics on D-Bus, config or
+        file errors in long-running shell components, since the session
+        supervisor restarts them with back-off.
+
+    - path: "packaging/arch/**"
+      instructions: |
+        Selawik must never be enabled system-wide (no `/etc/fonts` links).
+        `prepare()` must stay re-runnable. Pinned upstream commits and patch
+        sets must stay consistent. Flag anything that could break `pacman -R`
+        safety nets (`lapin-ux.install`, `lapin-ux-greeter.install`).
+
+    - path: "install.sh"
+      instructions: |
+        Must never leave the user unable to log in. Flag destructive or
+        unconditional changes to stock desktop parts and unquoted variables.
+
+    - path: "**/*.sh"
+      instructions: |
+        Shell scripts must pass `shellcheck -S warning`. Flag unquoted
+        variables, missing `set -u`/error handling around anything that touches
+        PAM, greeter or login manager config.
+
+    - path: "{README.md,docs/**/*.md,CONTRIBUTING.md,TESTING.md}"
+      instructions: |
+        Read the section "How Lapin UX is described" in CLAUDE.md and flag any
+        wording it forbids, including comparisons to or road-to-another-OS
+        phrasing and calling the key anything but Super. The documented
+        exceptions in that section are allowed. Keep the independence notice
+        and the third-party credits intact. Counts in the README progress table
+        must match its checklists.
+
+    - path: "crates/**/src/**/*.rs"
+      instructions: |
+        The same wording rule applies to UI strings, package descriptions and
+        installer text (code comments are exempt).
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - "TESTING.md"
+      - "CONTRIBUTING.md"
