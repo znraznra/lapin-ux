@@ -193,20 +193,20 @@ check "runs once that session is gone (stale mark)" "[ -z \"\$(rd font-name)\" ]
 }
 scenR() {
 echo "R: login service while logind says the starting session is Lapin UX's (#115)"
-DS=$(dirname $U)/lapin-ux-desktop-settings
+DS=$(dirname "$U")/lapin-ux-desktop-settings
 export XDG_RUNTIME_DIR=$HOME/run; mkdir -p $XDG_RUNTIME_DIR $HOME/bin
 printf '#!/bin/sh\ncase "$*" in\n"show-user"*) echo c1 ;;\n"show-session"*) cat %s/desktop ;;\nesac\n' "$HOME" > $HOME/bin/loginctl; chmod +x $HOME/bin/loginctl
 export PATH=$HOME/bin:$PATH
-bash $U --snapshot; bash $DS enter; lapin_writes
+bash "$U" --snapshot; bash "$DS" enter; lapin_writes
 echo "LapinUX;COSMIC" > $HOME/desktop
-bash $DS leave
+bash "$DS" leave
 check "skipped: logind's session is Lapin UX (no pid file yet)" "[ \"\$(rd font-name)\" = \"'Selawik 10'\" ]"
 echo "gnome" > $HOME/desktop
-bash $DS leave
+bash "$DS" leave
 check "runs when the session is another desktop's" "[ -z \"\$(rd font-name)\" ]"
-bash $U --snapshot; bash $DS enter; lapin_writes
+bash "$U" --snapshot; bash "$DS" enter; lapin_writes
 echo "LapinUX" > $HOME/desktop
-LAPIN_UX_SESSION_END=1 bash $DS leave
+LAPIN_UX_SESSION_END=1 bash "$DS" leave
 check "session end: handed back although logind still lists the Lapin session" "[ -z \"\$(rd font-name)\" ]"
 }
 scenI() {
