@@ -19,7 +19,7 @@ use cosmic::iced::keyboard::{self, Key, key::Named};
 use cosmic::iced::mouse;
 use crate::taskbar_extras::Pointer;
 use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
-use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::runtime::wayland::popup::{SctkPopupSettings, SctkPositioner};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, set_keyboard_interactivity,
@@ -505,10 +505,8 @@ impl Shell {
             hide_pending: false,
         });
         let zone = if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 };
-        let hidden_input = self.config.auto_hide.then(|| {
-            let h = style::taskbar_height() as f32;
-            vec![Rectangle { x: 0.0, y: h - crate::autohide::STRIP as f32, width: 100_000.0, height: crate::autohide::STRIP as f32 }]
-        });
+        let hidden_input = self.config.auto_hide.then(|| vec![self.hidden_strip()]);
+        let bar_anchor = self.edge() | Anchor::LEFT | Anchor::RIGHT;
         let task = cosmic::surface::surface_task(app_layer_shell(
             // Opaque by default (#55): blur only with transparency effects on.
             move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id) && shell.config.transparency_effects), ..Default::default() },
@@ -516,7 +514,7 @@ impl Shell {
                 id,
                 layer: Layer::Top,
                 keyboard_interactivity: KeyboardInteractivity::None,
-                anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                anchor: bar_anchor,
                 output: IcedOutput::Output(output.clone()),
                 namespace: "lapin-ux-taskbar".into(),
                 size: Some((None, Some(style::taskbar_height()))),
@@ -561,6 +559,8 @@ impl Shell {
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
+        let start_edge = self.edge();
+        let start_margin = self.edge_margin(above - 8, if left { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
         self.anim_start_opened(id);
         Task::batch([
@@ -576,11 +576,11 @@ impl Shell {
                     id,
                     layer: Layer::Overlay,
                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                    anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
+                    anchor: if left { start_edge | Anchor::LEFT } else { start_edge },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    // Opens a little low and rises into place (anim.rs).
-                    margin: IcedMargin { top: 0, right: 0, bottom: above - 8, left: if left { 12 } else { 0 } },
+                    // Opens a little close to the bar and slides into place (anim.rs).
+                    margin: start_margin,
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
@@ -702,8 +702,9 @@ impl Shell {
             crate::redraw_debug::surface("pop-up opened", (&kind, parent, key, r, self.rects.contains_key(key)));
         }
         // Menus over the taskbar, or the Task view's desktop row, open upwards.
-        let above = self.bars.iter().any(|b| b.id == parent)
+        let above = (self.bars.iter().any(|b| b.id == parent) && !self.top_bar())
             || matches!(kind, PopupKind::DesktopTile(_) | PopupKind::DesktopBackground(_));
+        let top_bar = self.top_bar();
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         // Hover previews must not take the pointer or keyboard.
         let grab = !matches!(kind, PopupKind::Preview(_));
@@ -731,13 +732,13 @@ impl Shell {
                 // it; the rest are centred over the button they belong to.
                 anchor: match (at_pointer, above) {
                     // The account menu rises from the account button, left-aligned.
-                    _ if kind == PopupKind::Account => PAnchor::TopLeft,
+                    _ if kind == PopupKind::Account => if top_bar { PAnchor::BottomLeft } else { PAnchor::TopLeft },
                     (true, _) => PAnchor::TopLeft,
                     (false, true) => PAnchor::Top,
                     (false, false) => PAnchor::Bottom,
                 },
                 gravity: match (at_pointer, above) {
-                    _ if kind == PopupKind::Account => Gravity::TopRight,
+                    _ if kind == PopupKind::Account => if top_bar { Gravity::BottomRight } else { Gravity::TopRight },
                     (true, true) => Gravity::TopRight,
                     (true, false) => Gravity::BottomRight,
                     (false, true) => Gravity::Top,
@@ -1526,6 +1527,7 @@ impl Shell {
                     self.taskbar.set_pinned(cfg.pinned_taskbar.clone());
                 }
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
+                let position_changed = cfg.position != self.config.position;
                 let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
                 let apps_changed = cfg.show_other_desktop_apps != self.config.show_other_desktop_apps;
                 let main_changed = cfg.main_display != self.config.main_display
@@ -1541,6 +1543,9 @@ impl Shell {
                 self.sync_night_light();
                 if icons_changed {
                     self.reload_desktop();
+                }
+                if position_changed {
+                    return self.position_changed();
                 }
                 if auto_hide_changed {
                     return self.auto_hide_changed();

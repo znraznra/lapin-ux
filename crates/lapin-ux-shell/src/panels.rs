@@ -211,32 +211,28 @@ impl Shell {
                     .first()
                     .and_then(|b| self.rects.get(&rect_key(b.id, "start")))
                     .map_or(12, |r| r.x.max(0.0) as i32);
-                (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above - 4, left }, WINX_WIDTH)
+                (self.edge() | Anchor::LEFT, self.edge_margin(above - 4, left, 0), WINX_WIDTH)
             }
-            PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above, left: 12 }, RUN_WIDTH),
+            PanelKind::Run { .. } => (self.edge() | Anchor::LEFT, self.edge_margin(above, 12, 0), RUN_WIDTH),
             PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
             // Top centre, where the benchmark shows it over a window's maximize button.
-            PanelKind::Snap(_) => (Anchor::TOP, IcedMargin { top: 12, right: 0, bottom: 0, left: 0 }, crate::snap::WIDTH),
+            PanelKind::Snap(_) => {
+                // Below a top taskbar that hides itself too (a shown one keeps its own room).
+                let top = 12 + if self.top_bar() && self.config.auto_hide { style::taskbar_height() as i32 } else { 0 };
+                (Anchor::TOP, IcedMargin { top, right: 0, bottom: 0, left: 0 }, crate::snap::WIDTH)
+            }
             // Everything above the taskbar, which stays usable.
             PanelKind::TaskView(_) => (
                 Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 0, bottom: if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 }, left: 0 },
+                self.edge_margin(if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 }, 0, 0),
                 0,
             ),
-            PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: above, left: 0 }, crate::clipboard::WIDTH),
-            PanelKind::Quick(_) => (
-                Anchor::BOTTOM | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
-                crate::quick::WIDTH,
-            ),
+            PanelKind::Clip(_) => (self.edge(), self.edge_margin(above, 0, 0), crate::clipboard::WIDTH),
+            PanelKind::Quick(_) => (self.edge() | Anchor::RIGHT, self.edge_margin(above, 0, 12), crate::quick::WIDTH),
             PanelKind::ShutDown { .. } => (Anchor::empty(), IcedMargin::default(), crate::system_ui::SHUTDOWN_WIDTH),
             PanelKind::Properties(_) => (Anchor::empty(), IcedMargin::default(), crate::properties::WIDTH),
             PanelKind::OpenWith(_) => (Anchor::empty(), IcedMargin::default(), crate::open_with::WIDTH),
-            PanelKind::Project(_) => (
-                Anchor::BOTTOM | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
-                crate::system_ui::PROJECT_WIDTH,
-            ),
+            PanelKind::Project(_) => (self.edge() | Anchor::RIGHT, self.edge_margin(above, 0, 12), crate::system_ui::PROJECT_WIDTH),
             // The whole screen, taskbar included.
             PanelKind::Security { .. } | PanelKind::Snip(_) => (Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, IcedMargin::default(), 0),
         };

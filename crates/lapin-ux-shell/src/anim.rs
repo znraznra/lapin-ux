@@ -14,7 +14,7 @@ use crate::app::{Message, Shell};
 use crate::config::TaskbarAlignment;
 
 const START_SLIDE: Duration = Duration::from_millis(220);
-/// How far below its resting place Start begins. Start rests 12 px above
+/// How far towards the taskbar (below its resting place when the bar is at the bottom) Start begins. Start rests 12 px above
 /// the taskbar, as in Windows 11, and opens 4 px above it: it never touches
 /// or covers the taskbar and nothing of it is cut off.
 const START_DROP: f32 = 8.0;
@@ -117,10 +117,11 @@ impl Shell {
             self.anims.start = None;
         }
         let left = self.config.alignment == TaskbarAlignment::Left;
-        set_margin(id, 0, 0, self.above_bar() - self.start_drop() as i32, if left { 12 } else { 0 })
+        let m = self.edge_margin(self.above_bar() - self.start_drop() as i32, if left { 12 } else { 0 }, 0);
+        set_margin(id, m.top, m.right, m.bottom, m.left)
     }
 
-    /// How far below its resting place Start is right now.
+    /// How far towards the taskbar from its resting place Start is right now.
     pub(crate) fn start_drop(&self) -> f32 {
         let Some((id, t0)) = self.anims.start else { return 0.0 };
         if self.start.as_ref().is_none_or(|s| s.id != id) {
