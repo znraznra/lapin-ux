@@ -191,6 +191,20 @@ kill $sp; wait $sp 2>/dev/null
 bash $DS leave
 check "runs once that session is gone (stale mark)" "[ -z \"\$(rd font-name)\" ]"
 }
+scenR() {
+echo "R: login service while logind says the starting session is Lapin UX's (#115)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+export XDG_RUNTIME_DIR=$HOME/run; mkdir -p $XDG_RUNTIME_DIR $HOME/bin
+printf '#!/bin/sh\ncase "$*" in\n"show-user"*) echo c1 ;;\n"show-session"*) cat %s/desktop ;;\nesac\n' "$HOME" > $HOME/bin/loginctl; chmod +x $HOME/bin/loginctl
+export PATH=$HOME/bin:$PATH
+bash $U --snapshot; bash $DS enter; lapin_writes
+echo "LapinUX;COSMIC" > $HOME/desktop
+bash $DS leave
+check "skipped: logind's session is Lapin UX (no pid file yet)" "[ \"\$(rd font-name)\" = \"'Selawik 10'\" ]"
+echo "gnome" > $HOME/desktop
+bash $DS leave
+check "runs when the session is another desktop's" "[ -z \"\$(rd font-name)\" ]"
+}
 scenI() {
 echo "I: other desktops' startup parts a crashed Lapin session skipped come back"
 DS=$(dirname $U)/lapin-ux-desktop-settings
@@ -359,7 +373,7 @@ check "Lapin UX: the one picked there" "grep -q 'Cascadia Mono' $M && [ \"\$(dco
 bash $DS leave
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q; do
+for x in A B C D E F G H I J K L M N O P Q R; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

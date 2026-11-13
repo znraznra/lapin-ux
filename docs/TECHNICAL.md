@@ -483,8 +483,16 @@ view toggle). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
   starting is recorded with the last step it reached (#100). It waits up to 5 s
   for the user's systemd manager (greetd starts the session before it is
   ready, GDM later) and treats the `systemctl --user` calls as best effort. It
-  also turns the `;`-separated `DesktopNames` that cosmic-greeter passes into
-  the `:`-separated `XDG_CURRENT_DESKTOP` the session gate looks for.
+  also turns a `;`-separated `DesktopNames` that cosmic-greeter passes into
+  the `:`-separated `XDG_CURRENT_DESKTOP` the session gate looks for. The
+  session file itself now says `DesktopNames=LapinUX:COSMIC`, because under
+  greetd the `;` form sent the sign-in back to the greeter (#100); GDM and the
+  other login managers read it the same way.
+- `lapin-ux-desktop-settings leave` (the login service) also asks logind
+  whether one of the user's sessions has `LapinUX` as its desktop, since under
+  greetd the service runs before `start-lapin-ux` has written its pid file and
+  would otherwise swap the settings to the other desktops' copy as a Lapin
+  session starts (the wallpaper reset, #115).
 - Crash reports: every Lapin program installs `lapin_ux_core::crash`, which on
   a panic writes the message, its last ~40 handled messages (shell and
   notification service) and a backtrace to the session log and to

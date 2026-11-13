@@ -720,6 +720,16 @@ leave)
     # PID here until it has handed everything back).
     mark="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lapin-ux-session.pid"
     if [ -f "$mark" ] && kill -0 "$(cat "$mark" 2>/dev/null)" 2>/dev/null; then exit 0; fi
+    # Under greetd the user manager starts in the same second as the sign-in, before
+    # start-lapin-ux has written that file: ask logind whether the session that is
+    # starting (or running) is Lapin UX's.
+    if command -v loginctl >/dev/null 2>&1; then
+        for sess in $(loginctl show-user "$(id -u)" -p Sessions --value 2>/dev/null); do
+            case "$(loginctl show-session "$sess" -p Desktop --value 2>/dev/null)" in
+                *[Ll]apin[Uu][Xx]*) exit 0 ;;
+            esac
+        done
+    fi
     leave_session >/dev/null; exit 0 ;;
 esac
 if [ "$(id -u)" = 0 ]; then
