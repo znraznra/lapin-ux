@@ -456,7 +456,7 @@ package_lapin-explorer() {
     pkgdesc="Explorer: COSMIC Files with Lapin UX's familiar command bar and layout (stock COSMIC Files outside a Lapin session)"
     url="https://github.com/pop-os/cosmic-files"
     license=('GPL-3.0-only')
-    depends=('cosmic-icon-theme' 'glibc' 'libgcc' 'libxkbcommon' 'wayland' 'gvfs')
+    depends=('cosmic-icon-theme' 'libgcc' 'glib2' 'glibc' 'gvfs' 'libxkbcommon' 'xdg-utils' 'zstd')
     provides=("cosmic-files=$_cosmic_ver")
     conflicts=('cosmic-files' 'lapin-ux-cosmic-files')
     cd "$srcdir/cosmic-files"
