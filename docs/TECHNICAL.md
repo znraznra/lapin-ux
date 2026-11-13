@@ -528,6 +528,12 @@ drives and the sidebar's own right-click entries are still open on #72. The unin
   closing a pop-up that isn't created yet destroys nothing and leaves a stray,
   which `sweep_strays` then removes. Fewer strays means fewer "destroying a
   pop-up the shell had lost track of" lines in the log.
+- Drag and drop diagnostics (#81): `touch ~/.local/state/lapin-ux/debug-dnd`
+  (or `LAPIN_UX_DEBUG_DND=1`) before signing in makes the shell log libcosmic's
+  drop-target lines and iced's "Dnd event" lines to `session.log` (verbose, so
+  delete the file (and unset `LAPIN_UX_DEBUG_DND` if you used it), then sign
+  out and in again; it applies to the
+  whole session).
 - Less work per frame (#51): every message makes iced rebuild and redraw
   every shell surface, so the shell keeps messages few. Pointer motion is a
   message only while the left button is held or at the Show desktop corner
