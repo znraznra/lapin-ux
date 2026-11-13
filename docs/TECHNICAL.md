@@ -461,6 +461,13 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   start) and GTK's `cursor-size` (swapped per session). Run from another
   desktop, `lapin-ux-cursors` only changes Lapin UX's own copy of the pointer
   settings (`~/.local/state/lapin-ux/lapin-desktop`).
+  Changing the style shows at once (#57): `lapin-ux-cursors` writes the theme
+  name to `~/.local/state/lapin-ux/pointer-theme` (Lapin's own file, written
+  whole and moved into place), and the compositor (`lapin-ux-comp` 0012, only
+  in the Lapin session) checks it once a second and reloads every seat's
+  pointer from the new theme. GTK apps follow the gsettings key live; Qt and
+  other apps that are already open still read the theme when they start, and
+  Xwayland's pointer too.
 
 **Explorer** (`lapin-explorer`, #71): COSMIC Files at the pinned commit with the
 patches in `packaging/lapin-ux-files/` (after the dialog patch), installed in
