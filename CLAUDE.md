@@ -174,7 +174,8 @@ reviewed files. Every excluded file needs a separate review.
   After the fixes, add a short comment on the PR saying what was fixed and what
   was declined. CodeRabbit doesn't review draft PRs automatically (`drafts: false`
   in `.coderabbit.yaml`): open the PR as ready for review, or comment
-  `@coderabbitai review` on a draft once; don't wait for a review that won't come.
+  `@coderabbitai review` on a draft after each push that needs one; don't wait for a
+  review that won't come on its own.
 - CodeRabbit cannot run anything. KMS paths, locking, multi-monitor, touch and
   GPU timing still need Tako's hardware retest.
 
