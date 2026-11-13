@@ -1,0 +1,30 @@
+From 2693b55beb99c884d6ec6f7bbf6a3d3b2d95db34 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 21:53:25 +0800
+Subject: [PATCH] Lapin UX: pointer setting says it applies at once
+
+The compositor reloads its pointer theme when the setting changes (#57),
+so the Mouse pointer row no longer asks for a sign-out. Apps that were
+already open may keep the old pointer.
+
+Refs #57
+---
+ cosmic-settings/src/lapin/settings.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index bab6fbb..4682a3b 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -1116,7 +1116,7 @@ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     let step = (p.pointer_size.saturating_sub(POINTER_SIZE_MIN) / POINTER_SIZE_STEP + 1).clamp(1, 8);
+     rows.push(
+         settings::item::builder("Size")
+-            .description("Applies everywhere after you sign out and back in")
++            .description("Changes the pointer at once. Apps that are already open may keep the old one until you reopen them")
+             .control(
+                 widget::row::with_capacity(2)
+                     .spacing(12)
+-- 
+2.43.0
+
