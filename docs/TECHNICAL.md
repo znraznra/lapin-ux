@@ -720,8 +720,12 @@ plan; `--settings-only` only restores settings (for someone who already ran
   `lapin-ux-login restore`, `lapin-ux-uninstall` and the desktop package's
   `pre_remove` put everything back. pacman doesn't stop a removal when a
   scriptlet fails, so `pre_remove` first keeps a runnable copy of the tool in
-  `/var/lib/lapin-ux/login/lapin-ux-login-recover`; if the restore fails, greetd
-  stays on, the record is kept, and the message says how to finish it.
+  `/var/lib/lapin-ux/login/lapin-ux-login-recover`. If your own display manager
+  can't be enabled again, greetd stays on and the whole record is kept. If only
+  the boot animation can't be put back, the sign-in screen is already restored
+  (greetd off, your display manager on), the record is kept for the boot
+  animation, and `restore` reports failure until that is fixed. Either way the
+  message says how to finish it.
   `use-lapin` and `restore` share one lock, and a failed `use-lapin` never
   deletes a record from an earlier run. `./install.sh` and the first-run setup
   ask (Enter = Lapin UX's; `--keep-login` for unattended runs). Tests:
