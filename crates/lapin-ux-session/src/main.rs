@@ -88,11 +88,22 @@ async fn main() -> Result<()> {
         unsafe { std::env::set_var(k, v) };
     }
     if !nested {
+        // The environment is exported first (two quick commands: programs the
+        // shell starts through D-Bus need it). The masking of other desktops'
+        // autostart (which makes systemd reload) and the session target don't
+        // have to finish before the shell starts (#82): the components inherit
+        // this process's environment, and the masks only have to be in place
+        // before the autostart target runs, which the target start follows.
+        // They run beside the components, in this order.
+        let t0 = std::time::Instant::now();
         export_environment(&env).await;
-        skip_other_desktops_autostart().await;
-        systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
-        // The sign-in sound, once the audio server has had a moment.
-        tokio::spawn(async {
+        info!(ms = t0.elapsed().as_millis() as u64, "environment exported");
+        tokio::spawn(async move {
+            skip_other_desktops_autostart().await;
+            info!(ms = t0.elapsed().as_millis() as u64, "other desktops' autostart masked");
+            systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
+            info!(ms = t0.elapsed().as_millis() as u64, "session target started");
+            // The sign-in sound, once the audio server has had a moment.
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             lapin_ux_core::sound::play("desktop-login");
         });
