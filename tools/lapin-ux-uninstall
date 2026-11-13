@@ -552,9 +552,13 @@ full_uninstall() {
     # that one comes back below, and greetd goes away with it.)
     local lg=/var/lib/lapin-ux/login prior=""
     [ -f "$lg/complete" ] && prior=$(cat "$lg/dm" 2>/dev/null)
+    # A saved display manager that was removed since can't give the login back:
+    # then COSMIC's own sign-in screen goes in as usual.
+    local prior_gone=0
+    if [ -n "$prior" ] && [ "$prior" != greetd.service ] && ! systemctl cat "$prior" >/dev/null 2>&1; then prior_gone=1; fi
     if installed lapin-ux-greeter && systemctl is-enabled greetd >/dev/null 2>&1 \
         && grep -q cosmic-greeter /etc/greetd/config.toml 2>/dev/null \
-        && { [ ! -f "$lg/complete" ] || [ "$prior" = greetd.service ]; } \
+        && { [ ! -f "$lg/complete" ] || [ "$prior" = greetd.service ] || [ "$prior_gone" = 1 ]; } \
         && [[ " ${swap[*]} " != *" cosmic-greeter "* ]]; then
         swap+=(cosmic-greeter)
         say "Login screen: COSMIC's own sign-in screen comes back (it lists every desktop you have)"
@@ -611,6 +615,7 @@ full_uninstall() {
     if [ -f "$lg/complete" ]; then
         say ""; say "== Sign-in screen and boot animation"
         run sudo lapin-ux-login restore
+        [ "$prior_gone" = 1 ] && say "  ($prior isn't installed any more, so greetd with COSMIC's sign-in screen stays as your login.)"
     fi
 
     say ""; say "== Packages"

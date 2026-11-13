@@ -368,6 +368,8 @@ impl cosmic::Application for App {
                     cosmic::Action::App(Message::PointersDone(res))
                 });
             }
+            // While the setup command runs, the choice is made: ignore more clicks.
+            Message::Login(_) if self.applying_login => {}
             Message::Login(false) => self.step = self.step.next(),
             Message::Login(true) => {
                 self.applying_login = true;

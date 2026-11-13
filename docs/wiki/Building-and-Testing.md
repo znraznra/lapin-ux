@@ -1,7 +1,7 @@
 # Building and Testing
 
 ## Install (Arch)
-`./install.sh` asks for the password once, keeps sudo alive during the build, and moves a hand-installed Win11 icon theme aside. One split PKGBUILD (`packaging/arch`) builds the Lapin packages. It asks whether to use Lapin UX's sign-in screen and boot animation (Enter means yes; `./install.sh --keep-login` keeps yours). The same question comes in the first-run setup. What you had is saved first and comes back with `sudo lapin-ux-login restore`, `./uninstall.sh` or a plain `pacman -R`. The boot animation is only set when Plymouth is already set up; nothing in your initramfs or boot loader is edited. Uninstall with `./uninstall.sh` (see [Coexistence and Uninstall](Coexistence-and-Uninstall)).
+`./install.sh` asks for the password once, keeps sudo alive during the build, and moves a hand-installed Win11 icon theme aside. One split PKGBUILD (`packaging/arch`) builds the Lapin packages. It asks whether to use Lapin UX's sign-in screen and boot animation (Enter means yes; `./install.sh --keep-login` keeps yours). The same question comes in the first-run setup. What you had is saved first and comes back with `sudo lapin-ux-login restore`, `./uninstall.sh` or a plain `pacman -R`. The boot animation is only set when Plymouth is already set up; its configuration and your boot loader are not edited (the initramfs is rebuilt to apply the theme). Uninstall with `./uninstall.sh` (see [Coexistence and Uninstall](Coexistence-and-Uninstall)).
 
 ## Building
 - Lapin: `cargo build` (debug; the test harness uses `target/debug`).

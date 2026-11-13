@@ -2,16 +2,22 @@
 # Tests lapin-ux-login in throwaway roots with a fake systemctl and a fake
 # plymouth-set-default-theme. Run as a normal user:
 #   bash tools/test-login/run.sh "$PWD/tools/lapin-ux-login"
+# rc and out are read inside the eval of check().
+# shellcheck disable=SC2034
 set -u
 T=$1
 FAKEBIN=$(cd "$(dirname "$0")" && pwd)/fakebin
 fail=0
+ROOTS=()
+cleanup() { local r; for r in "${ROOTS[@]}"; do [ -n "$r" ] && rm -rf "$r"; done; }
+trap cleanup EXIT
 check() { if eval "$2"; then echo "  ok   $1"; else echo "  FAIL $1"; fail=1; fi; }
 
 newroot() {   # [plymouth|noplymouth] [bgrt|nobgrt] [dm]
     ROOT=$(mktemp -d /tmp/lapin-login-test.XXXXXX)
+    ROOTS+=("$ROOT")
     export LAPIN_LOGIN_ROOT=$ROOT PATH="$FAKEBIN:$ORIG_PATH"
-    unset FAKE_ENABLE_FAILS LAPIN_LOGIN_FORCE_BGRT
+    unset FAKE_ENABLE_FAILS FAKE_MISSING_UNIT LAPIN_LOGIN_FORCE_BGRT
     mkdir -p "$ROOT/etc/systemd/system/wants" "$ROOT/etc/greetd" "$ROOT/usr/bin" "$ROOT/usr/share/plymouth/themes/spinner" "$ROOT/usr/share/plymouth/themes/bgrt" "$ROOT/etc/plymouth" "$ROOT/sys/firmware/acpi/bgrt"
     : > "$ROOT/usr/share/plymouth/themes/spinner/animation-0001.png"
     : > "$ROOT/usr/share/plymouth/themes/spinner/watermark.png"
@@ -87,5 +93,38 @@ out=$(bash "$T" restore 2>&1); rc=$?
 check "says so and succeeds" '[ $rc = 0 ] && echo "$out" | grep -q "Nothing to put back"'
 check "gdm untouched" '[ "$(dm_now)" = gdm.service ]'
 
-rm -rf /tmp/lapin-login-test.*
-[ $fail = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }
+echo "G: a commented-out plymouth hook doesn't count as set up"
+newroot plymouth bgrt gdm
+echo 'HOOKS=(base udev) # add plymouth later' > "$ROOT/etc/mkinitcpio.conf"
+out=$(bash "$T" use-lapin 2>&1)
+check "Plymouth is left alone" 'echo "$out" | grep -q "Plymouth isn.t set up" && [ "$(theme_now)" = bgrt ]'
+
+echo "H: the saved display manager is gone: restore keeps greetd and the record"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null
+export FAKE_MISSING_UNIT=gdm.service
+out=$(bash "$T" restore 2>&1); rc=$?
+check "fails and says so" '[ $rc != 0 ] && echo "$out" | grep -q "greetd stays on"'
+check "greetd is still the display manager" '[ "$(dm_now)" = greetd.service ]'
+check "greetd still has Lapin's config" 'grep -q cosmic-greeter-start "$ROOT/etc/greetd/config.toml"'
+check "the record is kept" '[ -f "$ROOT/var/lib/lapin-ux/login/complete" ]'
+unset FAKE_MISSING_UNIT
+bash "$T" restore >/dev/null
+check "a later restore works" '[ "$(dm_now)" = gdm.service ] && [ ! -e "$ROOT/var/lib/lapin-ux/login" ]'
+
+echo "I: Lapin's sign-in screen isn't installed: no record, and it says so"
+newroot noplymouth bgrt gdm
+rm -f "$ROOT/usr/bin/cosmic-greeter-start"
+out=$(bash "$T" use-lapin 2>&1); rc=$?
+check "exits with 2" '[ $rc = 2 ]'
+check "gdm untouched and nothing recorded" '[ "$(dm_now)" = gdm.service ] && [ ! -e "$ROOT/var/lib/lapin-ux/login/complete" ]'
+
+echo "J: Plymouth fails to set the theme: its config is put back"
+newroot plymouth bgrt gdm
+export FAKE_PLYMOUTH_FAILS=1
+bash "$T" use-lapin >/dev/null 2>&1
+unset FAKE_PLYMOUTH_FAILS
+check "plymouthd.conf is as it was" '[ "$(theme_now)" = bgrt ]'
+check "no theme folder is left" '[ ! -d "$ROOT/usr/share/plymouth/themes/lapin-ux" ]'
+
+[ "$fail" = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }

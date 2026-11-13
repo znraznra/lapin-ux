@@ -21,7 +21,14 @@ pre_remove() {
     # Your own sign-in screen and boot animation come back (#100).
     if [ -f /var/lib/lapin-ux/login/complete ] && [ -x /usr/bin/lapin-ux-login ]; then
         echo ":: Lapin UX: putting your own sign-in screen and boot animation back..."
-        /usr/bin/lapin-ux-login restore || echo "   Couldn't; run: sudo lapin-ux-login restore"
+        if ! /usr/bin/lapin-ux-login restore; then
+            # The tool goes away with the package: keep a copy that still runs.
+            install -Dm755 /usr/bin/lapin-ux-login /var/lib/lapin-ux/login/lapin-ux-login-recover 2>/dev/null || true
+            echo "   Your sign-in screen couldn't be put back, so Lapin UX was NOT removed."
+            echo "   Fix what it said above, then run: sudo /var/lib/lapin-ux/login/lapin-ux-login-recover restore"
+            echo "   (or sudo lapin-ux-login restore), and remove the package again."
+            return 1
+        fi
     fi
     # Removed with plain pacman: give every account that used Lapin UX its own
     # desktop settings back, the way lapin-ux-uninstall does.

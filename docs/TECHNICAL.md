@@ -716,7 +716,7 @@ plan; `--settings-only` only restores settings (for someone who already ran
   can't be enabled). The boot animation (a `lapin-ux` Plymouth theme: the
   firmware's BGRT logo with a spinner, or the system's own logo from
   `/etc/os-release` when the firmware has none) is set only when Plymouth is
-  already set up; nothing in the initramfs or boot loader is edited.
+  already set up; its configuration and the boot loader's are not edited (the initramfs is rebuilt to apply the theme).
   `lapin-ux-login restore`, `lapin-ux-uninstall` and the desktop package's
   `pre_remove` put everything back. `./install.sh` and the first-run setup
   ask (Enter = Lapin UX's; `--keep-login` for unattended runs). Tests:
