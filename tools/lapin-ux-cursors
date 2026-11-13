@@ -223,12 +223,33 @@ def set_pointer(theme_dir):
         subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
                        stderr=subprocess.DEVNULL, check=False)
     restore_env()
-    print("Back to the system's mouse pointer (log out and back in for every app to pick it up).")
+    print("Back to the system's mouse pointer (apps that are already open pick it up when you sign in again).")
 
 
 def _state_file():
     base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
     return os.path.join(base, "lapin-ux", "xcursor-env")
+
+
+def _tell_compositor(name):
+    """The compositor (Lapin's build) watches this file and reloads its pointer
+    theme when it changes, so the new pointer shows at once (#57). Written whole
+    and moved into place; the file is Lapin's own state and nothing else reads it."""
+    path = os.path.join(os.path.dirname(_state_file()), "pointer-theme")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".pointer-theme.")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(name + "\n")
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 def _env_cmd(cmd):
@@ -241,8 +262,9 @@ def _env_cmd(cmd):
 def apply_now(theme_dir):
     """Tell what is running right now (#57): the user's systemd and D-Bus
     environments get the new XCURSOR_THEME, so apps started afterwards use it.
-    GTK apps follow the gsettings key live. (The compositor's own pointer and
-    apps that are already open read it when you sign in again.)
+    GTK apps follow the gsettings key live, and Lapin's compositor reloads its
+    own pointer from ~/.local/state/lapin-ux/pointer-theme. (Other apps that are
+    already open read it when you sign in again.)
 
     Only inside the Lapin UX session, and the value it replaced is written to
     ~/.local/state/lapin-ux/xcursor-env so `lapin-ux-desktop-settings leave`
@@ -278,6 +300,7 @@ def apply_now(theme_dir):
     var = f"XCURSOR_THEME={theme_dir}"
     _env_cmd(["systemctl", "--user", "set-environment", var])
     _env_cmd(["dbus-update-activation-environment", "--systemd", var])
+    _tell_compositor(theme_dir)
 
 
 def restore_env():
@@ -304,6 +327,7 @@ def restore_env():
         done = ok(_env_cmd(["dbus-update-activation-environment", dbus])) and done
     if not done:
         return   # keep the saved value so a later restore can try again
+    _tell_compositor(prior or "default")
     try:
         os.remove(mark)
     except OSError:

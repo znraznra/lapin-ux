@@ -1,0 +1,90 @@
+From ea54598c2041c6cab01703806874554404df102e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 19:34:28 +0800
+Subject: [PATCH] Lapin UX: the pointer theme reloads when Lapin's setting
+ changes
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ src/backend/render/cursor.rs |  9 +++++++++
+ src/lib.rs                   | 39 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/src/backend/render/cursor.rs b/src/backend/render/cursor.rs
+index 02da068..a369bab 100644
+--- a/src/backend/render/cursor.rs
++++ b/src/backend/render/cursor.rs
+@@ -568,6 +568,15 @@ impl CursorStateInner {
+         self.cursor_size
+     }
+ 
++    /// Lapin UX: switch to another pointer theme without restarting. The drawn
++    /// shapes are loaded again from the new theme the next time they are needed.
++    pub fn reload_theme(&mut self, name: &str) {
++        self.cursor_theme = CursorTheme::load(name);
++        self.cursors.clear();
++        self.current_image = None;
++        self.image_cache.clear();
++    }
++
+     /// Drop the rasterizations only a magnified cursor needed, once nothing has
+     /// magnified it for [`MAGNIFIED_FRAME_GRACE`].
+     pub fn drop_magnified_frames(&mut self, now: Instant, zoomed: bool) {
+diff --git a/src/lib.rs b/src/lib.rs
+index 98bfa2a..888bff2 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -188,6 +188,9 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
+         warn!(?err, "Failed to watch theme");
+     }
+ 
++    // Lapin UX: pick up a pointer theme change without a restart.
++    lapin_pointer_watch(&event_loop.handle());
++
+     // run the event loop
+     event_loop.run(None, &mut state, |state| {
+         // shall we shut down?
+@@ -365,3 +368,39 @@ fn refresh(state: &mut State) {
+     KeyboardLayoutState::refresh(state);
+     state.last_refresh = LastRefresh::At(Instant::now());
+ }
++
++/// Lapin UX: `lapin-ux-cursors` writes the chosen pointer theme to
++/// `$XDG_STATE_HOME/lapin-ux/pointer-theme`; when that file changes, every
++/// seat's pointer is reloaded from the new theme. Only in the Lapin session.
++fn lapin_pointer_watch(handle: &calloop::LoopHandle<'static, State>) {
++    if !std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX")) {
++        return;
++    }
++    let Some(path) = std::env::var_os("XDG_STATE_HOME")
++        .map(std::path::PathBuf::from)
++        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
++        .map(|d| d.join("lapin-ux/pointer-theme"))
++    else {
++        return;
++    };
++    let mut seen = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
++    let result = handle.insert_source(Timer::from_duration(Duration::from_secs(1)), move |_, _, state| {
++        let now = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
++        if now != seen {
++            seen = now;
++            if let Some(name) = std::fs::read_to_string(&path).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
++                info!(theme = %name, "Lapin UX: pointer theme changed");
++                let shell = state.common.shell.read();
++                for seat in shell.seats.iter() {
++                    if let Some(cursor) = seat.user_data().get::<backend::render::cursor::CursorState>() {
++                        cursor.lock().unwrap().reload_theme(&name);
++                    }
++                }
++            }
++        }
++        TimeoutAction::ToDuration(Duration::from_secs(1))
++    });
++    if result.is_err() {
++        warn!("Lapin UX: could not watch the pointer theme");
++    }
++}
+-- 
+2.43.0
+
