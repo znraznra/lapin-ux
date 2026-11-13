@@ -1534,8 +1534,11 @@ impl Shell {
                     || cfg.main_display_model != self.config.main_display_model;
                 crate::style::set_transparency(cfg.transparency_effects);
                 self.config = cfg;
+                // One update can change several things at once (the main display and
+                // the taskbar position, say): do every part and batch the tasks.
+                let mut tasks = Vec::new();
                 if main_changed {
-                    return self.desktop_follow_main();
+                    tasks.push(self.desktop_follow_main());
                 }
                 if apps_changed {
                     self.catalog = Catalog::load(self.config.show_other_desktop_apps);
@@ -1545,11 +1548,12 @@ impl Shell {
                     self.reload_desktop();
                 }
                 if position_changed {
-                    return self.position_changed();
+                    tasks.push(self.position_changed());
                 }
                 if auto_hide_changed {
-                    return self.auto_hide_changed();
+                    tasks.push(self.auto_hide_changed());
                 }
+                return Task::batch(tasks);
             }
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
