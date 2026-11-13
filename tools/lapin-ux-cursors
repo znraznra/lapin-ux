@@ -325,9 +325,11 @@ def restore_env():
         dbus = "XCURSOR_THEME=default"
     if shutil.which("dbus-update-activation-environment"):
         done = ok(_env_cmd(["dbus-update-activation-environment", dbus])) and done
+    # The compositor is told whether or not the environments could be restored:
+    # Lapin's own pointer setting is already back on the system's.
+    _tell_compositor(prior or "default")
     if not done:
         return   # keep the saved value so a later restore can try again
-    _tell_compositor(prior or "default")
     try:
         os.remove(mark)
     except OSError:

@@ -26,8 +26,15 @@ source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_co
         "0002-lapin_shell-v2-desktop-peek-night-light-shell-touchp.patch"
         "0003-Lapin-UX-app-icon-and-title-at-the-left-of-the-title.patch"
         "0004-Lapin-UX-night-light-uniform-on-the-KMS-path-screen-.patch"
-        "0005-lapin_shell-v3-report-the-Alt-key-to-the-shell-Alt-T.patch")
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+        "0005-lapin_shell-v3-report-the-Alt-key-to-the-shell-Alt-T.patch"
+        "0006-Lapin-UX-window-open-animation-follows-the-window-s-.patch"
+        "0007-Lapin-UX-publish-_NET_WORKAREA-for-X11-apps-the-scre.patch"
+        "0008-Lapin-UX-windows-open-at-their-own-size-without-a-ju.patch"
+        "0009-Lapin-UX-windows-reopen-at-their-last-size-and-place.patch"
+        "0010-Lapin-UX-log-Print-Screen-keys-and-why-a-window-open.patch"
+        "0011-Lapin-UX-the-lock-screen-s-blur-fades-in-and-out.patch"
+        "0012-Lapin-UX-the-pointer-theme-reloads-when-Lapin-s-sett.patch")
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 prepare() {
     cd cosmic-comp
