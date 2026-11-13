@@ -526,7 +526,8 @@ drives and the sidebar's own right-click entries are still open on #72. The unin
 - Drag and drop diagnostics (#81): `touch ~/.local/state/lapin-ux/debug-dnd`
   (or `LAPIN_UX_DEBUG_DND=1`) before signing in makes the shell log libcosmic's
   drop-target lines and iced's "Dnd event" lines to `session.log` (verbose, so
-  delete the file afterwards).
+  delete the file and sign out and in again afterwards; it applies to the
+  whole session).
 - Less work per frame (#51): every message makes iced rebuild and redraw
   every shell surface, so the shell keeps messages few. Pointer motion is a
   message only while the left button is held or at the Show desktop corner
