@@ -663,6 +663,7 @@ impl Shell {
     fn looks_active(&self, h: Handle) -> bool {
         let windows = self.taskbar.windows();
         matches!(self.activated_by_us, Some((a, at)) if a == h && at.elapsed() < Duration::from_secs(15))
+            && !self.desktop_focused
             && !windows.iter().any(|w| w.active)
             && windows.iter().any(|w| w.handle == h && !w.minimized)
     }
@@ -1552,6 +1553,8 @@ impl Shell {
             // Alt+F4 on the desktop opens the Shut Down dialog instead of closing a window.
             Message::Layer(LayerEvent::Focused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
                 self.desktop_focused = true;
+                // The desktop took the focus: nothing we activated is in front any more (#85).
+                self.activated_by_us = None;
             }
             Message::Layer(LayerEvent::Unfocused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
                 self.desktop_focused = false;
