@@ -206,7 +206,9 @@ def set_pointer(theme_dir):
             f.write(f"[Icon Theme]\nName=Default\nInherits={theme_dir}\n")
         subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme_dir],
                        stderr=subprocess.DEVNULL, check=False)
-        print("It's now your mouse pointer (log out and back in for every app to pick it up).")
+        apply_now(theme_dir)
+        print("It's now your mouse pointer. GTK apps and apps you start from now on use it at once; "
+              "the rest pick it up when you sign out and back in.")
         return
     try:
         with open(index) as f:
@@ -220,7 +222,92 @@ def set_pointer(theme_dir):
     if current == THEME_DIR:
         subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
                        stderr=subprocess.DEVNULL, check=False)
+    restore_env()
     print("Back to the system's mouse pointer (log out and back in for every app to pick it up).")
+
+
+def _state_file():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "lapin-ux", "xcursor-env")
+
+
+def _env_cmd(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def apply_now(theme_dir):
+    """Tell what is running right now (#57): the user's systemd and D-Bus
+    environments get the new XCURSOR_THEME, so apps started afterwards use it.
+    GTK apps follow the gsettings key live. (The compositor's own pointer and
+    apps that are already open read it when you sign in again.)
+
+    Only inside the Lapin UX session, and the value it replaced is written to
+    ~/.local/state/lapin-ux/xcursor-env so `lapin-ux-desktop-settings leave`
+    (and Back to the system's pointer) can hand it back to other desktops."""
+    if "LapinUX" not in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":"):
+        return
+    mark = _state_file()
+    if not os.path.exists(mark):
+        out = _env_cmd(["systemctl", "--user", "show-environment"])
+        if out is None or out.returncode != 0:
+            return   # can't read the old value: don't change it
+        prior = ""
+        for line in out.stdout.splitlines():
+            if line.startswith("XCURSOR_THEME="):
+                prior = line.split("=", 1)[1]
+        try:
+            os.makedirs(os.path.dirname(mark), exist_ok=True)
+            # Written whole and moved into place, so a failed write never leaves an
+            # empty file behind that would read as "there was no theme".
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(mark), prefix=".xcursor-env.")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(prior + "\n")
+                os.replace(tmp, mark)
+            except OSError:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return   # can't remember the old value: don't change it
+        except OSError:
+            return   # can't remember the old value: don't change it
+    var = f"XCURSOR_THEME={theme_dir}"
+    _env_cmd(["systemctl", "--user", "set-environment", var])
+    _env_cmd(["dbus-update-activation-environment", "--systemd", var])
+
+
+def restore_env():
+    """Give the user's environments the XCURSOR_THEME they had before apply_now."""
+    mark = _state_file()
+    try:
+        with open(mark) as f:
+            raw = f.read()
+    except OSError:
+        return
+    if not raw:
+        return   # a zero-byte file is not a saved value (an unset one holds a newline)
+    prior = raw.strip()
+    def ok(r):
+        return r is not None and r.returncode == 0
+    if prior:
+        done = ok(_env_cmd(["systemctl", "--user", "set-environment", f"XCURSOR_THEME={prior}"]))
+        dbus = f"XCURSOR_THEME={prior}"
+    else:
+        done = ok(_env_cmd(["systemctl", "--user", "unset-environment", "XCURSOR_THEME"]))
+        # D-Bus can't forget a variable; the stock pointer theme name is harmless.
+        dbus = "XCURSOR_THEME=default"
+    if shutil.which("dbus-update-activation-environment"):
+        done = ok(_env_cmd(["dbus-update-activation-environment", dbus])) and done
+    if not done:
+        return   # keep the saved value so a later restore can try again
+    try:
+        os.remove(mark)
+    except OSError:
+        pass
 
 
 def cached_pack():

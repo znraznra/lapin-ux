@@ -435,6 +435,27 @@ leave_session() {
             && run dbus-update-activation-environment FONTCONFIG_FILE=/etc/fonts/fonts.conf
         changed=1
     fi
+    # The pointer theme Settings handed to the user session (#57): the
+    # value it replaced is in $STATE/xcursor-env (empty = there was none).
+    local xprior
+    # Only when the saved value could be read: otherwise it stays for the next try.
+    if [ -f "$STATE/xcursor-env" ] && command -v systemctl >/dev/null 2>&1 && [ -s "$STATE/xcursor-env" ] && xprior=$(head -n1 "$STATE/xcursor-env"); then
+        say "  Lapin UX's pointer theme: removed from the user session"
+        local xok=1 xdbus="XCURSOR_THEME=default"
+        if [ -n "$xprior" ]; then
+            run systemctl --user set-environment "XCURSOR_THEME=$xprior" || xok=0
+            xdbus="XCURSOR_THEME=$xprior"
+        else
+            run systemctl --user unset-environment XCURSOR_THEME || xok=0
+            # D-Bus can't forget a variable: the stock theme name is harmless.
+        fi
+        if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+            run dbus-update-activation-environment "$xdbus" || xok=0
+        fi
+        # Kept when a step failed, so the next restore can try again.
+        if [ "$xok" = 1 ]; then run rm -f "$STATE/xcursor-env"; else say "  (couldn't hand the pointer theme back; the saved value is kept)"; fi
+        changed=1
+    fi
     # Other desktops' autostart parts a Lapin UX session skipped (masked with
     # --runtime) when it didn't end cleanly: give them back.
     local masked="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lapin-ux-autostart-masked"
@@ -497,6 +518,11 @@ restore_settings() {
     fi
     # Only COSMIC programs read ~/.config/cosmic; with none left it's leftovers.
     if [ "$MODE" = settings ]; then offer_cosmic_cleanup; fi
+    # Pointer themes and sound schemes added in Settings (#57, #58) are your files: they stay.
+    if [ -s "$STATE/pointers-added" ]; then
+        say "  Pointer themes you added in Settings stay in $DATA/icons (delete them yourself if you don't want them):"
+        sed 's/^/    /' "$STATE/pointers-added"
+    fi
     if [ -s "$STATE/sounds-added" ]; then
         say "  Sound schemes you added in Settings stay in $DATA/sounds (delete them yourself if you don't want them):"
         sed 's/^/    /' "$STATE/sounds-added"
