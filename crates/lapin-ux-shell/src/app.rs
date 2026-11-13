@@ -324,6 +324,9 @@ pub struct Shell {
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
     pub popup_dismissed: Option<(PopupKind, Instant)>,
+    /// When the last Alt+Tab request reached the shell (#65), to log how
+    /// long the switcher took to show.
+    pub(crate) alttab_at: Option<Instant>,
     /// Surfaces iced asked for a view of that the shell doesn't track, and
     /// when each was first seen (#34). A pop-up closed before its creation
     /// went through is created afterwards with nobody holding it: invisible,
@@ -1084,6 +1087,7 @@ impl Application for Shell {
             catcher: None,
             popup: None,
             popup_dismissed: None,
+            alttab_at: None,
             strays: std::sync::Mutex::new(HashMap::new()),
             popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
@@ -1180,7 +1184,18 @@ impl Application for Shell {
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
                 "snap" => self.update(Message::Snap(crate::snap::SnapMsg::Open)),
                 "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
-                "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
+                "alttab" => {
+                    self.alttab_at = Some(Instant::now());
+                    // How long the key press took to reach the shell: the
+                    // compositor starting `lapin-ux-shell alttab`, that
+                    // process starting up, and the D-Bus hop (#65).
+                    let sent_ms = args.iter().find_map(|a| a.strip_prefix("--sent-ms=")).and_then(|v| v.parse::<u128>().ok());
+                    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).ok();
+                    if let (Some(sent), Some(now)) = (sent_ms, now_ms) {
+                        tracing::info!(took_ms = now.saturating_sub(sent) as u64, "alt-tab: the request reached the shell");
+                    }
+                    self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev"))))
+                }
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 // Settings > Clipboard > Clear clipboard data (pinned items stay).
                 "clipboard-clear" => self.update(Message::Clip(crate::clipboard::ClipMsg::ClearAll)),
