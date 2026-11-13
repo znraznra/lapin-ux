@@ -389,6 +389,7 @@ impl Shell {
                     return Task::none();
                 }
                 // The dialog was closed when it started; bring it back with the message.
+                self.run_error_at = std::time::Instant::now();
                 self.open_panel(PanelKind::Run { input, error: true })
             }
             PanelMsg::RunSubmit => {
