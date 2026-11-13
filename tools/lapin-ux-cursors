@@ -260,8 +260,12 @@ def apply_now(theme_dir):
                 prior = line.split("=", 1)[1]
         try:
             os.makedirs(os.path.dirname(mark), exist_ok=True)
-            with open(mark, "w") as f:
+            # Written whole and moved into place, so a failed write never leaves an
+            # empty file behind that would read as "there was no theme".
+            tmp = mark + ".new"
+            with open(tmp, "w") as f:
                 f.write(prior + "\n")
+            os.replace(tmp, mark)
         except OSError:
             return   # can't remember the old value: don't change it
     var = f"XCURSOR_THEME={theme_dir}"
@@ -274,9 +278,12 @@ def restore_env():
     mark = _state_file()
     try:
         with open(mark) as f:
-            prior = f.read().strip()
+            raw = f.read()
     except OSError:
         return
+    if not raw:
+        return   # a zero-byte file is not a saved value (an unset one holds a newline)
+    prior = raw.strip()
     def ok(r):
         return r is not None and r.returncode == 0
     if prior:
