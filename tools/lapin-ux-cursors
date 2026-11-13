@@ -262,10 +262,17 @@ def apply_now(theme_dir):
             os.makedirs(os.path.dirname(mark), exist_ok=True)
             # Written whole and moved into place, so a failed write never leaves an
             # empty file behind that would read as "there was no theme".
-            tmp = mark + ".new"
-            with open(tmp, "w") as f:
-                f.write(prior + "\n")
-            os.replace(tmp, mark)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(mark), prefix=".xcursor-env.")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(prior + "\n")
+                os.replace(tmp, mark)
+            except OSError:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return   # can't remember the old value: don't change it
         except OSError:
             return   # can't remember the old value: don't change it
     var = f"XCURSOR_THEME={theme_dir}"
