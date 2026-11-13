@@ -468,7 +468,10 @@ place of `cosmic-files` (it provides and conflicts with it, and with the
 optional `lapin-ux-cosmic-files`), so it stays the default file manager. Every
 Lapin look is gated on `config::lapin_session()`; in COSMIC's own session it is
 stock. First piece: a command bar (New folder, Cut, Copy, Paste, Rename, Delete,
-view toggle). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
+view toggle). The sidebar starts with Home (the Home page) and Gallery (the
+Pictures folder), then the pinned folders, Recents and the drives; the tree
+under This PC, pin icons and the sidebar's own right-click entries are still
+open on #72. The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - Every app's Open/Save dialog ends with *File name* with the file
