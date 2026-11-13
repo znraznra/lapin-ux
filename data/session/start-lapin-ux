@@ -4,6 +4,35 @@
 # Started by the display manager for the "Lapin UX" session.
 set -e
 
+# Keep a log of this session (and the previous one) for bug reports:
+#   ~/.local/state/lapin-ux/session.log
+# Opened first, so a failure anywhere below is recorded (#100: under greetd the
+# script ended before the log existed and left no trace). The re-exec through the
+# login shell below appends to the same file instead of rotating it again.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
+if mkdir -p "$LOG_DIR" 2>/dev/null; then
+    if [ "${1}" != "--in-login-shell" ] && [ -f "$LOG_DIR/session.log" ]; then
+        mv -f "$LOG_DIR/session.log" "$LOG_DIR/session.previous.log"
+    fi
+    exec >>"$LOG_DIR/session.log" 2>&1
+fi
+# shellcheck disable=SC2154
+trap 'rc=$?; [ "$rc" = 0 ] || echo "start-lapin-ux stopped (exit $rc), last step: ${STEP:-start}"' EXIT
+echo "=== Lapin UX session start $(date -Iseconds) (pid $$, shell ${SHELL:-none}, args: $*) ==="
+
+# Right after sign-in (greetd, unlike GDM) the user's systemd manager can still
+# be coming up; wait a few seconds for it, and never let a missing one stop the
+# session: the steps below that talk to it are best effort.
+STEP="waiting for the user manager"
+if command -v systemctl >/dev/null; then
+    n=0
+    until systemctl --user show-environment >/dev/null 2>&1 || [ "$n" -ge 50 ]; do
+        n=$((n + 1)); sleep 0.1
+    done
+    [ "$n" -ge 50 ] && echo "warning: the user's systemd manager did not answer after 5 s"
+fi
+
+STEP="resetting failed units"
 if command -v systemctl >/dev/null; then
     # A previous session may have left failed units behind; reset them so
     # they do not block this one.
@@ -23,6 +52,14 @@ if [ -n "${SHELL}" ] && [ "${1}" != "--in-login-shell" ]; then
     exec "${SHELL}" -l -c "${0} --in-login-shell"
 fi
 
+# cosmic-greeter (greetd) passes the .desktop file's DesktopNames as is, with
+# ";" between the names, and takes everything up to the first ":" as the session
+# name, so XDG_CURRENT_DESKTOP arrives as "LapinUX;COSMIC". The list must be
+# separated by ":" or nothing sees "LapinUX" in it (the session gate in
+# Lapin's apps, the portals).
+STEP="setting up the environment"
+case "${XDG_CURRENT_DESKTOP:-}" in *\;*) XDG_CURRENT_DESKTOP=$(printf '%s' "$XDG_CURRENT_DESKTOP" | tr ';' ':' | sed 's/:*$//') ;; esac
+case "${XDG_SESSION_DESKTOP:-}" in *\;*) XDG_SESSION_DESKTOP=${XDG_SESSION_DESKTOP%%;*} ;; esac
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:=LapinUX:COSMIC}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:=LapinUX}"
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:=wayland}"
@@ -95,21 +132,15 @@ if [ -z "${XCURSOR_SIZE:-}" ] && [ -f "$POINTER_SIZE_FILE" ]; then
     fi
 fi
 
+STEP="importing the environment"
 if command -v systemctl >/dev/null; then
-    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK
-    [ -n "${FONTCONFIG_FILE:-}" ] && systemctl --user import-environment FONTCONFIG_FILE
-    [ -n "${XCURSOR_SIZE:-}" ] && systemctl --user import-environment XCURSOR_SIZE
-    [ -n "${WGPU_BACKEND:-}" ] && systemctl --user import-environment WGPU_BACKEND
+    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK || echo "warning: could not hand the environment to systemd"
+    if [ -n "${FONTCONFIG_FILE:-}" ]; then systemctl --user import-environment FONTCONFIG_FILE || true; fi
+    if [ -n "${XCURSOR_SIZE:-}" ]; then systemctl --user import-environment XCURSOR_SIZE || true; fi
+    if [ -n "${WGPU_BACKEND:-}" ]; then systemctl --user import-environment WGPU_BACKEND || true; fi
 fi
+STEP="starting the session"
 
-# Keep a log of this session (and the previous one) for bug reports:
-#   ~/.local/state/lapin-ux/session.log
-LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
-if mkdir -p "$LOG_DIR" 2>/dev/null; then
-    [ -f "$LOG_DIR/session.log" ] && mv -f "$LOG_DIR/session.log" "$LOG_DIR/session.previous.log"
-    exec >>"$LOG_DIR/session.log" 2>&1
-fi
-echo "=== Lapin UX session start $(date -Iseconds) ==="
 echo "graphics: WGPU_BACKEND=${WGPU_BACKEND:-default}"
 pacman -Q lapin-ux-desktop-git 2>/dev/null || true   # which build this is
 # Crash reports with a backtrace (each Lapin program also writes
