@@ -440,6 +440,15 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,
   notifications (apps can ask for silence or their own sound), alarms, volume
   changes, emptying the Recycle Bin.
+- Settings > Personalization > Sounds: pick the scheme (config key
+  `sound_theme` in `dev.lapinux.Shell`, empty = no sounds, read live by
+  `lapin_ux_core::sound`), install schemes from an archive or folder into
+  `~/.local/share/sounds` (tracked in `~/.local/state/lapin-ux/sounds-added`,
+  only those can be removed there), and set a sound, silence or own file per
+  event. Per-event choices live in the `lapin-ux-custom` theme, so an installed
+  scheme is never edited. Uninstall removes `lapin-ux-custom` and leaves added
+  schemes (listing them). Battery and device events are listed but Lapin does
+  not play them yet.
 - Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
 - Settings > Accessibility > Mouse pointer (#24): style (the extra pointers,

@@ -1,0 +1,628 @@
+From 6039a23a6d52d2598204d0ff87d9bd3fbe8b460f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:23:29 +0800
+Subject: [PATCH] Lapin UX: Sounds page (scheme, install, per-event sounds)
+
+Refs #58
+---
+ cosmic-settings/src/lapin/categories.rs   |   1 +
+ cosmic-settings/src/lapin/mod.rs          |   1 +
+ cosmic-settings/src/lapin/pointers_add.rs |   6 +-
+ cosmic-settings/src/lapin/search.rs       |   3 +
+ cosmic-settings/src/lapin/settings.rs     | 188 ++++++++++++++
+ cosmic-settings/src/lapin/sounds_add.rs   | 294 ++++++++++++++++++++++
+ 6 files changed, 490 insertions(+), 3 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/sounds_add.rs
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 148a0db..f72bdfa 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -105,6 +105,7 @@ const SPECS: &[Spec] = &[
+             c("lapin-lock-screen", "system-lock-screen-symbolic", "Lock screen", "Lock screen images, sign-in screen"),
+             c("lapin-start", "view-app-grid-symbolic", "Start", "Recent items, search, web results"),
+             c("lapin-pointer", "input-mouse-symbolic", "Mouse pointers", "Pointer style, add your own, size"),
++            c("lapin-sounds", "audio-volume-high-symbolic", "Sounds", "Sound scheme, sounds for events"),
+             c("lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins"),
+             c("lapin-fonts", "preferences-desktop-font-symbolic", "Fonts", "System font, monospace font, text smoothing"),
+         ],
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index ad074e4..819185d 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -15,6 +15,7 @@ pub mod device;
+ pub mod icons;
+ pub mod pages;
+ mod pointers_add;
++mod sounds_add;
+ pub mod privacy;
+ pub mod rows;
+ pub mod search;
+diff --git a/cosmic-settings/src/lapin/pointers_add.rs b/cosmic-settings/src/lapin/pointers_add.rs
+index f2c13f9..e88e68f 100644
+--- a/cosmic-settings/src/lapin/pointers_add.rs
++++ b/cosmic-settings/src/lapin/pointers_add.rs
+@@ -59,7 +59,7 @@ pub fn find_themes(root: &Path) -> Vec<PathBuf> {
+     out
+ }
+ 
+-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
++pub(super) fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+     std::fs::create_dir_all(to)?;
+     for e in std::fs::read_dir(from)? {
+         let e = e?;
+@@ -82,14 +82,14 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+ }
+ 
+ /// A folder name that is safe to create under the icons folder.
+-fn safe_name(raw: &str) -> String {
++pub(super) fn safe_name(raw: &str) -> String {
+     let n: String = raw.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' }).collect();
+     let n = n.trim().trim_matches('.').to_string();
+     if n.is_empty() || n == "default" { "pointers".into() } else { n }
+ }
+ 
+ /// Unpacks an archive (`.tar.gz`, `.tar.xz`, `.zip`…) into a scratch folder.
+-fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
++pub(super) fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
+     for tool in ["bsdtar", "tar"] {
+         match Command::new(tool).arg("-xf").arg(archive).arg("-C").arg(into).output() {
+             Ok(o) if o.status.success() => return Ok(()),
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index bf41009..c61a0c4 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -48,6 +48,9 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-pointer", "Add your own mouse pointers"),
+     ("lapin-pointer", "Busy pointer colour"),
+     ("lapin-pointer", "Mouse pointer size"),
++    ("lapin-sounds", "Sound scheme"),
++    ("lapin-sounds", "Install a sound scheme"),
++    ("lapin-sounds", "System sounds for events"),
+     ("lapin-start", "Show web results in search"),
+     ("lapin-start", "Search engine"),
+     ("lapin-start", "Show recently opened items in Start and jump lists"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index f3ae069..98655ef 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -6,6 +6,7 @@
+ //! `dev.lapinux.Notifications`), so changes apply at once.
+ 
+ use super::pointers_add;
++use super::sounds_add;
+ use cosmic::{Apply, Element};
+ use cosmic::widget::list_column::IntoListItem;
+ use cosmic::iced::Length;
+@@ -138,6 +139,11 @@ pub struct Prefs {
+     pub pointer_error: Option<String>,
+     /// What the last Add or Remove said.
+     pub pointer_note: Option<String>,
++    /// Sounds (#58): the chosen scheme ("" = none) and the installed ones.
++    pub sound_scheme: String,
++    pub sound_ids: Vec<String>,
++    pub sound_names: Vec<String>,
++    pub sound_note: Option<String>,
+     /// Personalization > Fonts (#40): "rgb" / "bgr" / "grayscale" for apps
+     /// using the system's font settings, and Lapin's own text contrast (0–2).
+     pub text_smoothing: String,
+@@ -199,6 +205,10 @@ impl Prefs {
+             pointer_busy_now: false,
+             pointer_error: None,
+             pointer_note: None,
++            sound_scheme: get(&shell, "sound_theme").unwrap_or_else(|| sounds_add::DEFAULT.into()),
++            sound_ids: sound_lists().0,
++            sound_names: sound_lists().1,
++            sound_note: None,
+             text_smoothing: get(&shell, "text_smoothing").unwrap_or_else(|| "rgb".into()),
+             system_font: cosmic::config::interface_font().family,
+             mono_font: cosmic::config::monospace_font().family,
+@@ -246,6 +256,13 @@ pub enum Msg {
+     PointersAdded(Result<Vec<String>, String>),
+     RemovePointers,
+     PointersRemoved(Result<(), String>),
++    SoundScheme(usize),
++    SoundEvent(usize, usize),
++    SoundTest(usize),
++    SoundFile(usize, Option<std::path::PathBuf>),
++    InstallScheme,
++    SchemeInstalled(Result<Vec<String>, String>),
++    RemoveScheme,
+     // Personalization > Fonts (#40)
+     TextSmoothing(usize),
+     TextContrast(u32),
+@@ -463,6 +480,113 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+                 return tool.chain(cosmic::task::message(crate::Message::PageMessage(PMsg::Lapin(Msg::PointersRemoved(res)))));
+             }
+         }
++        Msg::SoundScheme(i) => {
++            p.sound_scheme = p.sound_ids.get(i).cloned().unwrap_or_default();
++            save(SHELL, "sound_theme", &p.sound_scheme);
++            if !p.sound_scheme.is_empty() {
++                let _ = std::fs::write(
++                    sounds_add::user_data().join("sounds").join(sounds_add::CUSTOM).join("index.theme"),
++                    format!("[Sound Theme]\nName=Lapin UX (your sounds)\nInherits={}\nDirectories=stereo\n", p.sound_scheme),
++                )
++                .ok();
++            }
++            p.sound_note = None;
++        }
++        Msg::SoundEvent(e, choice) => {
++            let (Some((event, _)), user) = (sounds_add::EVENTS.get(e), sounds_add::user_data()) else { return cosmic::Task::none() };
++            match choice {
++                0 => sounds_add::use_scheme_sound(&user, event),
++                1 => p.sound_note = sounds_add::set_silent(&user, &p.sound_scheme, event).err(),
++                _ => {
++                    #[cfg(feature = "xdg-portal")]
++                    return cosmic::task::future(async move {
++                        use cosmic::dialog::file_chooser;
++                        let filter = file_chooser::FileFilter::new("Sounds").glob("*.ogg").glob("*.oga").glob("*.wav").glob("*.flac").glob("*.mp3");
++                        let picked = file_chooser::open::Dialog::new()
++                            .title("Choose a sound")
++                            .accept_label("Use this sound")
++                            .filter(filter)
++                            .modal(false)
++                            .open_file()
++                            .await
++                            .ok()
++                            .and_then(|r| r.url().to_file_path().ok());
++                        crate::Message::PageMessage(PMsg::Lapin(Msg::SoundFile(e, picked)))
++                    });
++                }
++            }
++        }
++        Msg::SoundFile(e, path) => {
++            if let (Some((event, _)), Some(path)) = (sounds_add::EVENTS.get(e), path) {
++                p.sound_note = sounds_add::set_file(&sounds_add::user_data(), &p.sound_scheme, event, &path).err();
++            }
++        }
++        Msg::SoundTest(e) => {
++            if let Some((event, _)) = sounds_add::EVENTS.get(e)
++                && let Some(f) = sounds_add::current_file(&sounds_add::data_dirs(), &p.sound_scheme, event)
++            {
++                for player in ["pw-play", "paplay"] {
++                    if let Ok(mut c) = std::process::Command::new(player)
++                        .arg(&f)
++                        .stdin(std::process::Stdio::null())
++                        .stdout(std::process::Stdio::null())
++                        .stderr(std::process::Stdio::null())
++                        .spawn()
++                    {
++                        std::thread::spawn(move || {
++                            let _ = c.wait();
++                        });
++                        break;
++                    }
++                }
++            }
++        }
++        Msg::InstallScheme => {
++            #[cfg(feature = "xdg-portal")]
++            return cosmic::task::future(async {
++                use cosmic::dialog::file_chooser;
++                let filter = file_chooser::FileFilter::new("Sound schemes").glob("*.tar.gz").glob("*.tgz").glob("*.tar.xz").glob("*.tar.bz2").glob("*.tar.zst").glob("*.zip");
++                let picked = file_chooser::open::Dialog::new()
++                    .title("Choose a sound scheme")
++                    .accept_label("Install scheme")
++                    .filter(filter)
++                    .modal(false)
++                    .open_file()
++                    .await
++                    .ok()
++                    .and_then(|r| r.url().to_file_path().ok());
++                let Some(path) = picked else { return crate::Message::None };
++                let res = tokio::task::spawn_blocking(move || {
++                    sounds_add::install(&path, &sounds_add::user_data(), &sounds_add::state_file(), &std::env::temp_dir())
++                })
++                .await
++                .unwrap_or_else(|_| Err("It didn't work.".into()));
++                crate::Message::PageMessage(PMsg::Lapin(Msg::SchemeInstalled(res)))
++            });
++        }
++        Msg::SchemeInstalled(r) => match r {
++            Ok(names) => {
++                (p.sound_ids, p.sound_names) = sound_lists();
++                if let Some(first) = names.first() {
++                    p.sound_scheme = first.clone();
++                    save(SHELL, "sound_theme", &p.sound_scheme);
++                }
++                p.sound_note = Some(format!("Installed: {}.", names.join(", ")));
++            }
++            Err(e) => p.sound_note = Some(e),
++        },
++        Msg::RemoveScheme => {
++            let res = sounds_add::remove(&p.sound_scheme, &sounds_add::user_data(), &sounds_add::state_file());
++            p.sound_note = Some(match res {
++                Ok(()) => {
++                    p.sound_scheme = sounds_add::DEFAULT.into();
++                    save(SHELL, "sound_theme", &p.sound_scheme);
++                    (p.sound_ids, p.sound_names) = sound_lists();
++                    "Removed. Back to the standard sounds.".into()
++                }
++                Err(e) => e,
++            });
++        }
+         Msg::PointersRemoved(r) => {
+             forget_pointer_themes();
+             p.pointer_note = Some(match r {
+@@ -995,6 +1119,69 @@ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     rows
+ }
+ 
++// --- Personalization > Sounds (#58) -------------------------------------------
++
++/// "No sounds" first, then every installed scheme: (ids, names).
++fn sound_lists() -> (Vec<String>, Vec<String>) {
++    let mut ids = vec![String::new()];
++    let mut names = vec!["No sounds".to_string()];
++    for (i, n) in sounds_add::themes(&sounds_add::data_dirs()) {
++        ids.push(i);
++        names.push(n);
++    }
++    (ids, names)
++}
++
++const SOUND_CHOICES: [&str; 3] = ["The scheme's sound", "No sound", "Choose a file\u{2026}"];
++
++fn sound_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
++    let sel = p.sound_ids.iter().position(|i| *i == p.sound_scheme).unwrap_or(0);
++    let mine = !p.sound_scheme.is_empty() && sounds_add::added(&sounds_add::state_file()).iter().any(|a| *a == p.sound_scheme);
++    let mut buttons = widget::row::with_capacity(2).spacing(8);
++    if mine {
++        buttons = buttons.push(widget::button::standard("Remove").on_press(m(Msg::RemoveScheme)));
++    }
++    buttons = buttons.push(widget::button::standard("Install a scheme\u{2026}").on_press(m(Msg::InstallScheme)));
++    let mut rows = vec![
++        settings::item::builder("Sound scheme")
++            .description(match &p.sound_note {
++                Some(n) => n.clone(),
++                None => "The sounds for sign-in, notifications, volume and more. Install a scheme from a .tar.gz, .tar.xz or .zip file, or a folder.".to_string(),
++            })
++            .control(widget::dropdown(&p.sound_names, Some(sel), |i| m(Msg::SoundScheme(i))))
++            .apply(Element::from)
++            .into_list_item(),
++        settings::item::builder("Your own schemes").control(buttons).apply(Element::from).into_list_item(),
++    ];
++    if p.sound_scheme.is_empty() {
++        return rows;
++    }
++    let user = sounds_add::user_data();
++    for (e, (event, label)) in sounds_add::EVENTS.iter().enumerate() {
++        let (cur, desc) = match sounds_add::choice(&user, event) {
++            sounds_add::Choice::Scheme => (0, "From the scheme".to_string()),
++            sounds_add::Choice::Silent => (1, "No sound".to_string()),
++            sounds_add::Choice::File(f) => (2, f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
++        };
++        rows.push(
++            settings::item::builder(*label)
++                .description(desc)
++                .control(
++                    widget::row::with_capacity(2)
++                        .spacing(8)
++                        .align_y(cosmic::iced::Alignment::Center)
++                        .push(widget::button::standard("Test").on_press(m(Msg::SoundTest(e))))
++                        .push(widget::dropdown(&SOUND_CHOICES, Some(cur), move |i| m(Msg::SoundEvent(e, i)))),
++                )
++                .apply(Element::from)
++                .into_list_item(),
++        );
++    }
++    rows
++}
++
++lapin_page!(Sounds, "lapin-sounds", "audio-volume-high-symbolic", "Sounds", "Sound scheme, sounds for events", [("", sound_rows)]);
++
+ // --- Personalization > Fonts (#40) --------------------------------------------
+ 
+ /// How apps that use the system's font settings (GTK, Qt, Firefox,
+@@ -1492,6 +1679,7 @@ pub fn register(pages: &mut Binder<PMsg>) {
+     let _ = pages.register::<Clipboard>();
+     let _ = pages.register::<LockScreen>();
+     let _ = pages.register::<Pointer>();
++    let _ = pages.register::<Sounds>();
+     let _ = pages.register::<Fonts>();
+     let _ = pages.register::<super::apps::Page>();
+     let _ = pages.register::<super::storage::Page>();
+diff --git a/cosmic-settings/src/lapin/sounds_add.rs b/cosmic-settings/src/lapin/sounds_add.rs
+new file mode 100644
+index 0000000..94c3236
+--- /dev/null
++++ b/cosmic-settings/src/lapin/sounds_add.rs
+@@ -0,0 +1,294 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Sound schemes and per-event sounds (#58). Lapin plays sounds from the scheme
++//! named in `dev.lapinux.Shell` `sound_theme`; the user's per-event choices live
++//! in `~/.local/share/sounds/lapin-ux-custom`, so no installed scheme is edited.
++//! Mirrors `lapin_ux_core::sound` (Settings builds without Lapin's crates).
++
++use super::pointers_add::{copy_dir, safe_name, unpack};
++use std::path::{Path, PathBuf};
++
++pub const CUSTOM: &str = "lapin-ux-custom";
++pub const DEFAULT: &str = "borealis";
++
++/// (freedesktop name, label, group): same list as `lapin_ux_core::sound::EVENTS`.
++pub const EVENTS: &[(&str, &str)] = &[
++    ("desktop-login", "Sign in"),
++    ("desktop-logout", "Sign out"),
++    ("message-new-instant", "Notification"),
++    ("dialog-warning", "Warning"),
++    ("dialog-error", "Error"),
++    ("dialog-question", "Question"),
++    ("battery-low", "Low battery"),
++    ("battery-caution", "Critical battery"),
++    ("device-added", "Device connected"),
++    ("device-removed", "Device disconnected"),
++    ("trash-empty", "Empty Recycle Bin"),
++    ("camera-shutter", "Screenshot"),
++    ("audio-volume-change", "Volume change"),
++];
++
++const EXTS: [&str; 5] = ["oga", "ogg", "wav", "flac", "mp3"];
++
++fn home() -> PathBuf {
++    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
++}
++pub fn user_data() -> PathBuf {
++    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
++}
++pub fn data_dirs() -> Vec<PathBuf> {
++    let mut v = vec![user_data()];
++    let sys = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
++    v.extend(sys.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
++    v
++}
++pub fn state_file() -> PathBuf {
++    let st = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/state"));
++    st.join("lapin-ux").join("sounds-added")
++}
++
++/// Installed schemes: (folder, display name).
++pub fn themes(dirs: &[PathBuf]) -> Vec<(String, String)> {
++    let mut out: Vec<(String, String)> = Vec::new();
++    for d in dirs {
++        let Ok(rd) = std::fs::read_dir(d.join("sounds")) else { continue };
++        for e in rd.flatten() {
++            let id = e.file_name().to_string_lossy().into_owned();
++            let Ok(index) = std::fs::read_to_string(e.path().join("index.theme")) else { continue };
++            if id == CUSTOM || id == "freedesktop" || out.iter().any(|(i, _)| *i == id) {
++                continue;
++            }
++            let name = index.lines().find_map(|l| l.strip_prefix("Name=")).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
++            out.push((id, name));
++        }
++    }
++    out.sort_by_key(|(_, n)| n.to_lowercase());
++    out
++}
++
++pub fn added(state: &Path) -> Vec<String> {
++    std::fs::read_to_string(state).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
++}
++
++/// What the user chose for `event`.
++#[derive(Debug, PartialEq)]
++pub enum Choice {
++    Scheme,
++    Silent,
++    File(PathBuf),
++}
++
++fn custom_dir(user: &Path) -> PathBuf {
++    user.join("sounds").join(CUSTOM).join("stereo")
++}
++
++pub fn choice(user: &Path, event: &str) -> Choice {
++    let dir = custom_dir(user);
++    if dir.join(format!("{event}.silent")).exists() {
++        return Choice::Silent;
++    }
++    for ext in EXTS {
++        let p = dir.join(format!("{event}.{ext}"));
++        if p.is_file() {
++            return Choice::File(p);
++        }
++    }
++    Choice::Scheme
++}
++
++fn clear(user: &Path, event: &str) {
++    let dir = custom_dir(user);
++    let _ = std::fs::remove_file(dir.join(format!("{event}.silent")));
++    for ext in EXTS {
++        let _ = std::fs::remove_file(dir.join(format!("{event}.{ext}")));
++    }
++}
++
++fn ensure_custom(user: &Path, scheme: &str) -> std::io::Result<PathBuf> {
++    let dir = custom_dir(user);
++    std::fs::create_dir_all(&dir)?;
++    let index = dir.parent().map(|p| p.join("index.theme")).unwrap_or_default();
++    std::fs::write(index, format!("[Sound Theme]\nName=Lapin UX (your sounds)\nInherits={scheme}\nDirectories=stereo\n\n[stereo]\nOutputProfile=stereo\n"))?;
++    Ok(dir)
++}
++
++pub fn use_scheme_sound(user: &Path, event: &str) {
++    clear(user, event);
++}
++
++pub fn set_silent(user: &Path, scheme: &str, event: &str) -> Result<(), String> {
++    let dir = ensure_custom(user, scheme).map_err(|e| e.to_string())?;
++    clear(user, event);
++    std::fs::write(dir.join(format!("{event}.silent")), b"").map_err(|e| e.to_string())
++}
++
++pub fn set_file(user: &Path, scheme: &str, event: &str, file: &Path) -> Result<(), String> {
++    let ext = file.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
++    if !EXTS.contains(&ext.as_str()) {
++        return Err("Use an .ogg, .oga, .wav, .flac or .mp3 file.".into());
++    }
++    let dir = ensure_custom(user, scheme).map_err(|e| e.to_string())?;
++    clear(user, event);
++    std::fs::copy(file, dir.join(format!("{event}.{ext}"))).map(|_| ()).map_err(|e| format!("Couldn't copy the sound: {e}"))
++}
++
++/// The file Lapin would play for `event` with `scheme` (for Test).
++pub fn current_file(dirs: &[PathBuf], scheme: &str, event: &str) -> Option<PathBuf> {
++    if let Some(user) = dirs.first() {
++        match choice(user, event) {
++            Choice::Silent => return None,
++            Choice::File(f) => return Some(f),
++            Choice::Scheme => {}
++        }
++    }
++    for t in [scheme, "freedesktop"] {
++        for d in dirs {
++            for sub in ["stereo", ""] {
++                for ext in ["oga", "ogg", "wav"] {
++                    let p = d.join("sounds").join(t).join(sub).join(format!("{event}.{ext}"));
++                    if p.is_file() {
++                        return Some(p);
++                    }
++                }
++            }
++        }
++    }
++    None
++}
++
++fn find_schemes(root: &Path) -> Vec<PathBuf> {
++    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
++        if dir.join("index.theme").is_file() && (dir.join("stereo").is_dir() || has_audio(dir)) {
++            out.push(dir.to_path_buf());
++            return;
++        }
++        if depth >= 3 {
++            return;
++        }
++        let Ok(rd) = std::fs::read_dir(dir) else { return };
++        let mut subs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.is_symlink()).collect();
++        subs.sort();
++        for s in subs {
++            walk(&s, depth + 1, out);
++        }
++    }
++    fn has_audio(d: &Path) -> bool {
++        std::fs::read_dir(d).map(|rd| rd.flatten().any(|e| matches!(e.path().extension().and_then(|x| x.to_str()), Some("oga" | "ogg" | "wav")))).unwrap_or(false)
++    }
++    let mut out = Vec::new();
++    walk(root, 0, &mut out);
++    out
++}
++
++/// Install a scheme from an archive or folder into `<user>/sounds`.
++pub fn install(source: &Path, user: &Path, state: &Path, scratch_parent: &Path) -> Result<Vec<String>, String> {
++    let scratch = scratch_parent.join(format!("lapin-sounds-{}", std::process::id()));
++    let _ = std::fs::remove_dir_all(&scratch);
++    std::fs::create_dir_all(&scratch).map_err(|e| format!("Couldn't prepare the files: {e}"))?;
++    let res = (|| {
++        let root = if source.is_dir() {
++            source.to_path_buf()
++        } else {
++            unpack(source, &scratch)?;
++            scratch.clone()
++        };
++        let found = find_schemes(&root);
++        if found.is_empty() {
++            return Err("This doesn't look like a sound scheme (it has no index.theme with sounds).".to_string());
++        }
++        let sounds = user.join("sounds");
++        std::fs::create_dir_all(&sounds).map_err(|e| e.to_string())?;
++        let mut done = Vec::new();
++        for t in found {
++            let raw = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
++            let raw = if t == root && !source.is_dir() { source.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or(raw.clone()) } else { raw };
++            let name = safe_name(raw.trim_end_matches(".tar"));
++            if name == CUSTOM || name == "freedesktop" {
++                return Err("That name is reserved.".into());
++            }
++            let dest = sounds.join(&name);
++            if dest.exists() {
++                return Err(format!("You already have a sound scheme called \"{name}\"."));
++            }
++            copy_dir(&t, &dest).map_err(|e| {
++                let _ = std::fs::remove_dir_all(&dest);
++                format!("Couldn't copy the sounds: {e}")
++            })?;
++            let mut all = added(state);
++            all.push(name.clone());
++            if let Some(p) = state.parent() {
++                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
++            }
++            std::fs::write(state, all.join("\n") + "\n").map_err(|e| e.to_string())?;
++            done.push(name);
++        }
++        Ok(done)
++    })();
++    let _ = std::fs::remove_dir_all(&scratch);
++    res
++}
++
++/// Remove a scheme this page installed (and only that).
++pub fn remove(name: &str, user: &Path, state: &Path) -> Result<(), String> {
++    if name.contains('/') || name.is_empty() || !added(state).iter().any(|n| n == name) {
++        return Err("Only sound schemes added here can be removed here.".into());
++    }
++    let dir = user.join("sounds").join(name);
++    if dir.is_dir() && !dir.is_symlink() {
++        std::fs::remove_dir_all(&dir).map_err(|e| format!("Couldn't remove it: {e}"))?;
++    }
++    let rest: Vec<String> = added(state).into_iter().filter(|n| n != name).collect();
++    std::fs::write(state, if rest.is_empty() { String::new() } else { rest.join("\n") + "\n" }).map_err(|e| e.to_string())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn tmp(tag: &str) -> PathBuf {
++        let d = std::env::temp_dir().join(format!("lapin-snd-{tag}-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&d);
++        std::fs::create_dir_all(&d).unwrap();
++        d
++    }
++    fn scheme(dir: &Path, name: &str) {
++        std::fs::create_dir_all(dir.join("stereo")).unwrap();
++        std::fs::write(dir.join("index.theme"), format!("[Sound Theme]\nName={name}\n")).unwrap();
++        std::fs::write(dir.join("stereo/desktop-login.oga"), b"x").unwrap();
++    }
++
++    #[test]
++    fn install_then_remove_only_what_was_added() {
++        let (src, user, st, scratch) = (tmp("s"), tmp("u"), tmp("st").join("added"), tmp("sc"));
++        scheme(&src.join("Ocean"), "Ocean waves");
++        assert_eq!(install(&src.join("Ocean"), &user, &st, &scratch).unwrap(), ["Ocean"]);
++        assert_eq!(themes(std::slice::from_ref(&user)), [("Ocean".to_string(), "Ocean waves".to_string())]);
++        assert!(install(&src.join("Ocean"), &user, &st, &scratch).unwrap_err().contains("already have"));
++        scheme(&user.join("sounds/Mine"), "Mine");
++        assert!(remove("Mine", &user, &st).is_err() && user.join("sounds/Mine").exists());
++        remove("Ocean", &user, &st).unwrap();
++        assert!(!user.join("sounds/Ocean").exists() && added(&st).is_empty());
++        std::fs::create_dir_all(src.join("none/docs")).unwrap();
++        assert!(install(&src.join("none"), &user, &st, &scratch).unwrap_err().contains("doesn't look like"));
++    }
++
++    #[test]
++    fn per_event_choices_never_touch_the_scheme() {
++        let user = tmp("c");
++        scheme(&user.join("sounds/borealis"), "Borealis");
++        let dirs = vec![user.clone()];
++        assert_eq!(choice(&user, "desktop-login"), Choice::Scheme);
++        assert!(current_file(&dirs, "borealis", "desktop-login").unwrap().to_string_lossy().contains("borealis"));
++        set_silent(&user, "borealis", "desktop-login").unwrap();
++        assert_eq!(choice(&user, "desktop-login"), Choice::Silent);
++        assert!(current_file(&dirs, "borealis", "desktop-login").is_none());
++        let mine = user.join("beep.wav");
++        std::fs::write(&mine, b"x").unwrap();
++        set_file(&user, "borealis", "desktop-login", &mine).unwrap();
++        assert!(matches!(choice(&user, "desktop-login"), Choice::File(_)));
++        assert!(set_file(&user, "borealis", "desktop-login", &user.join("x.txt")).is_err());
++        use_scheme_sound(&user, "desktop-login");
++        assert_eq!(choice(&user, "desktop-login"), Choice::Scheme);
++        assert!(user.join("sounds/borealis/stereo/desktop-login.oga").exists());
++        assert!(themes(&dirs).iter().all(|(i, _)| i != CUSTOM));
++    }
++}
+-- 
+2.43.0
+
