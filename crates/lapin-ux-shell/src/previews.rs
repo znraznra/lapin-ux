@@ -251,9 +251,10 @@ impl Shell {
         // No thumbnails are needed, and with nothing of ours open there is
         // no keyboard hand-back to wait for (#65).
         if self.alt_down == Some(false) {
-            let nothing_open = self.start.is_none() && self.popup.is_none();
+            // An open panel (Run, say) holds the keyboard too, so it counts and is closed.
+            let nothing_open = self.start.is_none() && self.popup.is_none() && self.panel.is_none();
             tracing::info!(nothing_open, since_request_ms = self.alttab_at.map_or(0, |t| t.elapsed().as_millis() as u64), "alt-tab: quick tap");
-            let close = Task::batch([self.close_start(), self.close_popup()]);
+            let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);
             let target = order[selected];
             let activate = if nothing_open { Task::done(cosmic::Action::App(Message::ActivateWindow(target))) } else { activate_after_close(target) };
             return Task::batch([close, activate]);
