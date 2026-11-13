@@ -731,6 +731,28 @@ plan; `--settings-only` only restores settings (for someone who already ran
   installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
   else sets greetd to a text login (`agreety`, old config kept as
   `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
+- **Sign-in screen and boot animation (#100).** `tools/lapin-ux-login
+  use-lapin` first saves the enabled display manager, `/etc/greetd/config.toml`
+  and the Plymouth theme to `/var/lib/lapin-ux/login` (the first record is
+  never overwritten), then points greetd at Lapin UX's sign-in screen and
+  enables it in place of the old display manager (rolled back if greetd
+  can't be enabled). The boot animation (a `lapin-ux` Plymouth theme: the
+  firmware's BGRT logo with a spinner, or the system's own logo from
+  `/etc/os-release` when the firmware has none) is set only when Plymouth is
+  already set up; the initramfs configuration and the boot loader's are not edited, but the initramfs itself is rebuilt to apply the theme (the Plymouth theme setting changes).
+  `lapin-ux-login restore`, `lapin-ux-uninstall` and the desktop package's
+  `pre_remove` put everything back. pacman doesn't stop a removal when a
+  scriptlet fails, so `pre_remove` first keeps a runnable copy of the tool in
+  `/var/lib/lapin-ux/login/lapin-ux-login-recover`. If your own display manager
+  can't be enabled again, greetd stays on and the whole record is kept. If only
+  the boot animation can't be put back, the sign-in screen is already restored
+  (greetd off, your display manager on), the record is kept for the boot
+  animation, and `restore` reports failure until that is fixed. Either way the
+  message says how to finish it.
+  `use-lapin` and `restore` share one lock, and a failed `use-lapin` never
+  deletes a record from an earlier run. `./install.sh` and the first-run setup
+  ask (Enter = Lapin UX's; `--keep-login` for unattended runs). Tests:
+  `tools/test-login/run.sh`.
 - **Sign-in screen picture and font (#100).** The sign-in screen shows the
   selected (last signed-in, else the first) user's lock screen picture and
   system font, read by the greeter daemon from that user's `dev.lapinux.Shell`

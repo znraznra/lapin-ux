@@ -6,8 +6,23 @@
 # Installs the build tools, then builds and installs Lapin UX together with
 # its compositor build; pacman pulls in every other dependency
 # automatically. The font and icon sets ship inside this repository.
+#
+#   ./install.sh               use Lapin UX's sign-in screen and boot animation
+#                              (asks first; Enter means yes, and unattended runs
+#                              do the same)
+#   ./install.sh --keep-login  keep your own sign-in screen and boot animation;
+#                              Lapin UX is then one more session in your list
 set -euo pipefail
 cd "$(dirname "$0")"
+
+use_lapin_login=1
+for arg in "$@"; do
+    case "$arg" in
+    --keep-login) use_lapin_login=0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
+    esac
+done
 
 if ! command -v pacman >/dev/null; then
     echo "Lapin UX's installer is for Arch Linux (pacman was not found)." >&2
@@ -16,6 +31,14 @@ fi
 if [[ $EUID -eq 0 ]]; then
     echo "Run this as your normal user; it asks for your password when it needs it." >&2
     exit 1
+fi
+
+# Asked first, so the long build below can run without anyone watching.
+if [[ $use_lapin_login -eq 1 && -t 0 ]]; then
+    echo "Use Lapin UX's sign-in screen and boot animation? Your current ones are kept and come"
+    echo "back if you uninstall Lapin UX."
+    read -r -p "Use Lapin UX's? [Y/n] " answer
+    [[ $answer == [nN]* ]] && use_lapin_login=0
 fi
 
 tools=(base-devel git)
@@ -97,6 +120,16 @@ if [ ${#replaced[@]} -gt 0 ]; then
     echo "Replacing COSMIC's own ${replaced[*]} with Lapin UX's versions (they come back if you uninstall Lapin UX)."
 fi
 sudo pacman -U --noconfirm --needed --ask 4 "${built[@]}"
+
+if [[ $use_lapin_login -eq 1 ]]; then
+    echo
+    echo "Setting up Lapin UX's sign-in screen and boot animation (what you have now is saved first)."
+    sudo lapin-ux-login use-lapin || echo "Couldn't set them up; your own are unchanged. Try again with: sudo lapin-ux-login use-lapin"
+else
+    echo
+    echo "Keeping your own sign-in screen and boot animation. Lapin UX is in your session list."
+    echo "To switch later: sudo lapin-ux-login use-lapin"
+fi
 
 # Optional extra mouse pointers. Their author (JepriCreations) doesn't
 # allow the files to be redistributed, so they're downloaded and converted

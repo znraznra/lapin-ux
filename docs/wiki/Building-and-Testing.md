@@ -1,7 +1,7 @@
 # Building and Testing
 
 ## Install (Arch)
-`./install.sh` asks for the password once, keeps sudo alive during the build, and moves a hand-installed Win11 icon theme aside. One split PKGBUILD (`packaging/arch`) builds the Lapin packages. Uninstall with `./uninstall.sh` (see [Coexistence and Uninstall](Coexistence-and-Uninstall)).
+`./install.sh` asks for the password once, keeps sudo alive during the build, and moves a hand-installed Win11 icon theme aside. One split PKGBUILD (`packaging/arch`) builds the Lapin packages. It asks whether to use Lapin UX's sign-in screen and boot animation (Enter means yes; `./install.sh --keep-login` keeps yours). The same question comes in the first-run setup. What you had is saved first and comes back with `sudo lapin-ux-login restore`, `./uninstall.sh` or a plain `pacman -R`. The boot animation is only set when Plymouth is already set up; the initramfs configuration and your boot loader are not edited, but the initramfs itself is rebuilt to apply the theme (the Plymouth theme setting changes). Uninstall with `./uninstall.sh` (see [Coexistence and Uninstall](Coexistence-and-Uninstall)).
 
 ## Building
 - Lapin: `cargo build` (debug; the test harness uses `target/debug`).
@@ -12,7 +12,7 @@
 ## Tests
 - `lapin-ux-core`: 99 unit tests.
 - Settings: `cargo test --release --locked -p cosmic-settings --bin cosmic-settings lapin` (13 passed).
-- Uninstaller: `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (59 checks, needs dconf and dbus-run-session; run as a normal user) plus `shellcheck`.
+- Uninstaller: `bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"` (needs dconf and dbus-run-session; run as a normal user) plus `shellcheck`. Sign-in screen and boot animation: `bash tools/test-login/run.sh "$PWD/tools/lapin-ux-login"` (fake root, fake systemctl and Plymouth).
 
 ## Sandbox test harness
 Run `dbus-run-session -- bash run.sh bash b9.sh`. Helpers: `S name [wait]` screenshot, `C x y wait [right]` click, `SH <subcommand>`, `W` wtype, `F app-id "Title"` foot window. Screenshots are 1600x900 with the nested screen at offset (160,50), 1280x800. `mocksys` mocks logind and systemd; `fakebin` stands in for checkupdates, flatpak, fwupdmgr, pkexec. `LAPIN_UX_ANIM_SCALE=10` slows animations for mid-frame captures.
