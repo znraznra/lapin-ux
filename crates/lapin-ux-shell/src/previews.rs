@@ -63,6 +63,8 @@ pub enum PreviewMsg {
 
 const SHOW_DELAY: Duration = Duration::from_millis(400);
 const HIDE_DELAY: Duration = Duration::from_millis(300);
+/// A preview switch waits until the previous pop-up has had this long to exist (#34).
+const SWITCH_GAP: Duration = Duration::from_millis(350);
 
 fn later(d: Duration, m: PreviewMsg) -> Task<Message> {
     Task::future(async move {
@@ -132,8 +134,18 @@ impl Shell {
                 self.capture(windows);
                 return match self.preview_open() {
                     Some(open) if open == app => Task::none(),
-                    // Moving along the taskbar switches previews at once.
-                    Some(_) => self.update_preview(PreviewMsg::Show(serial)),
+                    // Moving along the taskbar switches previews at once, but
+                    // not while the last one is still being created: closing a
+                    // pop-up that doesn't exist yet destroys nothing and leaves
+                    // a stray (#34), which the log showed several times a second.
+                    Some(_) => {
+                        let age = self.popup_opened_at.elapsed();
+                        if age < SWITCH_GAP {
+                            later(SWITCH_GAP - age, PreviewMsg::Show(serial))
+                        } else {
+                            self.update_preview(PreviewMsg::Show(serial))
+                        }
+                    }
                     None => later(SHOW_DELAY, PreviewMsg::Show(serial)),
                 };
             }
