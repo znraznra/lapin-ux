@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake plymouth-set-default-theme: the theme is a line in $LAPIN_LOGIN_ROOT/etc/plymouth/plymouthd.conf.
+C=$LAPIN_LOGIN_ROOT/etc/plymouth/plymouthd.conf; mkdir -p "$(dirname "$C")"
+args=(); for a in "$@"; do case "$a" in -R) ;; *) args+=("$a");; esac; done
+case "${args[0]:-}" in
+"") sed -n 's/^Theme=//p' "$C" 2>/dev/null | head -n1 ;;
+--reset) rm -f "$C" ;;
+*) [ -d "$LAPIN_LOGIN_ROOT/usr/share/plymouth/themes/${args[0]}" ] || exit 1
+   printf '[Daemon]\nTheme=%s\n' "${args[0]}" > "$C" ;;
+esac

@@ -708,6 +708,19 @@ plan; `--settings-only` only restores settings (for someone who already ran
   installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
   else sets greetd to a text login (`agreety`, old config kept as
   `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
+- **Sign-in screen and boot animation (#100).** `tools/lapin-ux-login
+  use-lapin` first saves the enabled display manager, `/etc/greetd/config.toml`
+  and the Plymouth theme to `/var/lib/lapin-ux/login` (the first record is
+  never overwritten), then points greetd at Lapin UX's sign-in screen and
+  enables it in place of the old display manager (rolled back if greetd
+  can't be enabled). The boot animation (a `lapin-ux` Plymouth theme: the
+  firmware's BGRT logo with a spinner, or the system's own logo from
+  `/etc/os-release` when the firmware has none) is set only when Plymouth is
+  already set up; nothing in the initramfs or boot loader is edited.
+  `lapin-ux-login restore`, `lapin-ux-uninstall` and the desktop package's
+  `pre_remove` put everything back. `./install.sh` and the first-run setup
+  ask (Enter = Lapin UX's; `--keep-login` for unattended runs). Tests:
+  `tools/test-login/run.sh`.
 - Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf; 55
   checks, scenario I covers giving other desktops' skipped startup parts back).
 

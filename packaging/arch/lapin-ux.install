@@ -18,6 +18,11 @@ post_upgrade() {
 pre_remove() {
     # lapin-ux-uninstall leaves this mark and does all this itself.
     [ -e /run/lapin-ux-uninstall ] && return 0
+    # Your own sign-in screen and boot animation come back (#100).
+    if [ -f /var/lib/lapin-ux/login/complete ] && [ -x /usr/bin/lapin-ux-login ]; then
+        echo ":: Lapin UX: putting your own sign-in screen and boot animation back..."
+        /usr/bin/lapin-ux-login restore || echo "   Couldn't; run: sudo lapin-ux-login restore"
+    fi
     # Removed with plain pacman: give every account that used Lapin UX its own
     # desktop settings back, the way lapin-ux-uninstall does.
     echo ":: Lapin UX: giving each account its own desktop settings back..."

@@ -15,7 +15,15 @@ enum Step {
     Network,
     Mode,
     Pointers,
+    /// Lapin UX's sign-in screen and boot animation, or your own (#100).
+    Login,
     Done,
+}
+
+/// Asked only when the tool is installed and nothing was chosen yet (a saved
+/// restore point means Lapin UX's are already in use).
+fn login_step_needed() -> bool {
+    std::path::Path::new("/usr/bin/lapin-ux-login").exists() && !std::path::Path::new("/var/lib/lapin-ux/login/complete").exists()
 }
 
 impl Step {
@@ -24,7 +32,8 @@ impl Step {
             Step::Hello => Step::Network,
             Step::Network => Step::Mode,
             Step::Mode => Step::Pointers,
-            Step::Pointers | Step::Done => Step::Done,
+            Step::Pointers if login_step_needed() => Step::Login,
+            Step::Pointers | Step::Login | Step::Done => Step::Done,
         }
     }
 }
@@ -50,6 +59,9 @@ enum Message {
     Pointers,
     /// Ok, or the reason it failed (the tool's last line of output).
     PointersDone(Result<(), String>),
+    /// `true`: use Lapin UX's sign-in screen and boot animation; `false`: keep mine.
+    Login(bool),
+    LoginDone(Result<(), String>),
 }
 
 struct App {
@@ -64,6 +76,8 @@ struct App {
     dark: bool,
     pointers: Option<Result<(), String>>,
     installing_pointers: bool,
+    login: Option<Result<(), String>>,
+    applying_login: bool,
 }
 
 fn first_name() -> String {
@@ -255,6 +269,8 @@ impl cosmic::Application for App {
             dark: is_dark(),
             pointers: None,
             installing_pointers: false,
+            login: None,
+            applying_login: false,
         };
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Welcome".into(), id),
@@ -351,6 +367,34 @@ impl cosmic::Application for App {
                     };
                     cosmic::Action::App(Message::PointersDone(res))
                 });
+            }
+            Message::Login(false) => self.step = self.step.next(),
+            Message::Login(true) => {
+                self.applying_login = true;
+                self.login = None;
+                return Task::future(async {
+                    let res = match tokio::process::Command::new("pkexec").args(["/usr/bin/lapin-ux-login", "use-lapin"]).output().await {
+                        Ok(out) if out.status.success() => Ok(()),
+                        Ok(out) => {
+                            let err = String::from_utf8_lossy(&out.stderr);
+                            let line = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+                            Err(if line.is_empty() { "It didn't work, and nothing was changed.".into() } else { line })
+                        }
+                        Err(e) => Err(format!("The sign-in tool couldn't start: {e}")),
+                    };
+                    cosmic::Action::App(Message::LoginDone(res))
+                });
+            }
+            Message::LoginDone(res) => {
+                self.applying_login = false;
+                let ok = res.is_ok();
+                if let Err(e) = &res {
+                    eprintln!("lapin-ux-welcome: login: {e}");
+                }
+                self.login = Some(res);
+                if ok {
+                    self.step = self.step.next();
+                }
             }
             Message::PointersDone(res) => {
                 self.installing_pointers = false;
@@ -464,6 +508,27 @@ impl cosmic::Application for App {
                     _ => lapin_ux_ui::button::standard("Get the pointers").on_press(Message::Pointers).into(),
                 },
                 lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
+            ),
+            Step::Login => (
+                "Sign-in screen and boot animation".into(),
+                "Use Lapin UX's sign-in screen and boot animation? Your current ones are kept and come back if you uninstall Lapin UX. The change shows from the next start-up.".into(),
+                match &self.login {
+                    _ if self.applying_login => text::body("Setting them up…").into(),
+                    Some(Err(reason)) => column::with_children(vec![
+                        text::body("It didn't work, and nothing was changed.").into(),
+                        text::caption(reason.clone()).align_x(cosmic::iced::alignment::Horizontal::Center).into(),
+                    ])
+                    .spacing(8)
+                    .align_x(cosmic::iced::Alignment::Center)
+                    .into(),
+                    _ => widget::Space::new().into(),
+                },
+                row::with_children(vec![
+                    lapin_ux_ui::button::suggested("Use Lapin UX's").on_press(Message::Login(true)).into(),
+                    lapin_ux_ui::button::standard("Keep mine").on_press(Message::Login(false)).into(),
+                ])
+                .spacing(8)
+                .into(),
             ),
             Step::Done => (
                 "You're all set".into(),

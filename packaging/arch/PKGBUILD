@@ -302,6 +302,8 @@ package_lapin-ux-desktop-git() {
     install -Dm644 CREDITS.md "$pkgdir/usr/share/lapin-ux/CREDITS.md"
     printf '%s\n' "$pkgver" > "$pkgdir/usr/share/lapin-ux/version"
     install -Dm755 tools/lapin-ux-cursors           "$pkgdir/usr/bin/lapin-ux-cursors"
+    # Use Lapin UX's sign-in screen and boot animation, or keep your own (#100).
+    install -Dm755 tools/lapin-ux-login             "$pkgdir/usr/bin/lapin-ux-login"
     # Clean removal: restores desktop settings, then removes the packages.
     install -Dm755 tools/lapin-ux-uninstall         "$pkgdir/usr/bin/lapin-ux-uninstall"
     # Lapin UX's font/icon/pointer settings only while it runs (same script).

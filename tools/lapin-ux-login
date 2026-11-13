@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+# Lapin UX's sign-in screen and boot animation: use them, or keep your own.
+#
+#   lapin-ux-login use-lapin   use Lapin UX's sign-in screen (greetd with
+#                              lapin-ux-greeter) and boot animation. What you
+#                              have now is saved first.
+#   lapin-ux-login restore     put your former sign-in screen and boot animation back
+#   lapin-ux-login status      what is saved and what is set now
+#
+# "use-lapin" never switches anything it can't undo: the first thing it does
+# is save the current display manager (the enabled service and its config),
+# the greetd config and the Plymouth theme to /var/lib/lapin-ux/login. A
+# second "use-lapin" keeps that first record. "restore" puts it all back, and
+# lapin-ux-uninstall and a plain "pacman -R" call it too.
+#
+# The boot animation is the logo from the firmware (the ACPI BGRT picture)
+# with a spinner under it, or, when the firmware has none, the logo of your
+# own system (from /etc/os-release) with the spinner. It is only set when
+# Plymouth is already set up (package plus the mkinitcpio or dracut module);
+# nothing in the initramfs or the boot loader is edited by this tool.
+#
+# LAPIN_LOGIN_ROOT=/some/dir runs everything below that folder (for tests).
+set -u
+R=${LAPIN_LOGIN_ROOT:-}
+STATE=$R/var/lib/lapin-ux/login
+THEME_DIR=$R/usr/share/plymouth/themes
+LAPIN_THEME=lapin-ux
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'lapin-ux-login: %s\n' "$*" >&2; exit 1; }
+
+need_root() {
+    [ -n "$R" ] && return 0
+    [ "$EUID" -eq 0 ] && return 0
+    exec sudo -- "$0" "$@"
+}
+
+current_dm() {   # the enabled display manager's unit name, or nothing
+    local l; l=$(readlink "$R/etc/systemd/system/display-manager.service" 2>/dev/null) || return 0
+    basename "$l"
+}
+
+current_theme() {   # the Plymouth theme set now, or nothing
+    if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+        plymouth-set-default-theme 2>/dev/null | head -n1
+    else
+        sed -n 's/^Theme=//p' "$R/etc/plymouth/plymouthd.conf" 2>/dev/null | head -n1
+    fi
+}
+
+# Plymouth is "set up" when the program is there and the initramfs has its module.
+plymouth_ready() {
+    command -v plymouth-set-default-theme >/dev/null 2>&1 || [ -n "$R" ] || return 1
+    grep -qsE '^[^#]*(HOOKS|hooks).*plymouth' "$R"/etc/mkinitcpio.conf "$R"/etc/mkinitcpio.conf.d/*.conf 2>/dev/null && return 0
+    grep -qsE 'plymouth' "$R"/etc/dracut.conf "$R"/etc/dracut.conf.d/*.conf 2>/dev/null && return 0
+    return 1
+}
+
+have_record() { [ -f "$STATE/complete" ]; }
+
+snapshot() {
+    have_record && return 0
+    rm -rf "$STATE"; mkdir -p "$STATE" || die "can't write $STATE"
+    current_dm > "$STATE/dm"
+    systemctl is-enabled greetd.service >/dev/null 2>&1 && echo yes > "$STATE/greetd-enabled" || echo no > "$STATE/greetd-enabled"
+    if [ -f "$R/etc/greetd/config.toml" ]; then cp -a "$R/etc/greetd/config.toml" "$STATE/greetd-config.toml"; else : > "$STATE/greetd-config.absent"; fi
+    current_theme > "$STATE/plymouth-theme"
+    if [ -f "$R/etc/plymouth/plymouthd.conf" ]; then cp -a "$R/etc/plymouth/plymouthd.conf" "$STATE/plymouthd.conf"; else : > "$STATE/plymouthd.conf.absent"; fi
+    : > "$STATE/complete"
+}
+
+# ---- the distro's own logo, for firmware without a picture
+distro_logo_png() {   # prints a PNG path, or nothing
+    local logo="" f d
+    # shellcheck disable=SC1091
+    [ -f "$R/etc/os-release" ] && logo=$(. "$R/etc/os-release"; printf '%s' "${LOGO:-}")
+    [ -n "$logo" ] || return 0
+    f="$R/usr/share/pixmaps/$logo.png"; [ -f "$f" ] && { echo "$f"; return 0; }
+    for d in 256x256 192x192 128x128 512x512 96x96 64x64 48x48; do
+        f="$R/usr/share/icons/hicolor/$d/apps/$logo.png"; [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    local svg=""
+    for f in "$R/usr/share/icons/hicolor/scalable/apps/$logo.svg" "$R/usr/share/pixmaps/$logo.svg"; do [ -f "$f" ] && { svg=$f; break; }; done
+    [ -n "$svg" ] || return 0
+    local out=$THEME_DIR/$LAPIN_THEME/distro-logo.png
+    if command -v rsvg-convert >/dev/null 2>&1; then rsvg-convert -w 160 -a "$svg" -o "$out" 2>/dev/null && { echo "$out"; return 0; }
+    elif command -v magick >/dev/null 2>&1; then magick -background none -density 300 "$svg" -resize 160x "$out" 2>/dev/null && { echo "$out"; return 0; }
+    elif command -v convert >/dev/null 2>&1; then convert -background none -density 300 "$svg" -resize 160x "$out" 2>/dev/null && { echo "$out"; return 0; }
+    fi
+    return 0
+}
+
+# A 1x1 transparent picture: the "no logo" watermark.
+blank_png() { printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$1"; }
+
+build_theme() {
+    local base=$THEME_DIR/spinner dir=$THEME_DIR/$LAPIN_THEME fw=true wm
+    [ -d "$base" ] || { say "Boot animation: Plymouth's spinner theme isn't there; left as it is."; return 1; }
+    rm -rf "$dir"; mkdir -p "$dir" && cp -a "$base"/. "$dir"/ || return 1
+    # The firmware's picture when it has one; otherwise the system's own logo.
+    local vpos=.96
+    if [ -e "$R/sys/firmware/acpi/bgrt/image" ] || [ -n "${LAPIN_LOGIN_FORCE_BGRT:-}" ]; then
+        blank_png "$dir/watermark.png"
+    else
+        fw=false; vpos=.40
+        wm=$(distro_logo_png)
+        if [ -n "$wm" ] && [ -f "$wm" ]; then cp -f "$wm" "$dir/watermark.png.new" && mv -f "$dir/watermark.png.new" "$dir/watermark.png"; else blank_png "$dir/watermark.png"; fi
+    fi
+    cat > "$dir/$LAPIN_THEME.plymouth" <<PLY
+[Plymouth Theme]
+Name=Lapin UX
+Description=The firmware logo (or your system's own logo) with a spinner. Made by lapin-ux-login.
+ModuleName=two-step
+
+[two-step]
+Font=Selawik 12
+TitleFont=Selawik Light 30
+ImageDir=/usr/share/plymouth/themes/$LAPIN_THEME
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.7
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.7
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=$vpos
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x000000
+BackgroundEndColor=0x000000
+ProgressBarBackgroundColor=0x606060
+ProgressBarForegroundColor=0xffffff
+DialogClearsFirmwareBackground=false
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+UseFirmwareBackground=$fw
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=$fw
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=$fw
+PLY
+}
+
+splash_use() {
+    if ! plymouth_ready; then
+        say "Boot animation: Plymouth isn't set up on this system, so it was left as it is."
+        say "  (Lapin UX doesn't edit your initramfs or boot loader. See the Lapin UX wiki, \"Boot animation\".)"
+        return 0
+    fi
+    build_theme || return 0
+    if plymouth-set-default-theme -R "$LAPIN_THEME" >/dev/null 2>&1; then
+        echo yes > "$STATE/splash-changed"
+        say "Boot animation: Lapin UX's (firmware logo with a spinner)."
+    else
+        rm -rf "${THEME_DIR:?}/$LAPIN_THEME"
+        say "Boot animation: couldn't be set, left as it was."
+    fi
+}
+
+splash_restore() {
+    [ -f "$STATE/splash-changed" ] || { rm -rf "${THEME_DIR:?}/$LAPIN_THEME"; return 0; }
+    local prev; prev=$(cat "$STATE/plymouth-theme" 2>/dev/null)
+    if [ -n "$prev" ] && [ -d "$THEME_DIR/$prev" ]; then
+        plymouth-set-default-theme -R "$prev" >/dev/null 2>&1 || say "Boot animation: couldn't put \"$prev\" back; run: sudo plymouth-set-default-theme -R $prev"
+    elif [ -f "$STATE/plymouthd.conf" ]; then
+        cp -a "$STATE/plymouthd.conf" "$R/etc/plymouth/plymouthd.conf"
+        plymouth-set-default-theme -R >/dev/null 2>&1 || true
+    else
+        plymouth-set-default-theme -R --reset >/dev/null 2>&1 || plymouth-set-default-theme --reset >/dev/null 2>&1 || true
+    fi
+    rm -rf "${THEME_DIR:?}/$LAPIN_THEME"
+    say "Boot animation: yours is back."
+}
+
+login_use() {
+    command -v greetd >/dev/null 2>&1 || [ -n "$R" ] || { say "Sign-in screen: greetd isn't installed, so it was left as it is."; return 0; }
+    [ -x "$R/usr/bin/cosmic-greeter-start" ] || command -v cosmic-greeter-start >/dev/null 2>&1 \
+        || { say "Sign-in screen: Lapin UX's isn't installed, so it was left as it is."; return 0; }
+    mkdir -p "$R/etc/greetd"
+    cat > "$R/etc/greetd/config.toml" <<'TOML'
+# Lapin UX's sign-in screen. Your earlier file is kept in /var/lib/lapin-ux/login
+# and comes back with: lapin-ux-login restore
+[terminal]
+vt = "1"
+
+[general]
+service = "cosmic-greeter"
+
+[default_session]
+command = "cosmic-greeter-start"
+user = "cosmic-greeter"
+TOML
+    local dm; dm=$(current_dm)
+    if [ "$dm" != greetd.service ]; then
+        [ -n "$dm" ] && systemctl disable "$dm" >/dev/null 2>&1
+        systemctl enable --force greetd.service >/dev/null 2>&1
+    fi
+    # Never leave the computer without a login: if greetd didn't get enabled, undo.
+    if ! systemctl is-enabled greetd.service >/dev/null 2>&1; then
+        login_restore
+        rm -rf "$STATE"
+        die "greetd couldn't be enabled; your sign-in screen is unchanged."
+    fi
+    say "Sign-in screen: Lapin UX's, from the next start-up."
+}
+
+login_restore() {
+    local dm was; dm=$(cat "$STATE/dm" 2>/dev/null); was=$(cat "$STATE/greetd-enabled" 2>/dev/null)
+    if [ -f "$STATE/greetd-config.toml" ]; then cp -a "$STATE/greetd-config.toml" "$R/etc/greetd/config.toml"
+    elif [ -f "$STATE/greetd-config.absent" ]; then rm -f "$R/etc/greetd/config.toml"; fi
+    if [ -n "$dm" ] && [ "$dm" != greetd.service ]; then
+        systemctl enable --force "$dm" >/dev/null 2>&1 || say "Sign-in screen: couldn't enable $dm again; run: sudo systemctl enable --force $dm"
+    fi
+    if [ "$was" != yes ] && [ "$dm" != greetd.service ]; then
+        systemctl disable greetd.service >/dev/null 2>&1
+    fi
+}
+
+cmd_use() {
+    need_root use-lapin
+    snapshot
+    login_use
+    splash_use
+}
+
+cmd_restore() {
+    need_root restore
+    have_record || { say "Nothing to put back: Lapin UX hasn't changed your sign-in screen or boot animation."; return 0; }
+    splash_restore
+    login_restore
+    say "Sign-in screen: yours is back, from the next start-up."
+    rm -rf "$STATE"
+}
+
+cmd_status() {
+    say "Display manager now: $(current_dm || true)"
+    say "Boot animation now:   $(current_theme || true)"
+    if have_record; then
+        say "Saved (restored by lapin-ux-login restore): display manager '$(cat "$STATE/dm")', boot animation '$(cat "$STATE/plymouth-theme")'"
+    else
+        say "Nothing saved: Lapin UX hasn't changed them."
+    fi
+}
+
+case "${1:-}" in
+use-lapin) cmd_use ;;
+restore) cmd_restore ;;
+status) cmd_status ;;
+-h|--help|"") sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) die "unknown command: $1 (use-lapin, restore or status)" ;;
+esac

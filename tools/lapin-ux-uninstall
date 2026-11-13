@@ -548,8 +548,13 @@ full_uninstall() {
     # If greetd uses it, COSMIC's own sign-in screen goes back in its place:
     # the same login setup you had, with every installed desktop in its list,
     # so you never come back to a blank screen.
+    # (Not when "lapin-ux-login use-lapin" moved you off another login screen:
+    # that one comes back below, and greetd goes away with it.)
+    local lg=/var/lib/lapin-ux/login prior=""
+    [ -f "$lg/complete" ] && prior=$(cat "$lg/dm" 2>/dev/null)
     if installed lapin-ux-greeter && systemctl is-enabled greetd >/dev/null 2>&1 \
         && grep -q cosmic-greeter /etc/greetd/config.toml 2>/dev/null \
+        && { [ ! -f "$lg/complete" ] || [ "$prior" = greetd.service ]; } \
         && [[ " ${swap[*]} " != *" cosmic-greeter "* ]]; then
         swap+=(cosmic-greeter)
         say "Login screen: COSMIC's own sign-in screen comes back (it lists every desktop you have)"
@@ -566,6 +571,7 @@ full_uninstall() {
     done
     local howdy=0 f
     for f in "${HOWDY_PAM[@]}"; do grep -qF "$HOWDY_MARK" "$f" 2>/dev/null && howdy=1; done
+    [ -f "$lg/complete" ] && say "Sign-in screen and boot animation: your own come back (display manager '${prior:-none}')"
     [ "$howdy" = 1 ] && say "Face sign-in: remove Lapin UX's Howdy line from ${HOWDY_PAM[*]}"
 
     # Other accounts that used Lapin UX.
@@ -601,6 +607,11 @@ full_uninstall() {
         done
     fi
 
+
+    if [ -f "$lg/complete" ]; then
+        say ""; say "== Sign-in screen and boot animation"
+        run sudo lapin-ux-login restore
+    fi
 
     say ""; say "== Packages"
     run sudo touch "$RUN_MARK"

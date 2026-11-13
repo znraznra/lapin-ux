@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Fake systemctl: unit "enabled" state is a link under $LAPIN_LOGIN_ROOT/etc/systemd/system/wants,
+# display-manager.service points at the enabled display manager.
+R=$LAPIN_LOGIN_ROOT; W=$R/etc/systemd/system; mkdir -p "$W/wants"
+cmd=$1; shift; args=(); for a in "$@"; do case "$a" in --*) ;; *) args+=("$a");; esac; done
+u=${args[0]:-}
+case "$cmd" in
+enable) [ -n "${FAKE_ENABLE_FAILS:-}" ] && [ "$u" = greetd.service ] && exit 1
+        : > "$W/wants/$u"; ln -sfn "/usr/lib/systemd/system/$u" "$W/display-manager.service" ;;
+disable) rm -f "$W/wants/$u"; [ "$(basename "$(readlink "$W/display-manager.service" 2>/dev/null)")" = "$u" ] && rm -f "$W/display-manager.service"; exit 0 ;;
+is-enabled) [ -e "$W/wants/$u" ] ;;
+*) exit 0 ;;
+esac
