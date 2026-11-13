@@ -1,0 +1,59 @@
+From c907ccc6376487f9fe61a339b934f26d88837d72 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 11:24:40 +0800
+Subject: [PATCH] Lapin UX: log the lock picture and font the sign-in screen
+ reads
+
+---
+ daemon/src/lib.rs | 32 +++++++++++++++++++++++---------
+ 1 file changed, 23 insertions(+), 9 deletions(-)
+
+diff --git a/daemon/src/lib.rs b/daemon/src/lib.rs
+index 4034afa..ad49d1f 100644
+--- a/daemon/src/lib.rs
++++ b/daemon/src/lib.rs
+@@ -120,18 +120,32 @@ impl LapinLock {
+     /// Read as the user.
+     pub fn read() -> Self {
+         use cosmic_config::ConfigGet;
+-        let Ok(c) = cosmic_config::Config::new("dev.lapinux.Shell", 1) else { return Self::default() };
+-        let wallpaper = c
+-            .get::<String>("lock_wallpaper")
+-            .ok()
+-            .filter(|p| !p.is_empty())
+-            .map(PathBuf::from)
+-            .filter(|p| p.is_file());
+-        Self {
++        // Logged, so a sign-in screen that shows the wrong picture or font can be
++        // traced from the journal (#100): journalctl -b -t cosmic-greeter-daemon
++        let c = match cosmic_config::Config::new("dev.lapinux.Shell", 1) {
++            Ok(c) => c,
++            Err(err) => {
++                tracing::warn!("Lapin UX: can't open dev.lapinux.Shell for the lock settings: {err:?}");
++                return Self::default();
++            }
++        };
++        let picture = c.get::<String>("lock_wallpaper").ok().filter(|p| !p.is_empty());
++        let wallpaper = picture.clone().map(PathBuf::from).filter(|p| p.is_file());
++        if picture.is_some() && wallpaper.is_none() {
++            tracing::warn!("Lapin UX: the lock picture {picture:?} isn't a readable file; using the desktop wallpaper");
++        }
++        let lock = Self {
+             wallpaper,
+             plain_signin: c.get::<bool>("no_signin_picture").unwrap_or(false),
+             system_font: c.get::<String>("system_font").unwrap_or_default(),
+-        }
++        };
++        tracing::info!(
++            "Lapin UX: lock picture {:?}, plain sign-in {}, font {:?}",
++            lock.wallpaper,
++            lock.plain_signin,
++            lock.system_font
++        );
++        lock
+     }
+ 
+     /// Show the lock picture on every screen instead of the wallpaper.
+-- 
+2.43.0
+

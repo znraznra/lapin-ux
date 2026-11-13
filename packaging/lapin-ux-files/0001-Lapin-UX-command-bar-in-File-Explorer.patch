@@ -1,0 +1,91 @@
+From 478c08cff5692077e0f8c6b0f7a7712053b70c53 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:28:10 +0800
+Subject: [PATCH] Lapin UX: command bar in File Explorer
+
+Refs #72
+---
+ src/app.rs  |  6 ++++++
+ src/menu.rs | 52 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/src/app.rs b/src/app.rs
+index 77aa67d..dca3d30 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -6511,6 +6511,12 @@ impl Application for App {
+         }
+ 
+         let entity = self.tab_model.active();
++        if crate::config::lapin_session() {
++            tab_column = tab_column.push(menu::command_bar(
++                self.tab_model.data::<Tab>(entity),
++                self.clipboard_has_content(),
++            ));
++        }
+         if let Some(tab) = self.tab_model.data::<Tab>(entity) {
+             let tab_view = tab
+                 .view(
+diff --git a/src/menu.rs b/src/menu.rs
+index 4caa701..237823b 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -779,3 +779,55 @@ pub fn location_context_menu(ancestor_index: usize) -> Vec<menu::Tree<tab::Messa
+         ],
+     )
+ }
++
++/// The row of common commands above the files (Lapin session only, #72):
++/// New folder, Cut, Copy, Paste, Rename, Delete and the view toggle.
++/// COSMIC's own session never calls this.
++pub fn command_bar<'a>(
++    tab_opt: Option<&Tab>,
++    clipboard_paste_available: bool,
++) -> Element<'a, Message> {
++    use cosmic::iced::{Alignment, Length};
++    let spacing = theme::spacing();
++    let mut selected = 0;
++    if let Some(items) = tab_opt.and_then(|tab| tab.items_opt()) {
++        selected = items.iter().filter(|i| i.selected).count();
++    }
++    let in_trash = tab_opt.is_some_and(|tab| tab.location.is_trash());
++    let can_edit = tab_opt.is_some_and(|tab| tab.location.supports_paste());
++    let can_paste = clipboard_paste_available && can_edit;
++    let grid = tab_opt.is_some_and(|tab| tab.config.view == tab::View::Grid);
++
++    let button = |icon: &'static str, label: String, action: Action, enabled: bool| {
++        let b = widget::button::text(label)
++            .leading_icon(widget::icon::from_name(icon).size(16))
++            .class(theme::Button::HeaderBar);
++        if enabled {
++            b.on_press(MenuAction::message(&action))
++        } else {
++            b
++        }
++    };
++    widget::container(
++        widget::row::with_capacity(8)
++            .spacing(spacing.space_xxs)
++            .align_y(Alignment::Center)
++            .push(button("folder-new-symbolic", fl!("new-folder"), Action::NewFolder, can_edit && !in_trash))
++            .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
++            .push(button("edit-cut-symbolic", fl!("cut"), Action::Cut, selected > 0 && !in_trash))
++            .push(button("edit-copy-symbolic", fl!("copy"), Action::Copy, selected > 0))
++            .push(button("edit-paste-symbolic", fl!("paste"), Action::Paste, can_paste))
++            .push(button("document-edit-symbolic", fl!("rename"), Action::Rename, selected == 1 && !in_trash))
++            .push(button("edit-delete-symbolic", fl!("delete"), Action::Delete, selected > 0))
++            .push(widget::space::horizontal())
++            .push(button(
++                if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
++                if grid { fl!("list-view") } else { fl!("grid-view") },
++                if grid { Action::TabViewList } else { Action::TabViewGrid },
++                tab_opt.is_some(),
++            )),
++    )
++    .padding([spacing.space_xxs, spacing.space_s])
++    .width(Length::Fill)
++    .into()
++}
+-- 
+2.43.0
+

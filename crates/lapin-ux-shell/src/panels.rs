@@ -33,7 +33,9 @@ const RUN_WIDTH: u32 = 420;
 pub enum PanelKind {
     /// Power-user menu. `power` shows the shut down / sign out list.
     WinX { power: bool, selected: usize },
-    Run { input: String },
+    /// `error`: the last try could not be found or started (#99); the
+    /// dialog shows the message until OK.
+    Run { input: String, error: bool },
     Quick(crate::quick::QuickPanel),
     Clip(crate::clipboard::ClipPanel),
     AltTab(crate::previews::AltTab),
@@ -87,6 +89,10 @@ pub enum PanelMsg {
     WinXPower(bool),
     RunInput(String),
     RunSubmit,
+    /// OK on the "Can't find" message: back to the text, selected.
+    RunErrorOk,
+    /// A command line that was started but ended at once as not found.
+    RunFailed(String, u64),
 }
 
 /// One menu row: icon, label, action.
@@ -161,8 +167,13 @@ pub fn run_command(input: &str) -> std::process::Command {
     } else {
         t.to_string()
     };
-    let looks_like_target = expanded.contains("://") || (expanded.starts_with('/') && std::path::Path::new(&expanded).exists());
-    if looks_like_target && !expanded.contains(' ') {
+    // A URL, an existing absolute path (spaces and all: xdg-open gets it as one
+    // argument) or an existing ./ folder. A ./ program stays a command for sh.
+    let exists = std::path::Path::new(&expanded).exists();
+    let looks_like_target = (expanded.contains("://") && !expanded.contains(' '))
+        || (expanded.starts_with('/') && exists)
+        || (expanded.starts_with("./") && std::path::Path::new(&expanded).is_dir());
+    if looks_like_target {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(expanded);
         c
@@ -171,6 +182,63 @@ pub fn run_command(input: &str) -> std::process::Command {
         c.arg("-c").arg(t);
         c
     }
+}
+
+/// Shell words and builtins mean the line is more than "a program name": it is
+/// handed to `sh` and judged by how it ends instead (#99).
+fn is_complex(line: &str) -> bool {
+    const BUILTINS: &[&str] = &["cd", "echo", "exit", "export", "exec", "source", ".", "eval", "set", "unset", "alias", "ulimit", "umask", "wait", "time", "test", "[", "true", "false"];
+    let first = line.split_whitespace().next().unwrap_or("");
+    line.contains(['|', '&', ';', '<', '>', '$', '`', '(', ')', '"', '\'', '\\', '*', '?', '{', '\n'])
+        || first.contains('=')
+        || BUILTINS.contains(&first)
+}
+
+fn is_executable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Whether the first word of `line` is something that can be started: an
+/// existing file or folder (also `~`), a URL, or a program on `PATH`. Complex
+/// lines (pipes, quotes, builtins…) pass here and are checked by how they end.
+pub fn can_start(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.contains("://") || is_complex(t) {
+        return true;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let first = t.split_whitespace().next().unwrap_or("");
+    let whole = if t == "~" { home.clone() } else if let Some(r) = t.strip_prefix("~/") { format!("{home}/{r}") } else { t.to_string() };
+    // A file or folder name, spaces and all.
+    if whole.contains('/') && std::path::Path::new(&whole).exists() {
+        return true;
+    }
+    let first = if first == "~" { home.clone() } else if let Some(r) = first.strip_prefix("~/") { format!("{home}/{r}") } else { first.to_string() };
+    if first.contains('/') {
+        return is_executable(std::path::Path::new(&first));
+    }
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|d| is_executable(&d.join(&first))))
+}
+
+/// Starts the command. `Ok(false)` when it ended within a moment as "not
+/// found" or "not executable" (sh's 127 and 126), `Ok(true)` otherwise.
+async fn start_and_watch(cmd: &mut std::process::Command) -> std::io::Result<bool> {
+    let mut child = cmd.spawn()?;
+    for _ in 0..30 {
+        if let Some(st) = child.try_wait()? {
+            return Ok(!matches!(st.code(), Some(126 | 127)));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // Still running: let it be, and reap it when it ends.
+    tokio::task::spawn_blocking(move || {
+        let _ = child.wait();
+    });
+    Ok(true)
 }
 
 impl Shell {
@@ -200,6 +268,7 @@ impl Shell {
     }
 
     pub(crate) fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
+        self.run_seq += 1;
         let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
         let id = window::Id::unique();
         let above = self.above_bar();
@@ -211,32 +280,28 @@ impl Shell {
                     .first()
                     .and_then(|b| self.rects.get(&rect_key(b.id, "start")))
                     .map_or(12, |r| r.x.max(0.0) as i32);
-                (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above - 4, left }, WINX_WIDTH)
+                (self.edge() | Anchor::LEFT, self.edge_margin(above - 4, left, 0), WINX_WIDTH)
             }
-            PanelKind::Run { .. } => (Anchor::BOTTOM | Anchor::LEFT, IcedMargin { top: 0, right: 0, bottom: above, left: 12 }, RUN_WIDTH),
+            PanelKind::Run { .. } => (self.edge() | Anchor::LEFT, self.edge_margin(above, 12, 0), RUN_WIDTH),
             PanelKind::AltTab(a) => (Anchor::empty(), IcedMargin::default(), crate::previews::switcher_width(a.order.len())),
             // Top centre, where the benchmark shows it over a window's maximize button.
-            PanelKind::Snap(_) => (Anchor::TOP, IcedMargin { top: 12, right: 0, bottom: 0, left: 0 }, crate::snap::WIDTH),
+            PanelKind::Snap(_) => {
+                // Below a top taskbar that hides itself too (a shown one keeps its own room).
+                let top = 12 + if self.top_bar() && self.config.auto_hide { style::taskbar_height() as i32 } else { 0 };
+                (Anchor::TOP, IcedMargin { top, right: 0, bottom: 0, left: 0 }, crate::snap::WIDTH)
+            }
             // Everything above the taskbar, which stays usable.
             PanelKind::TaskView(_) => (
                 Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 0, bottom: if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 }, left: 0 },
+                self.edge_margin(if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 }, 0, 0),
                 0,
             ),
-            PanelKind::Clip(_) => (Anchor::BOTTOM, IcedMargin { top: 0, right: 0, bottom: above, left: 0 }, crate::clipboard::WIDTH),
-            PanelKind::Quick(_) => (
-                Anchor::BOTTOM | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
-                crate::quick::WIDTH,
-            ),
+            PanelKind::Clip(_) => (self.edge(), self.edge_margin(above, 0, 0), crate::clipboard::WIDTH),
+            PanelKind::Quick(_) => (self.edge() | Anchor::RIGHT, self.edge_margin(above, 0, 12), crate::quick::WIDTH),
             PanelKind::ShutDown { .. } => (Anchor::empty(), IcedMargin::default(), crate::system_ui::SHUTDOWN_WIDTH),
             PanelKind::Properties(_) => (Anchor::empty(), IcedMargin::default(), crate::properties::WIDTH),
             PanelKind::OpenWith(_) => (Anchor::empty(), IcedMargin::default(), crate::open_with::WIDTH),
-            PanelKind::Project(_) => (
-                Anchor::BOTTOM | Anchor::RIGHT,
-                IcedMargin { top: 0, right: 12, bottom: above, left: 0 },
-                crate::system_ui::PROJECT_WIDTH,
-            ),
+            PanelKind::Project(_) => (self.edge() | Anchor::RIGHT, self.edge_margin(above, 0, 12), crate::system_ui::PROJECT_WIDTH),
             // The whole screen, taskbar included.
             PanelKind::Security { .. } | PanelKind::Snip(_) => (Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, IcedMargin::default(), 0),
         };
@@ -292,7 +357,7 @@ impl Shell {
             }
             PanelMsg::OpenRun => {
                 let input = self.state.run_history.first().cloned().unwrap_or_default();
-                self.open_panel(PanelKind::Run { input })
+                self.open_panel(PanelKind::Run { input, error: false })
             }
             PanelMsg::Close => self.close_panel(),
             PanelMsg::Do(m) => {
@@ -307,28 +372,58 @@ impl Shell {
                 Task::none()
             }
             PanelMsg::RunInput(s) => {
-                if let Some(Panel { kind: PanelKind::Run { input }, .. }) = &mut self.panel {
+                if let Some(Panel { kind: PanelKind::Run { input, .. }, .. }) = &mut self.panel {
                     *input = s;
                 }
                 Task::none()
             }
+            PanelMsg::RunErrorOk => {
+                if let Some(Panel { kind: PanelKind::Run { error, .. }, .. }) = &mut self.panel {
+                    *error = false;
+                }
+                Task::batch([text_input::focus(RUN_INPUT.clone()), text_input::select_all(RUN_INPUT.clone())])
+            }
+            PanelMsg::RunFailed(input, seq) => {
+                // Another panel was opened since: don't close it for an old command.
+                if seq != self.run_seq {
+                    return Task::none();
+                }
+                // The dialog was closed when it started; bring it back with the message.
+                self.open_panel(PanelKind::Run { input, error: true })
+            }
             PanelMsg::RunSubmit => {
-                let Some(Panel { kind: PanelKind::Run { input }, .. }) = &self.panel else { return Task::none() };
+                let Some(Panel { kind: PanelKind::Run { input, error: false }, .. }) = &self.panel else { return Task::none() };
                 let input = input.trim().to_string();
                 if input.is_empty() {
+                    return Task::none();
+                }
+                // An installed app by its name or id opens like it does from Start.
+                let app = self.catalog.search(&input).into_iter().find(|a| a.data.id.eq_ignore_ascii_case(&input) || a.data.name.eq_ignore_ascii_case(&input)).map(|a| a.data.id.clone());
+                if app.is_none() && !can_start(&input) {
+                    if let Some(Panel { kind: PanelKind::Run { error, .. }, .. }) = &mut self.panel {
+                        *error = true;
+                    }
                     return Task::none();
                 }
                 self.state.record_run(&input);
                 self.persist_state();
                 let close = self.close_panel();
-                let cmd = run_command(&input);
+                if let Some(id) = app {
+                    return Task::batch([close, self.launch(&id)]);
+                }
+                let seq = self.run_seq;
+                let mut cmd = run_command(&input);
                 Task::batch([
                     close,
                     Task::future(async move {
-                        if cosmic::process::spawn(cmd).await.is_none() {
-                            tracing::warn!("run: could not start {input:?}");
+                        let ok = start_and_watch(&mut cmd).await;
+                        if let Err(e) = &ok {
+                            tracing::warn!("run: could not start {input:?}: {e}");
                         }
-                        cosmic::Action::App(Message::Noop)
+                        match ok {
+                            Ok(true) => cosmic::Action::App(Message::Noop),
+                            _ => cosmic::Action::App(Message::Panel(PanelMsg::RunFailed(input, seq))),
+                        }
                     }),
                 ])
             }
@@ -356,6 +451,7 @@ impl Shell {
         let Some(panel) = &self.panel else { return Task::none() };
         match (&panel.kind, key) {
             (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
+            (PanelKind::Run { error: true, .. }, Named::Enter | Named::Escape) => self.update_panel(PanelMsg::RunErrorOk),
             (PanelKind::AltTab(_), k) => self.alt_tab_key(k),
             (PanelKind::Quick(_), Named::Escape) => match self.quick_escape() {
                 Some(t) => t,
@@ -432,7 +528,42 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
             }
             container(col).padding(4).into()
         }
-        PanelKind::Run { input } => {
+        PanelKind::Run { input, error: true } => {
+            let title = container(
+                row::with_children(vec![
+                    icon::from_name("system-run-symbolic").size(16).into(),
+                    text::body("Run").width(Length::Fill).into(),
+                ])
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .padding([4, 4, 4, 14])
+            .class(style::panel_footer());
+            let body = column::with_children(vec![
+                row::with_children(vec![
+                    icon::from_name("dialog-error-symbolic").size(32).into(),
+                    column::with_children(vec![
+                        text::heading(format!("Can't find \"{}\"", input.trim())).into(),
+                        text::body("Make sure you typed the name correctly, then try again.").into(),
+                    ])
+                    .spacing(4)
+                    .width(Length::Fill)
+                    .into(),
+                ])
+                .spacing(16)
+                .align_y(Alignment::Center)
+                .into(),
+                row::with_children(vec![
+                    widget::Space::new().width(Length::Fill).into(),
+                    lapin_ux_ui::button::suggested("OK").on_press(Message::Panel(PanelMsg::RunErrorOk)).into(),
+                ])
+                .into(),
+            ])
+            .spacing(16)
+            .padding(20);
+            column::with_children(vec![title.into(), body.into()]).into()
+        }
+        PanelKind::Run { input, .. } => {
             let field = text_input::text_input("", input)
                 .id(RUN_INPUT.clone())
                 .on_input(|s| Message::Panel(PanelMsg::RunInput(s)))
@@ -512,4 +643,45 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
     .min_height(1.0)
     .max_height(900.0)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_command;
+    #[test]
+    fn folders_with_spaces_open_with_xdg_open() {
+        let d = std::env::temp_dir().join(format!("lapin run test {}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let c = run_command(d.to_str().unwrap());
+        assert_eq!(c.get_program(), "xdg-open");
+        assert_eq!(c.get_args().count(), 1);
+        assert_eq!(run_command("ls -la").get_program(), "sh");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    use super::can_start;
+
+    #[test]
+    fn finds_programs_paths_and_urls() {
+        assert!(can_start("sh"));
+        assert!(can_start("/bin/sh"));
+        assert!(can_start("/tmp"));
+        assert!(can_start("https://example.org"));
+        assert!(can_start("ls -la"));
+    }
+
+    #[test]
+    fn complex_lines_are_left_to_sh() {
+        assert!(can_start("cd /tmp && ls"));
+        assert!(can_start("echo hi"));
+        assert!(can_start("FOO=1 nothing-here"));
+    }
+
+    #[test]
+    fn unknown_names_are_not_found() {
+        assert!(!can_start("xyz"));
+        assert!(!can_start("definitely-not-a-program arg"));
+        assert!(!can_start("/nonexistent/thing"));
+        assert!(!can_start("   "));
+    }
 }

@@ -1,0 +1,93 @@
+From d7b7e9dac8a073e9d580ddd92586a6b8865e32fd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:02:35 +0800
+Subject: [PATCH] Lapin UX: Taskbar location on screen (Bottom or Top)
+
+Settings > Personalization > Taskbar > Taskbar behaviors. Writes the shell's
+'position' key in dev.lapinux.Shell (Lapin's own key, nothing for the
+per-session swap). Refs #41.
+---
+ cosmic-settings/src/lapin/search.rs   |  1 +
+ cosmic-settings/src/lapin/settings.rs | 15 +++++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 88cc993..ecbecea 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -28,6 +28,7 @@ pub struct Entry {
+ /// Settings on Lapin's own pages, by page id: (page, setting name).
+ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-taskbar", "Taskbar alignment"),
++    ("lapin-taskbar", "Taskbar location on screen"),
+     ("lapin-taskbar", "Automatically hide the taskbar"),
+     ("lapin-taskbar", "Combine taskbar buttons and hide labels"),
+     ("lapin-taskbar", "Show smaller taskbar buttons"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 8b7d912..0244863 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -27,6 +27,12 @@ pub enum Alignment {
+     Left,
+ }
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum Position {
++    #[default]
++    Bottom,
++    Top,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+ pub enum Combine {
+     #[default]
+     Always,
+@@ -96,6 +102,7 @@ pub struct Prefs {
+     pub show_search: bool,
+     pub touch_keyboard_button: bool,
+     pub alignment: Alignment,
++    pub position: Position,
+     pub auto_hide: bool,
+     pub combine: Combine,
+     pub small: SmallButtons,
+@@ -164,6 +171,7 @@ impl Prefs {
+             show_search: get(&shell, "show_search").unwrap_or(true),
+             touch_keyboard_button: get(&shell, "touch_keyboard_button").unwrap_or(false),
+             alignment: get(&shell, "alignment").unwrap_or_default(),
++            position: get(&shell, "position").unwrap_or_default(),
+             auto_hide: get(&shell, "auto_hide").unwrap_or(false),
+             combine: get(&shell, "combine_buttons").unwrap_or_default(),
+             small: get(&shell, "small_buttons").unwrap_or_default(),
+@@ -212,6 +220,7 @@ pub enum Msg {
+     ShowSearch(bool),
+     TouchKeyboard(bool),
+     Alignment(usize),
++    Position(usize),
+     AutoHide(bool),
+     Combine(usize),
+     Small(usize),
+@@ -533,6 +542,10 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+             p.alignment = if i == 1 { Alignment::Left } else { Alignment::Center };
+             save(SHELL, "alignment", &p.alignment);
+         }
++        Msg::Position(i) => {
++            p.position = if i == 1 { Position::Top } else { Position::Bottom };
++            save(SHELL, "position", &p.position);
++        }
+         Msg::AutoHide(v) => (p.auto_hide = v, save(SHELL, "auto_hide", &v)).1,
+         Msg::Combine(i) => {
+             p.combine = [Combine::Always, Combine::WhenFull, Combine::Never][i.min(2)];
+@@ -693,6 +706,7 @@ fn section_view<P: page::Page<PMsg>>(title: &'static str, f: Rows) -> Section<PM
+ // --- Personalization > Taskbar -------------------------------------------
+ 
+ const ALIGN: [&str; 2] = ["Center", "Left"];
++const POSITION: [&str; 2] = ["Bottom", "Top"];
+ const WHEN: [&str; 3] = ["Always", "When taskbar is full", "Never"];
+ const MULTI: [&str; 3] = ["All taskbars", "Main taskbar and taskbar where window is open", "Taskbar where window is open"];
+ 
+@@ -711,6 +725,7 @@ fn taskbar_behaviors<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     };
+     vec![
+         choice("Taskbar alignment", None, &ALIGN, usize::from(p.alignment == Alignment::Left), Msg::Alignment),
++        choice("Taskbar location on screen", None, &POSITION, usize::from(p.position == Position::Top), Msg::Position),
+         toggle("Automatically hide the taskbar", None, p.auto_hide, Msg::AutoHide),
+         choice("Combine taskbar buttons and hide labels", None, &WHEN, p.combine as usize, Msg::Combine),
+         choice("Show smaller taskbar buttons", None, &WHEN, p.small as usize, Msg::Small),

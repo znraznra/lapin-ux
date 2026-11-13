@@ -1,0 +1,108 @@
+From 80f240a12c8130747e0adce8773d05250b6e6d11 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:44:16 +0800
+Subject: [PATCH] Lapin UX: Explorer navigation, Home, Recent, Gallery and
+ Details buttons
+
+Refs #72 #73 #74 #75
+---
+ src/menu.rs | 56 ++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 38 insertions(+), 18 deletions(-)
+
+diff --git a/src/menu.rs b/src/menu.rs
+index 237823b..9e6851e 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -780,8 +780,9 @@ pub fn location_context_menu(ancestor_index: usize) -> Vec<menu::Tree<tab::Messa
+     )
+ }
+ 
+-/// The row of common commands above the files (Lapin session only, #72):
+-/// New folder, Cut, Copy, Paste, Rename, Delete and the view toggle.
++/// The row of common commands above the files (Lapin session only, #72-#75):
++/// Back, Forward, Up, Reload, Home and Recent, then New folder, Cut, Copy,
++/// Paste, Rename, Delete, then Gallery, Details and the view toggle.
+ /// COSMIC's own session never calls this.
+ pub fn command_bar<'a>(
+     tab_opt: Option<&Tab>,
+@@ -789,42 +790,61 @@ pub fn command_bar<'a>(
+ ) -> Element<'a, Message> {
+     use cosmic::iced::{Alignment, Length};
+     let spacing = theme::spacing();
+-    let mut selected = 0;
++    let (mut selected, mut gallery) = (0, 0);
+     if let Some(items) = tab_opt.and_then(|tab| tab.items_opt()) {
+-        selected = items.iter().filter(|i| i.selected).count();
++        for item in items.iter().filter(|i| i.selected) {
++            selected += 1;
++            if item.can_gallery() {
++                gallery += 1;
++            }
++        }
+     }
+     let in_trash = tab_opt.is_some_and(|tab| tab.location.is_trash());
+     let can_edit = tab_opt.is_some_and(|tab| tab.location.supports_paste());
+     let can_paste = clipboard_paste_available && can_edit;
+     let grid = tab_opt.is_some_and(|tab| tab.config.view == tab::View::Grid);
++    let has_tab = tab_opt.is_some();
+ 
+-    let button = |icon: &'static str, label: String, action: Action, enabled: bool| {
++    let button = |icon: &'static str, label: String, msg: Option<Message>| {
+         let b = widget::button::text(label)
+             .leading_icon(widget::icon::from_name(icon).size(16))
+             .class(theme::Button::HeaderBar);
+-        if enabled {
+-            b.on_press(MenuAction::message(&action))
+-        } else {
+-            b
++        match msg {
++            Some(m) => b.on_press(m),
++            None => b,
+         }
+     };
++    let act = |a: Action, enabled: bool| enabled.then(|| MenuAction::message(&a));
++    // Icon-only buttons for navigation, so the row stays short.
++    let nav = |icon: &'static str, a: Action| {
++        widget::button::icon(widget::icon::from_name(icon).size(16)).on_press(MenuAction::message(&a))
++    };
++    let home = dirs::home_dir()
++        .map(|p| Message::TabMessage(None, tab::Message::Location(Location::Path(p))));
+     widget::container(
+-        widget::row::with_capacity(8)
++        widget::row::with_capacity(16)
+             .spacing(spacing.space_xxs)
+             .align_y(Alignment::Center)
+-            .push(button("folder-new-symbolic", fl!("new-folder"), Action::NewFolder, can_edit && !in_trash))
++            .push(nav("go-previous-symbolic", Action::HistoryPrevious))
++            .push(nav("go-next-symbolic", Action::HistoryNext))
++            .push(nav("go-up-symbolic", Action::LocationUp))
++            .push(nav("view-refresh-symbolic", Action::Reload))
++            .push(button("user-home-symbolic", fl!("home"), home))
++            .push(button("document-open-recent-symbolic", fl!("recents"), act(Action::Recents, true)))
+             .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
+-            .push(button("edit-cut-symbolic", fl!("cut"), Action::Cut, selected > 0 && !in_trash))
+-            .push(button("edit-copy-symbolic", fl!("copy"), Action::Copy, selected > 0))
+-            .push(button("edit-paste-symbolic", fl!("paste"), Action::Paste, can_paste))
+-            .push(button("document-edit-symbolic", fl!("rename"), Action::Rename, selected == 1 && !in_trash))
+-            .push(button("edit-delete-symbolic", fl!("delete"), Action::Delete, selected > 0))
++            .push(button("folder-new-symbolic", fl!("new-folder"), act(Action::NewFolder, can_edit && !in_trash)))
++            .push(button("edit-cut-symbolic", fl!("cut"), act(Action::Cut, selected > 0 && !in_trash)))
++            .push(button("edit-copy-symbolic", fl!("copy"), act(Action::Copy, selected > 0)))
++            .push(button("edit-paste-symbolic", fl!("paste"), act(Action::Paste, can_paste)))
++            .push(button("document-edit-symbolic", fl!("rename"), act(Action::Rename, selected == 1 && !in_trash)))
++            .push(button("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
+             .push(widget::space::horizontal())
++            .push(button("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
++            .push(button("dialog-information-symbolic", fl!("details"), act(Action::Preview, selected > 0)))
+             .push(button(
+                 if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+                 if grid { fl!("list-view") } else { fl!("grid-view") },
+-                if grid { Action::TabViewList } else { Action::TabViewGrid },
+-                tab_opt.is_some(),
++                act(if grid { Action::TabViewList } else { Action::TabViewGrid }, has_tab),
+             )),
+     )
+     .padding([spacing.space_xxs, spacing.space_s])
+-- 
+2.43.0
+

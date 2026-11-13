@@ -22,6 +22,29 @@ impl Shell {
         12 + if self.config.auto_hide { style::taskbar_height() as i32 } else { 0 }
     }
 
+    /// The taskbar is at the top of the screen (#41).
+    pub(crate) fn top_bar(&self) -> bool {
+        self.config.position == crate::config::TaskbarPosition::Top
+    }
+
+    /// The screen edge the taskbar is on, as a layer-shell anchor.
+    pub(crate) fn edge(&self) -> cosmic::iced::platform_specific::shell::commands::layer_surface::Anchor {
+        use cosmic::iced::platform_specific::shell::commands::layer_surface::Anchor;
+        if self.top_bar() { Anchor::TOP } else { Anchor::BOTTOM }
+    }
+
+    /// A margin of `edge` px on the taskbar's side of the screen.
+    pub(crate) fn edge_margin(&self, edge: i32, left: i32, right: i32) -> cosmic::iced::platform_specific::runtime::wayland::layer_surface::IcedMargin {
+        margin_on_edge(self.top_bar(), edge, left, right)
+    }
+
+    /// Where the sliver that brings back a hidden bar is, inside the bar's surface.
+    pub(crate) fn hidden_strip(&self) -> cosmic::iced::Rectangle {
+        let h = style::taskbar_height() as f32;
+        let y = if self.top_bar() { 0.0 } else { h - STRIP as f32 };
+        cosmic::iced::Rectangle { x: 0.0, y, width: 100_000.0, height: STRIP as f32 }
+    }
+
     fn bar_needed(&self, id: window::Id) -> bool {
         let Some(bar) = self.bars.iter().find(|b| b.id == id) else { return false };
         bar.hovered
@@ -41,7 +64,7 @@ impl Shell {
         let input = if revealed || !self.config.auto_hide {
             cosmic::iced::Rectangle { x: 0.0, y: 0.0, width: 100_000.0, height: h }
         } else {
-            cosmic::iced::Rectangle { x: 0.0, y: h - STRIP as f32, width: 100_000.0, height: STRIP as f32 }
+            self.hidden_strip()
         };
         Task::batch([set_exclusive_zone(id, zone), set_input_zone(id, Some(vec![input]))])
     }
@@ -99,6 +122,21 @@ impl Shell {
         }
     }
 
+    /// The taskbar was moved to another edge (#41): re-anchor every bar and
+    /// move its strip; open pop-ups and panels close, they would be on the wrong side.
+    pub(crate) fn position_changed(&mut self) -> Task<Message> {
+        use cosmic::iced::platform_specific::shell::commands::layer_surface::set_anchor;
+        let anchor = self.edge() | cosmic::iced::platform_specific::shell::commands::layer_surface::Anchor::LEFT | cosmic::iced::platform_specific::shell::commands::layer_surface::Anchor::RIGHT;
+        let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
+        let ids: Vec<window::Id> = self.bars.iter().map(|b| b.id).collect();
+        for id in ids {
+            tasks.push(set_anchor(id, anchor));
+            let revealed = self.bars.iter().find(|b| b.id == id).is_none_or(|b| b.revealed);
+            tasks.push(self.resize_bar(id, revealed));
+        }
+        Task::batch(tasks)
+    }
+
     /// The setting was switched: resize every bar to match.
     pub(crate) fn auto_hide_changed(&mut self) -> Task<Message> {
         let ids: Vec<window::Id> = self.bars.iter().map(|b| b.id).collect();
@@ -112,5 +150,24 @@ impl Shell {
         }
         tasks.push(self.sync_autohide());
         Task::batch(tasks)
+    }
+}
+
+/// `edge` px on the top margin when the bar is at the top, else on the bottom one.
+fn margin_on_edge(top_bar: bool, edge: i32, left: i32, right: i32) -> cosmic::iced::platform_specific::runtime::wayland::layer_surface::IcedMargin {
+    use cosmic::iced::platform_specific::runtime::wayland::layer_surface::IcedMargin;
+    if top_bar { IcedMargin { top: edge, right, bottom: 0, left } } else { IcedMargin { top: 0, right, bottom: edge, left } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::margin_on_edge;
+
+    #[test]
+    fn margin_follows_the_bar() {
+        let b = margin_on_edge(false, 12, 5, 7);
+        assert_eq!((b.top, b.bottom, b.left, b.right), (0, 12, 5, 7));
+        let t = margin_on_edge(true, 12, 5, 7);
+        assert_eq!((t.top, t.bottom, t.left, t.right), (12, 0, 5, 7));
     }
 }

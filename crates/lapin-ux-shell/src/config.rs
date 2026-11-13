@@ -17,12 +17,22 @@ pub enum TaskbarAlignment {
     Left,
 }
 
+/// Settings > Personalization > Taskbar > "Taskbar location on screen" (#41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TaskbarPosition {
+    #[default]
+    Bottom,
+    Top,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, CosmicConfigEntry)]
 #[version = 1]
 pub struct ShellConfig {
     /// Defaults below are filled from installed apps on first start.
     pub initialized: bool,
     pub alignment: TaskbarAlignment,
+    /// Which screen edge the taskbar sits on (#41).
+    pub position: TaskbarPosition,
     pub pinned_taskbar: Vec<String>,
     pub pinned_start: Vec<String>,
     pub show_search: bool,

@@ -77,11 +77,11 @@ gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/
 
 # Packages, and the stock COSMIC package each one stands in for.
 LAPIN_PKGS=(lapin-ux-desktop-git lapin-ux-comp lapin-ux-greeter lapin-ux-osk lapin-ux-osd
-            lapin-ux-settings lapin-ux-portal lapin-ux-cosmic-files lapin-ux-cosmic-term
+            lapin-ux-settings lapin-ux-portal lapin-explorer lapin-ux-cosmic-files lapin-ux-cosmic-term
             lapin-ux-cosmic-edit lapin-ux-cosmic-store)
 declare -A STOCK=([lapin-ux-greeter]=cosmic-greeter [lapin-ux-osk]=cosmic-osk
                   [lapin-ux-osd]=cosmic-osd [lapin-ux-settings]=cosmic-settings
-                  [lapin-ux-portal]=xdg-desktop-portal-cosmic [lapin-ux-cosmic-files]=cosmic-files
+                  [lapin-ux-portal]=xdg-desktop-portal-cosmic [lapin-explorer]=cosmic-files [lapin-ux-cosmic-files]=cosmic-files
                   [lapin-ux-cosmic-term]=cosmic-terminal [lapin-ux-cosmic-edit]=cosmic-text-editor
                   [lapin-ux-cosmic-store]=cosmic-store)
 
@@ -490,13 +490,17 @@ restore_settings() {
 
     # Lapin UX's own files.
     local -a own=()
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR"; do [ -e "$v" ] && own+=("$v"); done
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"
     fi
     # Only COSMIC programs read ~/.config/cosmic; with none left it's leftovers.
     if [ "$MODE" = settings ]; then offer_cosmic_cleanup; fi
+    if [ -s "$STATE/sounds-added" ]; then
+        say "  Sound schemes you added in Settings stay in $DATA/sounds (delete them yourself if you don't want them):"
+        sed 's/^/    /' "$STATE/sounds-added"
+    fi
     if [ -e "$STATE" ]; then
         say "  Removing $STATE (restore point, session copies and logs)."
         run rm -rf "$STATE"
