@@ -303,6 +303,11 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   (`packaging/lapin-ux-libcosmic` 0002–0007), turned on only by Lapin
   Settings. The layout switches on only in a Lapin UX session
   (`XDG_CURRENT_DESKTOP` contains `LapinUX`, or `LAPIN_UX_SETTINGS=1`).
+- Start-up (#80): in the Lapin session `init` returns at once and the window
+  shows "Loading…"; a 20 ms timer then sends `Message::Boot`, which builds the
+  pages (`build_pages`) and opens the page asked for on the command line, or Home. Until then `update` ignores
+  everything but `Boot`, and `subscription`, `dialog` and `on_app_exit` do
+  nothing. COSMIC's own session builds the pages in `init` as before.
 
 **Pop-ups and admin prompt** (`lapin-ux-osd`, a patch on COSMIC's cosmic-osd)
 - Volume and brightness keys show a small rounded box 12 px above the
