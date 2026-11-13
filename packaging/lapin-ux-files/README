@@ -7,5 +7,4 @@ File Explorer (#71): patches on top of COSMIC Files (pin 3cc4b80) AND on top of
 
 Every Lapin look here is gated on `config::lapin_session()` (XDG_CURRENT_DESKTOP
 contains LapinUX, or LAPIN_UX_DIALOG=1). In COSMIC's own session the app is stock.
-Not packaged yet: nothing in packaging/arch builds or installs these as an app,
-so for now they only exist as the source of truth for the fork.
+Packaged as lapin-explorer (replaces cosmic-files; see packaging/arch/PKGBUILD).
