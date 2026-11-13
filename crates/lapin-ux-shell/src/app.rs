@@ -324,6 +324,9 @@ pub struct Shell {
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
     pub popup_dismissed: Option<(PopupKind, Instant)>,
+    /// The last window the taskbar asked to minimize and when (#85): if the
+    /// window reports it is shown again a moment later, the app undid it.
+    pub(crate) minimize_asked: Option<(Handle, Instant)>,
     /// Surfaces iced asked for a view of that the shell doesn't track, and
     /// when each was first seen (#34). A pop-up closed before its creation
     /// went through is created afterwards with nobody holding it: invisible,
@@ -641,6 +644,21 @@ impl Shell {
         format!("unknown surface {id:?}")
     }
 
+    /// Log what a click on a taskbar button saw and chose (#85): every window
+    /// of the app with its state, so "clicking the active app doesn't
+    /// minimize it" shows whether the window wasn't seen as active, there
+    /// were several windows, or the app undid the minimize.
+    pub(crate) fn log_click(&mut self, how: &str, app: &str, chose: &str) {
+        let windows: Vec<String> = self
+            .taskbar
+            .windows()
+            .iter()
+            .filter(|w| w.app == app)
+            .map(|w| format!("{:?} \"{}\" active={} minimized={} on={:?}", w.handle, w.title, w.active, w.minimized, w.outputs))
+            .collect();
+        tracing::info!(how, app, chose, windows = ?windows, "taskbar click");
+    }
+
     pub(crate) fn close_popup(&mut self) -> Task<Message> {
         let sub = self.close_submenu();
         match self.popup.take() {
@@ -788,6 +806,14 @@ impl Shell {
         tracing::debug!(?info, "window changed");
         let app = self.catalog.resolve_window(&info.app_id, &info.title).id;
         let app = if app.is_empty() { info.app_id.clone() } else { app };
+        // The app showed a window again right after the taskbar minimized it (#85).
+        if let Some((h, at)) = self.minimize_asked
+            && h == info.id
+            && at.elapsed() < Duration::from_secs(2)
+            && !info.minimized
+        {
+            tracing::info!(app_id = %info.app_id, title = %info.title, activated = info.activated, after_ms = at.elapsed().as_millis() as u64, "window not minimized after the taskbar asked for it");
+        }
         let was_active = self.taskbar.windows().iter().any(|w| w.handle == info.id && w.active);
         if info.activated && !was_active {
             self.note_activation(info.id);
@@ -1084,6 +1110,7 @@ impl Application for Shell {
             catcher: None,
             popup: None,
             popup_dismissed: None,
+            minimize_asked: None,
             strays: std::sync::Mutex::new(HashMap::new()),
             popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
@@ -1809,6 +1836,12 @@ impl Shell {
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
                 let active = self.taskbar.windows().iter().any(|w| w.handle == h && w.active && !w.minimized);
+                if let Some(app) = self.taskbar.windows().iter().find(|w| w.handle == h).map(|w| w.app.clone()) {
+                    self.log_click("window", &app, if active { "minimize" } else { "activate" });
+                }
+                if active {
+                    self.minimize_asked = Some((h, Instant::now()));
+                }
                 self.request(if active { WaylandRequest::Minimize(h) } else { WaylandRequest::Activate(h) });
                 return close;
             }
@@ -1818,6 +1851,16 @@ impl Shell {
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
                 let action = self.taskbar.click(&app);
+                self.log_click(
+                    "button",
+                    &app,
+                    match &action {
+                        ClickAction::Launch(_) => "launch",
+                        ClickAction::Activate(_) => "activate",
+                        ClickAction::Minimize(_) => "minimize",
+                        ClickAction::ShowPicker => "window picker",
+                    },
+                );
                 let next = match action {
                     ClickAction::Launch(id) => self.launch(&id),
                     ClickAction::Activate(h) => {
@@ -1825,6 +1868,7 @@ impl Shell {
                         Task::none()
                     }
                     ClickAction::Minimize(h) => {
+                        self.minimize_asked = Some((h, Instant::now()));
                         self.request(WaylandRequest::Minimize(h));
                         Task::none()
                     }
