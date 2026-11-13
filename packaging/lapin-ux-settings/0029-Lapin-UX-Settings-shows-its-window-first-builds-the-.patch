@@ -1,0 +1,228 @@
+From aa7e507e74acb323273f5eae1420d49e6584f749 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 22:43:44 +0800
+Subject: [PATCH] Lapin UX: Settings shows its window first, builds the pages
+ after (#80)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In the Lapin session the window opens with "Loading…" and the pages
+are built a moment later, so the window is up sooner. Stock COSMIC's own
+session keeps its start-up unchanged.
+
+Refs #80
+---
+ cosmic-settings/src/app.rs | 135 ++++++++++++++++++++++++++-----------
+ 1 file changed, 95 insertions(+), 40 deletions(-)
+
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index 98aa4d1..eaebdfa 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -69,6 +69,11 @@ pub struct SettingsApp {
+     context_title: Option<String>,
+     /// Lapin UX: Windows 11 layout (sidebar, categories, back arrow).
+     lapin: crate::lapin::State,
++    /// Lapin UX shows the window first and builds the pages a moment later
++    /// (#80). Always true outside Lapin's session.
++    booted: bool,
++    /// The page asked for on the command line, until the pages exist.
++    pending_command: Option<PageCommands>,
+ }
+ 
+ impl SettingsApp {
+@@ -160,6 +165,8 @@ pub enum Message {
+     #[cfg(feature = "wayland")]
+     DesktopInfo,
+     Error(String),
++    /// Lapin UX: build the pages now that the window is showing (#80).
++    Boot,
+     None,
+     OpenContextDrawer(Entity),
+     #[cfg(feature = "wayland")]
+@@ -217,50 +224,25 @@ impl cosmic::Application for SettingsApp {
+             search_selections: Vec::default(),
+             context_title: None,
+             lapin: crate::lapin::State::default(),
++            booted: true,
++            pending_command: None,
+         };
+ 
+-        #[cfg(feature = "page-networking")]
+-        app.insert_page::<networking::Page>();
+-        #[cfg(feature = "page-bluetooth")]
+-        app.insert_page::<bluetooth::Page>();
+-        #[cfg(feature = "page-accessibility")]
+-        app.insert_page::<accessibility::Page>();
+-        let desktop_id = app.insert_page::<desktop::Page>().id();
+-        #[cfg(feature = "page-display")]
+-        app.insert_page::<display::Page>();
+-        #[cfg(feature = "page-sound")]
+-        app.insert_page::<sound::Page>();
+-        #[cfg(feature = "page-power")]
+-        app.insert_page::<power::Page>();
+-        #[cfg(feature = "page-input")]
+-        app.insert_page::<input::Page>();
+-        app.insert_page::<applications::Page>();
+-        app.insert_page::<time::Page>();
+-        app.insert_page::<system::Page>();
+-
+-        let lapin = crate::lapin::enabled();
+-        if lapin {
+-            app.lapin.layout = crate::lapin::arrange(&mut app.pages);
+-            // Windows draws each setting as its own card.
+-            cosmic::lapin::set_card_lists(true);
+-            cosmic::lapin::set_item_icons(crate::lapin::icons::row_icon);
+-        }
+-
+-        let active_id = match flags.sub_command {
+-            Some(p) => app.subtask_to_page(&p),
+-            // Windows opens Settings on Home.
+-            None if lapin => Some(app.lapin.layout.home),
+-            None => app
+-                .pages
+-                .find_page_by_id(&app.last_active_page)
+-                .map(|(id, _info)| id),
++        if crate::lapin::enabled() {
++            // Show the window with "Loading…" first, then build the pages.
++            app.booted = false;
++            app.pending_command = flags.sub_command;
++            let task = Task::batch([
++                cosmic::command::set_theme(cosmic::theme::system_preference()),
++                Task::future(async {
++                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
++                    cosmic::Action::App(Message::Boot)
++                }),
++            ]);
++            return (app, task);
+         }
+-        .unwrap_or(desktop_id);
+ 
+-        let task = Task::batch([
+-            cosmic::command::set_theme(cosmic::theme::system_preference()),
+-            app.activate_page(active_id),
+-        ]);
++        let task = app.build_pages(flags.sub_command);
+         (app, task)
+     }
+ 
+@@ -302,6 +284,9 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn on_app_exit(&mut self) -> Option<Self::Message> {
++        if !self.booted {
++            return None;
++        }
+         self.pages.on_leave(self.active_page);
+         None
+     }
+@@ -329,6 +314,9 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn subscription(&self) -> Subscription<Message> {
++        if !self.booted {
++            return Subscription::none();
++        }
+         let page = &self.pages.page[self.active_page];
+ 
+         let subscriptions = vec![
+@@ -417,7 +405,19 @@ impl cosmic::Application for SettingsApp {
+ 
+     #[allow(clippy::too_many_lines)]
+     fn update(&mut self, message: Message) -> Task<Self::Message> {
++        if !self.booted {
++            // Nothing else can act before the pages exist (#80).
++            return match message {
++                Message::Boot => {
++                    self.booted = true;
++                    let command = self.pending_command.take();
++                    self.build_pages(command)
++                }
++                _ => Task::none(),
++            };
++        }
+         match message {
++            Message::Boot => {}
+             Message::Page(page) => return self.activate_page(page),
+ 
+             Message::Lapin(msg) => match msg {
+@@ -1033,6 +1033,12 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn view(&self) -> Element<'_, Message> {
++        if !self.booted {
++            // Lapin UX: the window is up, the pages are being built (#80).
++            return container(cosmic::widget::text::title3("Loading…"))
++                .center(Length::Fill)
++                .into();
++        }
+         if crate::lapin::enabled() {
+             return self.lapin_view();
+         }
+@@ -1074,6 +1080,9 @@ impl cosmic::Application for SettingsApp {
+     }
+ 
+     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
++        if !self.booted {
++            return None;
++        }
+         self.pages
+             .dialog(self.active_page)
+             .map(|e| e.map(Message::PageMessage))
+@@ -1101,6 +1110,52 @@ impl cosmic::Application for SettingsApp {
+ 
+ impl SettingsApp {
+     /// Activates a page.
++    /// Builds every page and opens the first one (the slow part of start-up).
++    fn build_pages(&mut self, command: Option<PageCommands>) -> Task<Message> {
++        #[cfg(feature = "page-networking")]
++        self.insert_page::<networking::Page>();
++        #[cfg(feature = "page-bluetooth")]
++        self.insert_page::<bluetooth::Page>();
++        #[cfg(feature = "page-accessibility")]
++        self.insert_page::<accessibility::Page>();
++        let desktop_id = self.insert_page::<desktop::Page>().id();
++        #[cfg(feature = "page-display")]
++        self.insert_page::<display::Page>();
++        #[cfg(feature = "page-sound")]
++        self.insert_page::<sound::Page>();
++        #[cfg(feature = "page-power")]
++        self.insert_page::<power::Page>();
++        #[cfg(feature = "page-input")]
++        self.insert_page::<input::Page>();
++        self.insert_page::<applications::Page>();
++        self.insert_page::<time::Page>();
++        self.insert_page::<system::Page>();
++
++        let lapin = crate::lapin::enabled();
++        if lapin {
++            self.lapin.layout = crate::lapin::arrange(&mut self.pages);
++            // Windows draws each setting as its own card.
++            cosmic::lapin::set_card_lists(true);
++            cosmic::lapin::set_item_icons(crate::lapin::icons::row_icon);
++        }
++
++        let active_id = match command {
++            Some(p) => self.subtask_to_page(&p),
++            // Windows opens Settings on Home.
++            None if lapin => Some(self.lapin.layout.home),
++            None => self
++                .pages
++                .find_page_by_id(&self.last_active_page)
++                .map(|(id, _info)| id),
++        }
++        .unwrap_or(desktop_id);
++
++        Task::batch([
++            cosmic::command::set_theme(cosmic::theme::system_preference()),
++            self.activate_page(active_id),
++        ])
++    }
++
+     fn activate_page(&mut self, page: page::Entity) -> Task<crate::Message> {
+         let page = self.lapin.layout.redirect(page);
+         let current_page = self.active_page;
+-- 
+2.43.0
+
