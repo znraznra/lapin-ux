@@ -1,0 +1,113 @@
+From 97ff95f0d5b60172c4e7e19d600a25806bd96162 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 16:26:13 +0800
+Subject: [PATCH] Lapin UX: Explorer sidebar starts with Home and Gallery
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |  1 +
+ src/app.rs               | 54 ++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 53 insertions(+), 2 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 4400c08..9c08ed0 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -396,3 +396,4 @@ sort-newest-first = Newest first
+ sort-oldest-first = Oldest first
+ sort-smallest-to-largest = Smallest to largest
+ sort-largest-to-smallest = Largest to smallest
++gallery = Gallery
+diff --git a/src/app.rs b/src/app.rs
+index 52455ce..42c180d 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -672,6 +672,13 @@ pub struct FavoriteIndex(usize);
+ 
+ pub struct MounterData(MounterKey, MounterItem);
+ 
++/// The two fixed entries Lapin UX puts at the top of the sidebar.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum LapinNav {
++    Home,
++    Gallery,
++}
++
+ #[derive(Clone, Debug)]
+ pub enum WindowKind {
+     Desktop(Entity),
+@@ -1820,11 +1827,28 @@ impl App {
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
++        // Lapin UX: Home (the page with favourites and recent files) and Gallery
++        // (pictures) first, then the pinned folders.
++        if crate::config::lapin_session() {
++            nav_model = nav_model.insert(|b| {
++                b.text(fl!("home"))
++                    .icon(icon::icon(icon::from_name("user-home-symbolic").size(16).handle()).size(16))
++                    .data(LapinNav::Home)
++            });
++            nav_model = nav_model.insert(|b| {
++                b.text(fl!("gallery"))
++                    .icon(icon::icon(icon::from_name("folder-pictures-symbolic").size(16).handle()).size(16))
++                    .data(LapinNav::Gallery)
++            });
++        }
++
+         if self.config.show_recents {
+             nav_model = nav_model.insert(|b| {
+-                b.text(fl!("recents"))
++                let b = b
++                    .text(fl!("recents"))
+                     .icon(icon::from_name("document-open-recent-symbolic"))
+-                    .data(Location::Recents)
++                    .data(Location::Recents);
++                if crate::config::lapin_session() { b.divider_above() } else { b }
+             });
+         }
+ 
+@@ -2731,6 +2755,22 @@ impl Application for App {
+     fn on_nav_select(&mut self, entity: Entity) -> Task<Self::Message> {
+         self.lapin_home = false;
+         self.nav_model.activate(entity);
++        match self.nav_model.data::<LapinNav>(entity).copied() {
++            Some(LapinNav::Home) => {
++                self.lapin_home = true;
++                return Task::none();
++            }
++            Some(LapinNav::Gallery) => {
++                if let Some(dir) = dirs::picture_dir() {
++                    return Task::done(cosmic::Action::App(Message::TabMessage(
++                        None,
++                        tab::Message::Location(Location::Path(dir)),
++                    )));
++                }
++                return Task::none();
++            }
++            None => {}
++        }
+         if let Some(location) = self.nav_model.data::<Location>(entity) {
+             let should_open = match location {
+                 #[cfg(feature = "gvfs")]
+@@ -2934,6 +2974,16 @@ impl Application for App {
+         match message {
+             Message::LapinHome(on) => {
+                 self.lapin_home = on;
++                if on {
++                    // Home in the sidebar shows as the open place.
++                    let id = self
++                        .nav_model
++                        .iter()
++                        .find(|&id| self.nav_model.data::<LapinNav>(id) == Some(&LapinNav::Home));
++                    if let Some(id) = id {
++                        self.nav_model.activate(id);
++                    }
++                }
+             }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+-- 
+2.43.0
+
