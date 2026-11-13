@@ -327,6 +327,9 @@ pub struct Shell {
     /// The last window the taskbar asked to minimize and when (#85): if the
     /// window reports it is shown again a moment later, the app undid it.
     pub(crate) minimize_asked: Option<(Handle, Instant)>,
+    /// The window the taskbar last asked to activate, while nothing has reported
+    /// being active since (#85): see `looks_active`.
+    pub(crate) activated_by_us: Option<(Handle, Instant)>,
     /// Surfaces iced asked for a view of that the shell doesn't track, and
     /// when each was first seen (#34). A pop-up closed before its creation
     /// went through is created afterwards with nobody holding it: invisible,
@@ -653,6 +656,18 @@ impl Shell {
         format!("unknown surface {id:?}")
     }
 
+    /// Some apps (Claude Desktop, Task Manager) never report their window as
+    /// active (#85), so a click on their button always chose "activate" and the
+    /// window could never be minimized. A window the taskbar itself just
+    /// activated, with no window reporting active since, counts as active.
+    fn looks_active(&self, h: Handle) -> bool {
+        let windows = self.taskbar.windows();
+        matches!(self.activated_by_us, Some((a, at)) if a == h && at.elapsed() < Duration::from_secs(15))
+            && !self.desktop_focused
+            && !windows.iter().any(|w| w.active)
+            && windows.iter().any(|w| w.handle == h && !w.minimized)
+    }
+
     /// Log what a click on a taskbar button saw and chose (#85): every window
     /// of the app with its state, so "clicking the active app doesn't
     /// minimize it" shows whether the window wasn't seen as active, there
@@ -825,6 +840,9 @@ impl Shell {
             tracing::info!(app_id = %info.app_id, title = %info.title, activated = info.activated, after_ms = at.elapsed().as_millis() as u64, "window not minimized after the taskbar asked for it");
         }
         let was_active = self.taskbar.windows().iter().any(|w| w.handle == info.id && w.active);
+        if info.activated {
+            self.activated_by_us = None;
+        }
         if info.activated && !was_active {
             self.note_activation(info.id);
         } else if !self.mru.contains(&info.id) {
@@ -1121,6 +1139,7 @@ impl Application for Shell {
             popup: None,
             popup_dismissed: None,
             minimize_asked: None,
+            activated_by_us: None,
             strays: std::sync::Mutex::new(HashMap::new()),
             popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
@@ -1534,6 +1553,8 @@ impl Shell {
             // Alt+F4 on the desktop opens the Shut Down dialog instead of closing a window.
             Message::Layer(LayerEvent::Focused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
                 self.desktop_focused = true;
+                // The desktop took the focus: nothing we activated is in front any more (#85).
+                self.activated_by_us = None;
             }
             Message::Layer(LayerEvent::Unfocused, id) if self.desktop.as_ref().is_some_and(|d| d.id == id) => {
                 self.desktop_focused = false;
@@ -1867,12 +1888,15 @@ impl Shell {
                     return Task::none();
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
-                let active = self.taskbar.windows().iter().any(|w| w.handle == h && w.active && !w.minimized);
+                let active = self.taskbar.windows().iter().any(|w| w.handle == h && w.active && !w.minimized) || self.looks_active(h);
                 if let Some(app) = self.taskbar.windows().iter().find(|w| w.handle == h).map(|w| w.app.clone()) {
                     self.log_click("window", &app, if active { "minimize" } else { "activate" });
                 }
                 if active {
                     self.minimize_asked = Some((h, Instant::now()));
+                    self.activated_by_us = None;
+                } else {
+                    self.activated_by_us = Some((h, Instant::now()));
                 }
                 self.request(if active { WaylandRequest::Minimize(h) } else { WaylandRequest::Activate(h) });
                 return close;
@@ -1882,7 +1906,10 @@ impl Shell {
                     return Task::none();
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
-                let action = self.taskbar.click(&app);
+                let action = match self.taskbar.click(&app) {
+                    ClickAction::Activate(h) if self.looks_active(h) => ClickAction::Minimize(h),
+                    a => a,
+                };
                 self.log_click(
                     "button",
                     &app,
@@ -1896,10 +1923,12 @@ impl Shell {
                 let next = match action {
                     ClickAction::Launch(id) => self.launch(&id),
                     ClickAction::Activate(h) => {
+                        self.activated_by_us = Some((h, Instant::now()));
                         self.request(WaylandRequest::Activate(h));
                         Task::none()
                     }
                     ClickAction::Minimize(h) => {
+                        self.activated_by_us = None;
                         self.minimize_asked = Some((h, Instant::now()));
                         self.request(WaylandRequest::Minimize(h));
                         Task::none()
