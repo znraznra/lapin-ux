@@ -8,6 +8,10 @@ use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
 use cosmic::{ApplicationExt, Core, Element, theme};
 
+/// The search box, so it can be given the keyboard when the window opens (#96):
+/// typing then goes straight into it, like in Settings.
+static SEARCH_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-control-search"));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
     /// A page of Settings: a COSMIC page or a Lapin page id (`lapin-…`).
@@ -194,7 +198,7 @@ impl cosmic::Application for App {
             Some(id) => app.set_window_title("Control Panel".into(), id),
             None => Task::none(),
         };
-        (app, title)
+        (app, Task::batch([title, text_input::focus(SEARCH_ID.clone())]))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -208,7 +212,7 @@ impl cosmic::Application for App {
     }
 
     fn header_end(&self) -> Vec<Element<'_, Message>> {
-        vec![text_input::search_input("Search Control Panel", &self.search).on_input(Message::Search).width(240).into()]
+        vec![text_input::search_input("Search Control Panel", &self.search).id(SEARCH_ID.clone()).on_input(Message::Search).width(240).into()]
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {

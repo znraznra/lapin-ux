@@ -9,6 +9,9 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// The search box, focused when the window opens so typing goes straight into it (#97).
+static SEARCH_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-taskmgr-search"));
+
 use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Size, Subscription};
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
@@ -554,7 +557,7 @@ impl cosmic::Application for App {
             Some(id) => app.set_window_title("Task Manager".into(), id),
             None => Task::none(),
         };
-        (app, Task::batch([title, Task::done(cosmic::Action::App(Message::Tick))]))
+        (app, Task::batch([title, Task::done(cosmic::Action::App(Message::Tick)), text_input::focus(SEARCH_ID.clone())]))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -571,6 +574,7 @@ impl cosmic::Application for App {
     fn header_center(&self) -> Vec<Element<'_, Message>> {
         vec![
             text_input::search_input("Type a name or PID to search", &self.search)
+                .id(SEARCH_ID.clone())
                 .on_input(Message::Search)
                 .width(Length::Fixed(380.0))
                 .into(),
