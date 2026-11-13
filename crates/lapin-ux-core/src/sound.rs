@@ -66,22 +66,72 @@ pub fn themes(dirs: &[PathBuf]) -> Vec<(String, String)> {
     out
 }
 
-/// Find `event` in `theme` (then freedesktop's fallback theme) under the
-/// data dirs: `<dir>/sounds/<theme>/stereo/<event>.{oga,ogg,wav}`.
-pub fn find(theme: &str, event: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
-    for t in [theme, "freedesktop"] {
+/// What a theme says about an event.
+#[derive(Debug, PartialEq)]
+pub enum Lookup {
+    Found(PathBuf),
+    /// A theme has an `<event>.disabled` marker: no sound, no fallback.
+    Disabled,
+    Missing,
+}
+
+/// `theme` then the themes it `Inherits` (in order, each once, so a loop can't
+/// run away), then freedesktop's fallback theme.
+fn theme_chain(theme: &str, data_dirs: &[PathBuf]) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut queue = vec![theme.to_string()];
+    while let Some(t) = queue.first().cloned() {
+        queue.remove(0);
+        if t.is_empty() || t.contains('/') || chain.contains(&t) || chain.len() >= 16 {
+            continue;
+        }
+        let mut parents = Vec::new();
+        for d in data_dirs {
+            if let Ok(index) = std::fs::read_to_string(d.join("sounds").join(&t).join("index.theme")) {
+                for line in index.lines() {
+                    if let Some(v) = line.trim().strip_prefix("Inherits=") {
+                        parents.extend(v.split(',').map(|p| p.trim().to_string()));
+                    }
+                }
+                break;
+            }
+        }
+        chain.push(t);
+        queue.splice(0..0, parents);
+    }
+    if !chain.iter().any(|t| t == "freedesktop") {
+        chain.push("freedesktop".into());
+    }
+    chain
+}
+
+/// Look `event` up in `theme`, its parents and then freedesktop's fallback
+/// theme, under the data dirs: `<dir>/sounds/<theme>/stereo/<event>.{oga,ogg,wav}`.
+pub fn lookup(theme: &str, event: &str, data_dirs: &[PathBuf]) -> Lookup {
+    for t in theme_chain(theme, data_dirs) {
         for d in data_dirs {
             for sub in ["stereo", ""] {
+                let base = d.join("sounds").join(&t).join(sub);
+                if base.join(format!("{event}.disabled")).exists() {
+                    return Lookup::Disabled;
+                }
                 for ext in ["oga", "ogg", "wav"] {
-                    let p = d.join("sounds").join(t).join(sub).join(format!("{event}.{ext}"));
+                    let p = base.join(format!("{event}.{ext}"));
                     if p.is_file() {
-                        return Some(p);
+                        return Lookup::Found(p);
                     }
                 }
             }
         }
     }
-    None
+    Lookup::Missing
+}
+
+pub fn find(theme: &str, event: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
+    match lookup(theme, event, data_dirs) {
+        Lookup::Found(p) => Some(p),
+        _ => None,
+    }
 }
 
 /// XDG data dirs, user's first.
@@ -131,9 +181,9 @@ pub fn play(event: &str) {
     let file = match custom_choice(event, &dirs) {
         Choice::Silent => return,
         Choice::File(f) => f,
-        Choice::None => match find(&theme, event, &dirs) {
-            Some(f) => f,
-            None => return,
+        Choice::None => match lookup(&theme, event, &dirs) {
+            Lookup::Found(f) => f,
+            Lookup::Disabled | Lookup::Missing => return,
         },
     };
     play_file(&file);
@@ -173,6 +223,30 @@ mod tests {
         assert!(find("borealis", "trash-empty", &dirs).unwrap().ends_with("trash-empty.oga"));
         assert!(find("borealis", "bell", &dirs).unwrap().to_string_lossy().contains("freedesktop"));
         assert!(find("borealis", "nope", &dirs).is_none());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn inherited_themes_come_before_the_fallback() {
+        let d = std::env::temp_dir().join(format!("lapin-sound-i-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for t in ["ocean", "borealis", "freedesktop"] {
+            std::fs::create_dir_all(d.join("sounds").join(t).join("stereo")).unwrap();
+        }
+        std::fs::write(d.join("sounds/ocean/index.theme"), "[Sound Theme]\nInherits=borealis\n").unwrap();
+        // A loop must not hang the lookup.
+        std::fs::write(d.join("sounds/borealis/index.theme"), "[Sound Theme]\nInherits=ocean\n").unwrap();
+        std::fs::write(d.join("sounds/borealis/stereo/desktop-login.oga"), b"x").unwrap();
+        std::fs::write(d.join("sounds/freedesktop/stereo/desktop-login.oga"), b"x").unwrap();
+        std::fs::write(d.join("sounds/freedesktop/stereo/bell.oga"), b"x").unwrap();
+        let dirs = vec![d.clone()];
+        let found = find("ocean", "desktop-login", &dirs).unwrap();
+        assert!(found.to_string_lossy().contains("borealis"), "{found:?}");
+        assert!(find("ocean", "bell", &dirs).unwrap().to_string_lossy().contains("freedesktop"));
+        assert_eq!(lookup("ocean", "nope", &dirs), Lookup::Missing);
+        // A .disabled marker in the theme stops the fallback.
+        std::fs::write(d.join("sounds/ocean/stereo/bell.disabled"), b"").unwrap();
+        assert_eq!(lookup("ocean", "bell", &dirs), Lookup::Disabled);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

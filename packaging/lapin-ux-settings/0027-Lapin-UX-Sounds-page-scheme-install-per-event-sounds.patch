@@ -1,4 +1,4 @@
-From 6039a23a6d52d2598204d0ff87d9bd3fbe8b460f Mon Sep 17 00:00:00 2001
+From a91d571389e79fab4e124dbe2648e7266d7c7d20 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 13 Nov 2026 09:23:29 +0800
 Subject: [PATCH] Lapin UX: Sounds page (scheme, install, per-event sounds)
@@ -9,9 +9,9 @@ Refs #58
  cosmic-settings/src/lapin/mod.rs          |   1 +
  cosmic-settings/src/lapin/pointers_add.rs |   6 +-
  cosmic-settings/src/lapin/search.rs       |   3 +
- cosmic-settings/src/lapin/settings.rs     | 188 ++++++++++++++
- cosmic-settings/src/lapin/sounds_add.rs   | 294 ++++++++++++++++++++++
- 6 files changed, 490 insertions(+), 3 deletions(-)
+ cosmic-settings/src/lapin/settings.rs     | 188 +++++++++++++
+ cosmic-settings/src/lapin/sounds_add.rs   | 329 ++++++++++++++++++++++
+ 6 files changed, 525 insertions(+), 3 deletions(-)
  create mode 100644 cosmic-settings/src/lapin/sounds_add.rs
 
 diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
@@ -325,10 +325,10 @@ index f3ae069..98655ef 100644
      let _ = pages.register::<super::storage::Page>();
 diff --git a/cosmic-settings/src/lapin/sounds_add.rs b/cosmic-settings/src/lapin/sounds_add.rs
 new file mode 100644
-index 0000000..94c3236
+index 0000000..d689fbf
 --- /dev/null
 +++ b/cosmic-settings/src/lapin/sounds_add.rs
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,329 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +//! Sound schemes and per-event sounds (#58). Lapin plays sounds from the scheme
 +//! named in `dev.lapinux.Shell` `sound_theme`; the user's per-event choices live
@@ -471,11 +471,39 @@ index 0000000..94c3236
 +            Choice::Scheme => {}
 +        }
 +    }
-+    for t in [scheme, "freedesktop"] {
++    // The scheme, then what it Inherits (once each), then freedesktop; an
++    // `<event>.disabled` marker in any of them means no sound.
++    let mut chain: Vec<String> = Vec::new();
++    let mut queue = vec![scheme.to_string()];
++    while !queue.is_empty() {
++        let t = queue.remove(0);
++        if t.is_empty() || t.contains('/') || chain.contains(&t) || chain.len() >= 16 {
++            continue;
++        }
++        let mut parents = Vec::new();
++        for d in dirs {
++            if let Ok(index) = std::fs::read_to_string(d.join("sounds").join(&t).join("index.theme")) {
++                for line in index.lines() {
++                    if let Some(v) = line.trim().strip_prefix("Inherits=") {
++                        parents.extend(v.split(',').map(|p| p.trim().to_string()));
++                    }
++                }
++                break;
++            }
++        }
++        chain.push(t);
++        queue.splice(0..0, parents);
++    }
++    chain.push("freedesktop".into());
++    for t in &chain {
 +        for d in dirs {
 +            for sub in ["stereo", ""] {
++                let base = d.join("sounds").join(t).join(sub);
++                if base.join(format!("{event}.disabled")).exists() {
++                    return None;
++                }
 +                for ext in ["oga", "ogg", "wav"] {
-+                    let p = d.join("sounds").join(t).join(sub).join(format!("{event}.{ext}"));
++                    let p = base.join(format!("{event}.{ext}"));
 +                    if p.is_file() {
 +                        return Some(p);
 +                    }
@@ -621,6 +649,13 @@ index 0000000..94c3236
 +        assert_eq!(choice(&user, "desktop-login"), Choice::Scheme);
 +        assert!(user.join("sounds/borealis/stereo/desktop-login.oga").exists());
 +        assert!(themes(&dirs).iter().all(|(i, _)| i != CUSTOM));
++        // Inherited schemes count before freedesktop, and .disabled stops the search.
++        scheme(&user.join("sounds/child"), "Child");
++        std::fs::remove_file(user.join("sounds/child/stereo/desktop-login.oga")).unwrap();
++        std::fs::write(user.join("sounds/child/index.theme"), "[Sound Theme]\nName=Child\nInherits=borealis\n").unwrap();
++        assert!(current_file(&dirs, "child", "desktop-login").unwrap().to_string_lossy().contains("borealis"));
++        std::fs::write(user.join("sounds/child/stereo/desktop-login.disabled"), b"").unwrap();
++        assert!(current_file(&dirs, "child", "desktop-login").is_none());
 +    }
 +}
 -- 
