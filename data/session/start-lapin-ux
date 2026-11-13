@@ -24,12 +24,25 @@ echo "=== Lapin UX session start $(date -Iseconds) (pid $$, shell ${SHELL:-none}
 # be coming up; wait a few seconds for it, and never let a missing one stop the
 # session: the steps below that talk to it are best effort.
 STEP="waiting for the user manager"
-if command -v systemctl >/dev/null; then
-    n=0
-    until systemctl --user show-environment >/dev/null 2>&1 || [ "$n" -ge 50 ]; do
-        n=$((n + 1)); sleep 0.1
+# Only in the first run: the re-exec through the login shell below would wait a
+# second time when the manager stays away. The limit is 5 s of clock time (each
+# probe is itself bounded with timeout when there is one), not a count of loops.
+if command -v systemctl >/dev/null && [ "${1}" != "--in-login-shell" ]; then
+    probe() {
+        if command -v timeout >/dev/null; then
+            timeout 1 systemctl --user show-environment >/dev/null 2>&1
+        else
+            systemctl --user show-environment >/dev/null 2>&1
+        fi
+    }
+    deadline=$(( $(date +%s) + 5 ))
+    until probe; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "warning: the user's systemd manager did not answer after 5 s"
+            break
+        fi
+        sleep 0.1
     done
-    [ "$n" -ge 50 ] && echo "warning: the user's systemd manager did not answer after 5 s"
 fi
 
 STEP="resetting failed units"
