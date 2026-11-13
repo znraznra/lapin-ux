@@ -735,6 +735,7 @@ impl Shell {
                         d.selected = HashSet::from([path.clone()]);
                     }
                     d.drag_gen = d.drag_gen.wrapping_add(1);
+                    tracing::info!(path = %path.display(), "desktop drag started (#81)");
                     d.drag = Some(Drag { path, from });
                 }
             }
@@ -745,6 +746,7 @@ impl Shell {
             // when nothing was dropped (a cancelled drag).
             DesktopMsg::DragEnd => {
                 let gen_ = d.drag_gen;
+                tracing::info!(drag_gen = gen_, "desktop drag ended or cancelled (#81)");
                 return Task::future(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                     cosmic::Action::App(Message::Desktop(DesktopMsg::DragClear(gen_)))
@@ -757,10 +759,16 @@ impl Shell {
                 }
             }
             DesktopMsg::DropMotion(p) => {
+                if d.drop_at.is_none() {
+                    tracing::info!(at = ?p, "something is being dragged over the desktop (#81)");
+                }
                 d.drop_at = Some(p);
                 d.pointer = p;
             }
-            DesktopMsg::DropLeave => d.drop_at = None,
+            DesktopMsg::DropLeave => {
+                tracing::info!("the drag left the desktop (#81)");
+                d.drop_at = None;
+            }
             DesktopMsg::Dropped(uris, action) => {
                 let at = d.drop_at.take().unwrap_or(d.pointer);
                 let ours = d.drag.take();
