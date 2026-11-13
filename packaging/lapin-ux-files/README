@@ -1,0 +1,11 @@
+File Explorer (#71): patches on top of COSMIC Files (pin 3cc4b80) AND on top of
+../lapin-ux-portal/0001-*.patch (the file-dialog footer), in that order:
+
+  git -C ~/src/cosmic-files checkout -B lapin-ux 3cc4b80
+  git -C ~/src/cosmic-files am ~/lapin-ux/packaging/lapin-ux-portal/0001-*.patch
+  git -C ~/src/cosmic-files am ~/lapin-ux/packaging/lapin-ux-files/*.patch
+
+Every Lapin look here is gated on `config::lapin_session()` (XDG_CURRENT_DESKTOP
+contains LapinUX, or LAPIN_UX_DIALOG=1). In COSMIC's own session the app is stock.
+Not packaged yet: nothing in packaging/arch builds or installs these as an app,
+so for now they only exist as the source of truth for the fork.
