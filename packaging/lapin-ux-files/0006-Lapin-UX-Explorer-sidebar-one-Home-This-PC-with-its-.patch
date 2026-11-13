@@ -1,0 +1,297 @@
+From 7d1a7c87d65cffc401ed1b39eb589fe85696af43 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 18:13:07 +0800
+Subject: [PATCH] Lapin UX: Explorer sidebar: one Home, This PC with its
+ drives, Networks and Trash last
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |   3 +
+ src/app.rs               | 146 ++++++++++++++++++++++++++++++++++-----
+ src/tab.rs               |   5 ++
+ 3 files changed, 138 insertions(+), 16 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 9c08ed0..2af7604 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -397,3 +397,6 @@ sort-oldest-first = Oldest first
+ sort-smallest-to-largest = Smallest to largest
+ sort-largest-to-smallest = Largest to smallest
+ gallery = Gallery
++this-pc = This PC
++devices-and-drives = Devices and drives
++free-of = { $free } free of { $total }
+diff --git a/src/app.rs b/src/app.rs
+index 42c180d..2a2e858 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -670,6 +670,19 @@ impl DialogPages {
+ 
+ pub struct FavoriteIndex(usize);
+ 
++/// Free and total bytes of the filesystem holding `path`.
++fn disk_space(path: &Path) -> Option<(u64, u64)> {
++    use std::os::unix::ffi::OsStrExt;
++    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
++    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
++    // SAFETY: `c` is a valid NUL-terminated path and `st` a valid out pointer.
++    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
++        return None;
++    }
++    let frsize = st.f_frsize as u64;
++    Some((st.f_bavail as u64 * frsize, st.f_blocks as u64 * frsize))
++}
++
+ pub struct MounterData(MounterKey, MounterItem);
+ 
+ /// The two fixed entries Lapin UX puts at the top of the sidebar.
+@@ -677,6 +690,7 @@ pub struct MounterData(MounterKey, MounterItem);
+ enum LapinNav {
+     Home,
+     Gallery,
++    ThisPc,
+ }
+ 
+ #[derive(Clone, Debug)]
+@@ -730,6 +744,7 @@ pub struct App {
+     about: About,
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
++    lapin_pc: bool,
+     nav_model: segmented_button::SingleSelectModel,
+     tab_model: segmented_button::Model<segmented_button::SingleSelect>,
+     config_handler: Option<cosmic_config::Config>,
+@@ -875,6 +890,64 @@ impl App {
+         .into()
+     }
+ 
++    /// Lapin UX: the This PC page, every drive with how full it is.
++    fn lapin_pc_view(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing {
++            space_xxs, space_xs, space_s, ..
++        } = theme::spacing();
++        // (name, icon, location, path to measure)
++        let mut drives: Vec<(String, icon::Handle, Location, Option<PathBuf>)> = vec![(
++            fl!("filesystem"),
++            icon::from_name("drive-harddisk-symbolic").size(32).handle(),
++            Location::Path(PathBuf::from("/")),
++            Some(PathBuf::from("/")),
++        )];
++        let mut items: Vec<_> = self.mounter_items.values().flatten().collect();
++        items.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.name(), &b.name()));
++        for item in items {
++            let path = item.path();
++            let location = match (&path, item.is_remote()) {
++                (Some(p), true) => Location::Network(item.uri(), item.name(), Some(p.clone())),
++                (Some(p), false) => Location::Path(p.clone()),
++                (None, _) => Location::Network(item.uri(), item.name(), None),
++            };
++            let handle = item
++                .icon(false)
++                .unwrap_or_else(|| icon::from_name("drive-harddisk-symbolic").size(32).handle());
++            drives.push((item.name(), handle, location, path));
++        }
++        let mut list = widget::column::with_capacity(drives.len() + 2)
++            .spacing(space_s)
++            .padding(space_s)
++            .push(widget::text::title4(fl!("devices-and-drives")));
++        for (name, handle, location, path) in drives {
++            let mut text = widget::column::with_capacity(3).spacing(space_xxs).push(widget::text::body(name));
++            if let Some((free, total)) = path.as_deref().and_then(disk_space) {
++                let used = if total == 0 { 0.0 } else { 1.0 - free as f32 / total as f32 };
++                text = text
++                    .push(widget::progress_bar::determinate_linear(used).width(Length::Fixed(260.0)).girth(Length::Fixed(10.0)))
++                    .push(widget::text::caption(fl!(
++                        "free-of",
++                        free = tab::format_size_public(free),
++                        total = tab::format_size_public(total)
++                    )));
++            }
++            list = list.push(
++                widget::button::custom(
++                    widget::row::with_capacity(2)
++                        .spacing(space_xs)
++                        .align_y(Alignment::Center)
++                        .push(icon::icon(handle).size(48))
++                        .push(text),
++                )
++                .padding(space_xs)
++                .class(theme::Button::MenuItem)
++                .on_press(Message::TabMessage(None, tab::Message::Location(location))),
++            );
++        }
++        widget::scrollable(list).height(Length::Fill).into()
++    }
++
+     fn open_file(&mut self, paths: &[impl AsRef<Path>]) -> Task<Message> {
+         let mut tasks = Vec::new();
+ 
+@@ -1854,6 +1927,10 @@ impl App {
+ 
+         for (favorite_i, favorite) in self.config.favorites.iter().enumerate() {
+             if let Some(path) = favorite.path_opt() {
++                // Lapin UX has its own Home entry at the top.
++                if crate::config::lapin_session() && dirs::home_dir().as_deref() == Some(path.as_path()) {
++                    continue;
++                }
+                 let name = favorite.display_name().unwrap_or_else(|| fl!("filesystem"));
+                 nav_model = nav_model.insert(move |b| {
+                     b.text(name.clone())
+@@ -1876,26 +1953,39 @@ impl App {
+             }
+         }
+ 
+-        nav_model = nav_model.insert(|b| {
++        let lapin = crate::config::lapin_session();
++        let trash_entry = |b: segmented_button::BuilderEntity<segmented_button::SingleSelect>| {
+             b.text(fl!("trash"))
+                 .icon(icon::icon(Trash::icon_symbolic(16)))
+                 .data(Location::Trash)
+                 .divider_above()
+-        });
++        };
++        let networks_entry = |b: segmented_button::BuilderEntity<segmented_button::SingleSelect>| {
++            b.text(fl!("networks"))
++                .icon(icon::icon(
++                    icon::from_name("network-workgroup-symbolic")
++                        .size(16)
++                        .handle(),
++                ))
++                .data(Location::Network(
++                    "network:///".to_string(),
++                    fl!("networks"),
++                    None,
++                ))
++                .divider_above()
++        };
+ 
+-        if !MOUNTERS.is_empty() {
++        if !lapin {
++            nav_model = nav_model.insert(trash_entry);
++            if !MOUNTERS.is_empty() {
++                nav_model = nav_model.insert(networks_entry);
++            }
++        } else {
++            // Lapin UX: This PC, with the drives under it.
+             nav_model = nav_model.insert(|b| {
+-                b.text(fl!("networks"))
+-                    .icon(icon::icon(
+-                        icon::from_name("network-workgroup-symbolic")
+-                            .size(16)
+-                            .handle(),
+-                    ))
+-                    .data(Location::Network(
+-                        "network:///".to_string(),
+-                        fl!("networks"),
+-                        None,
+-                    ))
++                b.text(fl!("this-pc"))
++                    .icon(icon::icon(icon::from_name("computer-symbolic").size(16).handle()).size(16))
++                    .data(LapinNav::ThisPc)
+                     .divider_above()
+             });
+         }
+@@ -1927,14 +2017,28 @@ impl App {
+                 if item.is_mounted() {
+                     b = b.closable();
+                 }
+-                if i == 0 {
++                if !lapin && i == 0 {
+                     b = b.divider_above();
+                 }
+                 b
+             });
+         }
+ 
++        if lapin {
++            if !MOUNTERS.is_empty() {
++                nav_model = nav_model.insert(networks_entry);
++            }
++            nav_model = nav_model.insert(trash_entry);
++        }
++
+         self.nav_model = nav_model.build();
++        if lapin {
++            // The drives sit under This PC.
++            let drives: Vec<_> = self.nav_model.iter().filter(|&id| self.nav_model.data::<MounterData>(id).is_some()).collect();
++            for id in drives {
++                self.nav_model.indent_set(id, 1);
++            }
++        }
+ 
+         let tab_entity = self.tab_model.active();
+         if let Some(tab) = self.tab_model.data::<Tab>(tab_entity) {
+@@ -2511,6 +2615,7 @@ impl Application for App {
+             about,
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
++            lapin_pc: false,
+             nav_model: segmented_button::ModelBuilder::default().build(),
+             tab_model: segmented_button::ModelBuilder::default().build(),
+             config_handler: flags.config_handler,
+@@ -2754,12 +2859,17 @@ impl Application for App {
+ 
+     fn on_nav_select(&mut self, entity: Entity) -> Task<Self::Message> {
+         self.lapin_home = false;
++        self.lapin_pc = false;
+         self.nav_model.activate(entity);
+         match self.nav_model.data::<LapinNav>(entity).copied() {
+             Some(LapinNav::Home) => {
+                 self.lapin_home = true;
+                 return Task::none();
+             }
++            Some(LapinNav::ThisPc) => {
++                self.lapin_pc = true;
++                return Task::none();
++            }
+             Some(LapinNav::Gallery) => {
+                 if let Some(dir) = dirs::picture_dir() {
+                     return Task::done(cosmic::Action::App(Message::TabMessage(
+@@ -2943,6 +3053,7 @@ impl Application for App {
+         // Lapin UX: going anywhere closes the Home page.
+         if matches!(message, Message::TabMessage(_, tab::Message::Location(_))) {
+             self.lapin_home = false;
++            self.lapin_pc = false;
+         }
+         // Helper for updating config values efficiently
+         macro_rules! config_set {
+@@ -2974,6 +3085,7 @@ impl Application for App {
+         match message {
+             Message::LapinHome(on) => {
+                 self.lapin_home = on;
++                self.lapin_pc = false;
+                 if on {
+                     // Home in the sidebar shows as the open place.
+                     let id = self
+@@ -6659,7 +6771,9 @@ impl Application for App {
+                 self.clipboard_has_content(),
+             ));
+         }
+-        if crate::config::lapin_session() && self.lapin_home {
++        if crate::config::lapin_session() && self.lapin_pc {
++            tab_column = tab_column.push(self.lapin_pc_view());
++        } else if crate::config::lapin_session() && self.lapin_home {
+             tab_column = tab_column.push(self.lapin_home_view());
+         } else if let Some(tab) = self.tab_model.data::<Tab>(entity) {
+             let tab_view = tab
+diff --git a/src/tab.rs b/src/tab.rs
+index 7555012..53bb09d 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -345,6 +345,11 @@ fn tab_complete(path: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn Error>> {
+     Ok(completions)
+ }
+ 
++/// Lapin UX: the same text for the This PC page.
++pub fn format_size_public(size: u64) -> String {
++    format_size(size)
++}
++
+ //TODO: translate, add more levels?
+ fn format_size(size: u64) -> String {
+     const KB: u64 = 1000;
+-- 
+2.43.0
+
