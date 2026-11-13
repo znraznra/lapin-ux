@@ -162,7 +162,8 @@ reviewed files. Every excluded file needs a separate review.
   `gh api repos/znraznra/lapin-ux/pulls -f title=... -f head=BRANCH -f base=main -f body=...`.
   Read review comments the same way (`.../pulls/N/comments`, `.../pulls/N/reviews`).
 - **Always address CodeRabbit's findings** (rule set 2026-11-13). Before a PR is
-  handed over for review, and again after each push, read its comments and
+  handed over for review, and again after each push, wait until CodeRabbit's
+  review of the latest commit is posted, then read its comments and
   reviews (`.../pulls/N/comments`, `.../pulls/N/reviews`) and deal with every
   finding: fix it in a new commit on the same branch (no force-push), or, when it
   is wrong or out of scope, reply on the comment with the reason. Findings that
