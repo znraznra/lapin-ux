@@ -204,6 +204,10 @@ check "skipped: logind's session is Lapin UX (no pid file yet)" "[ \"\$(rd font-
 echo "gnome" > $HOME/desktop
 bash $DS leave
 check "runs when the session is another desktop's" "[ -z \"\$(rd font-name)\" ]"
+bash $U --snapshot; bash $DS enter; lapin_writes
+echo "LapinUX" > $HOME/desktop
+LAPIN_UX_SESSION_END=1 bash $DS leave
+check "session end: handed back although logind still lists the Lapin session" "[ -z \"\$(rd font-name)\" ]"
 }
 scenI() {
 echo "I: other desktops' startup parts a crashed Lapin session skipped come back"

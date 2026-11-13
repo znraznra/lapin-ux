@@ -182,5 +182,5 @@ else
 fi
 echo "=== Lapin UX session end $(date -Iseconds) (status $status) ==="
 rm -f "$MARK"
-lapin-ux-desktop-settings leave || true
+LAPIN_UX_SESSION_END=1 lapin-ux-desktop-settings leave || true
 exit "$status"
