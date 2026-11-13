@@ -389,6 +389,7 @@ impl Shell {
                     return Task::none();
                 }
                 // The dialog was closed when it started; bring it back with the message.
+                self.run_error_at = std::time::Instant::now();
                 self.open_panel(PanelKind::Run { input, error: true })
             }
             PanelMsg::RunSubmit => {
@@ -403,6 +404,7 @@ impl Shell {
                     if let Some(Panel { kind: PanelKind::Run { error, .. }, .. }) = &mut self.panel {
                         *error = true;
                     }
+                    self.run_error_at = std::time::Instant::now();
                     return Task::none();
                 }
                 self.state.record_run(&input);
@@ -451,6 +453,8 @@ impl Shell {
         let Some(panel) = &self.panel else { return Task::none() };
         match (&panel.kind, key) {
             (PanelKind::WinX { power: true, .. }, Named::Escape) => self.update_panel(PanelMsg::WinXPower(false)),
+            // The Enter that just showed the message is the same key press as this one.
+            (PanelKind::Run { error: true, .. }, Named::Enter) if self.run_error_at.elapsed() < std::time::Duration::from_millis(400) => Task::none(),
             (PanelKind::Run { error: true, .. }, Named::Enter | Named::Escape) => self.update_panel(PanelMsg::RunErrorOk),
             (PanelKind::AltTab(_), k) => self.alt_tab_key(k),
             (PanelKind::Quick(_), Named::Escape) => match self.quick_escape() {

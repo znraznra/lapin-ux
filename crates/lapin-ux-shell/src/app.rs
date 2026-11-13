@@ -410,6 +410,9 @@ pub struct Shell {
     /// old submission can't close a panel opened since.
     pub run_seq: u64,
     pub(crate) panel_closed_at: Instant,
+    /// When the Run dialog last switched to its "Can't find" view. The same Enter that
+    /// submitted the text also reaches the key listener, and must not dismiss it.
+    pub(crate) run_error_at: Instant,
     /// Last pointer position over a taskbar.
     pub(crate) pointer: Option<(window::Id, cosmic::iced::Point)>,
     pub drag: Option<crate::taskbar_extras::Drag>,
@@ -1165,6 +1168,7 @@ impl Application for Shell {
             panel: None,
             run_seq: 0,
             panel_closed_at: Instant::now() - Duration::from_secs(10),
+            run_error_at: Instant::now() - Duration::from_secs(10),
             pointer: None,
             drag: None,
             suppress_click_until: Instant::now(),
