@@ -63,6 +63,10 @@ fn adapters() -> &'static [lapin_ux_core::gpu::Adapter] {
 #[derive(Debug, Clone)]
 struct Sample {
     at: Instant,
+    /// When the process list and the GPU counters were read: each is stamped on its
+    /// own, so a slow GPU scan doesn't skew the process or the other rates.
+    procs_at: Instant,
+    gpu_at: Instant,
     procs: Vec<Proc>,
     cpu: (u64, u64),
     ncpu: usize,
@@ -187,6 +191,7 @@ fn sample() -> Sample {
         .filter(|l| l.starts_with("cpu MHz"))
         .filter_map(|l| l.split(':').nth(1)?.trim().parse().ok())
         .collect();
+    let procs_at = Instant::now();
     let procs = sysmon::read_all(proc);
     let gpu = if adapters().is_empty() {
         HashMap::new()
@@ -195,8 +200,11 @@ fn sample() -> Sample {
         let own: Vec<u32> = procs.iter().filter(|p| p.uid == uid).map(|p| p.pid).collect();
         lapin_ux_core::gpu::read(proc, Path::new("/sys/class/drm"), &own, adapters())
     };
+    let gpu_at = Instant::now();
     Sample {
         at: Instant::now(),
+        procs_at,
+        gpu_at,
         gpu,
         procs,
         cpu: sysmon::parse_cpu(&stat).unwrap_or((0, 1)),
@@ -267,14 +275,16 @@ impl App {
     fn absorb(&mut self, s: Sample) {
         if let Some(prev) = &self.last {
             let dt = s.at.duration_since(prev.at).as_secs_f64().max(0.1);
+            let dt_procs = s.procs_at.duration_since(prev.procs_at).as_secs_f64().max(0.1);
+            let dt_gpu = s.gpu_at.duration_since(prev.gpu_at).as_secs_f64().max(0.1);
             let before: HashMap<u32, (u64, u64)> = prev.procs.iter().map(|p| (p.pid, (p.cpu_ticks, p.read_bytes + p.write_bytes))).collect();
             self.cpu_of.clear();
             self.disk_of.clear();
             for p in &s.procs {
                 if let Some((t, io)) = before.get(&p.pid) {
-                    let cpu = (p.cpu_ticks.saturating_sub(*t)) as f64 / CLK_TCK / dt / s.ncpu as f64 * 100.0;
+                    let cpu = (p.cpu_ticks.saturating_sub(*t)) as f64 / CLK_TCK / dt_procs / s.ncpu as f64 * 100.0;
                     self.cpu_of.insert(p.pid, cpu);
-                    self.disk_of.insert(p.pid, (p.read_bytes + p.write_bytes).saturating_sub(*io) as f64 / dt);
+                    self.disk_of.insert(p.pid, (p.read_bytes + p.write_bytes).saturating_sub(*io) as f64 / dt_procs);
                 }
             }
             let (busy, total) = (s.cpu.0.saturating_sub(prev.cpu.0), s.cpu.1.saturating_sub(prev.cpu.1));
@@ -287,7 +297,7 @@ impl App {
             push(&mut self.net_hist, (self.net_rate.0 + self.net_rate.1) / (10.0 * 1024.0 * 1024.0));
             for (i, a) in adapters().iter().enumerate() {
                 let (Some(before), Some(now)) = (prev.gpu.get(&a.pci), s.gpu.get(&a.pci)) else { continue };
-                self.gpu_use[i] = lapin_ux_core::gpu::usage(before, now, dt);
+                self.gpu_use[i] = lapin_ux_core::gpu::usage(before, now, dt_gpu);
                 push(&mut self.gpu_hist[i], self.gpu_use[i].overall);
             }
         }
