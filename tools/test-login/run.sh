@@ -127,4 +127,14 @@ unset FAKE_PLYMOUTH_FAILS
 check "plymouthd.conf is as it was" '[ "$(theme_now)" = bgrt ]'
 check "no theme folder is left" '[ ! -d "$ROOT/usr/share/plymouth/themes/lapin-ux" ]'
 
+echo "K: a later failed use-lapin keeps the first restore point"
+newroot noplymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+rm -f "$ROOT/usr/bin/cosmic-greeter-start"
+bash "$T" use-lapin >/dev/null 2>&1; rc=$?
+check "reports 'not set up'" '[ $rc = 2 ]'
+check "the first record is still there" '[ "$(cat "$ROOT/var/lib/lapin-ux/login/dm")" = gdm.service ]'
+bash "$T" restore >/dev/null 2>&1
+check "restore still brings gdm back" '[ "$(dm_now)" = gdm.service ]'
+
 [ "$fail" = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }

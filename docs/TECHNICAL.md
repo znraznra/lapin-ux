@@ -718,7 +718,12 @@ plan; `--settings-only` only restores settings (for someone who already ran
   `/etc/os-release` when the firmware has none) is set only when Plymouth is
   already set up; its configuration and the boot loader's are not edited (the initramfs is rebuilt to apply the theme).
   `lapin-ux-login restore`, `lapin-ux-uninstall` and the desktop package's
-  `pre_remove` put everything back. `./install.sh` and the first-run setup
+  `pre_remove` put everything back. pacman doesn't stop a removal when a
+  scriptlet fails, so `pre_remove` first keeps a runnable copy of the tool in
+  `/var/lib/lapin-ux/login/lapin-ux-login-recover`; if the restore fails, greetd
+  stays on, the record is kept, and the message says how to finish it.
+  `use-lapin` and `restore` share one lock, and a failed `use-lapin` never
+  deletes a record from an earlier run. `./install.sh` and the first-run setup
   ask (Enter = Lapin UX's; `--keep-login` for unattended runs). Tests:
   `tools/test-login/run.sh`.
 - Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf; 55

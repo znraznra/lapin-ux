@@ -614,7 +614,12 @@ full_uninstall() {
 
     if [ -f "$lg/complete" ]; then
         say ""; say "== Sign-in screen and boot animation"
-        run sudo lapin-ux-login restore
+        if ! run sudo lapin-ux-login restore; then
+            say "Your sign-in screen couldn't be put back, so Lapin UX's packages were left in"
+            say "place (your login still works). Your settings are already restored. Fix what"
+            say "it said above and run this again."
+            exit 1
+        fi
         [ "$prior_gone" = 1 ] && say "  ($prior isn't installed any more, so greetd with COSMIC's sign-in screen stays as your login.)"
     fi
 
