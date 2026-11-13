@@ -272,8 +272,14 @@ impl App {
         })
     }
 
-    fn absorb(&mut self, s: Sample) {
+    fn absorb(&mut self, mut s: Sample) {
         if let Some(prev) = &self.last {
+            // Counters that dipped keep their old maximum (DRM's usage-stats rule).
+            for (pci, now) in s.gpu.iter_mut() {
+                if let Some(before) = prev.gpu.get(pci) {
+                    now.keep_maximum(before);
+                }
+            }
             let dt = s.at.duration_since(prev.at).as_secs_f64().max(0.1);
             let dt_procs = s.procs_at.duration_since(prev.procs_at).as_secs_f64().max(0.1);
             let dt_gpu = s.gpu_at.duration_since(prev.gpu_at).as_secs_f64().max(0.1);

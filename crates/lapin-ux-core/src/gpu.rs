@@ -262,6 +262,29 @@ pub fn engine_label(e: &str) -> String {
     .to_string()
 }
 
+impl Reading {
+    /// DRM lets a client's busy counter drop for a moment and requires userspace to
+    /// keep the highest value it has seen until the counter catches up. Raise every
+    /// counter here to at least what `prev` (itself already adjusted) had, so the
+    /// readings that follow a dip don't count the same work twice.
+    pub fn keep_maximum(&mut self, prev: &Reading) {
+        for (id, c) in self.clients.iter_mut() {
+            let Some(p) = prev.clients.get(id) else { continue };
+            for (e, v) in c.busy_ns.iter_mut() {
+                if let Some(old) = p.busy_ns.get(e) {
+                    *v = (*v).max(*old);
+                }
+            }
+            for (e, (busy, total)) in c.cycles.iter_mut() {
+                if let Some((ob, ot)) = p.cycles.get(e) {
+                    *busy = (*busy).max(*ob);
+                    *total = (*total).max(*ot);
+                }
+            }
+        }
+    }
+}
+
 /// Load between two readings `dt` seconds apart. Each client that is in both
 /// readings contributes its own change; one that appeared or left in between
 /// contributes nothing to that interval (it has no earlier or later figure).
@@ -363,6 +386,24 @@ mod tests {
         // sysfs wins when there.
         b.sysfs_busy = Some(0.8);
         assert!((usage(&a, &b, 1.0).overall - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_counter_that_dips_is_not_counted_twice() {
+        let g = |ns: u64| reading(&[("1", client(&[("render", ns * 1_000_000_000)], &[("rcs", ns * 100, ns * 1000)], &[]))]);
+        let (s1, mut s2, mut s3) = (g(10), g(9), g(10));
+        s2.keep_maximum(&s1);
+        assert_eq!(s2.clients["1"].busy_ns["render"], 10_000_000_000);
+        assert_eq!(usage(&s1, &s2, 1.0).overall, 0.0);
+        s3.keep_maximum(&s2);
+        // 10, 9, 10 s: the work was all reported before; nothing new happened.
+        let u = usage(&s2, &s3, 1.0);
+        assert_eq!(u.overall, 0.0);
+        assert!(u.engines.iter().all(|e| e.1 == 0.0));
+        // Recovery past the old maximum counts only what is new.
+        let mut s4 = g(11);
+        s4.keep_maximum(&s3);
+        assert!((usage(&s3, &s4, 1.0).overall - 1.0).abs() < 1e-9);
     }
 
     #[test]
