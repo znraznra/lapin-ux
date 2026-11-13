@@ -92,7 +92,7 @@ pub enum PanelMsg {
     /// OK on the "Can't find" message: back to the text, selected.
     RunErrorOk,
     /// A command line that was started but ended at once as not found.
-    RunFailed(String),
+    RunFailed(String, u64),
 }
 
 /// One menu row: icon, label, action.
@@ -167,8 +167,13 @@ pub fn run_command(input: &str) -> std::process::Command {
     } else {
         t.to_string()
     };
-    let looks_like_target = expanded.contains("://") || (expanded.starts_with('/') && std::path::Path::new(&expanded).exists());
-    if looks_like_target && !expanded.contains(' ') {
+    // A URL, an existing absolute path (spaces and all: xdg-open gets it as one
+    // argument) or an existing ./ folder. A ./ program stays a command for sh.
+    let exists = std::path::Path::new(&expanded).exists();
+    let looks_like_target = (expanded.contains("://") && !expanded.contains(' '))
+        || (expanded.starts_with('/') && exists)
+        || (expanded.starts_with("./") && std::path::Path::new(&expanded).is_dir());
+    if looks_like_target {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(expanded);
         c
@@ -263,6 +268,7 @@ impl Shell {
     }
 
     pub(crate) fn open_panel(&mut self, kind: PanelKind) -> Task<Message> {
+        self.run_seq += 1;
         let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
         let id = window::Id::unique();
         let above = self.above_bar();
@@ -381,7 +387,11 @@ impl Shell {
                 }
                 Task::batch([text_input::focus(RUN_INPUT.clone()), text_input::select_all(RUN_INPUT.clone())])
             }
-            PanelMsg::RunFailed(input) => {
+            PanelMsg::RunFailed(input, seq) => {
+                // Another panel was opened since: don't close it for an old command.
+                if seq != self.run_seq {
+                    return Task::none();
+                }
                 // The dialog was closed when it started; bring it back with the message.
                 self.open_panel(PanelKind::Run { input, error: true })
             }
@@ -392,7 +402,7 @@ impl Shell {
                     return Task::none();
                 }
                 // An installed app by its name or id opens like it does from Start.
-                let app = self.catalog.search(&input).first().filter(|a| a.data.id.eq_ignore_ascii_case(&input) || a.data.name.eq_ignore_ascii_case(&input)).map(|a| a.data.id.clone());
+                let app = self.catalog.search(&input).into_iter().find(|a| a.data.id.eq_ignore_ascii_case(&input) || a.data.name.eq_ignore_ascii_case(&input)).map(|a| a.data.id.clone());
                 if app.is_none() && !can_start(&input) {
                     if let Some(Panel { kind: PanelKind::Run { error, .. }, .. }) = &mut self.panel {
                         *error = true;
@@ -405,6 +415,7 @@ impl Shell {
                 if let Some(id) = app {
                     return Task::batch([close, self.launch(&id)]);
                 }
+                let seq = self.run_seq;
                 let mut cmd = run_command(&input);
                 Task::batch([
                     close,
@@ -415,7 +426,7 @@ impl Shell {
                         }
                         match ok {
                             Ok(true) => cosmic::Action::App(Message::Noop),
-                            _ => cosmic::Action::App(Message::Panel(PanelMsg::RunFailed(input))),
+                            _ => cosmic::Action::App(Message::Panel(PanelMsg::RunFailed(input, seq))),
                         }
                     }),
                 ])
@@ -640,6 +651,18 @@ pub fn view<'a>(shell: &'a Shell, panel: &'a Panel) -> Element<'a, Message> {
 
 #[cfg(test)]
 mod tests {
+    use super::run_command;
+    #[test]
+    fn folders_with_spaces_open_with_xdg_open() {
+        let d = std::env::temp_dir().join(format!("lapin run test {}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let c = run_command(d.to_str().unwrap());
+        assert_eq!(c.get_program(), "xdg-open");
+        assert_eq!(c.get_args().count(), 1);
+        assert_eq!(run_command("ls -la").get_program(), "sh");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     use super::can_start;
 
     #[test]

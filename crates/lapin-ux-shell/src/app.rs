@@ -400,6 +400,9 @@ pub struct Shell {
     pub tray_menu_path: Vec<i32>,
     /// Win+X menu / Run dialog.
     pub panel: Option<crate::panels::Panel>,
+    /// Counts Run submissions and opened panels, so a late "it didn't start" from an
+    /// old submission can't close a panel opened since.
+    pub run_seq: u64,
     pub(crate) panel_closed_at: Instant,
     /// Last pointer position over a taskbar.
     pub(crate) pointer: Option<(window::Id, cosmic::iced::Point)>,
@@ -1128,6 +1131,7 @@ impl Application for Shell {
             tray: Vec::new(),
             tray_menu_path: Vec::new(),
             panel: None,
+            run_seq: 0,
             panel_closed_at: Instant::now() - Duration::from_secs(10),
             pointer: None,
             drag: None,
