@@ -437,8 +437,9 @@ leave_session() {
     fi
     # The pointer theme Settings handed to the user session (#57): the
     # value it replaced is in $STATE/xcursor-env (empty = there was none).
-    if [ -f "$STATE/xcursor-env" ] && command -v systemctl >/dev/null 2>&1; then
-        local xprior; xprior=$(head -n1 "$STATE/xcursor-env")
+    local xprior
+    # Only when the saved value could be read: otherwise it stays for the next try.
+    if [ -f "$STATE/xcursor-env" ] && command -v systemctl >/dev/null 2>&1 && xprior=$(head -n1 "$STATE/xcursor-env"); then
         say "  Lapin UX's pointer theme: removed from the user session"
         local xok=1 xdbus="XCURSOR_THEME=default"
         if [ -n "$xprior" ]; then
