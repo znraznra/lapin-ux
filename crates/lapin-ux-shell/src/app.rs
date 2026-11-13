@@ -324,9 +324,6 @@ pub struct Shell {
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
     pub popup_dismissed: Option<(PopupKind, Instant)>,
-    /// When the last Alt+Tab request reached the shell (#65), to log how
-    /// long the switcher took to show.
-    pub(crate) alttab_at: Option<Instant>,
     /// Surfaces iced asked for a view of that the shell doesn't track, and
     /// when each was first seen (#34). A pop-up closed before its creation
     /// went through is created afterwards with nobody holding it: invisible,
@@ -384,6 +381,9 @@ pub struct Shell {
     /// A file being dragged over a taskbar button: (app, serial).
     pub drag_hover: Option<(String, u64)>,
     pub drag_serial: u64,
+    /// When the last Alt+Tab request reached the shell (#65), to log how
+    /// long the switcher took to show.
+    pub(crate) alttab_at: Option<Instant>,
     /// Badge counts / progress / attention announced by apps, by app id.
     pub badges: HashMap<String, lapin_ux_core::badge::Badge>,
     /// Jump list of the task whose right-click menu is open.
@@ -1087,7 +1087,6 @@ impl Application for Shell {
             catcher: None,
             popup: None,
             popup_dismissed: None,
-            alttab_at: None,
             strays: std::sync::Mutex::new(HashMap::new()),
             popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
@@ -1123,6 +1122,7 @@ impl Application for Shell {
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
             drag_serial: 0,
+            alttab_at: None,
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
