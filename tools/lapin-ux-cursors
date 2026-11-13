@@ -206,7 +206,9 @@ def set_pointer(theme_dir):
             f.write(f"[Icon Theme]\nName=Default\nInherits={theme_dir}\n")
         subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme_dir],
                        stderr=subprocess.DEVNULL, check=False)
-        print("It's now your mouse pointer (log out and back in for every app to pick it up).")
+        apply_now(theme_dir)
+        print("It's now your mouse pointer. GTK apps and apps you start from now on use it at once; "
+              "the rest pick it up when you sign out and back in.")
         return
     try:
         with open(index) as f:
@@ -221,6 +223,20 @@ def set_pointer(theme_dir):
         subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
                        stderr=subprocess.DEVNULL, check=False)
     print("Back to the system's mouse pointer (log out and back in for every app to pick it up).")
+
+
+def apply_now(theme_dir):
+    """Tell what is running right now (#57): the user's systemd and D-Bus
+    environments get the new XCURSOR_THEME, so apps started afterwards use it.
+    GTK apps follow the gsettings key live. (The compositor's own pointer and
+    apps that are already open read it when you sign in again.)"""
+    var = f"XCURSOR_THEME={theme_dir}"
+    for cmd in (["systemctl", "--user", "set-environment", var],
+                ["dbus-update-activation-environment", "--systemd", var]):
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def cached_pack():

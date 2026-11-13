@@ -1,0 +1,504 @@
+From a77d4f087b43e99f73b9f076d968a7eba89370cb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:18:55 +0800
+Subject: [PATCH] Lapin UX: Add your own mouse pointers (Personalization >
+ Mouse pointers)
+
+Refs #57
+---
+ cosmic-settings/src/lapin/categories.rs   |   6 +-
+ cosmic-settings/src/lapin/mod.rs          |   1 +
+ cosmic-settings/src/lapin/pointers_add.rs | 226 ++++++++++++++++++++++
+ cosmic-settings/src/lapin/search.rs       |   1 +
+ cosmic-settings/src/lapin/settings.rs     | 123 +++++++++++-
+ 5 files changed, 344 insertions(+), 13 deletions(-)
+ create mode 100644 cosmic-settings/src/lapin/pointers_add.rs
+
+diff --git a/cosmic-settings/src/lapin/categories.rs b/cosmic-settings/src/lapin/categories.rs
+index 646783c..148a0db 100644
+--- a/cosmic-settings/src/lapin/categories.rs
++++ b/cosmic-settings/src/lapin/categories.rs
+@@ -98,12 +98,13 @@ const SPECS: &[Spec] = &[
+         id: "lapin-personalization",
+         title: "Personalization",
+         icon: "cs-cat-appearance",
+-        description: "Background, colors, themes",
++        description: "Background, colors, mouse pointers, themes",
+         children: &[
+             c("wallpaper", "preferences-desktop-wallpaper-symbolic", "Background", "Background images, color, slideshow"),
+             c("appearance", "preferences-color-symbolic", "Colors", "Accent color, transparency effects, light and dark mode"),
+             c("lapin-lock-screen", "system-lock-screen-symbolic", "Lock screen", "Lock screen images, sign-in screen"),
+             c("lapin-start", "view-app-grid-symbolic", "Start", "Recent items, search, web results"),
++            c("lapin-pointer", "input-mouse-symbolic", "Mouse pointers", "Pointer style, add your own, size"),
+             c("lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskbar behaviors, system pins"),
+             c("lapin-fonts", "preferences-desktop-font-symbolic", "Fonts", "System font, monospace font, text smoothing"),
+         ],
+@@ -144,11 +145,10 @@ const SPECS: &[Spec] = &[
+         id: "lapin-accessibility",
+         title: "Accessibility",
+         icon: "cs-universal-access",
+-        description: "Magnifier, color filters, mouse pointer",
++        description: "Magnifier, color filters",
+         children: &[
+             c("accessibility", "preferences-desktop-accessibility-symbolic", "Vision", "Magnifier, color filters, invert colors"),
+             c("accessibility_magnifier", "zoom-in-symbolic", "Magnifier", "Zoom level, zoom increment"),
+-            c("lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, busy colour, size"),
+             c("accessibility_osk", "input-keyboard-symbolic", "Keyboard", "On-screen keyboard"),
+         ],
+     },
+diff --git a/cosmic-settings/src/lapin/mod.rs b/cosmic-settings/src/lapin/mod.rs
+index 28a57b4..ad074e4 100644
+--- a/cosmic-settings/src/lapin/mod.rs
++++ b/cosmic-settings/src/lapin/mod.rs
+@@ -14,6 +14,7 @@ mod categories;
+ pub mod device;
+ pub mod icons;
+ pub mod pages;
++mod pointers_add;
+ pub mod privacy;
+ pub mod rows;
+ pub mod search;
+diff --git a/cosmic-settings/src/lapin/pointers_add.rs b/cosmic-settings/src/lapin/pointers_add.rs
+new file mode 100644
+index 0000000..f2c13f9
+--- /dev/null
++++ b/cosmic-settings/src/lapin/pointers_add.rs
+@@ -0,0 +1,226 @@
++// SPDX-License-Identifier: GPL-3.0-only
++//! Adding and removing pointer themes (#57): unpack an archive or copy a
++//! folder into `~/.local/share/icons`, and remember what was added so only
++//! those can be removed from Settings. System themes and themes the user
++//! installed some other way are never touched.
++
++use std::path::{Path, PathBuf};
++use std::process::Command;
++
++const MAX_DEPTH: usize = 3;
++
++/// `~/.local/state/lapin-ux/pointers-added`: one folder name per line.
++pub fn state_file() -> PathBuf {
++    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
++    let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/state"));
++    state.join("lapin-ux").join("pointers-added")
++}
++
++/// `~/.local/share/icons`, where added themes go.
++pub fn icons_dir() -> PathBuf {
++    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
++    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("icons")
++}
++
++pub fn added(state: &Path) -> Vec<String> {
++    std::fs::read_to_string(state).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
++}
++
++fn remember(state: &Path, name: &str) -> std::io::Result<()> {
++    let mut all = added(state);
++    if !all.iter().any(|n| n == name) {
++        all.push(name.to_string());
++    }
++    if let Some(dir) = state.parent() {
++        std::fs::create_dir_all(dir)?;
++    }
++    std::fs::write(state, all.join("\n") + "\n")
++}
++
++/// Folders under `root` (down to a few levels) that hold a `cursors/` folder.
++pub fn find_themes(root: &Path) -> Vec<PathBuf> {
++    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
++        if dir.join("cursors").is_dir() {
++            out.push(dir.to_path_buf());
++            return;
++        }
++        if depth >= MAX_DEPTH {
++            return;
++        }
++        let Ok(rd) = std::fs::read_dir(dir) else { return };
++        let mut subs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.is_symlink()).collect();
++        subs.sort();
++        for s in subs {
++            walk(&s, depth + 1, out);
++        }
++    }
++    let mut out = Vec::new();
++    walk(root, 0, &mut out);
++    out
++}
++
++fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
++    std::fs::create_dir_all(to)?;
++    for e in std::fs::read_dir(from)? {
++        let e = e?;
++        let (src, dst) = (e.path(), to.join(e.file_name()));
++        let ty = e.file_type()?;
++        if ty.is_symlink() {
++            // Pointer themes link names to each other (left_ptr -> default); keep links
++            // that stay inside the theme, drop the rest.
++            let target = std::fs::read_link(&src)?;
++            if target.is_relative() && !target.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
++                let _ = std::os::unix::fs::symlink(target, dst);
++            }
++        } else if ty.is_dir() {
++            copy_dir(&src, &dst)?;
++        } else {
++            std::fs::copy(&src, &dst)?;
++        }
++    }
++    Ok(())
++}
++
++/// A folder name that is safe to create under the icons folder.
++fn safe_name(raw: &str) -> String {
++    let n: String = raw.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' }).collect();
++    let n = n.trim().trim_matches('.').to_string();
++    if n.is_empty() || n == "default" { "pointers".into() } else { n }
++}
++
++/// Unpacks an archive (`.tar.gz`, `.tar.xz`, `.zip`…) into a scratch folder.
++fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
++    for tool in ["bsdtar", "tar"] {
++        match Command::new(tool).arg("-xf").arg(archive).arg("-C").arg(into).output() {
++            Ok(o) if o.status.success() => return Ok(()),
++            Ok(_) => continue,
++            Err(_) => continue,
++        }
++    }
++    Err("This file couldn't be opened. Use a .tar.gz, .tar.xz or .zip file, or a folder.".into())
++}
++
++/// Adds the pointer theme(s) in `source` (an archive or a folder) under `icons`.
++/// Returns the folder names added. Existing folders of the same name are not replaced.
++pub fn add(source: &Path, icons: &Path, state: &Path, scratch_parent: &Path) -> Result<Vec<String>, String> {
++    const NOT_POINTERS: &str = "This doesn't look like a pointer theme (it has no \"cursors\" folder).";
++    let scratch = scratch_parent.join(format!("lapin-pointers-{}", std::process::id()));
++    let _ = std::fs::remove_dir_all(&scratch);
++    std::fs::create_dir_all(&scratch).map_err(|e| format!("Couldn't prepare the files: {e}"))?;
++    let result = (|| {
++        let root = if source.is_dir() {
++            source.to_path_buf()
++        } else {
++            unpack(source, &scratch)?;
++            scratch.clone()
++        };
++        let mut themes = find_themes(&root);
++        if themes.is_empty() {
++            return Err(NOT_POINTERS.to_string());
++        }
++        std::fs::create_dir_all(icons).map_err(|e| format!("Couldn't use {}: {e}", icons.display()))?;
++        let mut done = Vec::new();
++        for t in themes.drain(..) {
++            let raw = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
++            // A bare folder or archive root has no useful name: use the file's.
++            let raw = if t == root && !source.is_dir() { source.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or(raw.clone()) } else { raw };
++            let name = safe_name(raw.trim_end_matches(".tar"));
++            let dest = icons.join(&name);
++            if dest.exists() {
++                return Err(format!("You already have a pointer theme called \"{name}\"."));
++            }
++            copy_dir(&t, &dest).map_err(|e| {
++                let _ = std::fs::remove_dir_all(&dest);
++                format!("Couldn't copy the pointers: {e}")
++            })?;
++            remember(state, &name).map_err(|e| format!("Couldn't note the new pointers: {e}"))?;
++            done.push(name);
++        }
++        Ok(done)
++    })();
++    let _ = std::fs::remove_dir_all(&scratch);
++    result
++}
++
++/// Removes a theme this tool added (and only that).
++pub fn remove(name: &str, icons: &Path, state: &Path) -> Result<(), String> {
++    if name.contains('/') || name.is_empty() || !added(state).iter().any(|n| n == name) {
++        return Err("Only pointers added here can be removed here.".into());
++    }
++    let dir = icons.join(name);
++    if dir.is_dir() && !dir.is_symlink() {
++        std::fs::remove_dir_all(&dir).map_err(|e| format!("Couldn't remove them: {e}"))?;
++    }
++    let rest: Vec<String> = added(state).into_iter().filter(|n| n != name).collect();
++    std::fs::write(state, if rest.is_empty() { String::new() } else { rest.join("\n") + "\n" }).map_err(|e| e.to_string())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn tmp(tag: &str) -> PathBuf {
++        let d = std::env::temp_dir().join(format!("lapin-ptr-{tag}-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&d);
++        std::fs::create_dir_all(&d).unwrap();
++        d
++    }
++
++    fn make_theme(dir: &Path) {
++        std::fs::create_dir_all(dir.join("cursors")).unwrap();
++        std::fs::write(dir.join("cursors/left_ptr"), b"x").unwrap();
++        std::os::unix::fs::symlink("left_ptr", dir.join("cursors/arrow")).unwrap();
++        std::os::unix::fs::symlink("../../etc/passwd", dir.join("cursors/evil")).unwrap();
++        std::fs::write(dir.join("index.theme"), "[Icon Theme]\nName=Test\n").unwrap();
++    }
++
++    #[test]
++    fn finds_nested_themes() {
++        let root = tmp("find");
++        make_theme(&root.join("a/Bibata"));
++        make_theme(&root.join("Other"));
++        std::fs::create_dir_all(root.join("docs")).unwrap();
++        let found = find_themes(&root);
++        assert_eq!(found.len(), 2);
++        assert!(found.iter().any(|p| p.ends_with("Bibata")));
++        let _ = std::fs::remove_dir_all(&root);
++    }
++
++    #[test]
++    fn adds_a_folder_then_removes_only_what_it_added() {
++        let (src, icons, st) = (tmp("src"), tmp("icons"), tmp("state").join("added"));
++        make_theme(&src.join("MyPointers"));
++        let scratch = tmp("scratch");
++        let done = add(&src.join("MyPointers"), &icons, &st, &scratch).unwrap();
++        assert_eq!(done, ["MyPointers"]);
++        assert!(icons.join("MyPointers/cursors/left_ptr").exists());
++        // The harmless link stays, the one that points out of the theme is dropped.
++        assert!(icons.join("MyPointers/cursors/arrow").is_symlink());
++        assert!(!icons.join("MyPointers/cursors/evil").exists() && !icons.join("MyPointers/cursors/evil").is_symlink());
++        assert_eq!(added(&st), ["MyPointers"]);
++        // A second add of the same name is refused, not overwritten.
++        assert!(add(&src.join("MyPointers"), &icons, &st, &scratch).unwrap_err().contains("already have"));
++        // A theme the user installed some other way can't be removed here.
++        make_theme(&icons.join("Mine"));
++        assert!(remove("Mine", &icons, &st).is_err());
++        assert!(icons.join("Mine").exists());
++        remove("MyPointers", &icons, &st).unwrap();
++        assert!(!icons.join("MyPointers").exists());
++        assert!(added(&st).is_empty());
++    }
++
++    #[test]
++    fn adds_an_archive_and_refuses_a_non_theme() {
++        let (src, icons, st, scratch) = (tmp("asrc"), tmp("aicons"), tmp("astate").join("added"), tmp("ascratch"));
++        make_theme(&src.join("pack/Big Cursor"));
++        let ok = Command::new("tar").arg("-czf").arg(src.join("pack.tar.gz")).arg("-C").arg(src.join("pack")).arg(".").status();
++        if ok.is_ok_and(|s| s.success()) {
++            let done = add(&src.join("pack.tar.gz"), &icons, &st, &scratch).unwrap();
++            assert_eq!(done, ["Big Cursor"]);
++            assert!(icons.join("Big Cursor/cursors/left_ptr").exists());
++        }
++        std::fs::create_dir_all(src.join("empty/docs")).unwrap();
++        assert!(add(&src.join("empty"), &icons, &st, &scratch).unwrap_err().contains("doesn't look like a pointer theme"));
++        assert_eq!(safe_name("../x/y"), "_x_y");
++    }
++}
+diff --git a/cosmic-settings/src/lapin/search.rs b/cosmic-settings/src/lapin/search.rs
+index 88cc993..bf41009 100644
+--- a/cosmic-settings/src/lapin/search.rs
++++ b/cosmic-settings/src/lapin/search.rs
+@@ -45,6 +45,7 @@ const LAPIN_ROWS: &[(&str, &str)] = &[
+     ("lapin-fonts", "Text contrast"),
+     ("lapin-fonts", "Sharper text"),
+     ("lapin-pointer", "Mouse pointer style"),
++    ("lapin-pointer", "Add your own mouse pointers"),
+     ("lapin-pointer", "Busy pointer colour"),
+     ("lapin-pointer", "Mouse pointer size"),
+     ("lapin-start", "Show web results in search"),
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 8b7d912..f3ae069 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -5,6 +5,7 @@
+ //! the Lapin shell and notification daemon watch (`dev.lapinux.Shell`,
+ //! `dev.lapinux.Notifications`), so changes apply at once.
+ 
++use super::pointers_add;
+ use cosmic::{Apply, Element};
+ use cosmic::widget::list_column::IntoListItem;
+ use cosmic::iced::Length;
+@@ -135,6 +136,8 @@ pub struct Prefs {
+     /// The pointer tool is running, or why it failed last.
+     pub pointer_busy_now: bool,
+     pub pointer_error: Option<String>,
++    /// What the last Add or Remove said.
++    pub pointer_note: Option<String>,
+     /// Personalization > Fonts (#40): "rgb" / "bgr" / "grayscale" for apps
+     /// using the system's font settings, and Lapin's own text contrast (0–2).
+     pub text_smoothing: String,
+@@ -195,6 +198,7 @@ impl Prefs {
+             pointer_size: get(&shell, "pointer_size").unwrap_or(24),
+             pointer_busy_now: false,
+             pointer_error: None,
++            pointer_note: None,
+             text_smoothing: get(&shell, "text_smoothing").unwrap_or_else(|| "rgb".into()),
+             system_font: cosmic::config::interface_font().family,
+             mono_font: cosmic::config::monospace_font().family,
+@@ -238,6 +242,10 @@ pub enum Msg {
+     PointerSize(u32),
+     PointerSizeDone,
+     PointerDone(Result<(), String>),
++    AddPointers,
++    PointersAdded(Result<Vec<String>, String>),
++    RemovePointers,
++    PointersRemoved(Result<(), String>),
+     // Personalization > Fonts (#40)
+     TextSmoothing(usize),
+     TextContrast(u32),
+@@ -409,6 +417,59 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+             p.pointer_busy_now = false;
+             p.pointer_error = r.err();
+         }
++        Msg::AddPointers => {
++            #[cfg(feature = "xdg-portal")]
++            return cosmic::task::future(async {
++                use cosmic::dialog::file_chooser;
++                let filter = file_chooser::FileFilter::new("Pointer themes").glob("*.tar.gz").glob("*.tgz").glob("*.tar.xz").glob("*.tar.bz2").glob("*.tar.zst").glob("*.zip");
++                let picked = file_chooser::open::Dialog::new()
++                    .title("Choose a pointer theme")
++                    .accept_label("Add pointers")
++                    .filter(filter)
++                    .modal(false)
++                    .open_file()
++                    .await
++                    .ok()
++                    .and_then(|r| r.url().to_file_path().ok());
++                let Some(path) = picked else { return crate::Message::None };
++                let res = tokio::task::spawn_blocking(move || {
++                    pointers_add::add(&path, &pointers_add::icons_dir(), &pointers_add::state_file(), &std::env::temp_dir())
++                })
++                .await
++                .unwrap_or_else(|_| Err("It didn't work.".into()));
++                crate::Message::PageMessage(PMsg::Lapin(Msg::PointersAdded(res)))
++            });
++        }
++        Msg::PointersAdded(r) => match r {
++            Ok(names) => {
++                forget_pointer_themes();
++                // Use the first one straight away.
++                if let Some(first) = names.first() {
++                    p.pointer_style = format!("theme:{first}");
++                    save(SHELL, "pointer_style", &p.pointer_style);
++                    p.pointer_note = Some(format!("Added: {}.", names.join(", ")));
++                    return run_pointer_tool(p);
++                }
++            }
++            Err(e) => p.pointer_note = Some(e),
++        },
++        Msg::RemovePointers => {
++            if let Some(t) = p.pointer_style.strip_prefix("theme:").map(String::from) {
++                // The system's pointer first, so nothing points at a folder that is going.
++                p.pointer_style = "system".into();
++                save(SHELL, "pointer_style", &p.pointer_style);
++                let tool = run_pointer_tool(p);
++                let res = pointers_add::remove(&t, &pointers_add::icons_dir(), &pointers_add::state_file());
++                return tool.chain(cosmic::task::message(crate::Message::PageMessage(PMsg::Lapin(Msg::PointersRemoved(res)))));
++            }
++        }
++        Msg::PointersRemoved(r) => {
++            forget_pointer_themes();
++            p.pointer_note = Some(match r {
++                Ok(()) => "Removed. The system's pointer is back.".into(),
++                Err(e) => e,
++            });
++        }
+         Msg::TextSmoothing(i) => {
+             p.text_smoothing = TEXT_SMOOTHING.get(i).map_or("rgb", |(id, _)| *id).into();
+             save(SHELL, "text_smoothing", &p.text_smoothing);
+@@ -753,8 +814,37 @@ fn icon_dirs() -> Vec<std::path::PathBuf> {
+ /// name from its index.theme), sorted by name. The extra pointers (listed
+ /// on their own) and the `default` link aren't included (#57).
+ fn pointer_themes() -> &'static [(String, String)] {
+-    static THEMES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+-    THEMES.get_or_init(|| {
++    pointer_cache().0
++}
++
++/// The drop-down's entries: the fixed styles, then every installed theme.
++fn pointer_styles() -> &'static [&'static str] {
++    pointer_cache().1
++}
++
++type PointerCache = (&'static [(String, String)], &'static [&'static str]);
++static POINTER_CACHE: std::sync::Mutex<Option<PointerCache>> = std::sync::Mutex::new(None);
++
++/// A theme was added or removed: look again next time.
++fn forget_pointer_themes() {
++    *POINTER_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
++}
++
++fn pointer_cache() -> PointerCache {
++    let mut g = POINTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
++    if let Some(c) = *g {
++        return c;
++    }
++    let themes: &'static [(String, String)] = Box::leak(scan_pointer_themes().into_boxed_slice());
++    let mut names: Vec<&'static str> = POINTER_STYLES.iter().map(|(_, n)| *n).collect();
++    names.extend(themes.iter().map(|(_, n)| &*Box::leak(n.clone().into_boxed_str())));
++    let c: PointerCache = (themes, Box::leak(names.into_boxed_slice()));
++    *g = Some(c);
++    c
++}
++
++fn scan_pointer_themes() -> Vec<(String, String)> {
++    {
+         let mut found: Vec<(String, String)> = Vec::new();
+         for dir in icon_dirs() {
+             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+@@ -776,7 +866,7 @@ fn pointer_themes() -> &'static [(String, String)] {
+         }
+         found.sort_by_key(|(_, n)| n.to_lowercase());
+         found
+-    })
++    }
+ }
+ 
+ /// What's in use now, for accounts that set it before this page existed.
+@@ -829,12 +919,7 @@ fn run_pointer_tool(p: &mut Prefs) -> cosmic::app::Task<crate::Message> {
+ }
+ 
+ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+-    static STYLES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+-    let styles: &'static [&'static str] = STYLES.get_or_init(|| {
+-        let mut v: Vec<&'static str> = POINTER_STYLES.iter().map(|(_, n)| *n).collect();
+-        v.extend(pointer_themes().iter().map(|(_, n)| &*Box::leak(n.clone().into_boxed_str())));
+-        v
+-    });
++    let styles = pointer_styles();
+     let style_i = POINTER_STYLES
+         .iter()
+         .position(|(id, _)| *id == p.pointer_style)
+@@ -861,6 +946,24 @@ fn pointer_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+             .apply(Element::from)
+             .into_list_item(),
+     ];
++    {
++        let mine = p.pointer_style.strip_prefix("theme:").filter(|t| pointers_add::added(&pointers_add::state_file()).iter().any(|a| a == t));
++        let mut buttons = widget::row::with_capacity(2).spacing(8);
++        if mine.is_some() {
++            buttons = buttons.push(widget::button::standard("Remove").on_press(m(Msg::RemovePointers)));
++        }
++        buttons = buttons.push(widget::button::standard("Add pointers\u{2026}").on_press(m(Msg::AddPointers)));
++        rows.push(
++            settings::item::builder("Your own pointers")
++                .description(match &p.pointer_note {
++                    Some(n) => n.clone(),
++                    None => "Add a pointer theme from a .tar.gz, .tar.xz or .zip file, or a folder. It is used straight away.".to_string(),
++                })
++                .control(buttons)
++                .apply(Element::from)
++                .into_list_item(),
++        );
++    }
+     if matches!(p.pointer_style.as_str(), "light" | "dark") {
+         let busy_i = POINTER_BUSY.iter().position(|b| *b == p.pointer_busy).unwrap_or(0);
+         rows.push(
+@@ -1028,7 +1131,7 @@ fn font_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+ 
+ lapin_page!(Fonts, "lapin-fonts", "preferences-desktop-font-symbolic", "Fonts", "System font, monospace font, text smoothing, contrast", [("", font_rows)]);
+ 
+-lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointer", "Pointer style, colour, size", [("", pointer_rows)]);
++lapin_page!(Pointer, "lapin-pointer", "input-mouse-symbolic", "Mouse pointers", "Pointer style, add your own, size", [("", pointer_rows)]);
+ 
+ /// Start button pictures (ids the shell knows) and their names.
+ /// The official Lapin UX logo is the default (#56) and the only Lapin UX
+-- 
+2.43.0
+

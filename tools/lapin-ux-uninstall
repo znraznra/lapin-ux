@@ -497,6 +497,11 @@ restore_settings() {
     fi
     # Only COSMIC programs read ~/.config/cosmic; with none left it's leftovers.
     if [ "$MODE" = settings ]; then offer_cosmic_cleanup; fi
+    # Pointer themes added in Settings (#57) are your files: they stay.
+    if [ -s "$STATE/pointers-added" ]; then
+        say "  Pointer themes you added in Settings stay in $DATA/icons (delete them yourself if you don't want them):"
+        sed 's/^/    /' "$STATE/pointers-added"
+    fi
     if [ -e "$STATE" ]; then
         say "  Removing $STATE (restore point, session copies and logs)."
         run rm -rf "$STATE"
