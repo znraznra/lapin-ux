@@ -80,7 +80,7 @@ _install() {
 
 package_lapin-ux-cosmic-files() {
     pkgdesc="COSMIC Files with familiar title bars (Lapin UX)"
-    provides=('cosmic-files'); conflicts=('cosmic-files')
+    provides=('cosmic-files'); conflicts=('cosmic-files' 'lapin-explorer')
     _install cosmic-files
 }
 package_lapin-ux-cosmic-term() {

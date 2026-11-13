@@ -77,11 +77,11 @@ gkey_path() { case "$1" in */*) echo "/org/gnome/desktop/$1" ;; *) echo "$GPATH/
 
 # Packages, and the stock COSMIC package each one stands in for.
 LAPIN_PKGS=(lapin-ux-desktop-git lapin-ux-comp lapin-ux-greeter lapin-ux-osk lapin-ux-osd
-            lapin-ux-settings lapin-ux-portal lapin-ux-cosmic-files lapin-ux-cosmic-term
+            lapin-ux-settings lapin-ux-portal lapin-explorer lapin-ux-cosmic-files lapin-ux-cosmic-term
             lapin-ux-cosmic-edit lapin-ux-cosmic-store)
 declare -A STOCK=([lapin-ux-greeter]=cosmic-greeter [lapin-ux-osk]=cosmic-osk
                   [lapin-ux-osd]=cosmic-osd [lapin-ux-settings]=cosmic-settings
-                  [lapin-ux-portal]=xdg-desktop-portal-cosmic [lapin-ux-cosmic-files]=cosmic-files
+                  [lapin-ux-portal]=xdg-desktop-portal-cosmic [lapin-explorer]=cosmic-files [lapin-ux-cosmic-files]=cosmic-files
                   [lapin-ux-cosmic-term]=cosmic-terminal [lapin-ux-cosmic-edit]=cosmic-text-editor
                   [lapin-ux-cosmic-store]=cosmic-store)
 

@@ -1,0 +1,198 @@
+From f12b2e2d1ee13aa9bc685d3459e8e739ec96100e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:49:47 +0800
+Subject: [PATCH] Lapin UX: Explorer Home page
+
+Refs #73
+---
+ src/app.rs  | 96 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ src/menu.rs |  3 +-
+ src/tab.rs  |  2 +-
+ 3 files changed, 97 insertions(+), 4 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index dca3d30..52455ce 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -445,6 +445,10 @@ pub enum Message {
+     TabClose(Option<Entity>),
+     TabConfig(TabConfig),
+     TabMessage(Option<Entity>, tab::Message),
++    /// Lapin UX: show or leave the Home page (#73).
++    LapinHome(bool),
++    /// Lapin UX: open a file from the Home page.
++    LapinOpen(PathBuf),
+     TabNew,
+     TabRescan(
+         Entity,
+@@ -718,6 +722,7 @@ pub struct App {
+     core: Core,
+     about: About,
+     nav_bar_context_id: segmented_button::Entity,
++    lapin_home: bool,
+     nav_model: segmented_button::SingleSelectModel,
+     tab_model: segmented_button::Model<segmented_button::SingleSelect>,
+     config_handler: Option<cosmic_config::Config>,
+@@ -788,6 +793,81 @@ impl App {
+         }
+     }
+ 
++    /// Lapin UX: the Home page (#73): quick-access folders (the sidebar's
++    /// favourites) and the files used most recently.
++    fn lapin_home_view(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing {
++            space_xxs, space_xs, space_s, ..
++        } = theme::spacing();
++        let mut place_buttons: Vec<Element<'_, Message>> = Vec::new();
++        for favorite in &self.config.favorites {
++            let Some(path) = favorite.path_opt() else { continue };
++            let name = favorite.display_name().unwrap_or_else(|| fl!("filesystem"));
++            let location = match favorite {
++                Favorite::Network { uri, name, path } => {
++                    Location::Network(uri.clone(), name.clone(), Some(path.to_owned()))
++                }
++                _ => Location::Path(path.clone()),
++            };
++            place_buttons.push(
++                widget::button::custom(
++                    widget::row::with_capacity(2)
++                        .spacing(space_xs)
++                        .align_y(Alignment::Center)
++                        .push(icon::icon(tab::folder_icon_symbolic(&path, 24)).size(24))
++                        .push(widget::text::body(name)),
++                )
++                .padding(space_xs)
++                .class(theme::Button::MenuItem)
++                .on_press(Message::TabMessage(None, tab::Message::Location(location)))
++                .into(),
++            );
++        }
++        let places = widget::flex_row(place_buttons).row_spacing(space_xs).column_spacing(space_xs);
++        let mut recent = widget::column::with_capacity(12).spacing(space_xxs);
++        if let Ok(files) = recently_used_xbel::parse_file() {
++            let mut shown = 0;
++            for bookmark in files.bookmarks.into_iter().rev() {
++                if shown == 12 {
++                    break;
++                }
++                let Some(path) = tab::uri_to_path(bookmark.href) else { continue };
++                let (Some(name), true) = (path.file_name().map(|n| n.to_string_lossy().into_owned()), path.exists()) else { continue };
++                let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
++                recent = recent.push(
++                    widget::button::custom(
++                        widget::row::with_capacity(3)
++                            .spacing(space_xs)
++                            .align_y(Alignment::Center)
++                            .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(&path, None, false), 24)).size(24))
++                            .push(widget::text::body(name))
++                            .push(widget::space::horizontal())
++                            .push(widget::text::caption(parent)),
++                    )
++                    .width(Length::Fill)
++                    .padding(space_xs)
++                    .class(theme::Button::MenuItem)
++                    .on_press(Message::LapinOpen(path)),
++                );
++                shown += 1;
++            }
++            if shown == 0 {
++                recent = recent.push(widget::text::body(fl!("recents")));
++            }
++        }
++        widget::scrollable(
++            widget::column::with_capacity(4)
++                .spacing(space_s)
++                .padding(space_s)
++                .push(widget::text::title4(fl!("home")))
++                .push(places)
++                .push(widget::text::title4(fl!("recents")))
++                .push(recent),
++        )
++        .height(Length::Fill)
++        .into()
++    }
++
+     fn open_file(&mut self, paths: &[impl AsRef<Path>]) -> Task<Message> {
+         let mut tasks = Vec::new();
+ 
+@@ -2406,6 +2486,7 @@ impl Application for App {
+             core,
+             about,
+             nav_bar_context_id: segmented_button::Entity::null(),
++            lapin_home: false,
+             nav_model: segmented_button::ModelBuilder::default().build(),
+             tab_model: segmented_button::ModelBuilder::default().build(),
+             config_handler: flags.config_handler,
+@@ -2648,6 +2729,7 @@ impl Application for App {
+     }
+ 
+     fn on_nav_select(&mut self, entity: Entity) -> Task<Self::Message> {
++        self.lapin_home = false;
+         self.nav_model.activate(entity);
+         if let Some(location) = self.nav_model.data::<Location>(entity) {
+             let should_open = match location {
+@@ -2818,6 +2900,10 @@ impl Application for App {
+ 
+     /// Handle application events here.
+     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
++        // Lapin UX: going anywhere closes the Home page.
++        if matches!(message, Message::TabMessage(_, tab::Message::Location(_))) {
++            self.lapin_home = false;
++        }
+         // Helper for updating config values efficiently
+         macro_rules! config_set {
+             ($name: ident, $value: expr) => {
+@@ -2846,6 +2932,12 @@ impl Application for App {
+         }
+ 
+         match message {
++            Message::LapinHome(on) => {
++                self.lapin_home = on;
++            }
++            Message::LapinOpen(path) => {
++                return self.open_file(&[path]);
++            }
+             Message::AddToSidebar(entity_opt) => {
+                 let mut favorites = self.config.favorites.clone();
+                 // check if the selected entity is in the current tab
+@@ -6517,7 +6609,9 @@ impl Application for App {
+                 self.clipboard_has_content(),
+             ));
+         }
+-        if let Some(tab) = self.tab_model.data::<Tab>(entity) {
++        if crate::config::lapin_session() && self.lapin_home {
++            tab_column = tab_column.push(self.lapin_home_view());
++        } else if let Some(tab) = self.tab_model.data::<Tab>(entity) {
+             let tab_view = tab
+                 .view(
+                     &self.key_binds,
+diff --git a/src/menu.rs b/src/menu.rs
+index 9e6851e..b178ea4 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -819,8 +819,7 @@ pub fn command_bar<'a>(
+     let nav = |icon: &'static str, a: Action| {
+         widget::button::icon(widget::icon::from_name(icon).size(16)).on_press(MenuAction::message(&a))
+     };
+-    let home = dirs::home_dir()
+-        .map(|p| Message::TabMessage(None, tab::Message::Location(Location::Path(p))));
++    let home = Some(Message::LapinHome(true));
+     widget::container(
+         widget::row::with_capacity(16)
+             .spacing(spacing.space_xxs)
+diff --git a/src/tab.rs b/src/tab.rs
+index d462c11..7555012 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1251,7 +1251,7 @@ pub fn scan_search<F: Fn(SearchItem) -> bool + Sync>(
+     }
+ }
+ 
+-fn uri_to_path(uri: String) -> Option<PathBuf> {
++pub fn uri_to_path(uri: String) -> Option<PathBuf> {
+     uri.parse::<url::Url>().ok().and_then(|url| {
+         //TODO support for external drive or cloud?
+         if url.scheme() == "file" {
+-- 
+2.43.0
+

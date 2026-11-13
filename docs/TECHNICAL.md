@@ -462,6 +462,14 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   desktop, `lapin-ux-cursors` only changes Lapin UX's own copy of the pointer
   settings (`~/.local/state/lapin-ux/lapin-desktop`).
 
+**Explorer** (`lapin-explorer`, #71): COSMIC Files at the pinned commit with the
+patches in `packaging/lapin-ux-files/` (after the dialog patch), installed in
+place of `cosmic-files` (it provides and conflicts with it, and with the
+optional `lapin-ux-cosmic-files`), so it stays the default file manager. Every
+Lapin look is gated on `config::lapin_session()`; in COSMIC's own session it is
+stock. First piece: a command bar (New folder, Cut, Copy, Paste, Rename, Delete,
+view toggle). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
+
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
