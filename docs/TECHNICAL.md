@@ -560,7 +560,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 | Super + E | File manager |
 | Super + D | Show desktop / restore |
 | Super + X | Power-user menu |
-| Super + R | Run dialog |
+| Super + R | Run dialog (shows "Can't find …" when the name is not an app, program, file, folder or address) |
 | Super + N | Notification centre |
 | Super + A | Quick settings |
 | Super + V | Clipboard history |
