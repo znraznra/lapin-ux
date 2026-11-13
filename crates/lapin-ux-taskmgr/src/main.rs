@@ -46,6 +46,17 @@ enum Graph {
     Memory,
     Disk,
     Network,
+    /// The graphics adapter with this index in `adapters()` (#98).
+    Gpu(usize),
+}
+
+/// The graphics adapters, looked up once.
+fn adapters() -> &'static [lapin_ux_core::gpu::Adapter] {
+    static LIST: std::sync::OnceLock<Vec<lapin_ux_core::gpu::Adapter>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| {
+        let ids = ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids", "/usr/share/pci.ids"].iter().find_map(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        lapin_ux_core::gpu::adapters(Path::new("/sys/class/drm"), &ids)
+    })
 }
 
 /// Everything read in one go, off the UI thread.
@@ -58,6 +69,8 @@ struct Sample {
     mem: Memory,
     net: (u64, u64),
     disk: (u64, u64),
+    /// Counters per adapter, by PCI address.
+    gpu: HashMap<String, lapin_ux_core::gpu::Reading>,
     uptime: f64,
     mhz: f64,
 }
@@ -126,6 +139,11 @@ struct App {
     mem_hist: VecDeque<f64>,
     disk_hist: VecDeque<f64>,
     net_hist: VecDeque<f64>,
+    /// Per adapter: history, load and the latest counters.
+    gpu_titles: Vec<String>,
+    gpu_hist: Vec<VecDeque<f64>>,
+    gpu_use: Vec<lapin_ux_core::gpu::Usage>,
+    gpu_cur: Vec<lapin_ux_core::gpu::Reading>,
     cpu_now: f64,
     mem: Memory,
     disk_rate: (f64, f64),
@@ -169,9 +187,18 @@ fn sample() -> Sample {
         .filter(|l| l.starts_with("cpu MHz"))
         .filter_map(|l| l.split(':').nth(1)?.trim().parse().ok())
         .collect();
+    let procs = sysmon::read_all(proc);
+    let gpu = if adapters().is_empty() {
+        HashMap::new()
+    } else {
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata("/proc/self").ok().unwrap_or_else(|| std::fs::metadata("/").expect("/ exists")));
+        let own: Vec<u32> = procs.iter().filter(|p| p.uid == uid).map(|p| p.pid).collect();
+        lapin_ux_core::gpu::read(proc, Path::new("/sys/class/drm"), &own, adapters())
+    };
     Sample {
         at: Instant::now(),
-        procs: sysmon::read_all(proc),
+        gpu,
+        procs,
         cpu: sysmon::parse_cpu(&stat).unwrap_or((0, 1)),
         ncpu: sysmon::cpu_count(&stat),
         mem: sysmon::parse_meminfo(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default()),
@@ -258,6 +285,16 @@ impl App {
             // Disk and network graphs scale to 100 MB/s and 10 MB/s.
             push(&mut self.disk_hist, (self.disk_rate.0 + self.disk_rate.1) / (100.0 * 1024.0 * 1024.0));
             push(&mut self.net_hist, (self.net_rate.0 + self.net_rate.1) / (10.0 * 1024.0 * 1024.0));
+            for (i, a) in adapters().iter().enumerate() {
+                let (Some(before), Some(now)) = (prev.gpu.get(&a.pci), s.gpu.get(&a.pci)) else { continue };
+                self.gpu_use[i] = lapin_ux_core::gpu::usage(before, now, dt);
+                push(&mut self.gpu_hist[i], self.gpu_use[i].overall);
+            }
+        }
+        for (i, a) in adapters().iter().enumerate() {
+            if let Some(r) = s.gpu.get(&a.pci) {
+                self.gpu_cur[i] = r.clone();
+            }
         }
         self.mem = s.mem;
         push(&mut self.mem_hist, if s.mem.total == 0 { 0.0 } else { s.mem.used() as f64 / s.mem.total as f64 });
@@ -468,6 +505,10 @@ impl cosmic::Application for App {
             mem_hist: VecDeque::new(),
             disk_hist: VecDeque::new(),
             net_hist: VecDeque::new(),
+            gpu_titles: (0..adapters().len()).map(|i| format!("GPU {i}")).collect(),
+            gpu_hist: adapters().iter().map(|_| VecDeque::new()).collect(),
+            gpu_use: adapters().iter().map(|_| Default::default()).collect(),
+            gpu_cur: adapters().iter().map(|_| Default::default()).collect(),
             cpu_now: 0.0,
             mem: Memory::default(),
             disk_rate: (0.0, 0.0),
@@ -820,17 +861,23 @@ impl App {
 
     fn performance_view(&self) -> Element<'_, Message> {
         let mem_frac = if self.mem.total == 0 { 0.0 } else { self.mem.used() as f64 / self.mem.total as f64 };
-        let tiles = column::with_children(vec![
+        let mut tile_list = vec![
             self.perf_tile(Graph::Cpu, "CPU", format!("{:.0}%  {:.2} GHz", self.cpu_now * 100.0, self.mhz / 1000.0), &self.cpu_hist),
             self.perf_tile(Graph::Memory, "Memory", format!("{}/{} ({:.0}%)", gb(self.mem.used()), gb(self.mem.total), mem_frac * 100.0), &self.mem_hist),
             self.perf_tile(Graph::Disk, "Disk", format!("R {}  W {}", sysmon::rate_text(self.disk_rate.0), sysmon::rate_text(self.disk_rate.1)), &self.disk_hist),
             self.perf_tile(Graph::Network, "Network", format!("S: {}  R: {}", kbps(self.net_rate.1), kbps(self.net_rate.0)), &self.net_hist),
-        ])
-        .spacing(4)
-        .width(230);
+        ];
+        for i in 0..adapters().len() {
+            let t = self.gpu_cur[i].temp_c.map(|c| format!("  {c:.0}\u{b0}C")).unwrap_or_default();
+            tile_list.push(self.perf_tile(Graph::Gpu(i), &self.gpu_titles[i], format!("{:.0}%{t}", self.gpu_use[i].overall * 100.0), &self.gpu_hist[i]));
+        }
+        let tiles = scrollable(column::with_children(tile_list).spacing(4).width(230)).width(Length::Shrink);
 
         let threads: u32 = self.procs.iter().map(|p| p.threads).sum();
         let stat = |label: &'static str, value: String| -> Element<'_, Message> {
+            column::with_children(vec![text::caption(label).into(), text::title4(value).into()]).spacing(2).width(130).into()
+        };
+        let stat_owned = |label: String, value: String| -> Element<'_, Message> {
             column::with_children(vec![text::caption(label).into(), text::title4(value).into()]).spacing(2).width(130).into()
         };
         let (title, sub, hist, caption, stats): (&str, String, &VecDeque<f64>, &str, Vec<Element<'_, Message>>) = match self.graph {
@@ -867,6 +914,27 @@ impl App {
                 "Transfer rate (up to 100 MB/s)",
                 vec![stat("Read speed", sysmon::rate_text(self.disk_rate.0)), stat("Write speed", sysmon::rate_text(self.disk_rate.1))],
             ),
+            Graph::Gpu(i) if i < adapters().len() => {
+                let a = &adapters()[i];
+                let (r, u) = (&self.gpu_cur[i], &self.gpu_use[i]);
+                let mut st = vec![stat("Utilization", format!("{:.0}%", u.overall * 100.0))];
+                // AMD says its VRAM use itself; otherwise it is what the processes hold.
+                let ded = r.vram_used.unwrap_or(r.dedicated);
+                if a.vram_total.is_some() || ded > 0 {
+                    let total = a.vram_total.map(|t| format!(" / {}", gb(t))).unwrap_or_default();
+                    st.push(stat("Dedicated memory", format!("{}{total}", gb(ded))));
+                }
+                st.push(stat("Shared memory", gb(r.shared)));
+                st.push(stat("Driver", a.driver.clone()));
+                if let Some(c) = r.temp_c {
+                    st.push(stat("Temperature", format!("{c:.0}\u{b0}C")));
+                }
+                for (name, v) in u.engines.iter().take(3) {
+                    st.push(stat_owned(name.clone(), format!("{:.0}%", v * 100.0)));
+                }
+                (&self.gpu_titles[i], a.name.clone(), &self.gpu_hist[i], "% Utilization over 60 seconds (busiest engine)", st)
+            }
+            Graph::Gpu(_) => ("GPU", String::new(), &self.cpu_hist, "", vec![]),
             Graph::Network => (
                 "Network",
                 "All adapters".into(),
