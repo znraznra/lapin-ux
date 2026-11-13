@@ -84,7 +84,20 @@ fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,lapin_ux_shell=info".into()),
+                .unwrap_or_else(|_| {
+                    // Drag and drop diagnostics (#81): `touch
+                    // ~/.local/state/lapin-ux/debug-dnd` (or LAPIN_UX_DEBUG_DND=1)
+                    // before signing in logs every drag event the shell gets.
+                    let dnd = std::env::var("LAPIN_UX_DEBUG_DND").is_ok_and(|v| v == "1")
+                        || std::env::var_os("HOME")
+                            .map(|h| std::path::PathBuf::from(h).join(".local/state/lapin-ux/debug-dnd"))
+                            .is_some_and(|p| p.exists());
+                    if dnd {
+                        "warn,lapin_ux_shell=info,libcosmic::widget::dnd_destination=trace,iced::winit::program=trace".into()
+                    } else {
+                        "warn,lapin_ux_shell=info".into()
+                    }
+                }),
         )
         .init();
     // Redraw only the surfaces that move during an animation (#51);

@@ -523,6 +523,10 @@ drives and the sidebar's own right-click entries are still open on #72. The unin
   tracked position change,
   every pop-up/Start/catcher opened or closed (with its anchor), and which
   surface each click lands on. Delete the file to turn it off.
+- Drag and drop diagnostics (#81): `touch ~/.local/state/lapin-ux/debug-dnd`
+  (or `LAPIN_UX_DEBUG_DND=1`) before signing in makes the shell log libcosmic's
+  drop-target lines and iced's "Dnd event" lines to `session.log` (verbose, so
+  delete the file afterwards).
 - Less work per frame (#51): every message makes iced rebuild and redraw
   every shell surface, so the shell keeps messages few. Pointer motion is a
   message only while the left button is held or at the Show desktop corner
