@@ -479,6 +479,12 @@ view toggle). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
   cosmic-session, exports the display to systemd/D-Bus, then starts and
   supervises every component with exponential back-off restarts.
 - `dev.lapinux.Session.Exit` on the session bus for Sign out.
+- `start-lapin-ux` opens `session.log` on its first lines, so a failure while
+  starting is recorded with the last step it reached (#100). It waits up to 5 s
+  for the user's systemd manager (greetd starts the session before it is
+  ready, GDM later) and treats the `systemctl --user` calls as best effort. It
+  also turns the `;`-separated `DesktopNames` that cosmic-greeter passes into
+  the `:`-separated `XDG_CURRENT_DESKTOP` the session gate looks for.
 - Crash reports: every Lapin program installs `lapin_ux_core::crash`, which on
   a panic writes the message, its last ~40 handled messages (shell and
   notification service) and a backtrace to the session log and to
