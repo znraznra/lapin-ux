@@ -33,7 +33,7 @@ Icons with Recycle Bin, multi-select, cut/copy/paste, drag and drop, Properties,
 Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every setting, About laid out as a name card with specification cards, plus Lapin pages: Taskbar, Start, Night light, Notifications, Multitasking, Storage, Clipboard, Lock screen, Installed apps, Sign-in options (fingerprint, Howdy face unlock, password), Privacy and security, Update (incl. firmware). Search across all pages. `cosmic-settings lapin <page-id>` opens any Lapin page.
 
 ## System apps
-- **Task Manager**: Processes, Performance, Startup apps, Details, Users (logind), Services (systemd).
+- **Task Manager**: Processes, Performance (with GPU), Startup apps, Details, Users (logind), Services (systemd).
 - **Control Panel**: category view and Large icons with full-colour icons.
 - **Update**: pacman, Flatpak, fwupd firmware; history; restart prompt; background check.
 - **Get Started**: Wi-Fi, light/dark, optional pointers.

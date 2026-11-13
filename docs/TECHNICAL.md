@@ -336,7 +336,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 **System tools**
 - **Task Manager** (Ctrl+Shift+Esc, Ctrl+Alt+Del, Super+X): Processes (apps with
   their child processes, background processes, CPU/memory/disk, End task, Run
-  new task), Performance graphs, Startup apps (turn them on or off), Users
+  new task), Performance graphs (CPU, memory, disk, network and one entry per graphics adapter, read from sysfs and DRM fdinfo), Startup apps (turn them on or off), Users
   (who is signed in, from logind, with their CPU and memory; Manage user
   accounts), Details, and Services (every systemd service with PID and status;
   Start, Stop and Restart go through polkit and the admin prompt).

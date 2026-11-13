@@ -16,6 +16,7 @@ pub mod desktops;
 pub mod display;
 pub mod dnd;
 pub mod files;
+pub mod gpu;
 pub mod ics;
 pub mod notify;
 pub mod pins;
