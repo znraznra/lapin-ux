@@ -89,8 +89,11 @@ fn theme_chain(theme: &str, data_dirs: &[PathBuf]) -> Vec<String> {
         for d in data_dirs {
             if let Ok(index) = std::fs::read_to_string(d.join("sounds").join(&t).join("index.theme")) {
                 for line in index.lines() {
-                    if let Some(v) = line.trim().strip_prefix("Inherits=") {
-                        parents.extend(v.split(',').map(|p| p.trim().to_string()));
+                    // Desktop-entry format: whitespace is allowed around "=".
+                    if let Some((k, v)) = line.split_once('=') {
+                        if k.trim() == "Inherits" {
+                            parents.extend(v.split(',').map(|p| p.trim().to_string()));
+                        }
                     }
                 }
                 break;
@@ -233,7 +236,7 @@ mod tests {
         for t in ["ocean", "borealis", "freedesktop"] {
             std::fs::create_dir_all(d.join("sounds").join(t).join("stereo")).unwrap();
         }
-        std::fs::write(d.join("sounds/ocean/index.theme"), "[Sound Theme]\nInherits=borealis\n").unwrap();
+        std::fs::write(d.join("sounds/ocean/index.theme"), "[Sound Theme]\nInherits = borealis\n").unwrap();
         // A loop must not hang the lookup.
         std::fs::write(d.join("sounds/borealis/index.theme"), "[Sound Theme]\nInherits=ocean\n").unwrap();
         std::fs::write(d.join("sounds/borealis/stereo/desktop-login.oga"), b"x").unwrap();
