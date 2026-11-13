@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-settings' 'lapin-ux-portal')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-settings' 'lapin-ux-portal' 'lapin-explorer')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -122,6 +122,12 @@ prepare() {
     cd "$srcdir/cosmic-files"
     git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-portal/*.patch
+    # Explorer (lapin-explorer) is the same checkout with its own patches on top.
+    for p in "$_src"/packaging/lapin-ux-files/*.patch; do
+        [ -e "$p" ] && git apply "$p"
+    done
+    rm -f rust-toolchain rust-toolchain.toml
+    cargo fetch --locked --target "$host"
     cd "$srcdir/xdg-desktop-portal-cosmic"
     git reset -q --hard && git clean -fdq
     git apply "$_src"/packaging/lapin-ux-portal/portal/*.patch
@@ -224,6 +230,9 @@ build() {
 
     cd "$srcdir/xdg-desktop-portal-cosmic"
     cargo build --release --offline --config "$_files_patch"
+
+    cd "$srcdir/cosmic-files"
+    just build-release --frozen
 }
 
 check() {
@@ -428,6 +437,9 @@ package_lapin-ux-settings() {
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"
     CARGO_HOME="$srcdir/cargo-settings" just rootdir="$pkgdir" install
+    # Lets the shell, Control Panel and notifications see this is Lapin's
+    # Settings without starting it (#80).
+    install -Dm644 /dev/null "$pkgdir/usr/share/lapin-ux/settings-is-lapins"
     install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }
 
@@ -439,6 +451,18 @@ package_lapin-ux-portal() {
     provides=("xdg-desktop-portal-cosmic=$_cosmic_ver")
     conflicts=('xdg-desktop-portal-cosmic')
     cd "$srcdir/xdg-desktop-portal-cosmic"
+    just rootdir="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-explorer() {
+    pkgdesc="Explorer: COSMIC Files with Lapin UX's familiar command bar and layout (stock COSMIC Files outside a Lapin session)"
+    url="https://github.com/pop-os/cosmic-files"
+    license=('GPL-3.0-only')
+    depends=('cosmic-icon-theme' 'libgcc' 'glib2' 'glibc' 'gvfs' 'libxkbcommon' 'xdg-utils' 'zstd')
+    provides=("cosmic-files=$_cosmic_ver")
+    conflicts=('cosmic-files' 'lapin-ux-cosmic-files')
+    cd "$srcdir/cosmic-files"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

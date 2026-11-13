@@ -7,7 +7,7 @@ Everything built so far, by area. The authoritative long version lives in `docs/
 - Grouped buttons: click opens/focuses/minimizes; several windows show a picker; middle-click opens a new instance.
 - Accent pill under the focused app; jump lists, app actions, pin/unpin, **End task**.
 - Badges and progress bars (Unity LauncherEntry); attention flash.
-- Task view button, tray (StatusNotifierItem), clock (follows COSMIC's 24-hour switch; unset = 12 h), show-desktop sliver, auto-hide.
+- Task view button, tray (StatusNotifierItem), clock (follows COSMIC's 24-hour switch; unset = 12 h), show-desktop sliver, auto-hide, and the taskbar can sit at the top or the bottom of the screen.
 - Start button icon presets, OS logo or a custom picture (the Lapin UX logo by default). Opaque by default; Transparency effects in Settings > Colors make it see-through.
 - Main display choice: tray, desktop icons and notifications follow it. Older X11 and Wine tray icons show in the tray.
 
@@ -44,7 +44,7 @@ Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every
 Lock and sign-in screens (`lapin-ux-greeter`): big clock, blurred panel, round picture, fingerprint via fprintd, Howdy face unlock, accessibility/keyboard/session/power flyouts, on-screen keyboard.
 
 ## Input and accessibility
-Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Mouse pointers page under Personalization (style, add your own from an archive or folder, busy colour, size). Narrator (via Orca) is paused for now and hidden everywhere. Contrast themes are currently turned off.
+Input indicator with fcitx5, Super+Space, touch keyboard (`lapin-ux-osk`), Magnifier, colour filters, Mouse pointers page under Personalization (style, add your own from an archive or folder, busy colour, size), Sounds page under Personalization (scheme, install your own, per-event sounds). Narrator (via Orca) is paused for now and hidden everywhere. Contrast themes are currently turned off.
 
 ## Pop-ups and prompts (`lapin-ux-osd`)
 Volume/brightness pop-ups and the admin (polkit) prompt, clear and easy to read.

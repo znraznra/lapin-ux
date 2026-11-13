@@ -1,0 +1,26 @@
+From b50c668b7090e3da8a498b041db6347ae3245970 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 09:57:43 +0800
+Subject: [PATCH] Lapin UX: Details button toggles the docked details pane
+
+Refs #75
+---
+ src/menu.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/menu.rs b/src/menu.rs
+index b178ea4..1492e9c 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -839,7 +839,7 @@ pub fn command_bar<'a>(
+             .push(button("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
+             .push(widget::space::horizontal())
+             .push(button("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
+-            .push(button("dialog-information-symbolic", fl!("details"), act(Action::Preview, selected > 0)))
++            .push(button("dialog-information-symbolic", fl!("details"), act(Action::Preview, has_tab)))
+             .push(button(
+                 if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+                 if grid { fl!("list-view") } else { fl!("grid-view") },
+-- 
+2.43.0
+

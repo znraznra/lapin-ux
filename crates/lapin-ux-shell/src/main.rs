@@ -37,6 +37,7 @@ mod quick;
 mod pointer_gate;
 mod redraw_debug;
 mod screen_reader;
+mod single;
 mod snap;
 mod snip;
 mod start_pins;
@@ -93,7 +94,14 @@ fn main() -> cosmic::iced::Result {
     }
 
     let action = std::env::args().nth(1);
-    let args: Vec<String> = std::env::args().skip(2).collect();
+    let mut args: Vec<String> = std::env::args().skip(2).collect();
+    // Alt+Tab is slow (#65): say when the key press started this process, so
+    // the running shell can log how long it took to get there.
+    if action.as_deref() == Some("alttab")
+        && let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+    {
+        args.push(format!("--sent-ms={}", now.as_millis()));
+    }
     if matches!(action.as_deref(), Some("-h" | "--help")) {
         println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskview | snap | taskbar-item N | power-button]");
         return Ok(());
@@ -106,6 +114,21 @@ fn main() -> cosmic::iced::Result {
         let err = std::process::Command::new("cosmic-launcher").exec();
         eprintln!("lapin-ux-shell: not in an Lapin UX session and cosmic-launcher failed: {err}");
         return Ok(());
+    }
+
+    // Only the session starts the shell (#83): a shortcut's subcommand
+    // never turns into a second one.
+    match action.as_deref() {
+        Some(a) => {
+            if !single::shell_ready_for_command(a) {
+                return Ok(());
+            }
+        }
+        None => {
+            if !single::take_shell_lock() {
+                return Ok(());
+            }
+        }
     }
 
     cosmic::app::run_single_instance::<app::Shell>(

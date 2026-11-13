@@ -19,7 +19,7 @@ use cosmic::iced::keyboard::{self, Key, key::Named};
 use cosmic::iced::mouse;
 use crate::taskbar_extras::Pointer;
 use cosmic::iced::platform_specific::runtime::wayland::CornerRadius;
-use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings};
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::platform_specific::runtime::wayland::popup::{SctkPopupSettings, SctkPositioner};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, set_keyboard_interactivity,
@@ -324,6 +324,9 @@ pub struct Shell {
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
     pub popup_dismissed: Option<(PopupKind, Instant)>,
+    /// The last window the taskbar asked to minimize and when (#85): if the
+    /// window reports it is shown again a moment later, the app undid it.
+    pub(crate) minimize_asked: Option<(Handle, Instant)>,
     /// Surfaces iced asked for a view of that the shell doesn't track, and
     /// when each was first seen (#34). A pop-up closed before its creation
     /// went through is created afterwards with nobody holding it: invisible,
@@ -381,6 +384,9 @@ pub struct Shell {
     /// A file being dragged over a taskbar button: (app, serial).
     pub drag_hover: Option<(String, u64)>,
     pub drag_serial: u64,
+    /// When the last Alt+Tab request reached the shell (#65), to log how
+    /// long the switcher took to show.
+    pub(crate) alttab_at: Option<Instant>,
     /// Badge counts / progress / attention announced by apps, by app id.
     pub badges: HashMap<String, lapin_ux_core::badge::Badge>,
     /// Jump list of the task whose right-click menu is open.
@@ -400,6 +406,9 @@ pub struct Shell {
     pub tray_menu_path: Vec<i32>,
     /// Win+X menu / Run dialog.
     pub panel: Option<crate::panels::Panel>,
+    /// Counts Run submissions and opened panels, so a late "it didn't start" from an
+    /// old submission can't close a panel opened since.
+    pub run_seq: u64,
     pub(crate) panel_closed_at: Instant,
     /// Last pointer position over a taskbar.
     pub(crate) pointer: Option<(window::Id, cosmic::iced::Point)>,
@@ -505,10 +514,8 @@ impl Shell {
             hide_pending: false,
         });
         let zone = if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 };
-        let hidden_input = self.config.auto_hide.then(|| {
-            let h = style::taskbar_height() as f32;
-            vec![Rectangle { x: 0.0, y: h - crate::autohide::STRIP as f32, width: 100_000.0, height: crate::autohide::STRIP as f32 }]
-        });
+        let hidden_input = self.config.auto_hide.then(|| vec![self.hidden_strip()]);
+        let bar_anchor = self.edge() | Anchor::LEFT | Anchor::RIGHT;
         let task = cosmic::surface::surface_task(app_layer_shell(
             // Opaque by default (#55): blur only with transparency effects on.
             move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id) && shell.config.transparency_effects), ..Default::default() },
@@ -516,7 +523,7 @@ impl Shell {
                 id,
                 layer: Layer::Top,
                 keyboard_interactivity: KeyboardInteractivity::None,
-                anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                anchor: bar_anchor,
                 output: IcedOutput::Output(output.clone()),
                 namespace: "lapin-ux-taskbar".into(),
                 size: Some((None, Some(style::taskbar_height()))),
@@ -561,6 +568,8 @@ impl Shell {
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
+        let start_edge = self.edge();
+        let start_margin = self.edge_margin(above - 8, if left { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
         self.anim_start_opened(id);
         Task::batch([
@@ -576,11 +585,11 @@ impl Shell {
                     id,
                     layer: Layer::Overlay,
                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                    anchor: if left { Anchor::BOTTOM | Anchor::LEFT } else { Anchor::BOTTOM },
+                    anchor: if left { start_edge | Anchor::LEFT } else { start_edge },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
-                    // Opens a little low and rises into place (anim.rs).
-                    margin: IcedMargin { top: 0, right: 0, bottom: above - 8, left: if left { 12 } else { 0 } },
+                    // Opens a little close to the bar and slides into place (anim.rs).
+                    margin: start_margin,
                     size: Some((Some(style::START_WIDTH), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
@@ -639,6 +648,21 @@ impl Shell {
             return format!("stray surface {id:?} (no owner, to be destroyed)");
         }
         format!("unknown surface {id:?}")
+    }
+
+    /// Log what a click on a taskbar button saw and chose (#85): every window
+    /// of the app with its state, so "clicking the active app doesn't
+    /// minimize it" shows whether the window wasn't seen as active, there
+    /// were several windows, or the app undid the minimize.
+    pub(crate) fn log_click(&mut self, how: &str, app: &str, chose: &str) {
+        let windows: Vec<String> = self
+            .taskbar
+            .windows()
+            .iter()
+            .filter(|w| w.app == app)
+            .map(|w| format!("{:?} \"{}\" active={} minimized={} on={:?}", w.handle, w.title, w.active, w.minimized, w.outputs))
+            .collect();
+        tracing::info!(how, app, chose, windows = ?windows, "taskbar click");
     }
 
     pub(crate) fn close_popup(&mut self) -> Task<Message> {
@@ -702,8 +726,9 @@ impl Shell {
             crate::redraw_debug::surface("pop-up opened", (&kind, parent, key, r, self.rects.contains_key(key)));
         }
         // Menus over the taskbar, or the Task view's desktop row, open upwards.
-        let above = self.bars.iter().any(|b| b.id == parent)
+        let above = (self.bars.iter().any(|b| b.id == parent) && !self.top_bar())
             || matches!(kind, PopupKind::DesktopTile(_) | PopupKind::DesktopBackground(_));
+        let top_bar = self.top_bar();
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         // Hover previews must not take the pointer or keyboard.
         let grab = !matches!(kind, PopupKind::Preview(_));
@@ -731,13 +756,13 @@ impl Shell {
                 // it; the rest are centred over the button they belong to.
                 anchor: match (at_pointer, above) {
                     // The account menu rises from the account button, left-aligned.
-                    _ if kind == PopupKind::Account => PAnchor::TopLeft,
+                    _ if kind == PopupKind::Account => if top_bar { PAnchor::BottomLeft } else { PAnchor::TopLeft },
                     (true, _) => PAnchor::TopLeft,
                     (false, true) => PAnchor::Top,
                     (false, false) => PAnchor::Bottom,
                 },
                 gravity: match (at_pointer, above) {
-                    _ if kind == PopupKind::Account => Gravity::TopRight,
+                    _ if kind == PopupKind::Account => if top_bar { Gravity::BottomRight } else { Gravity::TopRight },
                     (true, true) => Gravity::TopRight,
                     (true, false) => Gravity::BottomRight,
                     (false, true) => Gravity::Top,
@@ -788,6 +813,14 @@ impl Shell {
         tracing::debug!(?info, "window changed");
         let app = self.catalog.resolve_window(&info.app_id, &info.title).id;
         let app = if app.is_empty() { info.app_id.clone() } else { app };
+        // The app showed a window again right after the taskbar minimized it (#85).
+        if let Some((h, at)) = self.minimize_asked
+            && h == info.id
+            && at.elapsed() < Duration::from_secs(2)
+            && !info.minimized
+        {
+            tracing::info!(app_id = %info.app_id, title = %info.title, activated = info.activated, after_ms = at.elapsed().as_millis() as u64, "window not minimized after the taskbar asked for it");
+        }
         let was_active = self.taskbar.windows().iter().any(|w| w.handle == info.id && w.active);
         if info.activated && !was_active {
             self.note_activation(info.id);
@@ -1084,6 +1117,7 @@ impl Application for Shell {
             catcher: None,
             popup: None,
             popup_dismissed: None,
+            minimize_asked: None,
             strays: std::sync::Mutex::new(HashMap::new()),
             popup_opened_at: Instant::now() - Duration::from_secs(10),
             rects: HashMap::new(),
@@ -1119,6 +1153,7 @@ impl Application for Shell {
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
             drag_serial: 0,
+            alttab_at: None,
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
@@ -1128,6 +1163,7 @@ impl Application for Shell {
             tray: Vec::new(),
             tray_menu_path: Vec::new(),
             panel: None,
+            run_seq: 0,
             panel_closed_at: Instant::now() - Duration::from_secs(10),
             pointer: None,
             drag: None,
@@ -1180,7 +1216,18 @@ impl Application for Shell {
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
                 "snap" => self.update(Message::Snap(crate::snap::SnapMsg::Open)),
                 "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
-                "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
+                "alttab" => {
+                    self.alttab_at = Some(Instant::now());
+                    // How long the key press took to reach the shell: the
+                    // compositor starting `lapin-ux-shell alttab`, that
+                    // process starting up, and the D-Bus hop (#65).
+                    let sent_ms = args.iter().find_map(|a| a.strip_prefix("--sent-ms=")).and_then(|v| v.parse::<u128>().ok());
+                    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).ok();
+                    if let (Some(sent), Some(now)) = (sent_ms, now_ms) {
+                        tracing::info!(took_ms = now.saturating_sub(sent) as u64, "alt-tab: the request reached the shell");
+                    }
+                    self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev"))))
+                }
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 // Settings > Clipboard > Clear clipboard data (pinned items stay).
                 "clipboard-clear" => self.update(Message::Clip(crate::clipboard::ClipMsg::ClearAll)),
@@ -1526,14 +1573,18 @@ impl Shell {
                     self.taskbar.set_pinned(cfg.pinned_taskbar.clone());
                 }
                 let auto_hide_changed = cfg.auto_hide != self.config.auto_hide;
+                let position_changed = cfg.position != self.config.position;
                 let icons_changed = cfg.desktop_special != self.config.desktop_special || cfg.hide_recycle_bin != self.config.hide_recycle_bin;
                 let apps_changed = cfg.show_other_desktop_apps != self.config.show_other_desktop_apps;
                 let main_changed = cfg.main_display != self.config.main_display
                     || cfg.main_display_model != self.config.main_display_model;
                 crate::style::set_transparency(cfg.transparency_effects);
                 self.config = cfg;
+                // One update can change several things at once (the main display and
+                // the taskbar position, say): do every part and batch the tasks.
+                let mut tasks = Vec::new();
                 if main_changed {
-                    return self.desktop_follow_main();
+                    tasks.push(self.desktop_follow_main());
                 }
                 if apps_changed {
                     self.catalog = Catalog::load(self.config.show_other_desktop_apps);
@@ -1542,9 +1593,13 @@ impl Shell {
                 if icons_changed {
                     self.reload_desktop();
                 }
-                if auto_hide_changed {
-                    return self.auto_hide_changed();
+                if position_changed {
+                    tasks.push(self.position_changed());
                 }
+                if auto_hide_changed {
+                    tasks.push(self.auto_hide_changed());
+                }
+                return Task::batch(tasks);
             }
             Message::Tick => {
                 self.now = chrono::Local::now().naive_local();
@@ -1809,6 +1864,12 @@ impl Shell {
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
                 let active = self.taskbar.windows().iter().any(|w| w.handle == h && w.active && !w.minimized);
+                if let Some(app) = self.taskbar.windows().iter().find(|w| w.handle == h).map(|w| w.app.clone()) {
+                    self.log_click("window", &app, if active { "minimize" } else { "activate" });
+                }
+                if active {
+                    self.minimize_asked = Some((h, Instant::now()));
+                }
                 self.request(if active { WaylandRequest::Minimize(h) } else { WaylandRequest::Activate(h) });
                 return close;
             }
@@ -1818,6 +1879,16 @@ impl Shell {
                 }
                 let close = Task::batch([self.close_preview(), self.close_popup()]);
                 let action = self.taskbar.click(&app);
+                self.log_click(
+                    "button",
+                    &app,
+                    match &action {
+                        ClickAction::Launch(_) => "launch",
+                        ClickAction::Activate(_) => "activate",
+                        ClickAction::Minimize(_) => "minimize",
+                        ClickAction::ShowPicker => "window picker",
+                    },
+                );
                 let next = match action {
                     ClickAction::Launch(id) => self.launch(&id),
                     ClickAction::Activate(h) => {
@@ -1825,6 +1896,7 @@ impl Shell {
                         Task::none()
                     }
                     ClickAction::Minimize(h) => {
+                        self.minimize_asked = Some((h, Instant::now()));
                         self.request(WaylandRequest::Minimize(h));
                         Task::none()
                     }

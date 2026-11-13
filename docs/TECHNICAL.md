@@ -440,6 +440,15 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 - System sounds from the bundled **Borealis** theme: sign-in, sign-out,
   notifications (apps can ask for silence or their own sound), alarms, volume
   changes, emptying the Recycle Bin.
+- Settings > Personalization > Sounds: pick the scheme (config key
+  `sound_theme` in `dev.lapinux.Shell`, empty = no sounds, read live by
+  `lapin_ux_core::sound`), install schemes from an archive or folder into
+  `~/.local/share/sounds` (tracked in `~/.local/state/lapin-ux/sounds-added`,
+  only those can be removed there), and set a sound, silence or own file per
+  event. Per-event choices live in the `lapin-ux-custom` theme, so an installed
+  scheme is never edited. Uninstall removes `lapin-ux-custom` and leaves added
+  schemes (listing them). Battery and device events are listed but Lapin does
+  not play them yet.
 - Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).
 - Settings > Accessibility > Mouse pointer (#24): style (the extra pointers,
@@ -452,6 +461,14 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   start) and GTK's `cursor-size` (swapped per session). Run from another
   desktop, `lapin-ux-cursors` only changes Lapin UX's own copy of the pointer
   settings (`~/.local/state/lapin-ux/lapin-desktop`).
+
+**Explorer** (`lapin-explorer`, #71): COSMIC Files at the pinned commit with the
+patches in `packaging/lapin-ux-files/` (after the dialog patch), installed in
+place of `cosmic-files` (it provides and conflicts with it, and with the
+optional `lapin-ux-cosmic-files`), so it stays the default file manager. Every
+Lapin look is gated on `config::lapin_session()`; in COSMIC's own session it is
+stock. First piece: a command bar (New folder, Cut, Copy, Paste, Rename, Delete,
+view toggle). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - Every app's Open/Save dialog ends with *File name* with the file
@@ -560,7 +577,7 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
 | Super + E | File manager |
 | Super + D | Show desktop / restore |
 | Super + X | Power-user menu |
-| Super + R | Run dialog |
+| Super + R | Run dialog (shows "Can't find …" when the name is not an app, program, file, folder or address) |
 | Super + N | Notification centre |
 | Super + A | Quick settings |
 | Super + V | Clipboard history |
@@ -633,7 +650,7 @@ niri…), so the shell also runs on wlroots compositors.
 
 All settings use cosmic-config and apply live:
 `~/.config/cosmic/dev.lapinux.Shell/v1/` (`pinned_taskbar`, `pinned_start`,
-`alignment` = `Center`/`Left`, `show_search`, `clock_24h`, `clock_seconds`,
+`alignment` = `Center`/`Left`, `position` = `Bottom`/`Top` (#41; Start, Quick settings, panels and pop-ups follow the bar to the top), `show_search`, `clock_24h`, `clock_seconds`,
 `show_desktop_corner`, `tray_inline`, `web_search`, `hide_web_search`, `desktop_icon_size`, `desktop_sort`, `hide_desktop_icons`, `desktop_auto_arrange`, `auto_hide`, `multi_display`, `hotspot_password`).
 
 ## Install on Arch
@@ -708,6 +725,11 @@ plan; `--settings-only` only restores settings (for someone who already ran
   installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
   else sets greetd to a text login (`agreety`, old config kept as
   `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
+- **Sign-in screen picture and font (#100).** The sign-in screen shows the
+  selected (last signed-in, else the first) user's lock screen picture and
+  system font, read by the greeter daemon from that user's `dev.lapinux.Shell`
+  config. The daemon logs what it read (`journalctl -b -u cosmic-greeter-daemon`,
+  lines starting "Lapin UX:"), so a wrong picture or font can be traced.
 - Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf; 55
   checks, scenario I covers giving other desktops' skipped startup parts back).
 

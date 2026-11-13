@@ -60,6 +60,7 @@ Log out, pick **Lapin UX** on the sign-in screen, and sign in. The first build t
 | Super | Start |
 | Super + E / D / L | Files / show the desktop / lock |
 | Super + A / N | Quick settings / notifications |
+| Super + R | Run: type a program, a folder, a web address or an app's name. If it can't be found, it says so and keeps what you typed |
 | Super + Z | Snap layouts |
 | Alt + Tab | Switch windows |
 | Ctrl + Shift + Esc | Task Manager |
