@@ -118,6 +118,12 @@ pub fn cosmic_fallback(page: &str) -> Option<&'static str> {
 pub fn lapin_settings_installed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
+        // The lapin-ux-settings package ships this marker, so the usual case
+        // costs one stat instead of a whole Settings start-up (#80).
+        if std::path::Path::new("/usr/share/lapin-ux/settings-is-lapins").exists() {
+            return true;
+        }
+        // Installs from before the marker: ask Settings itself.
         std::process::Command::new("cosmic-settings")
             .args(["help", "lapin"])
             .stdout(std::process::Stdio::null())

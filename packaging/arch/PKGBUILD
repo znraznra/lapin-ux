@@ -428,6 +428,9 @@ package_lapin-ux-settings() {
     conflicts=('cosmic-settings')
     cd "$srcdir/cosmic-settings"
     CARGO_HOME="$srcdir/cargo-settings" just rootdir="$pkgdir" install
+    # Lets the shell, Control Panel and notifications see this is Lapin's
+    # Settings without starting it (#80).
+    install -Dm644 /dev/null "$pkgdir/usr/share/lapin-ux/settings-is-lapins"
     install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }
 
