@@ -19,14 +19,18 @@ const WAIT_FOR_SHELL: Duration = Duration::from_secs(5);
 /// (the session restarts a crashed shell while the old process is exiting).
 const WAIT_FOR_LOCK: Duration = Duration::from_secs(3);
 
-/// Whether a shell has registered its D-Bus name.
-fn shell_is_running() -> bool {
+/// Whether a shell has registered its D-Bus name, within `limit` (a bus that
+/// accepts the connection but never answers must not hold a shortcut up).
+fn shell_is_running(limit: Duration) -> bool {
     let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return false };
     rt.block_on(async {
-        let Ok(conn) = zbus::Connection::session().await else { return false };
-        let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return false };
-        let Ok(name) = zbus::names::BusName::try_from(lapin_ux_core::ids::SHELL_APP_ID) else { return false };
-        proxy.name_has_owner(name).await.unwrap_or(false)
+        let probe = async {
+            let Ok(conn) = zbus::Connection::session().await else { return false };
+            let Ok(proxy) = zbus::fdo::DBusProxy::new(&conn).await else { return false };
+            let Ok(name) = zbus::names::BusName::try_from(lapin_ux_core::ids::SHELL_APP_ID) else { return false };
+            proxy.name_has_owner(name).await.unwrap_or(false)
+        };
+        tokio::time::timeout(limit, probe).await.unwrap_or(false)
     })
 }
 
@@ -35,7 +39,7 @@ fn shell_is_running() -> bool {
 pub fn shell_ready_for_command(action: &str) -> bool {
     let started = Instant::now();
     loop {
-        if shell_is_running() {
+        if shell_is_running(WAIT_FOR_SHELL.saturating_sub(started.elapsed())) {
             return true;
         }
         if started.elapsed() >= WAIT_FOR_SHELL {
