@@ -87,6 +87,7 @@ async fn main() -> Result<()> {
         // nothing else reads the environment concurrently.
         unsafe { std::env::set_var(k, v) };
     }
+    let mut setup: Option<tokio::task::JoinHandle<()>> = None;
     if !nested {
         // The environment is exported first (two quick commands: programs the
         // shell starts through D-Bus need it). The masking of other desktops'
@@ -98,12 +99,14 @@ async fn main() -> Result<()> {
         let t0 = std::time::Instant::now();
         export_environment(&env).await;
         info!(ms = t0.elapsed().as_millis() as u64, "environment exported");
-        tokio::spawn(async move {
+        setup = Some(tokio::spawn(async move {
             skip_other_desktops_autostart().await;
             info!(ms = t0.elapsed().as_millis() as u64, "other desktops' autostart masked");
             systemctl(&["start", "--no-block", "lapin-ux-session.target"]).await;
             info!(ms = t0.elapsed().as_millis() as u64, "session target started");
-            // The sign-in sound, once the audio server has had a moment.
+        }));
+        // The sign-in sound, once the audio server has had a moment.
+        tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             lapin_ux_core::sound::play("desktop-login");
         });
@@ -147,6 +150,11 @@ async fn main() -> Result<()> {
     }
     terminate(&mut comp).await;
     if !nested {
+        // A quick sign-out must not stop the target and restore the masks
+        // before the start-up task has finished with them.
+        if let Some(h) = setup {
+            let _ = tokio::time::timeout(Duration::from_secs(15), h).await;
+        }
         systemctl(&["stop", "--no-block", "lapin-ux-session.target"]).await;
         restore_autostart().await;
     }
