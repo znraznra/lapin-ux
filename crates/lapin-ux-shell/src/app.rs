@@ -381,6 +381,9 @@ pub struct Shell {
     /// A file being dragged over a taskbar button: (app, serial).
     pub drag_hover: Option<(String, u64)>,
     pub drag_serial: u64,
+    /// When the last Alt+Tab request reached the shell (#65), to log how
+    /// long the switcher took to show.
+    pub(crate) alttab_at: Option<Instant>,
     /// Badge counts / progress / attention announced by apps, by app id.
     pub badges: HashMap<String, lapin_ux_core::badge::Badge>,
     /// Jump list of the task whose right-click menu is open.
@@ -1120,6 +1123,7 @@ impl Application for Shell {
             mods: keyboard::Modifiers::empty(),
             ctrl_released: Instant::now() - Duration::from_secs(10),
             drag_serial: 0,
+            alttab_at: None,
             hover: None,
             hover_gen: 0,
             mru: Vec::new(),
@@ -1181,7 +1185,18 @@ impl Application for Shell {
                 "quick" => self.update(Message::Quick(crate::quick::QuickMsg::Toggle)),
                 "snap" => self.update(Message::Snap(crate::snap::SnapMsg::Open)),
                 "taskview" => self.update(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
-                "alttab" => self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev")))),
+                "alttab" => {
+                    self.alttab_at = Some(Instant::now());
+                    // How long the key press took to reach the shell: the
+                    // compositor starting `lapin-ux-shell alttab`, that
+                    // process starting up, and the D-Bus hop (#65).
+                    let sent_ms = args.iter().find_map(|a| a.strip_prefix("--sent-ms=")).and_then(|v| v.parse::<u128>().ok());
+                    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).ok();
+                    if let (Some(sent), Some(now)) = (sent_ms, now_ms) {
+                        tracing::info!(took_ms = now.saturating_sub(sent) as u64, "alt-tab: the request reached the shell");
+                    }
+                    self.update(Message::Preview(crate::previews::PreviewMsg::AltTab(args.first().is_some_and(|a| a == "prev"))))
+                }
                 "clipboard" => self.update(Message::Clip(crate::clipboard::ClipMsg::Open(crate::clipboard::Tab::Clipboard))),
                 // Settings > Clipboard > Clear clipboard data (pinned items stay).
                 "clipboard-clear" => self.update(Message::Clip(crate::clipboard::ClipMsg::ClearAll)),

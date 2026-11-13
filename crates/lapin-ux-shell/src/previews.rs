@@ -244,16 +244,22 @@ impl Shell {
         if order.is_empty() {
             return Task::none();
         }
-        self.capture(order.iter().copied());
         let n = order.len();
         let selected = if n == 1 { 0 } else if back { n - 1 } else { 1 };
         // A quick tap that was over before the switcher could open: just
         // flip to that window, like Windows (the compositor says Alt is up).
+        // No thumbnails are needed, and with nothing of ours open there is
+        // no keyboard hand-back to wait for (#65).
         if self.alt_down == Some(false) {
-            tracing::debug!("alt-tab: quick tap");
-            let close = Task::batch([self.close_start(), self.close_popup()]);
-            return Task::batch([close, activate_after_close(order[selected])]);
+            // An open panel (Run, say) holds the keyboard too, so it counts and is closed.
+            let nothing_open = self.start.is_none() && self.popup.is_none() && self.panel.is_none();
+            tracing::info!(nothing_open, since_request_ms = self.alttab_at.map_or(0, |t| t.elapsed().as_millis() as u64), "alt-tab: quick tap");
+            let close = Task::batch([self.close_start(), self.close_popup(), self.close_panel()]);
+            let target = order[selected];
+            let activate = if nothing_open { Task::done(cosmic::Action::App(Message::ActivateWindow(target))) } else { activate_after_close(target) };
+            return Task::batch([close, activate]);
         }
+        self.capture(order.iter().copied());
         let close = Task::batch([self.close_start(), self.close_popup()]);
         Task::batch([close, self.open_panel(PanelKind::AltTab(AltTab { order, selected, saw_alt: false }))])
     }
@@ -281,6 +287,9 @@ impl Shell {
     }
 
     pub(crate) fn alt_tab_focused(&self) -> Task<Message> {
+        if let Some(t) = self.alttab_at {
+            tracing::info!(since_request_ms = t.elapsed().as_millis() as u64, "alt-tab: the switcher is on screen");
+        }
         // With Lapin UX's compositor the Alt release itself closes the
         // switcher (AltReleased); guessing from a timer only for others.
         if self.alt_down.is_some() {

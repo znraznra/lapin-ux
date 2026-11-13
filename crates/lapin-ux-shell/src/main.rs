@@ -93,7 +93,14 @@ fn main() -> cosmic::iced::Result {
     }
 
     let action = std::env::args().nth(1);
-    let args: Vec<String> = std::env::args().skip(2).collect();
+    let mut args: Vec<String> = std::env::args().skip(2).collect();
+    // Alt+Tab is slow (#65): say when the key press started this process, so
+    // the running shell can log how long it took to get there.
+    if action.as_deref() == Some("alttab")
+        && let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+    {
+        args.push(format!("--sent-ms={}", now.as_millis()));
+    }
     if matches!(action.as_deref(), Some("-h" | "--help")) {
         println!("usage: lapin-ux-shell [start | desktop | winx | run | quick | notifications | clipboard | emoji | alttab [prev] | taskview | snap | taskbar-item N | power-button]");
         return Ok(());
