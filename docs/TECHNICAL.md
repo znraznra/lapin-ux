@@ -708,6 +708,11 @@ plan; `--settings-only` only restores settings (for someone who already ran
   installed login manager (sddm, gdm, plasmalogin, lightdm, lxdm, ly), or
   else sets greetd to a text login (`agreety`, old config kept as
   `config.toml.lapin-ux-bak`) and says how to get a graphical one back.
+- **Sign-in screen picture and font (#100).** The sign-in screen shows the
+  selected (last signed-in, else the first) user's lock screen picture and
+  system font, read by the greeter daemon from that user's `dev.lapinux.Shell`
+  config. The daemon logs what it read (`journalctl -b -u cosmic-greeter-daemon`,
+  lines starting "Lapin UX:"), so a wrong picture or font can be traced.
 - Tests: `tools/test-uninstall/run.sh` (throwaway homes; needs dconf; 55
   checks, scenario I covers giving other desktops' skipped startup parts back).
 
