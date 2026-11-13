@@ -125,6 +125,8 @@ pub struct DesktopView {
     press_keep: Option<PathBuf>,
     /// Where a drag is hovering over the desktop.
     drop_at: Option<Point>,
+    /// Counts drags, so a late "drag over" only clears its own drag (#81).
+    drag_gen: u32,
     trash_full: bool,
     trash_stamp: Option<SystemTime>,
     /// The small text box shown over an icon's label while renaming.
@@ -168,6 +170,8 @@ pub enum DesktopMsg {
     /// Drag-and-drop from an icon started / ended.
     DragStart(PathBuf),
     DragEnd,
+    /// The drag with this number is over and nothing was dropped (#81).
+    DragClear(u32),
     DropMotion(Point),
     DropLeave,
     Dropped(Option<crate::dnd::Uris>, DndAction),
@@ -290,6 +294,7 @@ impl Shell {
             anchor: None,
             press_keep: None,
             drop_at: None,
+            drag_gen: 0,
             trash_full: false,
             trash_stamp: None,
             rename_surface: None,
@@ -729,12 +734,27 @@ impl Shell {
                     if !d.selected.contains(&path) {
                         d.selected = HashSet::from([path.clone()]);
                     }
+                    d.drag_gen = d.drag_gen.wrapping_add(1);
                     d.drag = Some(Drag { path, from });
                 }
             }
+            // The source reports "finished" and the destination reports the
+            // drop in no fixed order (#81): clearing the drag here could wipe
+            // where it was dropped and which icons were dragged before the
+            // drop is handled. `Dropped` clears them; this only does it later
+            // when nothing was dropped (a cancelled drag).
             DesktopMsg::DragEnd => {
-                d.drag = None;
-                d.drop_at = None;
+                let gen_ = d.drag_gen;
+                return Task::future(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    cosmic::Action::App(Message::Desktop(DesktopMsg::DragClear(gen_)))
+                });
+            }
+            DesktopMsg::DragClear(gen_) => {
+                if d.drag_gen == gen_ {
+                    d.drag = None;
+                    d.drop_at = None;
+                }
             }
             DesktopMsg::DropMotion(p) => {
                 d.drop_at = Some(p);
@@ -749,7 +769,20 @@ impl Shell {
                 let uris = uris.map(|u| u.0).unwrap_or_default();
                 let paths: Vec<PathBuf> = uris.iter().filter_map(|u| lapin_ux_core::recent::file_uri_to_path(u)).collect();
                 let links: Vec<String> = uris.iter().filter(|u| u.starts_with("http://") || u.starts_with("https://")).cloned().collect();
+                // Our own icons were dragged but the data didn't come through:
+                // the drag knows what was picked up.
+                let paths = if paths.is_empty() && ours.is_some() { self.selection() } else { paths };
                 let target = self.item_at_cell(cell).filter(|t| !paths.contains(t));
+                tracing::info!(
+                    at = ?at,
+                    ?cell,
+                    ?target,
+                    own_drag = ours.is_some(),
+                    paths = paths.len(),
+                    links = links.len(),
+                    ?action,
+                    "desktop drop"
+                );
                 // Onto the Recycle Bin: delete.
                 if target.as_deref() == Some(trash_path().as_path()) {
                     if let Some(d) = &mut self.desktop {
