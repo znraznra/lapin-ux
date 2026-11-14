@@ -272,6 +272,34 @@ theme_is_lapins() {   # theme folder (a *.Builder one, or its sibling is used)
     done
     return 1
 }
+# The pointer Lapin UX uses, also one you added in Settings (#134): written by
+# lapin-ux-cursors. Read fresh each time; empty when there's none.
+lapin_pointer() { head -n1 "$STATE/lapin-pointer" 2>/dev/null | tr -d '\r\n'; }
+# The first theme an index.theme inherits from (the pointer it uses).
+inherited_pointer() { grep -m1 '^Inherits=' "$1" 2>/dev/null | cut -d= -f2- | cut -d, -f1; }
+# Is the pointer Lapin UX picked live, while the other desktops' saved copy
+# is a different one? Only the live value is judged by its name: a saved copy
+# is never taken for Lapin's because it names the same theme (#134).
+stray_lapin_pointer() {   # kind out-copy
+    local p live mine
+    # The noted pointer, and Lapin's bundled one (installs from before the note).
+    p=$(lapin_pointer)
+    case "$1" in
+    dconf)
+        dconf_ok || return 1
+        live=$(dconf read "$(gkey_path cursor-theme)" 2>/dev/null)
+        { [ -n "$p" ] && [ "$live" = "'$p'" ]; } || [ "$live" = "'$CURSOR'" ] || return 1
+        # The saved copy: a value that differs, or "unset" (an empty copy or
+        # an .absent marker; item_apply resets the key for both).
+        if [ -s "$2" ]; then [ "$(cat "$2")" != "$live" ]; else [ -e "$2" ] || [ -e "$2.absent" ]; fi ;;
+    pointer)
+        mine=$(inherited_pointer "$(item_path pointer default)")
+        [ -n "$mine" ] || return 1
+        { [ -n "$p" ] && [ "$mine" = "$p" ]; } || [ "$mine" = "$CURSOR" ] || return 1
+        [ -e "$2.absent" ] || { has_value "$2" && [ "$(inherited_pointer "$2")" != "$mine" ]; } ;;
+    *) return 1 ;;
+    esac
+}
 lapins_at() {   # kind name location-of-a-value
     case "$1" in
     dconf) [ -s "$3" ] && value_is_lapins "$(cat "$3")" ;;
@@ -407,7 +435,7 @@ enter_session() {
 }
 
 leave_session() {
-    local kind name out changed=0
+    local kind name out kind_name changed=0
     if [ -f "$ACTIVE" ]; then
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
@@ -422,6 +450,20 @@ leave_session() {
         done < <(items)
         run rm -f "$ACTIVE"
         changed=1
+    else
+        # Not in Lapin's copy, yet Lapin's pointer is in place (#134): it was set
+        # while the copies were swapped back too early (#115). It's Lapin's:
+        # keep it for Lapin UX and give the other desktops theirs back.
+        for kind_name in "dconf cursor-theme" "pointer default"; do
+            read -r kind name <<< "$kind_name"
+            out=$(store_path "$OUTSIDE" "$kind" "$name")
+            if stray_lapin_pointer "$kind" "$out"; then
+                say "  $(describe "$kind" "$name"): Lapin UX's pointer was left here; back to the other desktops' own"
+                item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
+                item_apply "$kind" "$name" "$out"
+                changed=1
+            fi
+        done
     fi
     # Lapin UX's font rule only lives in its own session's environment; make
     # sure the systemd user session doesn't hand it to other desktops' apps.

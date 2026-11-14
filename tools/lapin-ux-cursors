@@ -177,10 +177,41 @@ def lapin_copy_dir():
     return os.path.join(state, "lapin-desktop")
 
 
+def tracked_pointer():
+    """The pointer remember_pointer noted, or None."""
+    path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                        "lapin-ux", "lapin-pointer")
+    try:
+        with open(path) as f:
+            return f.readline().rstrip("\r\n") or None
+    except OSError:
+        return None
+
+
+def remember_pointer(theme_dir):
+    """Note which pointer is Lapin UX's own (#134), so lapin-ux-desktop-settings
+    can tell it apart from other desktops' when it finds it in the shared
+    settings, also for a pointer you added in Settings (not only Lapin's)."""
+    path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                        "lapin-ux", "lapin-pointer")
+    try:
+        if theme_dir:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w") as f:
+                f.write(theme_dir + "\n")
+            os.replace(path + ".tmp", path)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
 def set_pointer(theme_dir):
     """Make theme_dir (or None: the system's) the pointer, in the live
     settings or in Lapin UX's own copy."""
     data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    previous = tracked_pointer()
+    remember_pointer(theme_dir)
     store = lapin_copy_dir()
     if store is not None:
         os.makedirs(os.path.join(store, "dconf"), exist_ok=True)
@@ -210,16 +241,19 @@ def set_pointer(theme_dir):
         print("It's now your mouse pointer. GTK apps and apps you start from now on use it at once; "
               "the rest pick it up when you sign out and back in.")
         return
+    # Lapin's own pointer, or the one Lapin UX was using (also one you added, #134).
+    mine = {THEME_DIR} | ({previous} if previous else set())
     try:
         with open(index) as f:
-            ours = f"Inherits={THEME_DIR}" in f.read()
+            inherited = next((l.split("=", 1)[1].split(",")[0].strip() for l in f if l.startswith("Inherits=")), "")
+        ours = inherited in mine
     except OSError:
         ours = False
     if ours:
         os.remove(index)
     current = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"],
                              capture_output=True, text=True, check=False).stdout.strip().strip("'")
-    if current == THEME_DIR:
+    if current in mine:
         subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
                        stderr=subprocess.DEVNULL, check=False)
     restore_env()

@@ -477,6 +477,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   pointer from the new theme. GTK apps follow the gsettings key live; Qt and
   other apps that are already open still read the theme when they start, and
   Xwayland's pointer too.
+  The pointer picked for Lapin UX, also one you added, is noted in
+  `~/.local/state/lapin-ux/lapin-pointer` (#134), so `lapin-ux-desktop-settings`
+  knows it's Lapin's and not the other desktops'. If it's found in the shared
+  settings while Lapin's copy isn't in place (it was picked after the copies
+  were handed back too early, #115), `leave` keeps it for Lapin UX and puts the
+  other desktops' pointer back.
 
 **Explorer** (`lapin-explorer`, #71): COSMIC Files at the pinned commit with the
 patches in `packaging/lapin-ux-files/` (after the dialog patch), installed in
