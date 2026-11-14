@@ -415,6 +415,14 @@ check "an empty saved pointer file isn't applied" "grep -qx Inherits=Breeze \"$P
 dconf write /org/gnome/desktop/interface/cursor-theme "'Breeze'"; rm -f "$P"
 bash "$DS" enter; pick Breeze; bash "$DS" leave; bash "$DS" enter; bash "$DS" leave
 check "both use Breeze: the other desktop keeps Breeze" "[ \"\$(rd cursor-theme)\" = \"'Breeze'\" ]"
+# the other desktop had no pointer set: a left-behind one is cleared again
+dconf reset /org/gnome/desktop/interface/cursor-theme; rm -f "$P"
+bash "$DS" enter; bash "$DS" leave; pick "My Cursor"; bash "$DS" leave
+check "other desktop with no pointer set: unset again" "[ -z \"\$(rd cursor-theme)\" ] && [ ! -e \"$P\" ]"
+# an install from before the note: Lapin's bundled pointer left behind
+dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"
+bash "$DS" enter; bash "$DS" leave; pick Cursor-Concept-W11-Tail-HDPi-by-JepriCreations; rm -f "$L"; bash "$DS" leave
+check "no note: Lapin's bundled pointer still goes back" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e \"$P\" ]"
 # Back to the system's pointer inside Lapin UX resets the added one too
 pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1

@@ -281,17 +281,22 @@ inherited_pointer() { grep -m1 '^Inherits=' "$1" 2>/dev/null | cut -d= -f2- | cu
 # is a different one? Only the live value is judged by its name: a saved copy
 # is never taken for Lapin's because it names the same theme (#134).
 stray_lapin_pointer() {   # kind out-copy
-    local p live
+    local p live mine
+    # The noted pointer, and Lapin's bundled one (installs from before the note).
     p=$(lapin_pointer)
-    [ -n "$p" ] || return 1
     case "$1" in
     dconf)
         dconf_ok || return 1
         live=$(dconf read "$(gkey_path cursor-theme)" 2>/dev/null)
-        [ "$live" = "'$p'" ] && [ -s "$2" ] && [ "$(cat "$2")" != "$live" ] ;;
+        { [ -n "$p" ] && [ "$live" = "'$p'" ]; } || [ "$live" = "'$CURSOR'" ] || return 1
+        # The saved copy: a value that differs, or "unset" (an empty copy or
+        # an .absent marker; item_apply resets the key for both).
+        if [ -s "$2" ]; then [ "$(cat "$2")" != "$live" ]; else [ -e "$2" ] || [ -e "$2.absent" ]; fi ;;
     pointer)
-        [ "$(inherited_pointer "$(item_path pointer default)")" = "$p" ] || return 1
-        [ -e "$2.absent" ] || { has_value "$2" && [ "$(inherited_pointer "$2")" != "$p" ]; } ;;
+        mine=$(inherited_pointer "$(item_path pointer default)")
+        [ -n "$mine" ] || return 1
+        { [ -n "$p" ] && [ "$mine" = "$p" ]; } || [ "$mine" = "$CURSOR" ] || return 1
+        [ -e "$2.absent" ] || { has_value "$2" && [ "$(inherited_pointer "$2")" != "$mine" ]; } ;;
     *) return 1 ;;
     esac
 }
