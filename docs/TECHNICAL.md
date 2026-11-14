@@ -502,7 +502,9 @@ File operations (#101): copying, moving, deleting and the like open a small
 window titled with the overall percentage ("12% complete"), one section per
 operation: what it does, a progress bar, Pause/Resume and Cancel. More details
 adds a speed graph (one bar per half second, the last 30 s), the speed, the
-item in hand, the time left and the items left; Fewer details hides them. The
+item in hand, the time left and the items left; Fewer details hides them.
+Operations that don't copy data (moving to the Recycle Bin, deleting) have no
+speed line and an empty graph. The
 numbers come from the operation's controller (bytes, items and the current
 name are counted in the copy's progress callback), sampled twice a second.
 The window closes when everything is done. Closing it by hand keeps the
