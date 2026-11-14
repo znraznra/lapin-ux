@@ -1,0 +1,54 @@
+From 9e336ef3725f2488417688b35d5adc971f02f3a0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 09:37:58 +0800
+Subject: [PATCH] Lapin UX: Explorer always shows its tab bar, with a + for a
+ new tab
+
+---
+ src/app.rs | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index d6837fa..a495c3f 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -6745,9 +6745,8 @@ impl Application for App {
+             );
+         }
+ 
+-        if self.tab_model.len() > 1 {
+-            tab_column = tab_column.push(
+-                widget::container(
++        if self.tab_model.len() > 1 || crate::config::lapin_session() {
++            let tabs_el: Element<'_, Message> = widget::container(
+                     widget::tab_bar::horizontal(&self.tab_model)
+                         .button_height(32)
+                         .button_spacing(space_xxs)
+@@ -6764,8 +6763,22 @@ impl Application for App {
+                         .drag_id(self.tab_drag_id),
+                 )
+                 .width(Length::Fill)
+-                .padding([0, space_s]),
+-            );
++                .padding([0, space_s])
++                .into();
++            tab_column = tab_column.push(if crate::config::lapin_session() {
++                // The usual "+" to open another tab.
++                widget::row::with_children(vec![
++                    tabs_el,
++                    widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
++                        .on_press(Message::TabNew)
++                        .into(),
++                ])
++                .align_y(Alignment::Center)
++                .padding([0, space_s])
++                .into()
++            } else {
++                tabs_el
++            });
+         }
+ 
+         let entity = self.tab_model.active();
+-- 
+2.43.0
+
