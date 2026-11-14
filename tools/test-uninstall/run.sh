@@ -376,8 +376,34 @@ bash $DS enter
 check "Lapin UX: the one picked there" "grep -q 'Cascadia Mono' $M && [ \"\$(dconf read $GM)\" = \"'Cascadia Mono 10'\" ]"
 bash $DS leave
 }
+scenS() {
+echo "S: a pointer you added, picked in Lapin UX, stays out of other desktops (#134)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+P=$HOME/.local/share/icons/default/index.theme
+dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"
+bash $U --snapshot; bash $DS enter
+# what lapin-ux-cursors --theme does inside Lapin UX
+pick() { mkdir -p $HOME/.local/state/lapin-ux $(dirname $P); echo "$1" > $HOME/.local/state/lapin-ux/lapin-pointer
+  dconf write /org/gnome/desktop/interface/cursor-theme "'$1'"; printf '[Icon Theme]\nName=Default\nInherits=%s\n' "$1" > $P; }
+pick Bibata-Modern-Amber
+bash $DS leave
+check "other desktop: its own pointer after a clean sign-out" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e $P ]"
+bash $DS enter
+check "Lapin UX: the added pointer" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Amber'\" ] && grep -q Inherits=Bibata-Modern-Amber $P"
+# the copies were handed back too early (#115), then a pointer was picked
+bash $DS leave
+pick Bibata-Modern-Classic
+bash $DS leave
+check "other desktop: a pointer left behind goes back to its own" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e $P ]"
+bash $DS enter
+check "Lapin UX keeps the one picked" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Classic'\" ] && grep -q Inherits=Bibata-Modern-Classic $P"
+bash $DS leave
+dconf write /org/gnome/desktop/interface/cursor-theme "'Breeze_Snow'"
+bash $DS leave
+check "a different pointer picked in the other desktop is left alone" "[ \"\$(rd cursor-theme)\" = \"'Breeze_Snow'\" ]"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R; do
+for x in A B C D E F G H I J K L M N O P Q R S; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

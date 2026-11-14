@@ -272,18 +272,29 @@ theme_is_lapins() {   # theme folder (a *.Builder one, or its sibling is used)
     done
     return 1
 }
+# The pointer Lapin UX uses, also one you added in Settings (#134): written by
+# lapin-ux-cursors. Read fresh each time; empty when there's none.
+lapin_pointer() { head -n1 "$STATE/lapin-pointer" 2>/dev/null | tr -d "'\"[:space:]"; }
+pointer_is_lapins() {   # a dconf value or index.theme contents
+    local p
+    p=$(lapin_pointer)
+    [ -n "$p" ] || return 1
+    [[ $1 == *"'$p'"* || $1 == *"Inherits=$p"* ]]
+}
 lapins_at() {   # kind name location-of-a-value
     case "$1" in
-    dconf) [ -s "$3" ] && value_is_lapins "$(cat "$3")" ;;
+    dconf) [ -s "$3" ] && { value_is_lapins "$(cat "$3")" || { [ "$2" = cursor-theme ] && pointer_is_lapins "$(cat "$3")"; }; } ;;
     cosmic) key_is_lapins "${2%/*}" "${2#*/}" "$3" ;;
     cosmicdir) [ -d "$3" ] && theme_is_lapins "$3" ;;
-    pointer) grep -q "Inherits=$CURSOR" "$3" 2>/dev/null ;;
+    pointer) grep -q "Inherits=$CURSOR" "$3" 2>/dev/null || { [ -f "$3" ] && pointer_is_lapins "$(cat "$3")"; } ;;
     esac
 }
 looks_lapins_now() {   # kind name
     if [ "$1" = dconf ]; then
         dconf_ok || return 1
-        value_is_lapins "$(dconf read "$(gkey_path "$2")" 2>/dev/null)"
+        local v
+        v=$(dconf read "$(gkey_path "$2")" 2>/dev/null)
+        value_is_lapins "$v" || { [ "$2" = cursor-theme ] && pointer_is_lapins "$v"; }
     else
         lapins_at "$1" "$2" "$(item_path "$1" "$2")"
     fi
@@ -407,7 +418,7 @@ enter_session() {
 }
 
 leave_session() {
-    local kind name out changed=0
+    local kind name out kind_name changed=0
     if [ -f "$ACTIVE" ]; then
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
@@ -422,6 +433,20 @@ leave_session() {
         done < <(items)
         run rm -f "$ACTIVE"
         changed=1
+    else
+        # Not in Lapin's copy, yet Lapin's pointer is in place (#134): it was set
+        # while the copies were swapped back too early (#115). It's Lapin's:
+        # keep it for Lapin UX and give the other desktops theirs back.
+        for kind_name in "dconf cursor-theme" "pointer default"; do
+            read -r kind name <<< "$kind_name"
+            out=$(store_path "$OUTSIDE" "$kind" "$name")
+            if looks_lapins_now "$kind" "$name" && saved "$out" && ! lapins_at "$kind" "$name" "$out"; then
+                say "  $(describe "$kind" "$name"): Lapin UX's pointer was left here; back to the other desktops' own"
+                item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
+                item_apply "$kind" "$name" "$out"
+                changed=1
+            fi
+        done
     fi
     # Lapin UX's font rule only lives in its own session's environment; make
     # sure the systemd user session doesn't hand it to other desktops' apps.

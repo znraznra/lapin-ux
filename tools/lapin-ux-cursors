@@ -177,10 +177,29 @@ def lapin_copy_dir():
     return os.path.join(state, "lapin-desktop")
 
 
+def remember_pointer(theme_dir):
+    """Note which pointer is Lapin UX's own (#134), so lapin-ux-desktop-settings
+    can tell it apart from other desktops' when it finds it in the shared
+    settings, also for a pointer you added in Settings (not only Lapin's)."""
+    path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                        "lapin-ux", "lapin-pointer")
+    try:
+        if theme_dir:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w") as f:
+                f.write(theme_dir + "\n")
+            os.replace(path + ".tmp", path)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
 def set_pointer(theme_dir):
     """Make theme_dir (or None: the system's) the pointer, in the live
     settings or in Lapin UX's own copy."""
     data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    remember_pointer(theme_dir)
     store = lapin_copy_dir()
     if store is not None:
         os.makedirs(os.path.join(store, "dconf"), exist_ok=True)
