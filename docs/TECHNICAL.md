@@ -492,7 +492,7 @@ into one button when it is too narrow. The uninstaller lists it in `LAPIN_PKGS` 
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - The dialog's sidebar follows the Explorer's (#76): Home, Gallery (the Pictures
-  folder), Recents, the pinned folders, then a *This PC* heading with the drives
+  folder, left out when the user has none), Recents, the pinned folders, then a *This PC* heading with the drives
   indented under it. Home and Gallery are plain folders here (the dialog has no
   Home page).
 - Every app's Open/Save dialog ends with *File name* with the file
