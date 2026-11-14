@@ -498,6 +498,16 @@ With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
 The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
 The tab bar is always shown, with a + that opens a new tab.
+File operations (#101): copying, moving, deleting and the like open a small
+window titled with the overall percentage ("12% complete"), one section per
+operation: what it does, a progress bar, Pause/Resume and Cancel. More details
+adds a speed graph (one bar per half second, the last 30 s), the speed, the
+item in hand, the time left and the items left; Fewer details hides them. The
+numbers come from the operation's controller (bytes, items and the current
+name are counted in the copy's progress callback), sampled twice a second.
+The window closes when everything is done. Closing it by hand keeps the
+operations going and shows COSMIC's own progress strip in the Explorer window
+until they finish. Name conflicts still use COSMIC's Replace dialog.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
