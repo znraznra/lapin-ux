@@ -378,29 +378,43 @@ bash $DS leave
 }
 scenS() {
 echo "S: a pointer you added, picked in Lapin UX, stays out of other desktops (#134)"
-DS=$(dirname $U)/lapin-ux-desktop-settings
-P=$HOME/.local/share/icons/default/index.theme
+DS="$(dirname "$U")/lapin-ux-desktop-settings"
+CUR="$(dirname "$U")/lapin-ux-cursors"
+P="$HOME/.local/share/icons/default/index.theme"
+L="$HOME/.local/state/lapin-ux/lapin-pointer"
 dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"
-bash $U --snapshot; bash $DS enter
+bash "$U" --snapshot; bash "$DS" enter
 # what lapin-ux-cursors --theme does inside Lapin UX
-pick() { mkdir -p $HOME/.local/state/lapin-ux $(dirname $P); echo "$1" > $HOME/.local/state/lapin-ux/lapin-pointer
-  dconf write /org/gnome/desktop/interface/cursor-theme "'$1'"; printf '[Icon Theme]\nName=Default\nInherits=%s\n' "$1" > $P; }
+pick() { mkdir -p "$(dirname "$L")" "$(dirname "$P")"; echo "$1" > "$L"
+  dconf write /org/gnome/desktop/interface/cursor-theme "'$1'"; printf '[Icon Theme]\nName=Default\nInherits=%s\n' "$1" > "$P"; }
 pick Bibata-Modern-Amber
-bash $DS leave
-check "other desktop: its own pointer after a clean sign-out" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e $P ]"
-bash $DS enter
-check "Lapin UX: the added pointer" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Amber'\" ] && grep -q Inherits=Bibata-Modern-Amber $P"
+bash "$DS" leave
+check "other desktop: its own pointer after a clean sign-out" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e \"$P\" ]"
+bash "$DS" enter
+check "Lapin UX: the added pointer" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Amber'\" ] && grep -q Inherits=Bibata-Modern-Amber \"$P\""
 # the copies were handed back too early (#115), then a pointer was picked
-bash $DS leave
-pick Bibata-Modern-Classic
-bash $DS leave
-check "other desktop: a pointer left behind goes back to its own" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e $P ]"
-bash $DS enter
-check "Lapin UX keeps the one picked" "[ \"\$(rd cursor-theme)\" = \"'Bibata-Modern-Classic'\" ] && grep -q Inherits=Bibata-Modern-Classic $P"
-bash $DS leave
+bash "$DS" leave
+pick "My Cursor"
+bash "$DS" leave
+check "other desktop: a pointer left behind (name with a space) goes back to its own" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e \"$P\" ]"
+bash "$DS" enter
+check "Lapin UX keeps the one picked" "[ \"\$(rd cursor-theme)\" = \"'My Cursor'\" ] && grep -q 'Inherits=My Cursor' \"$P\""
+bash "$DS" leave
 dconf write /org/gnome/desktop/interface/cursor-theme "'Breeze_Snow'"
-bash $DS leave
+bash "$DS" leave
 check "a different pointer picked in the other desktop is left alone" "[ \"\$(rd cursor-theme)\" = \"'Breeze_Snow'\" ]"
+# another desktop's pointer whose name starts with Lapin's isn't taken for Lapin's
+O="$HOME/.local/state/lapin-ux/other-desktops"
+printf '[Icon Theme]\nName=Default\nInherits=Breeze_Snow\n' > "$P"; bash "$DS" enter; bash "$DS" leave
+pick Breeze; bash "$DS" leave
+check "a saved Breeze_Snow isn't mistaken for Lapin's Breeze" "grep -qx Inherits=Breeze_Snow \"$P\""
+# an empty saved copy is never put in place
+pick Breeze; : > "$O/pointer/default"; rm -f "$O/pointer/default.absent"; bash "$DS" leave
+check "an empty saved pointer file isn't applied" "grep -qx Inherits=Breeze \"$P\""
+# Back to the system's pointer inside Lapin UX resets the added one too
+pick "My Cursor"
+XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1
+check "--system resets an added pointer and forgets it" "[ \"\$(rd cursor-theme)\" != \"'My Cursor'\" ] && [ ! -e \"$P\" ] && [ ! -e \"$L\" ]"
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S; do
