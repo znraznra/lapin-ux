@@ -556,6 +556,12 @@ drives and the sidebar's own right-click entries are still open on #72. The unin
   `$XDG_RUNTIME_DIR/lapin-ux-autostart-masked` and unmasked when it ends
   (after a crash, by `lapin-ux-desktop-settings leave`). Your own
   ~/.config/autostart entries are never touched.
+- Session start order (#82): after the compositor is ready the session exports
+  the environment, then starts the components (shell, wallpaper…) at once. The
+  masking above (it makes systemd reload, which can take seconds) and the start
+  of `lapin-ux-session.target` run beside them, in that order, and each logs the
+  milliseconds since the export ("other desktops' autostart masked", "session
+  target started") in `session.log`.
 - The power button: Lapin UX's shortcuts bind `XF86PowerOff` to
   `lapin-ux-shell power-button` (Sleep with a battery, Shut down without),
   and the shell holds a logind `handle-power-key` inhibitor while it runs.
