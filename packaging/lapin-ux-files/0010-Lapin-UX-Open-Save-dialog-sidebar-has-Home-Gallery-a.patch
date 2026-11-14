@@ -1,0 +1,107 @@
+From 3a50ebbf7f414c699591acf96635b5b78b7a94da Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 09:33:14 +0800
+Subject: [PATCH] Lapin UX: Open/Save dialog sidebar has Home, Gallery and the
+ drives under This PC
+
+---
+ src/dialog.rs | 51 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 48 insertions(+), 3 deletions(-)
+
+diff --git a/src/dialog.rs b/src/dialog.rs
+index 9df183a..644d20f 100644
+--- a/src/dialog.rs
++++ b/src/dialog.rs
+@@ -1042,12 +1042,35 @@ impl App {
+ 
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
++        let lapin = crate::config::lapin_session();
++
++        // Lapin UX: the same top as the Explorer sidebar, Home and Gallery
++        // (the Pictures folder), then Recents, the pinned folders and, under
++        // "This PC", the drives (#76).
++        if lapin {
++            if let Some(home) = dirs::home_dir() {
++                nav_model = nav_model.insert(move |b| {
++                    b.text(fl!("home"))
++                        .icon(widget::icon::from_name("user-home-symbolic").size(16))
++                        .data(Location::Path(home.clone()))
++                });
++            }
++            if let Some(pictures) = dirs::picture_dir() {
++                nav_model = nav_model.insert(move |b| {
++                    b.text(fl!("gallery"))
++                        .icon(widget::icon::from_name("folder-pictures-symbolic").size(16))
++                        .data(Location::Path(pictures.clone()))
++                });
++            }
++        }
+ 
+         if self.flags.config.show_recents {
+             nav_model = nav_model.insert(|b| {
+-                b.text(fl!("recents"))
++                let b = b
++                    .text(fl!("recents"))
+                     .icon(widget::icon::from_name("document-open-recent-symbolic"))
+-                    .data(Location::Recents)
++                    .data(Location::Recents);
++                if lapin { b.divider_above() } else { b }
+             });
+         }
+ 
+@@ -1056,6 +1079,10 @@ impl App {
+                 let Some(name) = favorite.display_name() else {
+                     continue;
+                 };
++                // Home is already at the top.
++                if lapin && dirs::home_dir().as_deref() == Some(path.as_path()) {
++                    continue;
++                }
+                 nav_model = nav_model.insert(move |b| {
+                     b.text(name.clone())
+                         .icon(
+@@ -1080,6 +1107,14 @@ impl App {
+         }
+         // Sort by name lexically
+         nav_items.sort_unstable_by(|a, b| LANGUAGE_SORTER.compare(&a.1.name(), &b.1.name()));
++        if lapin && !nav_items.is_empty() {
++            // A heading with no location: the drives follow it, indented.
++            nav_model = nav_model.insert(|b| {
++                b.text(fl!("this-pc"))
++                    .icon(widget::icon::from_name("computer-symbolic").size(16))
++                    .divider_above()
++            });
++        }
+         // Add items to nav model
+         for (i, (key, item)) in nav_items.into_iter().enumerate() {
+             nav_model = nav_model.insert(|mut b| {
+@@ -1093,7 +1128,7 @@ impl App {
+                 if item.is_mounted() {
+                     b = b.closable();
+                 }
+-                if i == 0 {
++                if i == 0 && !lapin {
+                     b = b.divider_above();
+                 }
+                 b
+@@ -1101,6 +1136,16 @@ impl App {
+         }
+ 
+         self.nav_model = nav_model.build();
++        if lapin {
++            let drives: Vec<_> = self
++                .nav_model
++                .iter()
++                .filter(|&id| self.nav_model.data::<MounterData>(id).is_some())
++                .collect();
++            for id in drives {
++                self.nav_model.indent_set(id, 1);
++            }
++        }
+ 
+         self.activate_nav_model_location(&self.tab.location.clone());
+     }
+-- 
+2.43.0
+
