@@ -1,0 +1,54 @@
+From db9f394941743ca65f42b8e6bbf5e59eb4d4573e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 09:33:14 +0800
+Subject: [PATCH] Lapin UX: command bar scrolls sideways while the details pane
+ is docked
+
+---
+ src/menu.rs | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/src/menu.rs b/src/menu.rs
+index 40c1ae4..245ae7d 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -853,8 +853,10 @@ pub fn command_bar<'a>(
+         widget::button::icon(widget::icon::from_name(icon).size(16)).on_press(MenuAction::message(&a))
+     };
+     let home = Some(Message::LapinHome(true));
+-    widget::container(
+-        widget::row::with_capacity(16)
++    // With the details pane docked this column is narrow: no spacer, and the row
++    // scrolls sideways instead of clipping.
++    let narrow = config.show_details;
++    let row = widget::row::with_capacity(20)
+             .spacing(spacing.space_xxs)
+             .align_y(Alignment::Center)
+             .push(nav("go-previous-symbolic", Action::HistoryPrevious))
+@@ -872,15 +874,20 @@ pub fn command_bar<'a>(
+             .push(tool("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
+             .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
+             .push(menu_bar(core, tab_opt, config, modifiers, key_binds, clipboard_paste_available))
+-            .push(widget::space::horizontal())
++            .push_maybe((!narrow).then(widget::space::horizontal))
+             .push(tool("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
+             .push(tool("dialog-information-symbolic", fl!("details"), act(Action::Preview, has_tab)))
+             .push(tool(
+                 if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+                 if grid { fl!("list-view") } else { fl!("grid-view") },
+                 act(if grid { Action::TabViewList } else { Action::TabViewGrid }, has_tab),
+-            )),
+-    )
++            ));
++    let content: Element<'a, Message> = if narrow {
++        widget::scrollable::horizontal(widget::container(row).padding([0, 0, 10, 0])).into()
++    } else {
++        row.into()
++    };
++    widget::container(content)
+     .padding([spacing.space_xxs, spacing.space_s])
+     .width(Length::Fill)
+     .into()
+-- 
+2.43.0
+
