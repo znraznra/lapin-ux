@@ -498,6 +498,11 @@ With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
 The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
 The tab bar is always shown, with a + that opens a new tab.
+The Home page (#73) has Quick access (pinned folders with a pin to unpin
+them, then up to 8 folders of your recent files), Favorites (pinned files) and
+Recent (the 12 latest files). Right-click > Pin to Home pins a file or folder
+(the same list as COSMIC's "Add to sidebar"); pinned files show on Home only,
+pinned folders also in the sidebar.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
