@@ -492,7 +492,8 @@ drives and the sidebar's own right-click entries are still open on #72. The
 menus (Sort, View and More, which holds the File and Edit entries the buttons
 don't cover) sit in the command bar instead of the title bar, and the buttons
 are icon-only with a tooltip so the row fits a narrow window; the menus fold
-into one button when it is too narrow. The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
+into one button when it is too narrow. The address bar under it
+has no Back/Forward pair of its own any more (the command bar has them). The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - Every app's Open/Save dialog ends with *File name* with the file
