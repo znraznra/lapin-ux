@@ -1,0 +1,172 @@
+From d0cb87c44d377438931250dcb1d637da5411a759 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 01:16:52 +0800
+Subject: [PATCH] Lapin UX: Explorer menus (Sort, View, More) live in the
+ command bar, whose buttons are icon-only
+
+---
+ i18n/en/cosmic_files.ftl |  1 +
+ src/app.rs               |  8 ++++
+ src/menu.rs              | 81 ++++++++++++++++++++++++++++------------
+ 3 files changed, 67 insertions(+), 23 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 2af7604..95c2d96 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -400,3 +400,4 @@ gallery = Gallery
+ this-pc = This PC
+ devices-and-drives = Devices and drives
+ free-of = { $free } free of { $total }
++more = More
+diff --git a/src/app.rs b/src/app.rs
+index 2a2e858..d6837fa 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -6673,6 +6673,10 @@ impl Application for App {
+     }
+ 
+     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
++        if crate::config::lapin_session() {
++            // The menus (Sort, View, …) are in the command bar.
++            return Vec::new();
++        }
+         vec![menu::menu_bar(
+             &self.core,
+             self.tab_model.active_data::<Tab>(),
+@@ -6767,6 +6771,10 @@ impl Application for App {
+         let entity = self.tab_model.active();
+         if crate::config::lapin_session() {
+             tab_column = tab_column.push(menu::command_bar(
++                &self.core,
++                &self.config,
++                &self.modifiers,
++                &self.key_binds,
+                 self.tab_model.data::<Tab>(entity),
+                 self.clipboard_has_content(),
+             ));
+diff --git a/src/menu.rs b/src/menu.rs
+index 1492e9c..40c1ae4 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -596,16 +596,7 @@ pub fn menu_bar<'a>(
+         (fl!("move-to-trash"), Action::Delete)
+     };
+ 
+-    responsive_menu_bar()
+-        .item_height(ItemHeight::Dynamic(40))
+-        .item_width(ItemWidth::Uniform(360))
+-        .spacing(theme::spacing().space_xxxs.into())
+-        .into_element(
+-            core,
+-            key_binds,
+-            MENU_ID.clone(),
+-            Message::Surface,
+-            vec![
++    let mut menus = vec![
+                 (
+                     fl!("file"),
+                     vec![
+@@ -745,8 +736,37 @@ pub fn menu_bar<'a>(
+                         //TODO: sort by type
+                     ],
+                 ),
+-            ],
+-        )
++    ];
++    if crate::config::lapin_session() {
++        // Sort and View stay as menus; the rest of File and Edit goes under "…"
++        // (the common ones are buttons in the command bar).
++        let mut file = None;
++        let mut edit = None;
++        let mut sort = None;
++        let mut view = None;
++        for (label, items) in menus.drain(..) {
++            if label == fl!("file") {
++                file = Some(items);
++            } else if label == fl!("edit") {
++                edit = Some(items);
++            } else if label == fl!("sort") {
++                sort = Some((label, items));
++            } else {
++                view = Some((label, items));
++            }
++        }
++        let mut more = file.unwrap_or_default();
++        more.push(menu::Item::Divider);
++        more.extend(edit.unwrap_or_default());
++        menus.extend(sort);
++        menus.extend(view);
++        menus.push((fl!("more"), more));
++    }
++    responsive_menu_bar()
++        .item_height(ItemHeight::Dynamic(40))
++        .item_width(ItemWidth::Uniform(360))
++        .spacing(theme::spacing().space_xxxs.into())
++        .into_element(core, key_binds, MENU_ID.clone(), Message::Surface, menus)
+ }
+ 
+ pub fn location_context_menu(ancestor_index: usize) -> Vec<menu::Tree<tab::Message>> {
+@@ -785,6 +805,10 @@ pub fn location_context_menu(ancestor_index: usize) -> Vec<menu::Tree<tab::Messa
+ /// Paste, Rename, Delete, then Gallery, Details and the view toggle.
+ /// COSMIC's own session never calls this.
+ pub fn command_bar<'a>(
++    core: &Core,
++    config: &Config,
++    modifiers: &Modifiers,
++    key_binds: &HashMap<KeyBind, Action>,
+     tab_opt: Option<&Tab>,
+     clipboard_paste_available: bool,
+ ) -> Element<'a, Message> {
+@@ -814,6 +838,15 @@ pub fn command_bar<'a>(
+             None => b,
+         }
+     };
++    // Icon-only with a tooltip, for the edit actions, so the row fits narrow windows.
++    let tool = |icon: &'static str, label: String, msg: Option<Message>| {
++        let b = widget::button::icon(widget::icon::from_name(icon).size(16));
++        let b = match msg {
++            Some(m) => b.on_press(m),
++            None => b,
++        };
++        widget::tooltip(b, widget::text::body(label), widget::tooltip::Position::Bottom)
++    };
+     let act = |a: Action, enabled: bool| enabled.then(|| MenuAction::message(&a));
+     // Icon-only buttons for navigation, so the row stays short.
+     let nav = |icon: &'static str, a: Action| {
+@@ -828,19 +861,21 @@ pub fn command_bar<'a>(
+             .push(nav("go-next-symbolic", Action::HistoryNext))
+             .push(nav("go-up-symbolic", Action::LocationUp))
+             .push(nav("view-refresh-symbolic", Action::Reload))
+-            .push(button("user-home-symbolic", fl!("home"), home))
+-            .push(button("document-open-recent-symbolic", fl!("recents"), act(Action::Recents, true)))
++            .push(tool("user-home-symbolic", fl!("home"), home))
++            .push(tool("document-open-recent-symbolic", fl!("recents"), act(Action::Recents, true)))
++            .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
++            .push(tool("folder-new-symbolic", fl!("new-folder"), act(Action::NewFolder, can_edit && !in_trash)))
++            .push(tool("edit-cut-symbolic", fl!("cut"), act(Action::Cut, selected > 0 && !in_trash)))
++            .push(tool("edit-copy-symbolic", fl!("copy"), act(Action::Copy, selected > 0)))
++            .push(tool("edit-paste-symbolic", fl!("paste"), act(Action::Paste, can_paste)))
++            .push(tool("document-edit-symbolic", fl!("rename"), act(Action::Rename, selected == 1 && !in_trash)))
++            .push(tool("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
+             .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
+-            .push(button("folder-new-symbolic", fl!("new-folder"), act(Action::NewFolder, can_edit && !in_trash)))
+-            .push(button("edit-cut-symbolic", fl!("cut"), act(Action::Cut, selected > 0 && !in_trash)))
+-            .push(button("edit-copy-symbolic", fl!("copy"), act(Action::Copy, selected > 0)))
+-            .push(button("edit-paste-symbolic", fl!("paste"), act(Action::Paste, can_paste)))
+-            .push(button("document-edit-symbolic", fl!("rename"), act(Action::Rename, selected == 1 && !in_trash)))
+-            .push(button("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
++            .push(menu_bar(core, tab_opt, config, modifiers, key_binds, clipboard_paste_available))
+             .push(widget::space::horizontal())
+-            .push(button("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
+-            .push(button("dialog-information-symbolic", fl!("details"), act(Action::Preview, has_tab)))
+-            .push(button(
++            .push(tool("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
++            .push(tool("dialog-information-symbolic", fl!("details"), act(Action::Preview, has_tab)))
++            .push(tool(
+                 if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+                 if grid { fl!("list-view") } else { fl!("grid-view") },
+                 act(if grid { Action::TabViewList } else { Action::TabViewGrid }, has_tab),
+-- 
+2.43.0
+
