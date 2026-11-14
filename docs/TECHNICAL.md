@@ -488,7 +488,9 @@ view toggle). The sidebar starts with Home (the Home page, the only Home in
 the list) and Gallery (the Pictures folder), then Recents and the pinned
 folders, then This PC with the drives indented under it (its page shows each
 drive with how full it is), then Networks and Trash. Pin icons, collapsing the
-drives and the sidebar's own right-click entries are still open on #72. The
+drives and the sidebar's own right-click entries: right-click This PC > Hide
+drives folds them away and Show drives brings them back; a pinned folder's menu says Unpin from
+Home and Properties (#72). Pin icons in the sidebar are still open on #72. The
 menus (Sort, View and More, which holds the File and Edit entries the buttons
 don't cover) sit in the command bar instead of the title bar, and the buttons
 are icon-only with a tooltip so the row fits a narrow window; the menus fold

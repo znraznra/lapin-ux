@@ -1,0 +1,114 @@
+From ab57f34a11979fb73337d6b3cebdf7187ec92464 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 20:27:34 +0800
+Subject: [PATCH] Lapin UX: sidebar right-click: This PC hides or shows its
+ drives, Unpin and Properties
+
+---
+ i18n/en/cosmic_files.ftl |  2 ++
+ src/app.rs               | 30 ++++++++++++++++++++++++++++--
+ 2 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index e3df323..2682bc4 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -411,3 +411,5 @@ pin-to-home = Pin to Home
+ unpin-from-home = Unpin from Home
+ no-recent-files = Files you open show up here.
+ pin-files-hint = Right-click a file and choose Pin to Home to keep it here.
++show-drives = Show drives
++hide-drives = Hide drives
+diff --git a/src/app.rs b/src/app.rs
+index 4077053..623824b 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -320,6 +320,8 @@ pub enum NavMenuAction {
+     RunContextAction(segmented_button::Entity, usize),
+     RemoveFromSidebar(segmented_button::Entity),
+     ChangeSidebarLabel(segmented_button::Entity),
++    /// Lapin UX: show or hide the drives under This PC (#72).
++    LapinToggleDrives,
+ }
+ 
+ impl MenuAction for NavMenuAction {
+@@ -747,6 +749,8 @@ pub struct App {
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
+     lapin_pc: bool,
++    /// Lapin UX: the drives under This PC are hidden in the sidebar (#72).
++    lapin_drives_collapsed: bool,
+     nav_model: segmented_button::SingleSelectModel,
+     tab_model: segmented_button::Model<segmented_button::SingleSelect>,
+     config_handler: Option<cosmic_config::Config>,
+@@ -2080,6 +2084,9 @@ impl App {
+         }
+         // Sort by name lexically
+         nav_items.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.1.name(), &b.1.name()));
++        if lapin && self.lapin_drives_collapsed {
++            nav_items.clear();
++        }
+         // Add items to nav model
+         for (i, (key, item)) in nav_items.into_iter().enumerate() {
+             nav_model = nav_model.insert(|mut b| {
+@@ -2699,6 +2706,7 @@ impl Application for App {
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
+             lapin_pc: false,
++            lapin_drives_collapsed: false,
+             nav_model: segmented_button::ModelBuilder::default().build(),
+             tab_model: segmented_button::ModelBuilder::default().build(),
+             config_handler: flags.config_handler,
+@@ -2839,6 +2847,19 @@ impl Application for App {
+ 
+             let mut items: Vec<widget::menu::Item<NavMenuAction, String>> = Vec::with_capacity(7);
+ 
++            // Lapin UX's own entries (#72): This PC folds its drives; Home and
++            // Gallery have nothing to add.
++            if let Some(nav) = self.nav_model.data::<LapinNav>(entity) {
++                if matches!(nav, LapinNav::ThisPc) {
++                    items.push(cosmic::widget::menu::Item::Button(
++                        if self.lapin_drives_collapsed { fl!("show-drives") } else { fl!("hide-drives") },
++                        None,
++                        NavMenuAction::LapinToggleDrives,
++                    ));
++                }
++                return items;
++            }
++
+             if location_opt
+                 .and_then(Location::path_opt)
+                 .is_some_and(|x| x.is_file())
+@@ -2890,7 +2911,7 @@ impl Application for App {
+             items.push(cosmic::widget::menu::Item::Divider);
+             if matches!(location_opt, Some(Location::Path(..))) {
+                 items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("show-details"),
++                    if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") },
+                     None,
+                     NavMenuAction::Preview(entity),
+                 ));
+@@ -2903,7 +2924,7 @@ impl Application for App {
+                     NavMenuAction::ChangeSidebarLabel(entity),
+                 ));
+                 items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("remove-from-sidebar"),
++                    if crate::config::lapin_session() { fl!("unpin-from-home") } else { fl!("remove-from-sidebar") },
+                     None,
+                     NavMenuAction::RemoveFromSidebar(entity),
+                 ));
+@@ -5497,6 +5518,11 @@ impl Application for App {
+                     }
+                 }
+ 
++                NavMenuAction::LapinToggleDrives => {
++                    self.lapin_drives_collapsed = !self.lapin_drives_collapsed;
++                    self.update_nav_model();
++                }
++
+                 NavMenuAction::Preview(entity) => {
+                     if let Some(path) = self
+                         .nav_model
+-- 
+2.43.0
+
