@@ -411,6 +411,10 @@ check "a saved Breeze_Snow isn't mistaken for Lapin's Breeze" "grep -qx Inherits
 # an empty saved copy is never put in place
 pick Breeze; : > "$O/pointer/default"; rm -f "$O/pointer/default.absent"; bash "$DS" leave
 check "an empty saved pointer file isn't applied" "grep -qx Inherits=Breeze \"$P\""
+# the same pointer in both desktops: the other desktop's saved copy stays its own
+dconf write /org/gnome/desktop/interface/cursor-theme "'Breeze'"; rm -f "$P"
+bash "$DS" enter; pick Breeze; bash "$DS" leave; bash "$DS" enter; bash "$DS" leave
+check "both use Breeze: the other desktop keeps Breeze" "[ \"\$(rd cursor-theme)\" = \"'Breeze'\" ]"
 # Back to the system's pointer inside Lapin UX resets the added one too
 pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1

@@ -277,30 +277,36 @@ theme_is_lapins() {   # theme folder (a *.Builder one, or its sibling is used)
 lapin_pointer() { head -n1 "$STATE/lapin-pointer" 2>/dev/null | tr -d '\r\n'; }
 # The first theme an index.theme inherits from (the pointer it uses).
 inherited_pointer() { grep -m1 '^Inherits=' "$1" 2>/dev/null | cut -d= -f2- | cut -d, -f1; }
-pointer_is_lapins() {   # dconf VALUE | file PATH
-    local p
+# Is the pointer Lapin UX picked live, while the other desktops' saved copy
+# is a different one? Only the live value is judged by its name: a saved copy
+# is never taken for Lapin's because it names the same theme (#134).
+stray_lapin_pointer() {   # kind out-copy
+    local p live
     p=$(lapin_pointer)
     [ -n "$p" ] || return 1
     case "$1" in
-    dconf) [ "$2" = "'$p'" ] ;;
-    file) [ "$(inherited_pointer "$2")" = "$p" ] ;;
+    dconf)
+        dconf_ok || return 1
+        live=$(dconf read "$(gkey_path cursor-theme)" 2>/dev/null)
+        [ "$live" = "'$p'" ] && [ -s "$2" ] && [ "$(cat "$2")" != "$live" ] ;;
+    pointer)
+        [ "$(inherited_pointer "$(item_path pointer default)")" = "$p" ] || return 1
+        [ -e "$2.absent" ] || { has_value "$2" && [ "$(inherited_pointer "$2")" != "$p" ]; } ;;
     *) return 1 ;;
     esac
 }
 lapins_at() {   # kind name location-of-a-value
     case "$1" in
-    dconf) [ -s "$3" ] && { value_is_lapins "$(cat "$3")" || { [ "$2" = cursor-theme ] && pointer_is_lapins dconf "$(cat "$3")"; }; } ;;
+    dconf) [ -s "$3" ] && value_is_lapins "$(cat "$3")" ;;
     cosmic) key_is_lapins "${2%/*}" "${2#*/}" "$3" ;;
     cosmicdir) [ -d "$3" ] && theme_is_lapins "$3" ;;
-    pointer) grep -q "Inherits=$CURSOR" "$3" 2>/dev/null || pointer_is_lapins file "$3" ;;
+    pointer) grep -q "Inherits=$CURSOR" "$3" 2>/dev/null ;;
     esac
 }
 looks_lapins_now() {   # kind name
     if [ "$1" = dconf ]; then
         dconf_ok || return 1
-        local v
-        v=$(dconf read "$(gkey_path "$2")" 2>/dev/null)
-        value_is_lapins "$v" || { [ "$2" = cursor-theme ] && pointer_is_lapins dconf "$v"; }
+        value_is_lapins "$(dconf read "$(gkey_path "$2")" 2>/dev/null)"
     else
         lapins_at "$1" "$2" "$(item_path "$1" "$2")"
     fi
@@ -446,10 +452,7 @@ leave_session() {
         for kind_name in "dconf cursor-theme" "pointer default"; do
             read -r kind name <<< "$kind_name"
             out=$(store_path "$OUTSIDE" "$kind" "$name")
-            # A file copy must hold something (or be marked absent): an empty
-            # one is never put in place.
-            [ "$kind" = pointer ] && [ ! -e "$out.absent" ] && ! has_value "$out" && continue
-            if looks_lapins_now "$kind" "$name" && saved "$out" && ! lapins_at "$kind" "$name" "$out"; then
+            if stray_lapin_pointer "$kind" "$out"; then
                 say "  $(describe "$kind" "$name"): Lapin UX's pointer was left here; back to the other desktops' own"
                 item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
                 item_apply "$kind" "$name" "$out"
