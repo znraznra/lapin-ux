@@ -1,0 +1,722 @@
+From d4503a0ead66f0026debc808265877cb4c2616ef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 07:41:55 +0800
+Subject: [PATCH] Lapin UX: Explorer layout: tabs in the title bar, navigation
+ row with address bar and search, command bar, status bar
+
+---
+ i18n/en/cosmic_files.ftl |  13 ++
+ src/app.rs               | 312 +++++++++++++++++++++++++++++++--------
+ src/menu.rs              | 126 +++++++++++-----
+ src/tab.rs               |  57 ++++++-
+ 4 files changed, 411 insertions(+), 97 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index bf01012..c97edd2 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -422,3 +422,16 @@ time-left-seconds = Time remaining: about {$seconds} seconds
+ time-left-minutes = Time remaining: about {$minutes} min {$seconds} s
+ time-left-hours = Time remaining: about {$hours} h {$minutes} min
+ items-left = Items remaining: {$items}
++new = New
++back = Back
++forward = Forward
++up = Up
++search-place = Search {$name}
++status-items = {$items ->
++    [one] 1 item
++   *[other] {$items} items
++}
++status-selected = {$items ->
++    [one] 1 item selected
++   *[other] {$items} items selected
++}
+diff --git a/src/app.rs b/src/app.rs
+index 8824505..99a2c27 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -453,6 +453,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX: something the navigation pane asked for, when the view draws it.
++    LapinAction(Box<cosmic::Action<Message>>),
+     /// Lapin UX's progress window (#101): sample the speeds, open or close it.
+     LapinProgressTick,
+     LapinProgressDetails(bool),
+@@ -2257,6 +2259,174 @@ impl App {
+             .into()
+     }
+ 
++    /// Lapin UX: Back, Forward, Up and Refresh, the address bar, and the search box.
++    fn lapin_nav_row(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing {
++            space_xxs, space_xs, space_s, ..
++        } = theme::spacing();
++        let entity = self.tab_model.active();
++        let tab = self.tab_model.data::<Tab>(entity);
++        let page = self.lapin_home || self.lapin_pc;
++        let nav = |name: &'static str, label: String, action: Action, enabled: bool| {
++            let b = widget::button::icon(icon::from_name(name).size(16));
++            widget::tooltip(
++                if enabled { b.on_press(action.message(None)) } else { b },
++                widget::text::body(label),
++                widget::tooltip::Position::Bottom,
++            )
++        };
++        let back = page || tab.is_some_and(|t| t.history_i > 0 && !t.history.is_empty());
++        let forward = !page && tab.is_some_and(|t| t.history_i + 1 < t.history.len());
++        let up = !page && tab.is_some_and(|t| t.location.path_opt().is_some_and(|p| p.parent().is_some()));
++        let (address, place): (Element<'_, Message>, String) = if self.lapin_home || self.lapin_pc {
++            let name = if self.lapin_home { fl!("home") } else { fl!("this-pc") };
++            (
++                widget::row::with_capacity(3)
++                    .spacing(space_xxs)
++                    .align_y(Alignment::Center)
++                    .push(icon::from_name(if self.lapin_home { "user-home-symbolic" } else { "computer-symbolic" }).size(16))
++                    .push(icon::from_name("go-next-symbolic").size(16))
++                    .push(widget::text::body(name.clone()))
++                    .into(),
++                name,
++            )
++        } else if let Some(tab) = tab {
++            (
++                tab.location_view_part(tab::LocationPart::Address)
++                    .map(move |message| Message::TabMessage(Some(entity), message)),
++                tab.title(),
++            )
++        } else {
++            (widget::space::horizontal().into(), String::new())
++        };
++        widget::row::with_capacity(7)
++            .spacing(space_xxs)
++            .align_y(Alignment::Center)
++            .padding([space_xxs, space_s])
++            .push(nav("go-previous-symbolic", fl!("back"), Action::HistoryPrevious, back))
++            .push(nav("go-next-symbolic", fl!("forward"), Action::HistoryNext, forward))
++            .push(nav("go-up-symbolic", fl!("up"), Action::LocationUp, up))
++            .push(nav("view-refresh-symbolic", fl!("reload-folder"), Action::Reload, !page))
++            .push(
++                widget::container(address)
++                    .width(Length::Fill)
++                    .height(Length::Fixed(36.0))
++                    .align_y(Alignment::Center)
++                    .padding([0, space_xs])
++                    .class(theme::Container::Card),
++            )
++            .push(
++                widget::text_input::search_input(fl!("search-place", name = place), self.search_get().unwrap_or(""))
++                    .width(Length::Fixed(260.0))
++                    .id(self.search_id.clone())
++                    .on_clear(Message::SearchClear)
++                    .on_input(Message::SearchInput),
++            )
++            .into()
++    }
++
++    /// Lapin UX: how many items there are and how many are selected (with
++    /// their size) at the left, the two view buttons at the right.
++    fn lapin_status_bar(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing { space_xxs, space_s, .. } = theme::spacing();
++        let tab = self.tab_model.active_data::<Tab>();
++        let (mut items, mut selected, mut bytes, mut sized) = (0usize, 0usize, 0u64, true);
++        if let Some(list) = tab.and_then(|t| t.items_opt()) {
++            for item in list.iter() {
++                if item.hidden && !tab.is_some_and(|t| t.config.show_hidden) {
++                    continue;
++                }
++                items += 1;
++                if item.selected {
++                    selected += 1;
++                    match item.metadata.file_size() {
++                        Some(size) => bytes += size,
++                        None => sized = false,
++                    }
++                }
++            }
++        }
++        let page = self.lapin_home || self.lapin_pc;
++        let grid = tab.is_some_and(|t| t.config.view == tab::View::Grid);
++        let mut row = widget::row::with_capacity(8).spacing(space_s).align_y(Alignment::Center);
++        if !page {
++            row = row.push(widget::text::body(fl!("status-items", items = items)));
++            if selected > 0 {
++                row = row.push(widget::divider::vertical::default().height(Length::Fixed(14.0)));
++                row = row.push(widget::text::body(fl!("status-selected", items = selected)));
++                if sized && bytes > 0 {
++                    row = row.push(widget::text::body(tab::format_size_public(bytes)));
++                }
++            }
++        }
++        row = row.push(widget::space::horizontal());
++        if !page {
++            let view = |name: &'static str, label: String, action: Action, on: bool| {
++                widget::tooltip(
++                    widget::button::icon(icon::from_name(name).size(16))
++                        .selected(on)
++                        .on_press(action.message(None)),
++                    widget::text::body(label),
++                    widget::tooltip::Position::Top,
++                )
++            };
++            row = row
++                .push(view("view-list-symbolic", fl!("list-view"), Action::TabViewList, !grid))
++                .push(view("view-grid-symbolic", fl!("grid-view"), Action::TabViewGrid, grid));
++        }
++        widget::container(row)
++            .padding([space_xxs, space_s])
++            .width(Length::Fill)
++            .into()
++    }
++
++    /// The navigation pane: COSMIC's `nav_bar`, or the pane Lapin UX puts
++    /// beside the files itself.
++    fn nav_pane(&self) -> Option<Element<'_, cosmic::Action<Message>>> {
++        if !self.core.nav_bar_active() {
++            return None;
++        }
++
++        let nav_model = match self.mode {
++            Mode::App => &self.nav_model,
++            Mode::Desktop => return None,
++        };
++
++        let mut nav = cosmic::widget::nav_bar(nav_model, |entity| {
++            cosmic::Action::Cosmic(cosmic::app::Action::NavBar(entity))
++        })
++        .drag_id(self.nav_drag_id)
++        .on_dnd_enter(|entity, _| cosmic::Action::App(Message::DndEnterNav(entity)))
++        .on_dnd_leave(|_| cosmic::Action::App(Message::DndExitNav))
++        .on_dnd_drop(|entity, data, action| {
++            cosmic::Action::App(Message::DndDropNav(entity, data, action))
++        })
++        .on_context(|entity| cosmic::Action::App(Message::NavBarContext(entity)))
++        .on_close(|entity| cosmic::Action::App(Message::NavBarClose(entity)))
++        .on_middle_press(|entity| {
++            cosmic::Action::App(Message::NavMenuAction(NavMenuAction::OpenInNewTab(entity)))
++        })
++        .context_menu(self.nav_context_menu())
++        .close_icon(icon::from_name("media-eject-symbolic").size(16).icon());
++
++        #[cfg(feature = "wayland")]
++        {
++            nav = nav
++                .window_id_maybe(self.core().main_window_id())
++                .on_surface_action(|action| cosmic::Action::Surface(action.flatten()))
++        }
++
++        let mut nav = nav.into_container();
++
++        if !self.core.is_condensed() {
++            nav = nav.max_width(280);
++        }
++
++        Some(Element::from(
++            nav.width(Length::Shrink).height(Length::Fill),
++        ))
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -3079,45 +3249,12 @@ impl Application for App {
+     }
+ 
+     fn nav_bar(&self) -> Option<Element<'_, cosmic::Action<Self::Message>>> {
+-        if !self.core.nav_bar_active() {
++        // Lapin UX draws the navigation pane itself, under the full-width
++        // navigation row and command bar (see `view`).
++        if crate::config::lapin_session() && matches!(self.mode, Mode::App) {
+             return None;
+         }
+-
+-        let nav_model = self.nav_model()?;
+-
+-        let mut nav = cosmic::widget::nav_bar(nav_model, |entity| {
+-            cosmic::Action::Cosmic(cosmic::app::Action::NavBar(entity))
+-        })
+-        .drag_id(self.nav_drag_id)
+-        .on_dnd_enter(|entity, _| cosmic::Action::App(Message::DndEnterNav(entity)))
+-        .on_dnd_leave(|_| cosmic::Action::App(Message::DndExitNav))
+-        .on_dnd_drop(|entity, data, action| {
+-            cosmic::Action::App(Message::DndDropNav(entity, data, action))
+-        })
+-        .on_context(|entity| cosmic::Action::App(Message::NavBarContext(entity)))
+-        .on_close(|entity| cosmic::Action::App(Message::NavBarClose(entity)))
+-        .on_middle_press(|entity| {
+-            cosmic::Action::App(Message::NavMenuAction(NavMenuAction::OpenInNewTab(entity)))
+-        })
+-        .context_menu(self.nav_context_menu())
+-        .close_icon(icon::from_name("media-eject-symbolic").size(16).icon());
+-
+-        #[cfg(feature = "wayland")]
+-        {
+-            nav = nav
+-                .window_id_maybe(self.core().main_window_id())
+-                .on_surface_action(|action| cosmic::Action::Surface(action.flatten()))
+-        }
+-
+-        let mut nav = nav.into_container();
+-
+-        if !self.core.is_condensed() {
+-            nav = nav.max_width(280);
+-        }
+-
+-        Some(Element::from(
+-            nav.width(Length::Shrink).height(Length::Fill),
+-        ))
++        self.nav_pane()
+     }
+ 
+     fn nav_context_menu(&self) -> Option<Vec<widget::menu::Tree<cosmic::Action<Self::Message>>>> {
+@@ -3236,6 +3373,9 @@ impl Application for App {
+ 
+     fn nav_model(&self) -> Option<&segmented_button::SingleSelectModel> {
+         match self.mode {
++            // Lapin UX: see `nav_bar`; this also keeps libcosmic's pane toggle
++            // out of the title bar, where the tabs are.
++            Mode::App if crate::config::lapin_session() => None,
+             Mode::App => Some(&self.nav_model),
+             Mode::Desktop => None,
+         }
+@@ -3490,6 +3630,9 @@ impl Application for App {
+             Message::LapinProgressTick => {
+                 return self.lapin_progress_tick();
+             }
++            Message::LapinAction(action) => {
++                return Task::done(*action);
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -4966,6 +5109,10 @@ impl Application for App {
+                 return self.search_set_active(None);
+             }
+             Message::SearchInput(input) => {
++                // Lapin UX's search box is always there: emptying it ends the search.
++                if crate::config::lapin_session() && input.is_empty() {
++                    return self.search_set_active(None);
++                }
+                 return self.search_set_active(Some(input));
+             }
+             Message::SetShowDetails(show_details) => {
+@@ -7047,8 +7194,33 @@ impl Application for App {
+ 
+     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+         if crate::config::lapin_session() {
+-            // The menus (Sort, View, …) are in the command bar.
+-            return Vec::new();
++            // Lapin UX: the tabs are in the title bar, then a + for a new one.
++            // (The menus are in the command bar.)
++            return vec![
++                widget::tab_bar::horizontal(&self.tab_model)
++                    .button_height(32)
++                    .button_spacing(theme::spacing().space_xxs)
++                    .minimum_button_width(180)
++                    .maximum_button_width(280)
++                    .width(Length::Shrink)
++                    .enable_tab_drag(String::from("x-cosmic-files/tab-dnd"))
++                    .on_reorder(Message::ReorderTab)
++                    .tab_drag_threshold(25.)
++                    .on_activate(Message::TabActivate)
++                    .on_close(|entity| Message::TabClose(Some(entity)))
++                    .on_dnd_enter(Message::DndEnterTab)
++                    .on_dnd_leave(|_| Message::DndExitTab)
++                    .on_dnd_drop(|entity, data, action| Message::DndDropTab(entity, data, action))
++                    .drag_id(self.tab_drag_id)
++                    .into(),
++                widget::tooltip(
++                    widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
++                        .on_press(Message::TabNew),
++                    widget::text::body(fl!("new-tab")),
++                    widget::tooltip::Position::Bottom,
++                )
++                .into(),
++            ];
+         }
+         vec![menu::menu_bar(
+             &self.core,
+@@ -7062,6 +7234,10 @@ impl Application for App {
+ 
+     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
+         let mut elements = Vec::with_capacity(2);
++        if crate::config::lapin_session() {
++            // The search box is in the navigation row.
++            return elements;
++        }
+ 
+         if let Some(term) = self.search_get() {
+             if self.core.is_condensed() {
+@@ -7118,8 +7294,10 @@ impl Application for App {
+             );
+         }
+ 
+-        if self.tab_model.len() > 1 || crate::config::lapin_session() {
+-            let tabs_el: Element<'_, Message> = widget::container(
++        // Lapin UX has its tabs in the title bar (header_start).
++        if self.tab_model.len() > 1 && !crate::config::lapin_session() {
++            tab_column = tab_column.push(
++                widget::container(
+                     widget::tab_bar::horizontal(&self.tab_model)
+                         .button_height(32)
+                         .button_spacing(space_xxs)
+@@ -7136,26 +7314,14 @@ impl Application for App {
+                         .drag_id(self.tab_drag_id),
+                 )
+                 .width(Length::Fill)
+-                .padding([0, space_s])
+-                .into();
+-            tab_column = tab_column.push(if crate::config::lapin_session() {
+-                // The usual "+" to open another tab.
+-                widget::row::with_children(vec![
+-                    tabs_el,
+-                    widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
+-                        .on_press(Message::TabNew)
+-                        .into(),
+-                ])
+-                .align_y(Alignment::Center)
+-                .padding([0, space_s])
+-                .into()
+-            } else {
+-                tabs_el
+-            });
++                .padding([0, space_s]),
++            );
+         }
+ 
+         let entity = self.tab_model.active();
+         if crate::config::lapin_session() {
++            tab_column = tab_column.push(self.lapin_nav_row());
++            tab_column = tab_column.push(widget::divider::horizontal::default());
+             tab_column = tab_column.push(menu::command_bar(
+                 &self.core,
+                 &self.config,
+@@ -7165,10 +7331,11 @@ impl Application for App {
+                 self.clipboard_has_content(),
+             ));
+         }
++        let mut body: Option<Element<'_, Message>> = None;
+         if crate::config::lapin_session() && self.lapin_pc {
+-            tab_column = tab_column.push(self.lapin_pc_view());
++            body = Some(self.lapin_pc_view());
+         } else if crate::config::lapin_session() && self.lapin_home {
+-            tab_column = tab_column.push(self.lapin_home_view());
++            body = Some(self.lapin_home_view());
+         } else if let Some(tab) = self.tab_model.data::<Tab>(entity) {
+             let tab_view = tab
+                 .view(
+@@ -7178,9 +7345,30 @@ impl Application for App {
+                     &self.config.context_actions,
+                 )
+                 .map(move |message| Message::TabMessage(Some(entity), message));
+-            tab_column = tab_column.push(tab_view);
+-        } else {
+-            //TODO
++            body = Some(tab_view);
++        }
++        if let Some(body) = body {
++            // Lapin UX: the navigation pane sits beside the files, under the
++            // rows above, which span the window.
++            let pane = (crate::config::lapin_session() && matches!(self.mode, Mode::App))
++                .then(|| self.nav_pane())
++                .flatten()
++                .map(|pane: Element<'_, cosmic::Action<Message>>| {
++                    pane.map(|action| Message::LapinAction(Box::new(action)))
++                });
++            tab_column = tab_column.push(match pane {
++                Some(pane) => Element::from(
++                    widget::row::with_capacity(2)
++                        .push(pane)
++                        .push(widget::container(body).width(Length::Fill))
++                        .height(Length::Fill),
++                ),
++                None => body,
++            });
++        }
++
++        if crate::config::lapin_session() {
++            tab_column = tab_column.push(self.lapin_status_bar());
+         }
+ 
+         // The toaster is added on top of an empty element to ensure that it does not override context menus
+diff --git a/src/menu.rs b/src/menu.rs
+index bb07a67..50d264c 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -560,14 +560,14 @@ pub fn dialog_menu(
+     .into()
+ }
+ 
+-pub fn menu_bar<'a>(
+-    core: &Core,
++/// The menus as (label, entries) lists: COSMIC's File, Edit, View, Sort, or in
++/// the Lapin session Sort, View and More.
++pub fn menu_lists(
+     tab_opt: Option<&Tab>,
+     config: &Config,
+     modifiers: &Modifiers,
+-    key_binds: &HashMap<KeyBind, Action>,
+     clipboard_paste_available: bool,
+-) -> Element<'a, Message> {
++) -> Vec<(String, Vec<menu::Item<Action, String>>)> {
+     let sort_options = tab_opt.map(Tab::sort_options);
+     let sort_item = |label, sort, dir| {
+         menu::Item::CheckBox(
+@@ -774,6 +774,18 @@ pub fn menu_bar<'a>(
+         menus.extend(view);
+         menus.push((fl!("more"), more));
+     }
++    menus
++}
++
++pub fn menu_bar<'a>(
++    core: &Core,
++    tab_opt: Option<&Tab>,
++    config: &Config,
++    modifiers: &Modifiers,
++    key_binds: &HashMap<KeyBind, Action>,
++    clipboard_paste_available: bool,
++) -> Element<'a, Message> {
++    let menus = menu_lists(tab_opt, config, modifiers, clipboard_paste_available);
+     responsive_menu_bar()
+         .item_height(ItemHeight::Dynamic(40))
+         .item_width(ItemWidth::Uniform(360))
+@@ -841,6 +853,7 @@ pub fn command_bar<'a>(
+     let grid = tab_opt.is_some_and(|tab| tab.config.view == tab::View::Grid);
+     let has_tab = tab_opt.is_some();
+ 
++    let _ = (gallery, grid);
+     // Icon-only with a tooltip, for the edit actions, so the row fits narrow windows.
+     let tool = |icon: &'static str, label: String, msg: Option<Message>| {
+         let b = widget::button::icon(widget::icon::from_name(icon).size(16));
+@@ -851,40 +864,87 @@ pub fn command_bar<'a>(
+         widget::tooltip(b, widget::text::body(label), widget::tooltip::Position::Bottom)
+     };
+     let act = |a: Action, enabled: bool| enabled.then(|| MenuAction::message(&a));
+-    // Icon-only buttons for navigation, so the row stays short.
+-    let nav = |icon: &'static str, a: Action| {
+-        widget::button::icon(widget::icon::from_name(icon).size(16)).on_press(MenuAction::message(&a))
++    // A menu's button: an icon, a label and a small arrow (or just "…").
++    let root = |icon: Option<&'static str>, label: Option<String>, arrow: bool| -> Element<'static, Message> {
++        let mut r = widget::row::with_capacity(3).spacing(spacing.space_xxs).align_y(Alignment::Center);
++        if let Some(icon) = icon {
++            r = r.push(widget::icon::from_name(icon).size(16));
++        }
++        if let Some(label) = label {
++            r = r.push(widget::text::body(label));
++        }
++        if arrow {
++            r = r.push(widget::icon::from_name("pan-down-symbolic").size(12));
++        }
++        widget::button::custom(r).padding([6, 10]).class(theme::Button::MenuRoot).into()
+     };
+-    let home = Some(Message::LapinHome(true));
++    let bar = |trees: Vec<(Element<'static, Message>, Vec<menu::Item<Action, String>>)>| {
++        menu::bar(
++            trees
++                .into_iter()
++                .map(|(root, items)| {
++                    menu::Tree::<_>::with_children(
++                        cosmic::widget::RcElementWrapper::new(root),
++                        menu::items(key_binds, items),
++                    )
++                })
++                .collect(),
++        )
++        .item_height(ItemHeight::Dynamic(40))
++        .item_width(ItemWidth::Uniform(300))
++        .spacing(4.0)
++        .on_surface_action(Message::Surface)
++        .window_id_maybe(core.main_window_id())
++    };
++    let mut lists = menu_lists(tab_opt, config, modifiers, clipboard_paste_available).into_iter();
++    let sort = lists.next().map(|l| l.1).unwrap_or_default();
++    let view = lists.next().map(|l| l.1).unwrap_or_default();
++    let more = lists.next().map(|l| l.1).unwrap_or_default();
++    let new_enabled = can_edit && !in_trash;
++    let new_items = vec![
++        menu_button_optional(fl!("new-folder"), Action::NewFolder, new_enabled),
++        menu_button_optional(fl!("new-file"), Action::NewFile, new_enabled),
++        menu::Item::Divider,
++        menu::Item::Button(fl!("new-tab"), None, Action::TabNew),
++        menu::Item::Button(fl!("new-window"), None, Action::WindowNew),
++    ];
++    let divider = || widget::divider::vertical::default().height(Length::Fixed(24.0));
+     // With the details pane docked this column is narrow: no spacer, and the row
+     // scrolls sideways instead of clipping.
+     let narrow = config.show_details;
+     let row = widget::row::with_capacity(20)
+-            .spacing(spacing.space_xxs)
+-            .align_y(Alignment::Center)
+-            .push(nav("go-previous-symbolic", Action::HistoryPrevious))
+-            .push(nav("go-next-symbolic", Action::HistoryNext))
+-            .push(nav("go-up-symbolic", Action::LocationUp))
+-            .push(nav("view-refresh-symbolic", Action::Reload))
+-            .push(tool("user-home-symbolic", fl!("home"), home))
+-            .push(tool("document-open-recent-symbolic", fl!("recents"), act(Action::Recents, true)))
+-            .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
+-            .push(tool("folder-new-symbolic", fl!("new-folder"), act(Action::NewFolder, can_edit && !in_trash)))
+-            .push(tool("edit-cut-symbolic", fl!("cut"), act(Action::Cut, selected > 0 && !in_trash)))
+-            .push(tool("edit-copy-symbolic", fl!("copy"), act(Action::Copy, selected > 0)))
+-            .push(tool("edit-paste-symbolic", fl!("paste"), act(Action::Paste, can_paste)))
+-            .push(tool("document-edit-symbolic", fl!("rename"), act(Action::Rename, selected == 1 && !in_trash)))
+-            .push(tool("edit-delete-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
+-            .push(widget::divider::vertical::default().height(Length::Fixed(20.0)))
+-            .push(menu_bar(core, tab_opt, config, modifiers, key_binds, clipboard_paste_available))
+-            .push_maybe((!narrow).then(widget::space::horizontal))
+-            .push(tool("image-x-generic-symbolic", fl!("gallery-preview"), act(Action::Gallery, gallery > 0)))
+-            .push(tool("dialog-information-symbolic", fl!("details"), act(Action::Preview, has_tab)))
+-            .push(tool(
+-                if grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+-                if grid { fl!("list-view") } else { fl!("grid-view") },
+-                act(if grid { Action::TabViewList } else { Action::TabViewGrid }, has_tab),
+-            ));
++        .spacing(spacing.space_xxs)
++        .align_y(Alignment::Center)
++        .push(bar(vec![(root(Some("list-add-symbolic"), Some(fl!("new")), true), new_items)]))
++        .push(divider())
++        .push(tool("edit-cut-symbolic", fl!("cut"), act(Action::Cut, selected > 0 && !in_trash)))
++        .push(tool("edit-copy-symbolic", fl!("copy"), act(Action::Copy, selected > 0)))
++        .push(tool("edit-paste-symbolic", fl!("paste"), act(Action::Paste, can_paste)))
++        .push(tool("document-edit-symbolic", fl!("rename"), act(Action::Rename, selected == 1 && !in_trash)))
++        .push(tool("user-trash-symbolic", fl!("delete"), act(Action::Delete, selected > 0)))
++        .push(divider())
++        .push(bar(vec![
++            (root(Some("view-sort-ascending-symbolic"), Some(fl!("sort")), true), sort),
++            (root(Some("view-list-symbolic"), Some(fl!("view")), true), view),
++        ]))
++        .push(divider())
++        .push(bar(vec![(root(Some("view-more-horizontal-symbolic"), None, false), more)]))
++        .push_maybe((!narrow).then(widget::space::horizontal))
++        .push({
++            let b = widget::button::custom(
++                widget::row::with_capacity(2)
++                    .spacing(spacing.space_xxs)
++                    .align_y(Alignment::Center)
++                    .push(widget::icon::from_name("sidebar-show-right-symbolic").size(16))
++                    .push(widget::text::body(fl!("details"))),
++            )
++            .padding([6, 10])
++            .class(theme::Button::MenuRoot);
++            match act(Action::Preview, has_tab) {
++                Some(m) => b.on_press(m),
++                None => b,
++            }
++        });
+     let content: Element<'a, Message> = if narrow {
+         widget::scrollable::horizontal(widget::container(row).padding([0, 0, 10, 0])).into()
+     } else {
+diff --git a/src/tab.rs b/src/tab.rs
+index 42362a8..2186804 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -2766,6 +2766,14 @@ impl HeadingOptions {
+     }
+ }
+ 
++/// Which half of the location row to build (Lapin UX splits it).
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum LocationPart {
++    All,
++    Address,
++    Headings,
++}
++
+ #[derive(Clone, Debug)]
+ pub enum Mode {
+     App,
+@@ -5286,6 +5294,12 @@ impl Tab {
+     }
+ 
+     pub fn location_view(&self) -> Element<'_, Message> {
++        self.location_view_part(LocationPart::All)
++    }
++
++    /// Lapin UX draws the path in an address bar above the command bar and the
++    /// column headings above the files, so each half can be asked for alone.
++    pub fn location_view_part(&self, part: LocationPart) -> Element<'_, Message> {
+         //TODO: responsiveness is done in a hacky way, potentially move this to a custom widget?
+         fn text_width<'a>(
+             content: &'a str,
+@@ -5420,6 +5434,15 @@ impl Tab {
+         let heading_rule = widget::container(rule::horizontal(1))
+             .padding([0, theme::active().cosmic().corner_radii.radius_xs[0] as u16]);
+ 
++        if part == LocationPart::Headings {
++            let mut column = widget::column::with_capacity(2).padding([0, space_s]);
++            if self.config.view == View::List && !condensed {
++                column = column.push(heading_row);
++                column = column.push(heading_rule);
++            }
++            return column.into();
++        }
++
+         if let Some(edit_location) = &self.edit_location {
+             let mut text_input = None;
+ 
+@@ -5491,6 +5514,9 @@ impl Tab {
+                     );
+                 }
+                 row = row.push(popover);
++                if part == LocationPart::Address {
++                    return row.into();
++                }
+                 let mut column = widget::column::with_capacity(4).padding([0, space_s]);
+                 column = column.push(row);
+                 column = column.push(accent_rule);
+@@ -5500,7 +5526,9 @@ impl Tab {
+                 }
+                 return column.into();
+             }
+-        } else if let Some(path) = self.location.path_opt() {
++        } else if part != LocationPart::Address
++            && let Some(path) = self.location.path_opt()
++        {
+             row = row.push(
+                 crate::mouse_area::MouseArea::new(
+                     widget::button::custom(widget::icon::from_name("edit-symbolic").size(16))
+@@ -5635,6 +5663,26 @@ impl Tab {
+             }
+         }
+ 
++        if part == LocationPart::Address {
++            // The address bar: a root icon, the crumbs, and the rest of the
++            // bar is blank; a click there lets you type a path.
++            let mut bar = widget::row::with_capacity(children.len() + 3)
++                .align_y(Alignment::Center)
++                .spacing(space_xxxs)
++                .push(widget::icon::from_name("computer-symbolic").size(16))
++                .push(widget::icon::from_name("go-next-symbolic").size(16));
++            bar = bar.extend(children);
++            if self.location.path_opt().is_some() {
++                let location = self.location.clone();
++                bar = bar.push(
++                    crate::mouse_area::MouseArea::new(
++                        widget::space::horizontal().height(Length::Fixed(24.0)),
++                    )
++                    .on_press(move |_| Message::EditLocation(Some(location.clone().into()))),
++                );
++            }
++            return bar.into();
++        }
+         row = row.extend(children);
+         let mut column = widget::column::with_capacity(4).padding([0, space_s]);
+         column = column.push(row);
+@@ -6444,7 +6492,12 @@ impl Tab {
+         let location_view_opt = if matches!(self.mode, Mode::Desktop) {
+             None
+         } else {
+-            Some(self.location_view())
++            Some(if crate::config::lapin_session() && matches!(self.mode, Mode::App) {
++                // The path is in the address bar (see app.rs).
++                self.location_view_part(LocationPart::Headings)
++            } else {
++                self.location_view()
++            })
+         };
+         let (drag_list, mut item_view, can_scroll) = match self.config.view {
+             View::Grid => self.grid_view(),
+-- 
+2.43.0
+
