@@ -124,6 +124,8 @@ enum Message {
     Open(Target),
     View(bool),
     Search(String),
+    /// A key typed while nothing has the keyboard: it goes to the search box (#96).
+    TypeAhead(String),
     Home,
 }
 
@@ -211,6 +213,22 @@ impl cosmic::Application for App {
         ]
     }
 
+    fn subscription(&self) -> cosmic::iced::Subscription<Message> {
+        cosmic::iced::event::listen_with(|event, status, _| match event {
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed { text: Some(t), modifiers, .. })
+                if status == cosmic::iced::event::Status::Ignored
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                    && !modifiers.logo()
+                    && !t.is_empty()
+                    && t.chars().all(|c| !c.is_control()) =>
+            {
+                Some(Message::TypeAhead(t.to_string()))
+            }
+            _ => None,
+        })
+    }
+
     fn header_end(&self) -> Vec<Element<'_, Message>> {
         vec![text_input::search_input("Search Control Panel", &self.search).id(SEARCH_ID.clone()).on_input(Message::Search).width(240).into()]
     }
@@ -220,6 +238,10 @@ impl cosmic::Application for App {
             Message::Open(t) => open(t),
             Message::View(large) => self.large_icons = large,
             Message::Search(q) => self.search = q,
+            Message::TypeAhead(t) => {
+                self.search.push_str(&t);
+                return text_input::focus(SEARCH_ID.clone());
+            }
             Message::Home => {
                 self.search.clear();
                 self.large_icons = false;

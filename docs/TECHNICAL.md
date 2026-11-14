@@ -347,6 +347,10 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   Start, Stop and Restart go through polkit and the admin prompt).
 - **Control Panel**: the classic category view and Large icons, opening the
   matching Settings page or tool.
+  In Control Panel and Task Manager, typing with nothing focused goes into the
+  search box (#96, #97): a key event no widget took is caught by a subscription,
+  appended to the search text, and the box is focused. The focus asked for at
+  start-up alone wasn't enough on the real session.
 - **Update**: checks pacman, Flatpak and firmware (fwupd, via
   `fwupdmgr get-updates --json`) updates, installs them with one
   button (polkit), shows progress and history, and offers a restart when the

@@ -87,6 +87,8 @@ enum Message {
     Tick,
     Sampled(Box<Sample>),
     Search(String),
+    /// A key typed while nothing has the keyboard: it goes to the search box (#97).
+    TypeAhead(String),
     Select(u32),
     Sort(Sort),
     EndTask,
@@ -582,7 +584,22 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        cosmic::iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick)
+        Subscription::batch([
+            cosmic::iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick),
+            cosmic::iced::event::listen_with(|event, status, _| match event {
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed { text: Some(t), modifiers, .. })
+                if status == cosmic::iced::event::Status::Ignored
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                    && !modifiers.logo()
+                    && !t.is_empty()
+                    && t.chars().all(|c| !c.is_control()) =>
+            {
+                Some(Message::TypeAhead(t.to_string()))
+            }
+            _ => None,
+        }),
+        ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -598,6 +615,10 @@ impl cosmic::Application for App {
             }
             Message::Sampled(s) => self.absorb(*s),
             Message::Search(q) => self.search = q,
+            Message::TypeAhead(t) => {
+                self.search.push_str(&t);
+                return text_input::focus(SEARCH_ID.clone());
+            }
             Message::Select(pid) => self.selected = Some(pid),
             Message::Page(p) => {
                 self.page = p;
