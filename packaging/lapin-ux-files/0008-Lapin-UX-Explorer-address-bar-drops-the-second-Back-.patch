@@ -1,0 +1,74 @@
+From 8c16acf056d429add8b92682cda59ccf0ec3115b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 09:06:55 +0800
+Subject: [PATCH] Lapin UX: Explorer address bar drops the second Back and
+ Forward pair
+
+---
+ src/tab.rs | 50 ++++++++++++++++++++++++++++----------------------
+ 1 file changed, 28 insertions(+), 22 deletions(-)
+
+diff --git a/src/tab.rs b/src/tab.rs
+index 53bb09d..42362a8 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -5332,28 +5332,34 @@ impl Tab {
+             .padding([space_xxxs, 0]);
+         let mut w = 0.0;
+ 
+-        let mut prev_button =
+-            widget::button::custom(widget::icon::from_name("go-previous-symbolic").size(16))
+-                .padding(space_xxs)
+-                .class(theme::Button::Icon);
+-        if self.history_i > 0 && !self.history.is_empty() {
+-            prev_button = prev_button.on_press(Message::GoPrevious);
+-        }
+-        row = row.push(prev_button);
+-        w += f32::from(space_xxs).mul_add(2.0, 16.0);
+-
+-        let mut next_button =
+-            widget::button::custom(widget::icon::from_name("go-next-symbolic").size(16))
+-                .padding(space_xxs)
+-                .class(theme::Button::Icon);
+-        if self.history_i + 1 < self.history.len() {
+-            next_button = next_button.on_press(Message::GoNext);
+-        }
+-        row = row.push(next_button);
+-        w += f32::from(space_xxs).mul_add(2.0, 16.0);
+-
+-        row = row.push(widget::space::horizontal().width(Length::Fixed(space_s.into())));
+-        w += f32::from(space_s);
++        // Lapin session: Back and Forward are in the command bar already.
++        if !crate::config::lapin_session() {
++            let mut prev_button =
++                widget::button::custom(widget::icon::from_name("go-previous-symbolic").size(16))
++                    .padding(space_xxs)
++                    .class(theme::Button::Icon);
++            if self.history_i > 0 && !self.history.is_empty() {
++                prev_button = prev_button.on_press(Message::GoPrevious);
++            }
++            row = row.push(prev_button);
++            w += f32::from(space_xxs).mul_add(2.0, 16.0);
++
++            let mut next_button =
++                widget::button::custom(widget::icon::from_name("go-next-symbolic").size(16))
++                    .padding(space_xxs)
++                    .class(theme::Button::Icon);
++            if self.history_i + 1 < self.history.len() {
++                next_button = next_button.on_press(Message::GoNext);
++            }
++            row = row.push(next_button);
++            w += f32::from(space_xxs).mul_add(2.0, 16.0);
++
++        }
++
++        if !crate::config::lapin_session() {
++            row = row.push(widget::space::horizontal().width(Length::Fixed(space_s.into())));
++            w += f32::from(space_s);
++        }
+ 
+         //TODO: allow resizing?
+         let name_width = 300.0;
+-- 
+2.43.0
+
