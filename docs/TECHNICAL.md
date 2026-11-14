@@ -495,6 +495,10 @@ spacer and scrolls sideways.
 The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
+- The dialog's sidebar follows the Explorer's (#76): Home, Gallery (the Pictures
+  folder, left out when the user has none), Recents, the pinned folders, then a *This PC* heading with the drives
+  indented under it. Home and Gallery are plain folders here (the dialog has no
+  Home page).
 - Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
 
