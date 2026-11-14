@@ -1,0 +1,54 @@
+From 88c0bd5edc46b423dd8a7451a64d66219a6f3fd0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 09:33:45 +0800
+Subject: [PATCH] Lapin UX: right-click menu says Properties (it opens the
+ details pane)
+
+---
+ i18n/en/cosmic_files.ftl | 1 +
+ src/menu.rs              | 6 +++---
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 95c2d96..f583e21 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -401,3 +401,4 @@ this-pc = This PC
+ devices-and-drives = Devices and drives
+ free-of = { $free } free of { $total }
+ more = More
++properties = Properties
+diff --git a/src/menu.rs b/src/menu.rs
+index 245ae7d..aed8ca1 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -233,7 +233,7 @@ pub fn context_menu<'a>(
+                 children.push(menu::Item::Divider);
+ 
+                 //TODO: Print?
+-                children.push(menu_item(fl!("show-details"), Action::Preview));
++                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
+                 if any_trash_item {
+                     children.push(menu::Item::Divider);
+                     children.push(menu_item(
+@@ -338,7 +338,7 @@ pub fn context_menu<'a>(
+                     ));
+                 }
+                 children.push(menu::Item::Divider);
+-                children.push(menu_item(fl!("show-details"), Action::Preview));
++                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
+             } else {
+                 if dialog_kind.save() {
+                     children.push(menu_item(fl!("new-folder"), Action::NewFolder));
+@@ -379,7 +379,7 @@ pub fn context_menu<'a>(
+                 children.push(menu::Item::Divider);
+             }
+             if selected > 0 {
+-                children.push(menu_item(fl!("show-details"), Action::Preview));
++                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
+                 children.push(menu::Item::Divider);
+                 children.push(menu_item(
+                     fl!("restore-from-trash"),
+-- 
+2.43.0
+

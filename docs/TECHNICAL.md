@@ -496,7 +496,8 @@ into one button when it is too narrow. The address bar under it
 has no Back/Forward pair of its own any more (the command bar has them).
 With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
-The uninstaller lists it in `LAPIN_PKGS` and `STOCK`.
+The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
+The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
 - The dialog's sidebar follows the Explorer's (#76): Home, Gallery (the Pictures
