@@ -97,6 +97,15 @@ nothing took); the details pane only follows the Details setting, so Options or
 History in COSMIC's drawer don't hide it; clicking the Type heading sorts by
 type (folders, then by extension; again reverses), on top of the usual order
 (`Tab::lapin_sort_type`, not saved).
+Light mode, matched to Tako's reference (#143): the command bar, files and
+status bar sit on their own layer (`lapin_layer_style`: plain white in light
+mode, the window colour in dark) below the tabs and address row; the details
+pane is light grey (`lapin_details_style`). Details rows are 32 px with 16 px
+icons and no lines between them. The search box is the address's lightly
+rounded box with no outline until focused (`lapin_box_input`), tabs are 240 px
+each (a fixed-width box around the tab strip) and shrink when there are too
+many, the open place in the pane is a soft grey box (`lapin_pane_selected`),
+and Recents isn't in the pane (recent files are on Home).
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
