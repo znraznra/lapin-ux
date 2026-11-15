@@ -90,6 +90,10 @@ fn main() -> cosmic::iced::Result {
         .map(|h| std::path::PathBuf::from(h).join(".local/state/lapin-ux/debug-wayland"))
         .is_some_and(|p| p.exists())
     {
+        // Child applications should keep the value from the shell's original
+        // environment, not inherit the tracing value we add here. If it was
+        // absent, explicitly disable tracing in children via the launch env.
+        crate::catalog::set_child_wayland_debug(std::env::var("WAYLAND_DEBUG").ok());
         // SAFETY: first thing in main, before any other thread exists.
         unsafe { std::env::set_var("WAYLAND_DEBUG", "1") };
     }

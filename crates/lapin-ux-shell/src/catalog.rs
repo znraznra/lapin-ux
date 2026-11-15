@@ -3,6 +3,7 @@
 //! them, and launching.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use lapin_ux_core::search::{self, Searchable};
 use cosmic::desktop::{
@@ -24,6 +25,14 @@ pub struct Catalog {
     resolved: HashMap<String, DesktopEntryData>,
     /// Newest modification time of the application folders when loaded.
     stamp: Option<std::time::SystemTime>,
+}
+
+/// If tracing is enabled by the debug marker, this captures the original
+/// process value for children. `None` means the shell added the switch itself.
+static CHILD_WAYLAND_DEBUG: OnceLock<Option<String>> = OnceLock::new();
+
+pub(crate) fn set_child_wayland_debug(original: Option<String>) {
+    let _ = CHILD_WAYLAND_DEBUG.set(original);
 }
 
 /// Newest mtime of the application folders: changes when an app is
@@ -166,6 +175,11 @@ pub async fn launch(exec: String, app_id: String, terminal: bool, token: Option<
     if let Some(t) = token {
         env.push(("XDG_ACTIVATION_TOKEN", t.clone()));
         env.push(("DESKTOP_STARTUP_ID", t));
+    }
+    // Do not leak a WAYLAND_DEBUG value added by the shell to launched apps.
+    // Preserve the original value if the user had set it before tracing began.
+    if let Some(original) = CHILD_WAYLAND_DEBUG.get() {
+        env.push(("WAYLAND_DEBUG", original.clone().unwrap_or_else(|| "0".into())));
     }
     desktop::spawn_desktop_exec(exec, env, Some(&app_id), terminal).await;
 }
