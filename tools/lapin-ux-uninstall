@@ -587,7 +587,7 @@ restore_settings() {
     # Anything still in Lapin's sounds folder but its per-event sounds is a
     # scheme that couldn't move: keep that folder, remove the rest.
     local kept=0 entry
-    for entry in "$DATA/lapin-ux/sounds"/*; do
+    for entry in "$DATA/lapin-ux/sounds"/* "$DATA/lapin-ux/sounds"/.[!.]*; do
         [ -e "$entry" ] && [ "${entry##*/}" != lapin-ux-custom ] && kept=1
     done
     local lapin_data=("$DATA/lapin-ux")
