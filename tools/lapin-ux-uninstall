@@ -570,6 +570,17 @@ restore_settings() {
 
     # Lapin UX's own files.
     local -a own=()
+    # Sound schemes added in Settings live in Lapin's own folder (#134); they
+    # are your files, so they move to the usual place before that folder goes.
+    if [ -s "$STATE/sounds-added" ]; then
+        local scheme
+        while IFS= read -r scheme; do
+            case "$scheme" in ''|*/*|lapin-ux-custom|freedesktop) continue ;; esac
+            if [ -d "$DATA/lapin-ux/sounds/$scheme" ] && [ ! -e "$DATA/sounds/$scheme" ]; then
+                run mkdir -p "$DATA/sounds" && run mv "$DATA/lapin-ux/sounds/$scheme" "$DATA/sounds/$scheme"
+            fi
+        done < "$STATE/sounds-added"
+    fi
     for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"

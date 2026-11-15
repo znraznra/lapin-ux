@@ -1080,6 +1080,8 @@ impl Application for Shell {
         let mut cfg: ShellConfig = config::load(config_handle.as_ref());
         crate::style::set_transparency(cfg.transparency_effects);
         let catalog = Catalog::load(cfg.show_other_desktop_apps);
+        // Sounds added in Settings live in Lapin's own folder (#134).
+        lapin_ux_core::sound::move_into_lapin_now();
         if !cfg.initialized {
             crate::defaults::apply_first_run();
             cfg = cfg.with_defaults(&catalog);

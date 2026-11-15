@@ -1,0 +1,49 @@
+From 0729ed52d50ac8967a90944bdcf06c97846691fd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 22:54:15 +0800
+Subject: [PATCH] Lapin UX: sounds added in Settings go in Lapin UX's own
+ folder
+
+---
+ cosmic-settings/src/lapin/sounds_add.rs | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/sounds_add.rs b/cosmic-settings/src/lapin/sounds_add.rs
+index d689fbf..1c7407b 100644
+--- a/cosmic-settings/src/lapin/sounds_add.rs
++++ b/cosmic-settings/src/lapin/sounds_add.rs
+@@ -32,11 +32,16 @@ const EXTS: [&str; 5] = ["oga", "ogg", "wav", "flac", "mp3"];
+ fn home() -> PathBuf {
+     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+ }
+-pub fn user_data() -> PathBuf {
++fn shared_data() -> PathBuf {
+     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
+ }
++/// Lapin UX's own data dir: schemes added here and the per-event sounds go in
++/// its `sounds/`, where other desktops don't look (#134).
++pub fn user_data() -> PathBuf {
++    shared_data().join("lapin-ux")
++}
+ pub fn data_dirs() -> Vec<PathBuf> {
+-    let mut v = vec![user_data()];
++    let mut v = vec![user_data(), shared_data()];
+     let sys = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+     v.extend(sys.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
+     v
+@@ -260,7 +265,11 @@ pub fn remove(name: &str, user: &Path, state: &Path) -> Result<(), String> {
+     if name.contains('/') || name.is_empty() || !added(state).iter().any(|n| n == name) {
+         return Err("Only sound schemes added here can be removed here.".into());
+     }
+-    let dir = user.join("sounds").join(name);
++    // Added here: in Lapin's folder, or in the shared one (older installs).
++    let mut dir = user.join("sounds").join(name);
++    if !dir.exists() && let Some(shared) = user.parent() {
++        dir = shared.join("sounds").join(name);
++    }
+     if dir.is_dir() && !dir.is_symlink() {
+         std::fs::remove_dir_all(&dir).map_err(|e| format!("Couldn't remove it: {e}"))?;
+     }
+-- 
+2.43.0
+

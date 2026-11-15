@@ -447,8 +447,20 @@ pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1
 check "--system resets an added pointer and forgets it" "[ \"\$(rd cursor-theme)\" != \"'My Cursor'\" ] && [ ! -e \"$P\" ] && [ ! -e \"$L\" ]"
 }
+scenT() {
+echo "T: sound schemes added in Lapin UX's Settings stay yours after uninstall (#134)"
+D="$HOME/.local/share"
+mkdir -p "$D/lapin-ux/sounds/ocean/stereo" "$D/lapin-ux/sounds/lapin-ux-custom/stereo" "$HOME/.local/state/lapin-ux"
+echo x > "$D/lapin-ux/sounds/ocean/stereo/bell.oga"
+echo x > "$D/lapin-ux/sounds/lapin-ux-custom/stereo/bell.oga"
+printf 'ocean\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+bash "$U" --snapshot
+bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
+check "the added scheme moved to the usual place" "[ -f \"$D/sounds/ocean/stereo/bell.oga\" ]"
+check "Lapin's own folder and per-event sounds removed" "[ ! -e \"$D/lapin-ux\" ] && [ ! -e \"$D/sounds/lapin-ux-custom\" ]"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S; do
+for x in A B C D E F G H I J K L M N O P Q R S T; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log
