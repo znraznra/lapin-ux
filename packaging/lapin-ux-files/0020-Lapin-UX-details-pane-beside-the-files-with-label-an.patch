@@ -1,0 +1,196 @@
+From d4f4312d3238868f82c325b3df3c738b81942d9f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 08:09:47 +0800
+Subject: [PATCH 20/20] Lapin UX: details pane beside the files, with label and
+ value pairs
+
+---
+ i18n/en/cosmic_files.ftl |  6 ++++
+ src/app.rs               | 30 ++++++++++++++--
+ src/menu.rs              |  3 +-
+ src/tab.rs               | 75 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 111 insertions(+), 3 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 3095b73..3d9113b 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -447,3 +447,9 @@ details-pane = Details pane
+ hidden-items = Hidden items
+ options = Options
+ network-locations = Network locations
++bytes = {$bytes} bytes
++contains = Contains
++file-location = File location
++date-created = Date created
++date-accessed = Date accessed
++dimensions = Dimensions
+diff --git a/src/app.rs b/src/app.rs
+index cf1eadb..271d124 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -2694,6 +2694,18 @@ impl App {
+         model
+     }
+ 
++    /// Lapin UX (#143): the details pane sits beside the files, under the rows
++    /// that span the window, instead of in COSMIC's drawer over them.
++    fn lapin_details_pane(&self) -> Option<(Option<Entity>, &PreviewKind)> {
++        if !crate::config::lapin_session() || !matches!(self.mode, Mode::App) || !self.core.window.show_context {
++            return None;
++        }
++        match &self.context_page {
++            ContextPage::Preview(entity_opt, kind) => Some((*entity_opt, kind)),
++            _ => None,
++        }
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -6368,7 +6380,7 @@ impl Application for App {
+     }
+ 
+     fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<'_, Message>> {
+-        if !self.core.window.show_context {
++        if !self.core.window.show_context || self.lapin_details_pane().is_some() {
+             return None;
+         }
+ 
+@@ -7549,11 +7561,25 @@ impl Application for App {
+                 .map(|pane: Element<'_, cosmic::Action<Message>>| {
+                     pane.map(|action| Message::LapinAction(Box::new(action)))
+                 });
++            let details = self.lapin_details_pane().map(|(entity_opt, kind)| {
++                let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
++                widget::container(widget::scrollable(
++                    widget::container(
++                        self.preview(&entity_opt, kind, true)
++                            .map(move |x| Message::TabMessage(Some(entity), x)),
++                    )
++                    .padding(space_s),
++                ))
++                .width(Length::Fixed(360.0))
++                .height(Length::Fill)
++                .class(theme::Container::Card)
++            });
+             tab_column = tab_column.push(match pane {
+                 Some(pane) => Element::from(
+-                    widget::row::with_capacity(2)
++                    widget::row::with_capacity(3)
+                         .push(pane)
+                         .push(widget::container(body).width(Length::Fill))
++                        .push_maybe(details)
+                         .height(Length::Fill),
+                 ),
+                 None => body,
+diff --git a/src/menu.rs b/src/menu.rs
+index b98055e..35fd581 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -941,7 +941,8 @@ pub fn command_bar<'a>(
+     let divider = || widget::divider::vertical::default().height(Length::Fixed(24.0));
+     // With the details pane docked this column is narrow: no spacer, and the row
+     // scrolls sideways instead of clipping.
+-    let narrow = config.show_details;
++    // (Not needed since the pane moved under the bar; kept for small windows.)
++    let narrow = false;
+     let row = widget::row::with_capacity(20)
+         .spacing(spacing.space_xxs)
+         .align_y(Alignment::Center)
+diff --git a/src/tab.rs b/src/tab.rs
+index 1c87a54..171fd4f 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -2448,6 +2448,77 @@ impl Item {
+         row.into()
+     }
+ 
++    /// Lapin UX: the details as people know them: the name, a "Details"
++    /// heading, then Type, Size, File location and the dates, with the values
++    /// at the right.
++    fn lapin_details<'a>(&'a self, military_time: bool) -> widget::Column<'a, Message, cosmic::Theme> {
++        let cosmic_theme::Spacing { space_xxs, space_s, .. } = theme::spacing();
++        let pair = |label: String, value: String| {
++            widget::row::with_capacity(2)
++                .spacing(space_s)
++                .push(widget::text::caption(label))
++                .push(
++                    widget::selectable_text::body(value)
++                        .width(Length::Fill)
++                        .align_x(cosmic::iced::alignment::Horizontal::Right),
++                )
++        };
++        let mut column = widget::column::with_capacity(10).spacing(space_xxs);
++        column = column.push(widget::selectable_text::title4(self.name.clone()));
++        column = column.push(widget::space::vertical().height(Length::Fixed(f32::from(space_xxs))));
++        column = column.push(widget::text::heading(fl!("details")));
++        let Some(metadata) = self.file_metadata() else {
++            return column.push(pair(fl!("type-column"), self.mime.to_string()));
++        };
++        let kind = if metadata.is_dir() {
++            fl!("type-folder")
++        } else {
++            match Path::new(&self.name).extension().and_then(|e| e.to_str()) {
++                Some(ext) if !ext.is_empty() && ext.len() <= 8 => fl!("type-file", ext = ext.to_uppercase()),
++                _ => fl!("type-plain"),
++            }
++        };
++        column = column.push(pair(fl!("type-column"), kind));
++        let size = if metadata.is_dir() {
++            match &self.dir_size {
++                DirSize::Calculating(_) => fl!("calculating"),
++                DirSize::Directory(size) => format_size(*size),
++                DirSize::NotDirectory => String::new(),
++                DirSize::Error(err) => err.clone(),
++            }
++        } else {
++            format!("{} ({})", format_size(metadata.len()), fl!("bytes", bytes = metadata.len()))
++        };
++        if !size.is_empty() {
++            column = column.push(pair(fl!("size"), size));
++        }
++        if metadata.is_dir()
++            && let Some(children) = self.metadata.children_count()
++        {
++            column = column.push(pair(fl!("contains"), fl!("status-items", items = children)));
++        }
++        if let Some(parent) = self.path_opt().and_then(|p| p.parent()) {
++            column = column.push(pair(fl!("file-location"), parent.display().to_string()));
++        }
++        let date_time_formatter = date_time_formatter(military_time);
++        let time_formatter = time_formatter(military_time);
++        for (label, time) in [
++            (fl!("date-created"), metadata.created()),
++            (fl!("date-modified"), metadata.modified()),
++            (fl!("date-accessed"), metadata.accessed()),
++        ] {
++            if let Ok(time) = time {
++                column = column.push(pair(label, format_time(time, &date_time_formatter, &time_formatter).to_string()));
++            }
++        }
++        if let Some(path) = self.path_opt()
++            && let Ok((width, height)) = image::image_dimensions(path)
++        {
++            column = column.push(pair(fl!("dimensions"), format!("{width} x {height}")));
++        }
++        column
++    }
++
+     pub fn preview_view<'a>(
+         &'a self,
+         mime_app_cache_opt: Option<&'a mime_app::MimeAppCache>,
+@@ -2619,6 +2690,10 @@ impl Item {
+             let (width, height) = img;
+             details = details.push(widget::text::body(format!("{width}x{height}")));
+         }
++        if crate::config::lapin_session() {
++            // Lapin UX (#143): the name, then label and value pairs.
++            details = self.lapin_details(military_time);
++        }
+         column = column.push(details);
+ 
+         if let Some(metadata) = self.file_metadata()
+-- 
+2.43.0
+
