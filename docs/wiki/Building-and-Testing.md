@@ -24,4 +24,4 @@ Force switches: `LAPIN_OSD_PREVIEW=volume|brightness|admin`, `LAPIN_UX_OSK=1`, `
 KMS-only paths, real locking, real modifier delivery and touch hardware. Those are retested by Tako on real Arch/CachyOS.
 
 ## Documentation upkeep
-After each piece of work update the README (plain-words pitch, progress table, tour, roadmap), `docs/TECHNICAL.md`, and this wiki. Tour previews always come from approved gallery screens.
+After each piece of work update the README (plain-words pitch, progress table, tour, roadmap), `docs/TECHNICAL.md` (and the area files in `docs/technical/`), and this wiki. Tour previews always come from approved gallery screens.

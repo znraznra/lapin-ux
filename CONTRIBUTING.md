@@ -51,7 +51,7 @@ These come from real bugs. Please read [CLAUDE.md](CLAUDE.md) in full before cha
 - If you touched a COSMIC patch, `cargo check --locked` passes at the pinned commit with all patches applied.
 - You tried the change, and you say how in the pull request.
 - Screenshots are attached for anything people can see.
-- The docs are updated: the README if it's something users notice, and `docs/TECHNICAL.md` for the details. Wiki pages live in `docs/wiki/` and are published from there automatically, so edit them there, not in GitHub's wiki editor.
+- The docs are updated: the README if it's something users notice, and `docs/TECHNICAL.md` (feature details in the file for their area under `docs/technical/`) for the details. Wiki pages live in `docs/wiki/` and are published from there automatically, so edit them there, not in GitHub's wiki editor.
 
 ### Words matter
 
