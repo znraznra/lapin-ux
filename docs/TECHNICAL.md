@@ -568,6 +568,9 @@ A group heading folds its group away and back (`Tab::lapin_collapsed`; folded
 files have no row). Properties' General tab has a Read-only box (it clears
 every write permission; unticking gives the owner's back) and the window has
 Cancel beside OK (both close it: changes apply at once).
+The details view keeps its columns until the file area is narrower than 480 px
+(COSMIC switches to two-line rows under 600 px), so a normal window at 125%
+scale still shows Name, Date modified, Type and Size.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
