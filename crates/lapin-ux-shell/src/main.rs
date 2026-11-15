@@ -138,7 +138,7 @@ fn main() -> cosmic::iced::Result {
     // Lapin UX session, hand the key to COSMIC's own launcher.
     if action.as_deref() == Some("start") && !in_lapin_ux_session() {
         use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new("cosmic-launcher").exec();
+        let err = crate::catalog::child_env_std(&mut std::process::Command::new("cosmic-launcher")).exec();
         eprintln!("lapin-ux-shell: not in an Lapin UX session and cosmic-launcher failed: {err}");
         return Ok(());
     }

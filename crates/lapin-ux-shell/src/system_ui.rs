@@ -70,8 +70,8 @@ pub enum SecurityAction {
 }
 
 async fn randr(args: &[String]) -> Result<String, String> {
-    let out = tokio::process::Command::new("cosmic-randr")
-        .args(args)
+    let mut cmd = tokio::process::Command::new("cosmic-randr");
+    let out = crate::catalog::child_env_tokio(cmd.args(args))
         .output()
         .await
         .map_err(|e| format!("cosmic-randr isn't available ({e})"))?;
