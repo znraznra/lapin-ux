@@ -81,6 +81,18 @@ pub(crate) fn in_lapin_ux_session() -> bool {
 
 fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-shell");
+    // Protocol trace for drag and drop (#81): with
+    // `~/.local/state/lapin-ux/debug-wayland` present at sign-in, every Wayland
+    // message the shell sends and gets is written to the session log (a lot:
+    // turn it on for one test, then delete the file). Set before anything
+    // connects to the compositor or starts a thread.
+    if std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/state/lapin-ux/debug-wayland"))
+        .is_some_and(|p| p.exists())
+    {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("WAYLAND_DEBUG", "1") };
+    }
     // Drag and drop diagnostics (#81): `touch ~/.local/state/lapin-ux/debug-dnd`
     // (or LAPIN_UX_DEBUG_DND=1) before signing in logs every drag event the
     // shell gets. libcosmic and iced log through the `log` crate, which the
