@@ -1081,7 +1081,10 @@ impl Application for Shell {
         crate::style::set_transparency(cfg.transparency_effects);
         let catalog = Catalog::load(cfg.show_other_desktop_apps);
         // Sounds added in Settings live in Lapin's own folder (#134).
-        lapin_ux_core::sound::move_into_lapin_now();
+        // Only in a Lapin UX session: run from elsewhere it must not move files.
+        if crate::in_lapin_ux_session() {
+            lapin_ux_core::sound::move_into_lapin_now();
+        }
         if !cfg.initialized {
             crate::defaults::apply_first_run();
             cfg = cfg.with_defaults(&catalog);

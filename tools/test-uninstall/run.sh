@@ -458,6 +458,20 @@ bash "$U" --snapshot
 bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
 check "the added scheme moved to the usual place" "[ -f \"$D/sounds/ocean/stereo/bell.oga\" ]"
 check "Lapin's own folder and per-event sounds removed" "[ ! -e \"$D/lapin-ux\" ] && [ ! -e \"$D/sounds/lapin-ux-custom\" ]"
+# a scheme of the same name already in the usual place: both are kept
+mkdir -p "$D/lapin-ux/sounds/ocean/stereo" "$D/sounds/ocean/stereo" "$HOME/.local/state/lapin-ux"
+echo mine > "$D/lapin-ux/sounds/ocean/stereo/bell.oga"; echo theirs > "$D/sounds/ocean/stereo/bell.oga"
+printf 'ocean\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+bash "$U" --settings-only --yes > "$HOME/out2.txt" 2>&1
+check "name conflict: the existing scheme untouched, Lapin's kept beside it" "grep -q theirs \"$D/sounds/ocean/stereo/bell.oga\" && grep -q mine \"$D/sounds/ocean-2/stereo/bell.oga\""
+# the usual place can't be written: the scheme stays in Lapin's folder
+mkdir -p "$D/lapin-ux/sounds/reef/stereo" "$D/lapin-ux/sounds/lapin-ux-custom" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
+echo x > "$D/lapin-ux/sounds/reef/stereo/bell.oga"
+printf 'reef\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+chmod a-w "$D/sounds"
+bash "$U" --settings-only --yes > "$HOME/out3.txt" 2>&1
+chmod u+w "$D/sounds"
+check "a scheme that can't move is kept, the rest of Lapin's folder goes" "[ -f \"$D/lapin-ux/sounds/reef/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && [ ! -e \"$D/lapin-ux/sounds/lapin-ux-custom\" ]"
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T; do

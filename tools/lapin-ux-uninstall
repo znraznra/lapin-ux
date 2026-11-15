@@ -576,12 +576,28 @@ restore_settings() {
         local scheme
         while IFS= read -r scheme; do
             case "$scheme" in ''|*/*|lapin-ux-custom|freedesktop) continue ;; esac
-            if [ -d "$DATA/lapin-ux/sounds/$scheme" ] && [ ! -e "$DATA/sounds/$scheme" ]; then
-                run mkdir -p "$DATA/sounds" && run mv "$DATA/lapin-ux/sounds/$scheme" "$DATA/sounds/$scheme"
-            fi
+            [ -d "$DATA/lapin-ux/sounds/$scheme" ] || continue
+            # A scheme of that name is already there: keep both.
+            local dest="$DATA/sounds/$scheme" n=2
+            while [ -e "$dest" ]; do dest="$DATA/sounds/$scheme-$n"; n=$((n + 1)); done
+            run mkdir -p "$DATA/sounds" && run mv "$DATA/lapin-ux/sounds/$scheme" "$dest" \
+                || say "  (couldn't move the sound scheme $scheme; it stays in $DATA/lapin-ux/sounds)"
         done < "$STATE/sounds-added"
     fi
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
+    # Anything still in Lapin's sounds folder but its per-event sounds is a
+    # scheme that couldn't move: keep that folder, remove the rest.
+    local kept=0 entry
+    for entry in "$DATA/lapin-ux/sounds"/*; do
+        [ -e "$entry" ] && [ "${entry##*/}" != lapin-ux-custom ] && kept=1
+    done
+    local lapin_data=("$DATA/lapin-ux")
+    if [ "$kept" = 1 ]; then
+        lapin_data=("$DATA/lapin-ux/sounds/lapin-ux-custom")
+        for entry in "$DATA/lapin-ux"/* "$DATA/lapin-ux"/.[!.]*; do
+            [ -e "$entry" ] && [ "${entry##*/}" != sounds ] && lapin_data+=("$entry")
+        done
+    fi
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "${lapin_data[@]}" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"

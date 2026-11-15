@@ -184,9 +184,34 @@ pub fn move_into_lapin(shared: &Path, lapin: &Path, added: &[String]) {
         let (a, b) = (from.join(name), to.join(name));
         if a.is_dir() && !a.is_symlink() && !b.exists() {
             let _ = std::fs::create_dir_all(&to);
-            let _ = std::fs::rename(&a, &b);
+            if std::fs::rename(&a, &b).is_err() {
+                // Another filesystem (a linked sounds folder): copy, and remove
+                // the old one only when the whole copy worked.
+                if copy_dir(&a, &b).is_ok() {
+                    let _ = std::fs::remove_dir_all(&a);
+                } else {
+                    let _ = std::fs::remove_dir_all(&b);
+                }
+            }
         }
     }
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&src)?, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
 }
 
 /// `move_into_lapin` for this user, with the list Settings keeps.
@@ -202,17 +227,19 @@ pub fn move_into_lapin_now() {
     move_into_lapin(&shared, &lapin, &added);
 }
 
-/// What `lapin-ux-custom` says about `event` (only Lapin's own data dir counts).
+/// What `lapin-ux-custom` says about `event`: Lapin's own data dir, then the
+/// user's shared one (where older versions kept it, if it couldn't be moved).
 pub fn custom_choice(event: &str, dirs: &[PathBuf]) -> Choice {
-    let Some(user) = dirs.first() else { return Choice::None };
-    let dir = user.join("sounds").join(CUSTOM).join("stereo");
-    if dir.join(format!("{event}.silent")).exists() {
-        return Choice::Silent;
-    }
-    for ext in ["oga", "ogg", "wav", "flac", "mp3"] {
-        let p = dir.join(format!("{event}.{ext}"));
-        if p.is_file() {
-            return Choice::File(p);
+    for user in dirs.iter().take(2) {
+        let dir = user.join("sounds").join(CUSTOM).join("stereo");
+        if dir.join(format!("{event}.silent")).exists() {
+            return Choice::Silent;
+        }
+        for ext in ["oga", "ogg", "wav", "flac", "mp3"] {
+            let p = dir.join(format!("{event}.{ext}"));
+            if p.is_file() {
+                return Choice::File(p);
+            }
         }
     }
     Choice::None
@@ -283,6 +310,12 @@ mod move_tests {
         move_into_lapin(&shared, &lapin, &[]);
         assert!(shared.join("sounds").join(CUSTOM).is_dir());
         assert!(lapin.join("sounds").join(CUSTOM).join("stereo/bell.oga").is_file());
+        // A per-event choice left in the shared folder still counts.
+        let left = shared.join("sounds").join(CUSTOM).join("stereo");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("message.silent"), b"").unwrap();
+        assert!(matches!(custom_choice("message", &[lapin.clone(), shared.clone()]), Choice::Silent));
+        assert!(matches!(custom_choice("bell", &[lapin.clone(), shared.clone()]), Choice::File(_)));
         let _ = std::fs::remove_dir_all(&t);
     }
 }
