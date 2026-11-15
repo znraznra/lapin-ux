@@ -480,6 +480,7 @@ impl Shell {
             None => Task::future(async move {
                 let mut c = std::process::Command::new("xdg-open");
                 c.arg(shown.item.path);
+                crate::catalog::child_env_std(&mut c);
                 let _ = cosmic::process::spawn(c).await;
                 cosmic::Action::App(Message::Noop)
             }),
@@ -1161,6 +1162,7 @@ impl Shell {
                 let program: Vec<&str> = exec.split_whitespace().filter(|w| !w.starts_with('%')).collect();
                 let mut c = std::process::Command::new(program[0]);
                 c.args(&program[1..]).current_dir(dir);
+                crate::catalog::child_env_std(&mut c);
                 return Task::batch([
                     close,
                     Task::future(async move {
@@ -1688,7 +1690,10 @@ fn open_trash() -> Task<Message> {
         // Most file managers take trash:///; COSMIC Files too.
         let mut ok = false;
         for (cmd, args) in [("cosmic-files", vec!["trash:///"]), ("gio", vec!["open", "trash:///"]), ("xdg-open", vec!["trash:///"])] {
-            if tokio::process::Command::new(cmd).args(&args).spawn().is_ok() {
+            let mut c = tokio::process::Command::new(cmd);
+            c.args(&args);
+            crate::catalog::child_env_tokio(&mut c);
+            if c.spawn().is_ok() {
                 ok = true;
                 break;
             }

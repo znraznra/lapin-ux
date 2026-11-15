@@ -1866,7 +1866,10 @@ impl Shell {
                         None => vec!["xdg-open".into(), path.to_string_lossy().into_owned()],
                     };
                     if let Some((prog, rest)) = args.split_first() {
-                        if let Err(e) = tokio::process::Command::new(prog).args(rest).spawn() {
+                        let mut c = tokio::process::Command::new(prog);
+                        c.args(rest);
+                        crate::catalog::child_env_tokio(&mut c);
+                        if let Err(e) = c.spawn() {
                             tracing::warn!("jump list: {prog}: {e}");
                         }
                     }
@@ -1877,7 +1880,10 @@ impl Shell {
             Message::OpenFile(path) => {
                 let close = self.close_start();
                 let open = Task::future(async move {
-                    let _ = tokio::process::Command::new("xdg-open").arg(path).spawn();
+                    let mut c = tokio::process::Command::new("xdg-open");
+                    c.arg(path);
+                    crate::catalog::child_env_tokio(&mut c);
+                    let _ = c.spawn();
                     cosmic::Action::App(Message::Noop)
                 });
                 return Task::batch([close, open]);
@@ -2022,7 +2028,9 @@ impl Shell {
                 if !std::path::Path::new("/proc").read_dir().is_ok_and(|mut d| {
                     d.any(|e| e.ok().is_some_and(|e| std::fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.trim() == "cosmic-osk")))
                 }) {
-                    let _ = std::process::Command::new("cosmic-osk").spawn();
+                    let mut c = std::process::Command::new("cosmic-osk");
+                    crate::catalog::child_env_std(&mut c);
+                    let _ = c.spawn();
                 }
             }
             Message::Snap(m) => return self.update_snap(m),

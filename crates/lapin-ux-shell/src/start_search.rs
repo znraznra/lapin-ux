@@ -265,6 +265,7 @@ pub(crate) fn open_with_default(target: std::ffi::OsString) -> Task<Message> {
     Task::future(async move {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(target);
+        crate::catalog::child_env_std(&mut c);
         if cosmic::process::spawn(c).await.is_none() {
             tracing::warn!("xdg-open failed");
         }
@@ -293,6 +294,7 @@ pub fn show_in_folder(path: PathBuf) -> Task<Message> {
             let dir = path.parent().map(Path::to_path_buf).unwrap_or(path);
             let mut c = std::process::Command::new("xdg-open");
             c.arg(dir);
+            crate::catalog::child_env_std(&mut c);
             let _ = cosmic::process::spawn(c).await;
         }
         cosmic::Action::App(Message::Noop)

@@ -35,6 +35,53 @@ pub(crate) fn set_child_wayland_debug(original: Option<String>) {
     let _ = CHILD_WAYLAND_DEBUG.set(original);
 }
 
+/// What a program the shell starts gets for `WAYLAND_DEBUG` (#81), given what
+/// the shell started with: put back when it was set, removed when only the
+/// tracing switch added it, untouched when tracing is off (`None`).
+fn child_wayland_debug(setting: Option<&Option<String>>) -> Option<Option<&str>> {
+    setting.map(|v| v.as_deref())
+}
+
+/// Gives a program the shell starts the `WAYLAND_DEBUG` value the shell itself
+/// started with.
+pub(crate) fn child_env_std(c: &mut std::process::Command) -> &mut std::process::Command {
+    match child_wayland_debug(CHILD_WAYLAND_DEBUG.get()) {
+        Some(Some(v)) => c.env("WAYLAND_DEBUG", v),
+        Some(None) => c.env_remove("WAYLAND_DEBUG"),
+        None => c,
+    }
+}
+
+/// [`child_env_std`] for a `tokio` command.
+pub(crate) fn child_env_tokio(c: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    match child_wayland_debug(CHILD_WAYLAND_DEBUG.get()) {
+        Some(Some(v)) => c.env("WAYLAND_DEBUG", v),
+        Some(None) => c.env_remove("WAYLAND_DEBUG"),
+        None => c,
+    }
+}
+
+#[cfg(test)]
+mod wayland_debug_tests {
+    use super::child_wayland_debug;
+
+    #[test]
+    fn tracing_off_leaves_the_environment_alone() {
+        assert_eq!(child_wayland_debug(None), None);
+    }
+
+    #[test]
+    fn added_by_the_switch_is_removed_for_children() {
+        assert_eq!(child_wayland_debug(Some(&None)), Some(None));
+    }
+
+    #[test]
+    fn an_existing_value_is_put_back_for_children() {
+        let original = Some("client".to_string());
+        assert_eq!(child_wayland_debug(Some(&original)), Some(Some("client")));
+    }
+}
+
 /// Newest mtime of the application folders: changes when an app is
 /// installed or removed (a .desktop file is added to or deleted from them).
 fn apps_stamp() -> Option<std::time::SystemTime> {

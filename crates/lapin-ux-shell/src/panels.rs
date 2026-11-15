@@ -176,10 +176,12 @@ pub fn run_command(input: &str) -> std::process::Command {
     if looks_like_target {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(expanded);
+        crate::catalog::child_env_std(&mut c);
         c
     } else {
         let mut c = std::process::Command::new("sh");
         c.arg("-c").arg(t);
+        crate::catalog::child_env_std(&mut c);
         c
     }
 }
