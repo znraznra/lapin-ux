@@ -502,7 +502,8 @@ Properties and groups (#143). The Properties window has two tabs, General (the
 name, Type, Size, Contains, File location, the dates, Opens with, and for a
 drive its used and free space and capacity with a bar) and Security (the
 permissions and the checksum), and an OK button. The details pane shows the
-same details and a Properties button. `tab::LAPIN_PROPERTIES_TAB` tells
+name, Type, Size, Contains, File location and the dates (no permissions, no
+Opens with) and a Properties button. `tab::LAPIN_PROPERTIES_TAB` tells
 `Item::preview_view` which of the three to build. Sorted by date, the list is
 split into groups with a heading ("Today", "Yesterday", "Earlier this week",
 "Last week", "Earlier this month", "Last month", "Earlier this year", "A long
