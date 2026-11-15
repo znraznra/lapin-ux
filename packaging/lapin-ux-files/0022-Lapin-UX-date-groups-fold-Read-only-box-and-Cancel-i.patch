@@ -1,0 +1,163 @@
+From 6131dc9059f86ffeb02caf9f075f386e2f9e63ba Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 12:38:09 +0800
+Subject: [PATCH] Lapin UX: date groups fold, Read-only box and Cancel in
+ Properties, tab icon from the start
+
+---
+ i18n/en/cosmic_files.ftl |  1 +
+ src/app.rs               |  6 +++++
+ src/tab.rs               | 58 ++++++++++++++++++++++++++++++++++++----
+ 3 files changed, 60 insertions(+), 5 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 19665c2..77505e0 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -469,3 +469,4 @@ group-last-month = Last month
+ group-this-year = Earlier this year
+ group-long-ago = A long time ago
+ ok = OK
++read-only = Read-only
+diff --git a/src/app.rs b/src/app.rs
+index d3a7bf4..b3a1469 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -1528,6 +1528,7 @@ impl App {
+             entity.id()
+         };
+ 
++        self.lapin_tab_icon(entity);
+         let mut tasks = Vec::with_capacity(4);
+         if activate {
+             tasks.push(task::widget(unfocus()));
+@@ -7722,9 +7723,14 @@ impl Application for App {
+                             widget::row::with_capacity(2)
+                                 .padding(space_s)
+                                 .push(widget::space::horizontal())
++                                .spacing(8)
+                                 .push(
+                                     widget::button::suggested(fl!("ok"))
+                                         .on_press(Message::LapinCloseWindow(id)),
++                                )
++                                .push(
++                                    widget::button::standard(fl!("cancel"))
++                                        .on_press(Message::LapinCloseWindow(id)),
+                                 ),
+                         )
+                         .into()
+diff --git a/src/tab.rs b/src/tab.rs
+index 013c6a6..09424fb 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1827,6 +1827,7 @@ pub enum Message {
+     /// Lapin UX: Select none, Invert selection, and the details pane's Properties button.
+     LapinSelectNone,
+     LapinSelectInvert,
++    LapinGroupToggle(u8),
+     LapinProperties,
+     SelectFirst,
+     SelectLast,
+@@ -2796,7 +2797,27 @@ impl Item {
+                     }
+                     return column.into();
+                 }
+-                1 => {}
++                1 => {
++                    // Attributes: Read-only clears every write permission;
++                    // unticking gives the owner's back.
++                    #[cfg(unix)]
++                    if let (Some(path), Some(metadata)) = (self.path_opt(), self.file_metadata()) {
++                        use std::os::unix::fs::MetadataExt;
++                        let mode = metadata.mode();
++                        let read_only = mode & 0o222 == 0;
++                        let path = path.clone();
++                        settings.push(
++                            widget::settings::item::builder(fl!("read-only")).control(
++                                widget::checkbox(read_only).on_toggle(move |on| {
++                                    Message::SetPermissions(
++                                        path.clone(),
++                                        if on { mode & !0o222 } else { mode | 0o200 },
++                                    )
++                                }),
++                            ),
++                        );
++                    }
++                }
+                 _ => {
+                     settings.clear();
+                     if self.path_opt().is_some() {
+@@ -3018,6 +3039,8 @@ impl fmt::Debug for SearchContextWrapper {
+ // TODO when creating items, pass <Arc<SelectedItems>> to each item
+ // as a drag data, so that when dnd is initiated, they are all included
+ pub struct Tab {
++    /// Lapin UX: the date groups that are folded in the list (#143).
++    pub lapin_collapsed: std::collections::BTreeSet<u8>,
+     //TODO: make more items private
+     pub location: Location,
+     pub location_ancestors: Vec<(Location, String)>,
+@@ -3187,6 +3210,7 @@ impl Tab {
+             items_opt: None,
+             scrollable_id,
+             select_focus: None,
++            lapin_collapsed: std::collections::BTreeSet::new(),
+             select_range: None,
+             clicked: None,
+             dnd_hovered: None,
+@@ -4793,6 +4817,11 @@ impl Tab {
+                     self.search_context = None;
+                 }
+             }
++            Message::LapinGroupToggle(group) => {
++                if !self.lapin_collapsed.remove(&group) {
++                    self.lapin_collapsed.insert(group);
++                }
++            }
+             Message::LapinSelectNone => {
+                 self.select_none();
+             }
+@@ -6374,18 +6403,37 @@ impl Tab {
+                 // ("Today", "Earlier this week", …) with a heading each.
+                 if lapin_group_by_date {
+                     let group = lapin_date_group(item, &lapin_now);
++                    let folded = self.lapin_collapsed.contains(&group);
+                     if lapin_group != Some(group) {
+                         lapin_group = Some(group);
+                         column = column.push(
+-                            widget::container(
+-                                widget::text::body(lapin_group_name(group)).class(theme::Text::Accent),
++                            widget::button::custom(
++                                widget::row::with_capacity(2)
++                                    .spacing(space_xxs)
++                                    .align_y(Alignment::Center)
++                                    .push(
++                                        widget::icon::from_name(if folded {
++                                            "go-next-symbolic"
++                                        } else {
++                                            "go-down-symbolic"
++                                        })
++                                        .size(12),
++                                    )
++                                    .push(widget::text::body(lapin_group_name(group)).class(theme::Text::Accent)),
+                             )
+                             .height(Length::Fixed(LAPIN_GROUP_HEIGHT))
+-                            .align_y(Alignment::Center)
+-                            .padding([0, space_s]),
++                            .padding([0, space_s])
++                            .class(theme::Button::Text)
++                            .on_press(Message::LapinGroupToggle(group)),
+                         );
+                         y += LAPIN_GROUP_HEIGHT;
+                     }
++                    if folded {
++                        // A folded group's files aren't in the list.
++                        item.pos_opt.set(None);
++                        item.rect_opt.set(None);
++                        continue;
++                    }
+                 }
+ 
+                 item.pos_opt.set(Some((count, 0)));
+-- 
+2.43.0
+

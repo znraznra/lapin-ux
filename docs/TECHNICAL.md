@@ -564,6 +564,10 @@ split into groups with a heading ("Today", "Yesterday", "Earlier this week",
 "Last week", "Earlier this month", "Last month", "Earlier this year", "A long
 time ago"); the headings take 32 px each in the row positions. The "…" menu
 has Select none and Invert selection. A tab shows the icon of its place.
+A group heading folds its group away and back (`Tab::lapin_collapsed`; folded
+files have no row). Properties' General tab has a Read-only box (it clears
+every write permission; unticking gives the owner's back) and the window has
+Cancel beside OK (both close it: changes apply at once).
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
