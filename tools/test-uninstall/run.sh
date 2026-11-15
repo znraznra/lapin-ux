@@ -415,6 +415,14 @@ check "an empty saved pointer file isn't applied" "grep -qx Inherits=Breeze \"$P
 dconf write /org/gnome/desktop/interface/cursor-theme "'Breeze'"; rm -f "$P"
 bash "$DS" enter; pick Breeze; bash "$DS" leave; bash "$DS" enter; bash "$DS" leave
 check "both use Breeze: the other desktop keeps Breeze" "[ \"\$(rd cursor-theme)\" = \"'Breeze'\" ]"
+# Lapin picks, after an early hand-back, the pointer the other desktop uses too:
+# Lapin UX keeps it (its saved copy must not go back to the older pick)
+bash "$DS" enter; pick "My Cursor"; bash "$DS" leave
+pick Breeze; bash "$DS" leave
+bash "$DS" enter
+check "Lapin UX keeps a pick that matches the other desktop's pointer" "[ \"\$(rd cursor-theme)\" = \"'Breeze'\" ]"
+bash "$DS" leave
+check "the other desktop still has Breeze" "[ \"\$(rd cursor-theme)\" = \"'Breeze'\" ]"
 # the other desktop had no pointer set: a left-behind one is cleared again
 dconf reset /org/gnome/desktop/interface/cursor-theme; rm -f "$P"
 bash "$DS" enter; bash "$DS" leave; pick "My Cursor"; bash "$DS" leave
