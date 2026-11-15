@@ -1,0 +1,267 @@
+From b799baf37e4a1523da56f65b02e2c6cfa33777af Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 17:33:28 +0800
+Subject: [PATCH] Lapin UX: retest fixes: progress window yields to questions,
+ tabs drag, details pane stays, Type sorts
+
+---
+ src/app.rs | 53 +++++++++++++++++++++++++++++++++++++++++------------
+ src/tab.rs | 50 ++++++++++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 85 insertions(+), 18 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index b3a1469..d05a957 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -457,6 +457,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX: nothing to do (a press that only had to be taken).
++    LapinNoop,
+     /// Lapin UX's Properties window: pick a tab, close it.
+     LapinPropertiesTab(u8),
+     LapinCloseWindow(window::Id),
+@@ -2184,6 +2186,14 @@ impl App {
+         if self.lapin_progress_hidden {
+             return Task::none();
+         }
++        // A question is up (Replace or skip?): keep out of its way.
++        if self.dialog_pages.front().is_some() {
++            if let Some(id) = self.lapin_progress_window.take() {
++                self.windows.remove(&id);
++                return window::close(id);
++            }
++            return Task::none();
++        }
+         let percent = if count == 0 { 100 } else { (total / count as f32 * 100.0) as i32 };
+         let title = fl!("percent-complete", percent = percent);
+         if let Some(id) = self.lapin_progress_window {
+@@ -2191,9 +2201,10 @@ impl App {
+         }
+         let mut settings = window::Settings {
+             decorations: true,
+-            min_size: Some(Size::new(420.0, 160.0)),
++            min_size: Some(Size::new(420.0, 130.0)),
++            max_size: Some(Size::new(640.0, 520.0)),
+             resizable: true,
+-            size: Size::new(480.0, 260.0),
++            size: Size::new(480.0, if self.lapin_progress_details { 330.0 } else { 150.0 }),
+             transparent: true,
+             ..Default::default()
+         };
+@@ -2708,13 +2719,9 @@ impl App {
+     /// Lapin UX (#143): the details pane sits beside the files, under the rows
+     /// that span the window, instead of in COSMIC's drawer over them.
+     fn lapin_details_pane(&self) -> Option<(Option<Entity>, &PreviewKind)> {
+-        if !crate::config::lapin_session() || !matches!(self.mode, Mode::App) || !self.core.window.show_context {
+-            return None;
+-        }
+-        match &self.context_page {
+-            ContextPage::Preview(entity_opt, kind) => Some((*entity_opt, kind)),
+-            _ => None,
+-        }
++        const SELECTED: PreviewKind = PreviewKind::Selected;
++        (crate::config::lapin_session() && matches!(self.mode, Mode::App) && self.config.show_details)
++            .then_some((None, &SELECTED))
+     }
+ 
+     /// Lapin UX (#143): a tab shows the icon of the place it is in.
+@@ -3854,6 +3861,10 @@ impl Application for App {
+             }
+             Message::LapinProgressDetails(on) => {
+                 self.lapin_progress_details = on;
++                if let Some(id) = self.lapin_progress_window {
++                    let rows = self.progress_operations.len().max(1) as f32;
++                    return window::resize(id, Size::new(480.0, 60.0 + rows * if on { 270.0 } else { 90.0 }));
++                }
+             }
+             Message::LapinProgressTick => {
+                 return self.lapin_progress_tick();
+@@ -3874,6 +3885,7 @@ impl Application for App {
+                 self.remove_window(&id);
+                 return window::close(id);
+             }
++            Message::LapinNoop => {}
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -5213,6 +5225,12 @@ impl Application for App {
+             }
+             Message::Preview(entity_opt) => {
+                 match self.mode {
++                    Mode::App if crate::config::lapin_session() => {
++                        // Lapin UX: the details pane is beside the files and
++                        // only follows this setting; the drawer (Options,
++                        // History…) is left alone.
++                        return cosmic::task::message(Message::SetShowDetails(!self.config.show_details));
++                    }
+                     Mode::App => {
+                         let show_details = !self.config.show_details;
+                         self.context_page = ContextPage::Preview(None, PreviewKind::Selected);
+@@ -6421,7 +6439,14 @@ impl Application for App {
+     }
+ 
+     fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<'_, Message>> {
+-        if !self.core.window.show_context || self.lapin_details_pane().is_some() {
++        if !self.core.window.show_context {
++            return None;
++        }
++        // Lapin UX: the details are in the pane beside the files, never here.
++        if crate::config::lapin_session()
++            && matches!(self.mode, Mode::App)
++            && matches!(self.context_page, ContextPage::Preview(..))
++        {
+             return None;
+         }
+ 
+@@ -7443,8 +7468,11 @@ impl Application for App {
+         if crate::config::lapin_session() {
+             // Lapin UX: the tabs are in the title bar, then a + for a new one.
+             // (The menus are in the command bar.)
++            // The title bar moves the window when dragged from a spot nothing
++            // took the press on, so the tab strip takes it: dragging a tab
++            // reorders tabs instead of moving the window.
+             return vec![
+-                widget::tab_bar::horizontal(&self.tab_model)
++                crate::mouse_area::MouseArea::new(widget::tab_bar::horizontal(&self.tab_model)
+                     .button_height(32)
+                     .button_spacing(theme::spacing().space_xxs)
+                     .minimum_button_width(200)
+@@ -7458,7 +7486,8 @@ impl Application for App {
+                     .on_dnd_enter(Message::DndEnterTab)
+                     .on_dnd_leave(|_| Message::DndExitTab)
+                     .on_dnd_drop(|entity, data, action| Message::DndDropTab(entity, data, action))
+-                    .drag_id(self.tab_drag_id)
++                    .drag_id(self.tab_drag_id))
++                    .on_press(|_| Message::LapinNoop)
+                     .into(),
+                 widget::tooltip(
+                     widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
+diff --git a/src/tab.rs b/src/tab.rs
+index eeae92f..d9e7508 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1828,6 +1828,7 @@ pub enum Message {
+     LapinSelectNone,
+     LapinSelectInvert,
+     LapinGroupToggle(u8),
++    LapinSortType,
+     LapinProperties,
+     SelectFirst,
+     SelectLast,
+@@ -3041,6 +3042,8 @@ impl fmt::Debug for SearchContextWrapper {
+ pub struct Tab {
+     /// Lapin UX: the date groups that are folded in the list (#143).
+     pub lapin_collapsed: std::collections::BTreeSet<u8>,
++    /// Lapin UX: sorted by the Type column (Some(ascending)), on top of the usual sort.
++    pub lapin_sort_type: Option<bool>,
+     //TODO: make more items private
+     pub location: Location,
+     pub location_ancestors: Vec<(Location, String)>,
+@@ -3211,6 +3214,7 @@ impl Tab {
+             scrollable_id,
+             select_focus: None,
+             lapin_collapsed: std::collections::BTreeSet::new(),
++            lapin_sort_type: None,
+             select_range: None,
+             clicked: None,
+             dnd_hovered: None,
+@@ -4817,6 +4821,9 @@ impl Tab {
+                     self.search_context = None;
+                 }
+             }
++            Message::LapinSortType => {
++                self.lapin_sort_type = Some(!self.lapin_sort_type.unwrap_or(false));
++            }
+             Message::LapinGroupToggle(group) => {
+                 if !self.lapin_collapsed.remove(&group) {
+                     self.lapin_collapsed.insert(group);
+@@ -4914,6 +4921,7 @@ impl Tab {
+                 }
+             },
+             Message::SetSort(heading_option, dir) => {
++                self.lapin_sort_type = None;
+                 if !matches!(self.location, Location::Search(..)) {
+                     self.sort_name = heading_option;
+                     self.sort_direction = dir;
+@@ -4978,6 +4986,7 @@ impl Tab {
+                 );
+             }
+             Message::ToggleSort(heading_option) => {
++                self.lapin_sort_type = None;
+                 if !matches!(self.location, Location::Search(..)) {
+                     let heading_sort = if self.sort_name == heading_option {
+                         !self.sort_direction
+@@ -5216,6 +5225,28 @@ impl Tab {
+     }
+ 
+     fn column_sort(&self) -> Option<Vec<(usize, &Item)>> {
++        let mut items = self.column_sort_inner()?;
++        // Lapin UX: by Type (folders, then by extension), keeping the usual
++        // order inside each type.
++        if let Some(ascending) = self.lapin_sort_type {
++            let key = |item: &Item| {
++                let dir = item.metadata.is_dir();
++                let ext = if dir {
++                    String::new()
++                } else {
++                    Path::new(&item.name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
++                };
++                (!dir, ext)
++            };
++            items.sort_by(|a, b| {
++                let ord = key(a.1).cmp(&key(b.1));
++                if ascending { ord } else { ord.reverse() }
++            });
++        }
++        Some(items)
++    }
++
++    fn column_sort_inner(&self) -> Option<Vec<(usize, &Item)>> {
+         let check_reverse = |ord: Ordering, sort: bool| {
+             if sort { ord } else { ord.reverse() }
+         };
+@@ -5635,7 +5666,7 @@ impl Tab {
+                 .spacing(space_xxxs)
+                 .width(width);
+             row = row.push(widget::text::heading(name));
+-            match (sort_name == msg, sort_direction) {
++            match (sort_name == msg && self.lapin_sort_type.is_none(), sort_direction) {
+                 (true, true) => {
+                     row = row.push(widget::icon::from_name("pan-down-symbolic").size(16));
+                 }
+@@ -5667,11 +5698,17 @@ impl Tab {
+             },
+         ];
+         if lapin_columns() {
+-            headings.push(
+-                widget::container(widget::text::heading(fl!("type-column")))
+-                    .width(Length::Fixed(TYPE_WIDTH))
+-                    .into(),
+-            );
++            let mut row = widget::row::with_capacity(2)
++                .align_y(Alignment::Center)
++                .spacing(space_xxxs)
++                .width(Length::Fixed(TYPE_WIDTH))
++                .push(widget::text::heading(fl!("type-column")));
++            if let Some(ascending) = self.lapin_sort_type {
++                row = row.push(
++                    widget::icon::from_name(if ascending { "pan-down-symbolic" } else { "pan-up-symbolic" }).size(16),
++                );
++            }
++            headings.push(mouse_area::MouseArea::new(row).on_press(|_| Message::LapinSortType).into());
+         }
+         headings.push(heading_item(fl!("size"), Length::Fixed(size_width), HeadingOptions::Size));
+         let heading_row = widget::row::with_children(headings)
+@@ -6379,6 +6416,7 @@ impl Tab {
+         let lapin_group_by_date = crate::config::lapin_session()
+             && matches!(self.mode, Mode::App)
+             && matches!(self.sort_options().0, HeadingOptions::Modified)
++            && self.lapin_sort_type.is_none()
+             && matches!(self.location, Location::Path(_));
+         let lapin_now = jiff::Zoned::now();
+         let mut lapin_group: Option<u8> = None;
+-- 
+2.43.0
+
