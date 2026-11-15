@@ -39,4 +39,4 @@ Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), snip m
 
 1. Never undo the coexistence and clean-uninstall fixes ([details](Coexistence-and-Uninstall)); read `CLAUDE.md` in the repo root.
 2. Every fork keeps COSMIC's own behaviour outside a Lapin session.
-3. Update docs after each piece of work: README, `docs/TECHNICAL.md`, this wiki.
+3. Update docs after each piece of work: README, `docs/TECHNICAL.md` (and `docs/technical/`), this wiki.

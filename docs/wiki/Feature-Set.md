@@ -1,6 +1,6 @@
 # Feature Set
 
-Everything built so far, by area. The authoritative long version lives in `docs/TECHNICAL.md` in the repo.
+Everything built so far, by area. The authoritative long version lives in `docs/TECHNICAL.md` and `docs/technical/` in the repo.
 
 ## Taskbar (`lapin-ux-shell`)
 - Centred or left icons, Search box (real text field; Enter shows results in Start), pinned and running apps, one taskbar per monitor.
