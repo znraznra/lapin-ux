@@ -1,0 +1,459 @@
+From 994297a9a4b5c681fd817c548a74a65ac95635df Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 20:48:33 +0800
+Subject: [PATCH] Lapin UX: file operations show their progress in a window,
+ with speed graph, Pause and Cancel
+
+---
+ i18n/en/cosmic_files.ftl    |   9 ++
+ src/app.rs                  | 242 +++++++++++++++++++++++++++++++++++-
+ src/operation/controller.rs |  43 ++++++-
+ src/operation/mod.rs        |  17 ++-
+ 4 files changed, 308 insertions(+), 3 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 2682bc4..bf01012 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -413,3 +413,12 @@ no-recent-files = Files you open show up here.
+ pin-files-hint = Right-click a file and choose Pin to Home to keep it here.
+ show-drives = Show drives
+ hide-drives = Hide drives
++percent-complete = {$percent}% complete
++more-details = More details
++fewer-details = Fewer details
++speed-now = Speed: {$speed}/s
++item-name = Name: {$name}
++time-left-seconds = Time remaining: about {$seconds} seconds
++time-left-minutes = Time remaining: about {$minutes} min {$seconds} s
++time-left-hours = Time remaining: about {$hours} h {$minutes} min
++items-left = Items remaining: {$items}
+diff --git a/src/app.rs b/src/app.rs
+index 5d5cd9d..8824505 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -453,6 +453,9 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX's progress window (#101): sample the speeds, open or close it.
++    LapinProgressTick,
++    LapinProgressDetails(bool),
+     /// Lapin UX: Properties opens the details in a window (#75).
+     LapinProperties(Option<Entity>),
+     /// Lapin UX: unpin a favourite from Home (#73), by its index in the config.
+@@ -694,6 +697,18 @@ fn disk_space(path: &Path) -> Option<(u64, u64)> {
+ pub struct MounterData(MounterKey, MounterItem);
+ 
+ /// The two fixed entries Lapin UX puts at the top of the sidebar.
++/// Lapin UX: what the progress window knows about one operation's speed (#101).
++#[derive(Debug)]
++struct LapinSpeed {
++    last: Instant,
++    last_bytes: u64,
++    last_progress: f32,
++    /// Bytes per second, newest last (the graph).
++    samples: VecDeque<f64>,
++    /// Seconds left, when it can be told.
++    eta: Option<f64>,
++}
++
+ #[derive(Clone, Copy, PartialEq, Eq)]
+ enum LapinNav {
+     Home,
+@@ -708,6 +723,8 @@ pub enum WindowKind {
+     Dialogs(widget::Id),
+     FileDialog(Option<Box<[PathBuf]>>),
+     Preview(Option<Entity>, PreviewKind),
++    /// Lapin UX: the file operation progress window (#101).
++    LapinProgress,
+ }
+ 
+ pub struct WatcherWrapper {
+@@ -753,6 +770,13 @@ pub struct App {
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
+     lapin_pc: bool,
++    /// Lapin UX's progress window (#101): its id, whether it shows the
++    /// details, whether you closed it during the current operations, and the
++    /// speed samples per operation.
++    lapin_progress_window: Option<window::Id>,
++    lapin_progress_details: bool,
++    lapin_progress_hidden: bool,
++    lapin_speed: HashMap<u64, LapinSpeed>,
+     /// Lapin UX: the drives under This PC are hidden in the sidebar (#72).
+     lapin_drives_collapsed: bool,
+     nav_model: segmented_button::SingleSelectModel,
+@@ -1700,6 +1724,11 @@ impl App {
+     }
+ 
+     fn remove_window(&mut self, id: &window::Id) {
++        if self.lapin_progress_window == Some(*id) {
++            // Closed by hand: stays away until these operations are over.
++            self.lapin_progress_window = None;
++            self.lapin_progress_hidden = !self.progress_operations.is_empty();
++        }
+         if let Some(window) = self.windows.remove(id) {
+             match window.kind {
+                 WindowKind::Desktop(entity) => {
+@@ -2039,6 +2068,195 @@ impl App {
+         Task::none()
+     }
+ 
++    /// Lapin UX (#101): twice a second while file operations run. Opens the
++    /// progress window, samples each operation's speed, sets the title to the
++    /// overall percentage, and closes the window when everything is done.
++    fn lapin_progress_tick(&mut self) -> Task<Message> {
++        let now = Instant::now();
++        let mut total = 0.0;
++        let mut count = 0;
++        for (id, (op, controller)) in &self.pending_operations {
++            if !op.show_progress_notification() {
++                continue;
++            }
++            let (bytes, progress) = (controller.bytes(), controller.progress());
++            total += progress;
++            count += 1;
++            let speed = self.lapin_speed.entry(*id).or_insert_with(|| LapinSpeed {
++                last: now,
++                last_bytes: bytes,
++                last_progress: progress,
++                samples: VecDeque::new(),
++                eta: None,
++            });
++            let dt = now.duration_since(speed.last).as_secs_f64();
++            if dt < 0.4 {
++                continue;
++            }
++            if controller.is_paused() {
++                speed.last = now;
++                speed.eta = None;
++                continue;
++            }
++            speed.samples.push_back(bytes.saturating_sub(speed.last_bytes) as f64 / dt);
++            if speed.samples.len() > 60 {
++                speed.samples.pop_front();
++            }
++            let rate = f64::from(progress - speed.last_progress) / dt;
++            // Smoothed, so the time left doesn't jump with every sample.
++            speed.eta = (rate > 0.0).then(|| f64::from(1.0 - progress) / rate).map(|eta| match speed.eta {
++                Some(old) => old * 0.7 + eta * 0.3,
++                None => eta,
++            });
++            speed.last = now;
++            speed.last_bytes = bytes;
++            speed.last_progress = progress;
++        }
++        self.lapin_speed.retain(|id, _| self.pending_operations.contains_key(id));
++
++        if self.progress_operations.is_empty() {
++            self.lapin_progress_hidden = false;
++            if let Some(id) = self.lapin_progress_window.take() {
++                self.windows.remove(&id);
++                return window::close(id);
++            }
++            return Task::none();
++        }
++        if self.lapin_progress_hidden {
++            return Task::none();
++        }
++        let percent = if count == 0 { 100 } else { (total / count as f32 * 100.0) as i32 };
++        let title = fl!("percent-complete", percent = percent);
++        if let Some(id) = self.lapin_progress_window {
++            return self.set_window_title(title, id);
++        }
++        let mut settings = window::Settings {
++            decorations: true,
++            min_size: Some(Size::new(420.0, 160.0)),
++            resizable: true,
++            size: Size::new(480.0, 260.0),
++            transparent: true,
++            ..Default::default()
++        };
++        #[cfg(target_os = "linux")]
++        {
++            // The dialog id, so it floats.
++            settings.platform_specific.application_id = "com.system76.CosmicFilesDialog".to_string();
++        }
++        let (id, command) = window::open(settings);
++        self.windows.insert(id, Window::new(WindowKind::LapinProgress));
++        self.lapin_progress_window = Some(id);
++        Task::batch([command.map(|_id| cosmic::action::none()), self.set_window_title(title, id)])
++    }
++
++    /// Lapin UX (#101): one section per running operation: what it does, a
++    /// progress bar with Pause and Cancel, and under More details the speed
++    /// graph, the item in hand, the time and the items left.
++    fn lapin_progress_view(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing {
++            space_xxs, space_xs, space_s, ..
++        } = theme::spacing();
++        let details = self.lapin_progress_details;
++        let mut column = widget::column::with_capacity(8).spacing(space_s).padding(space_s);
++        for id in &self.progress_operations {
++            let Some((op, controller)) = self.pending_operations.get(id) else {
++                if let Some(op) = self.complete_operations.get(id) {
++                    column = column.push(widget::text::body(op.completed_text()));
++                }
++                continue;
++            };
++            let progress = controller.progress();
++            let paused = controller.is_paused();
++            let mut section = widget::column::with_capacity(4).spacing(space_xxs);
++            section = section.push(widget::text::heading(op.pending_text(progress, controller.state())));
++            section = section.push(
++                widget::row::with_capacity(3)
++                    .spacing(space_xs)
++                    .align_y(Alignment::Center)
++                    .push(widget::determinate_linear(progress).width(Length::Fill).girth(Length::Fixed(8.0)))
++                    .push(widget::tooltip(
++                        widget::button::icon(icon::from_name(if paused {
++                            "media-playback-start-symbolic"
++                        } else {
++                            "media-playback-pause-symbolic"
++                        }))
++                        .on_press(Message::PendingPause(*id, !paused)),
++                        widget::text::body(if paused { fl!("resume") } else { fl!("pause") }),
++                        widget::tooltip::Position::Top,
++                    ))
++                    .push(widget::tooltip(
++                        widget::button::icon(icon::from_name("window-close-symbolic")).on_press(Message::PendingCancel(*id)),
++                        widget::text::body(fl!("cancel")),
++                        widget::tooltip::Position::Top,
++                    )),
++            );
++            if details {
++                let speed = self.lapin_speed.get(id);
++                let samples: Vec<f64> = speed.map(|s| s.samples.iter().copied().collect()).unwrap_or_default();
++                let peak = samples.iter().copied().fold(1.0_f64, f64::max);
++                // The speed graph: one bar per half second, newest at the right.
++                let mut graph = widget::row::with_capacity(61).spacing(1).align_y(Alignment::End).height(Length::Fixed(64.0));
++                graph = graph.push(widget::space::horizontal());
++                for v in &samples {
++                    let h = ((v / peak) * 60.0).max(1.0) as f32;
++                    graph = graph.push(
++                        widget::container(widget::space::horizontal().width(Length::Fixed(5.0)))
++                            .height(Length::Fixed(h))
++                            .class(theme::Container::custom(|theme| {
++                                let accent: cosmic::iced::Color = theme.cosmic().accent_color().into();
++                                widget::container::Style {
++                                    background: Some(cosmic::iced::Background::Color(accent)),
++                                    ..Default::default()
++                                }
++                            })),
++                    );
++                }
++                section = section.push(
++                    widget::container(graph)
++                        .padding(2)
++                        .width(Length::Fill)
++                        .class(theme::Container::Card),
++                );
++                let now = samples.last().copied().unwrap_or(0.0);
++                let (done, all) = controller.items();
++                let mut facts = widget::column::with_capacity(4);
++                if controller.bytes() > 0 {
++                    facts = facts.push(widget::text::body(fl!("speed-now", speed = tab::format_size_public(now as u64))));
++                }
++                let name = controller.current();
++                if !name.is_empty() {
++                    facts = facts.push(widget::text::body(fl!("item-name", name = name)));
++                }
++                if let Some(eta) = speed.and_then(|s| s.eta).filter(|_| !paused) {
++                    let eta = eta.ceil() as u64;
++                    facts = facts.push(widget::text::body(if eta >= 3600 {
++                        fl!("time-left-hours", hours = (eta / 3600), minutes = (eta % 3600 / 60))
++                    } else if eta >= 60 {
++                        fl!("time-left-minutes", minutes = (eta / 60), seconds = (eta % 60))
++                    } else {
++                        fl!("time-left-seconds", seconds = eta)
++                    }));
++                }
++                if all > 0 {
++                    facts = facts.push(widget::text::body(fl!("items-left", items = all.saturating_sub(done))));
++                }
++                section = section.push(facts);
++            }
++            column = column.push(section);
++        }
++        column = column.push(
++            widget::button::link(if details { fl!("fewer-details") } else { fl!("more-details") })
++                .on_press(Message::LapinProgressDetails(!details))
++                .padding(0),
++        );
++        let _ = space_xs;
++        widget::container(widget::scrollable(column))
++            .width(Length::Fill)
++            .height(Length::Fill)
++            .class(theme::Container::Background)
++            .into()
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -2764,6 +2982,10 @@ impl Application for App {
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
+             lapin_pc: false,
++            lapin_progress_window: None,
++            lapin_progress_details: false,
++            lapin_progress_hidden: false,
++            lapin_speed: HashMap::new(),
+             lapin_drives_collapsed: false,
+             nav_model: segmented_button::ModelBuilder::default().build(),
+             tab_model: segmented_button::ModelBuilder::default().build(),
+@@ -3262,6 +3484,12 @@ impl Application for App {
+             Message::LapinProperties(entity_opt) => {
+                 return self.open_properties_window(entity_opt);
+             }
++            Message::LapinProgressDetails(on) => {
++                self.lapin_progress_details = on;
++            }
++            Message::LapinProgressTick => {
++                return self.lapin_progress_tick();
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -6700,7 +6928,11 @@ impl Application for App {
+     }
+ 
+     fn footer(&self) -> Option<Element<'_, Message>> {
+-        if self.progress_operations.is_empty() {
++        // Lapin UX shows progress in a window of its own (#101), unless you
++        // closed that window: then it's here, as in COSMIC.
++        if self.progress_operations.is_empty()
++            || (crate::config::lapin_session() && !self.lapin_progress_hidden)
++        {
+             return None;
+         }
+ 
+@@ -7006,6 +7238,7 @@ impl Application for App {
+                     };
+                 }
+                 WindowKind::DesktopViewOptions => self.desktop_view_options(),
++                WindowKind::LapinProgress => self.lapin_progress_view(),
+                 WindowKind::Dialogs(id) => match self.dialog() {
+                     Some(element) => return widget::autosize::autosize(element, id.clone()).into(),
+                     None => widget::space::horizontal().into(),
+@@ -7483,6 +7716,13 @@ impl Application for App {
+             subscriptions.push(dialog.subscription());
+         };
+ 
++        if crate::config::lapin_session()
++            && (!self.progress_operations.is_empty() || self.lapin_progress_window.is_some())
++        {
++            subscriptions
++                .push(iced::time::every(Duration::from_millis(500)).map(|_| Message::LapinProgressTick));
++        }
++
+         Subscription::batch(subscriptions)
+     }
+ }
+diff --git a/src/operation/controller.rs b/src/operation/controller.rs
+index 691316c..8c13693 100644
+--- a/src/operation/controller.rs
++++ b/src/operation/controller.rs
+@@ -1,7 +1,7 @@
+ use atomic_float::AtomicF32;
+ use num_enum::{IntoPrimitive, TryFromPrimitive};
+ use std::sync::Arc;
+-use std::sync::atomic::{self, AtomicU16};
++use std::sync::atomic::{self, AtomicU16, AtomicU64};
+ use tokio::sync::Notify;
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+@@ -18,6 +18,12 @@ struct ControllerInner {
+     state: AtomicU16,
+     progress: AtomicF32,
+     notify: Notify,
++    /// Lapin UX's progress window (#101): bytes copied so far, items done and
++    /// in all, and the item being worked on.
++    bytes: AtomicU64,
++    items_done: AtomicU64,
++    items_total: AtomicU64,
++    current: std::sync::Mutex<String>,
+ }
+ 
+ #[derive(Debug)]
+@@ -34,6 +40,10 @@ impl Default for Controller {
+                 state: AtomicU16::new(ControllerState::Running.into()),
+                 progress: AtomicF32::new(0.0),
+                 notify: Notify::new(),
++                bytes: AtomicU64::new(0),
++                items_done: AtomicU64::new(0),
++                items_total: AtomicU64::new(0),
++                current: std::sync::Mutex::new(String::new()),
+             }),
+         }
+     }
+@@ -53,6 +63,37 @@ impl Controller {
+         }
+     }
+ 
++    pub fn add_bytes(&self, bytes: u64) {
++        self.inner.bytes.fetch_add(bytes, atomic::Ordering::Relaxed);
++    }
++
++    pub fn bytes(&self) -> u64 {
++        self.inner.bytes.load(atomic::Ordering::Relaxed)
++    }
++
++    pub fn set_items(&self, done: u64, total: u64) {
++        self.inner.items_done.store(done, atomic::Ordering::Relaxed);
++        self.inner.items_total.store(total, atomic::Ordering::Relaxed);
++    }
++
++    /// (done, in all); (0, 0) when the operation doesn't count items.
++    pub fn items(&self) -> (u64, u64) {
++        (
++            self.inner.items_done.load(atomic::Ordering::Relaxed),
++            self.inner.items_total.load(atomic::Ordering::Relaxed),
++        )
++    }
++
++    pub fn set_current(&self, name: String) {
++        if let Ok(mut c) = self.inner.current.lock() {
++            *c = name;
++        }
++    }
++
++    pub fn current(&self) -> String {
++        self.inner.current.lock().map(|c| c.clone()).unwrap_or_default()
++    }
++
+     pub fn progress(&self) -> f32 {
+         self.inner.progress.load(atomic::Ordering::Relaxed)
+     }
+diff --git a/src/operation/mod.rs b/src/operation/mod.rs
+index 62dbba6..8c6fa12 100644
+--- a/src/operation/mod.rs
++++ b/src/operation/mod.rs
+@@ -172,7 +172,22 @@ async fn copy_or_move(
+ 
+         {
+             let controller = controller.clone();
+-            context = context.on_progress(move |_op, progress| {
++            // For Lapin UX's progress window (#101): bytes since the last call.
++            let last = std::cell::Cell::new((usize::MAX, 0u64, None::<u64>));
++            context = context.on_progress(move |op, progress| {
++                let (last_op, last_bytes, last_total) = last.get();
++                let delta = if last_op == progress.current_ops {
++                    progress.current_bytes.saturating_sub(last_bytes)
++                } else {
++                    controller.set_current(
++                        op.from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
++                    );
++                    // The rest of the item before (small files report once).
++                    last_total.unwrap_or(last_bytes).saturating_sub(last_bytes) + progress.current_bytes
++                };
++                last.set((progress.current_ops, progress.current_bytes, progress.total_bytes));
++                controller.add_bytes(delta);
++                controller.set_items(progress.current_ops as u64, progress.total_ops as u64);
+                 let item_progress = match progress.total_bytes {
+                     Some(total_bytes) => {
+                         if total_bytes == 0 {
+-- 
+2.43.0
+
