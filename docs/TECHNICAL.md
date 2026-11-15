@@ -477,6 +477,12 @@ patches in `packaging/lapin-ux-settings`; in progress, all 5 stages done)
   pointer from the new theme. GTK apps follow the gsettings key live; Qt and
   other apps that are already open still read the theme when they start, and
   Xwayland's pointer too.
+  The pointer picked for Lapin UX, also one you added, is noted in
+  `~/.local/state/lapin-ux/lapin-pointer` (#134), so `lapin-ux-desktop-settings`
+  knows it's Lapin's and not the other desktops'. If it's found in the shared
+  settings while Lapin's copy isn't in place (it was picked after the copies
+  were handed back too early, #115), `leave` keeps it for Lapin UX and puts the
+  other desktops' pointer back.
 
 **Explorer** (`lapin-explorer`, #71): COSMIC Files at the pinned commit with the
 patches in `packaging/lapin-ux-files/` (after the dialog patch), installed in
@@ -488,7 +494,9 @@ view toggle). The sidebar starts with Home (the Home page, the only Home in
 the list) and Gallery (the Pictures folder), then Recents and the pinned
 folders, then This PC with the drives indented under it (its page shows each
 drive with how full it is), then Networks and Trash. Pin icons, collapsing the
-drives and the sidebar's own right-click entries are still open on #72. The
+drives and the sidebar's own right-click entries: right-click This PC > Hide
+drives folds them away and Show drives brings them back; a pinned folder's menu says Unpin from
+Home and Properties (#72). Pin icons in the sidebar are still open on #72. The
 menus (Sort, View and More, which holds the File and Edit entries the buttons
 don't cover) sit in the command bar instead of the title bar, and the buttons
 are icon-only with a tooltip so the row fits a narrow window; the menus fold
@@ -496,8 +504,15 @@ into one button when it is too narrow. The address bar under it
 has no Back/Forward pair of its own any more (the command bar has them).
 With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
-The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
+The right-click entry is called Properties and opens a window of its own
+("<name> Properties": name, type, size, dates, permissions), #75; the Details
+button still docks the same details beside the files.
 The tab bar is always shown, with a + that opens a new tab.
+The Home page (#73) has Quick access (pinned folders with a pin to unpin
+them, then up to 8 folders of your recent files), Favorites (pinned files) and
+Recent (the 12 latest files). Right-click > Pin to Home pins a file or folder
+(the same list as COSMIC's "Add to sidebar"); pinned files show on Home only,
+pinned folders also in the sidebar.
 Properties and groups (#143). The Properties window has two tabs, General (the
 name, Type, Size, Contains, File location, the dates, Opens with, and for a
 drive its used and free space and capacity with a bar) and Security (the

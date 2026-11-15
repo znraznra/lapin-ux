@@ -1,0 +1,218 @@
+From e6a3869bcbe1cf5a56156b5f0d6720b0f99860bd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 20:36:26 +0800
+Subject: [PATCH] Lapin UX: Properties opens the details in a window of its own
+
+---
+ src/app.rs  | 100 ++++++++++++++++++++++++++++++++--------------------
+ src/menu.rs |  27 +++++++-------
+ 2 files changed, 77 insertions(+), 50 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 623824b..5d5cd9d 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -131,6 +131,7 @@ pub struct Flags {
+ pub enum Action {
+     About,
+     AddToSidebar,
++    LapinProperties,
+     Compress,
+     Copy,
+     CopyPath,
+@@ -204,6 +205,7 @@ impl Action {
+         match self {
+             Self::About => Message::ToggleContextPage(ContextPage::About),
+             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
++            Self::LapinProperties => Message::LapinProperties(entity_opt),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+             Self::CopyPath => Message::CopyPath(entity_opt),
+@@ -451,6 +453,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX: Properties opens the details in a window (#75).
++    LapinProperties(Option<Entity>),
+     /// Lapin UX: unpin a favourite from Home (#73), by its index in the config.
+     LapinUnpin(usize),
+     TabNew,
+@@ -1981,6 +1985,60 @@ impl App {
+         }
+     }
+ 
++    /// The details of the selection in a window of its own: the desktop's
++    /// Show details, and Lapin UX's Properties (#75).
++    fn open_properties_window(&mut self, entity_opt: Option<Entity>) -> Task<Message> {
++        let preview_kind = {
++            let mut selected_paths = self.selected_paths(entity_opt);
++            match (selected_paths.next(), selected_paths.next()) {
++                (Some(_), Some(_)) => Some(PreviewKind::Selected),
++                (Some(path), None) => {
++                    Some(PreviewKind::Location(Location::Path(path)))
++                }
++                _ => None,
++            }
++        };
++
++        if let Some(preview_kind) = preview_kind {
++            let mut settings = window::Settings {
++                decorations: true,
++                min_size: Some(Size::new(360.0, 180.0)),
++                resizable: true,
++                size: Size::new(480.0, 600.0),
++                transparent: true,
++                ..Default::default()
++            };
++
++            #[cfg(target_os = "linux")]
++            {
++                // Use the dialog ID to make it float
++                settings.platform_specific.application_id =
++                    "com.system76.CosmicFilesDialog".to_string();
++            }
++
++            // Lapin UX: "<name> Properties", the usual title (#75).
++            let title = crate::config::lapin_session().then(|| match &preview_kind {
++                PreviewKind::Location(location) => format!("{} {}", location.title(), fl!("properties")),
++                _ => fl!("properties"),
++            });
++            let (id, command) = window::open(settings);
++            self.windows.insert(
++                id,
++                Window::new(WindowKind::Preview(entity_opt, preview_kind)),
++            );
++            let title_task = match title {
++                Some(t) => self.set_window_title(t, id),
++                None => Task::none(),
++            };
++            return Task::batch([
++                self.update_desktop(), // Force re-calculating of directory sizes
++                command.map(|_id| cosmic::action::none()),
++                title_task,
++            ]);
++        }
++        Task::none()
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -3201,6 +3259,9 @@ impl Application for App {
+                     }
+                 }
+             }
++            Message::LapinProperties(entity_opt) => {
++                return self.open_properties_window(entity_opt);
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -4546,44 +4607,7 @@ impl Application for App {
+                         return cosmic::task::message(Message::SetShowDetails(show_details));
+                     }
+                     Mode::Desktop => {
+-                        let preview_kind = {
+-                            let mut selected_paths = self.selected_paths(entity_opt);
+-                            match (selected_paths.next(), selected_paths.next()) {
+-                                (Some(_), Some(_)) => Some(PreviewKind::Selected),
+-                                (Some(path), None) => {
+-                                    Some(PreviewKind::Location(Location::Path(path)))
+-                                }
+-                                _ => None,
+-                            }
+-                        };
+-
+-                        if let Some(preview_kind) = preview_kind {
+-                            let mut settings = window::Settings {
+-                                decorations: true,
+-                                min_size: Some(Size::new(360.0, 180.0)),
+-                                resizable: true,
+-                                size: Size::new(480.0, 600.0),
+-                                transparent: true,
+-                                ..Default::default()
+-                            };
+-
+-                            #[cfg(target_os = "linux")]
+-                            {
+-                                // Use the dialog ID to make it float
+-                                settings.platform_specific.application_id =
+-                                    "com.system76.CosmicFilesDialog".to_string();
+-                            }
+-
+-                            let (id, command) = window::open(settings);
+-                            self.windows.insert(
+-                                id,
+-                                Window::new(WindowKind::Preview(entity_opt, preview_kind)),
+-                            );
+-                            return Task::batch([
+-                                self.update_desktop(), // Force re-calculating of directory sizes
+-                                command.map(|_id| cosmic::action::none()),
+-                            ]);
+-                        }
++                        return self.open_properties_window(entity_opt);
+                     }
+                 }
+             }
+diff --git a/src/menu.rs b/src/menu.rs
+index b5f8fb5..bb07a67 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -233,7 +233,11 @@ pub fn context_menu<'a>(
+                 children.push(menu::Item::Divider);
+ 
+                 //TODO: Print?
+-                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
++                if crate::config::lapin_session() {
++                    children.push(menu_item(fl!("properties"), Action::LapinProperties));
++                } else {
++                    children.push(menu_item(fl!("show-details"), Action::Preview));
++                }
+                 if any_trash_item {
+                     children.push(menu::Item::Divider);
+                     children.push(menu_item(
+@@ -338,7 +342,11 @@ pub fn context_menu<'a>(
+                     ));
+                 }
+                 children.push(menu::Item::Divider);
+-                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
++                if crate::config::lapin_session() {
++                    children.push(menu_item(fl!("properties"), Action::LapinProperties));
++                } else {
++                    children.push(menu_item(fl!("show-details"), Action::Preview));
++                }
+             } else {
+                 if dialog_kind.save() {
+                     children.push(menu_item(fl!("new-folder"), Action::NewFolder));
+@@ -379,7 +387,11 @@ pub fn context_menu<'a>(
+                 children.push(menu::Item::Divider);
+             }
+             if selected > 0 {
+-                children.push(menu_item(if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") }, Action::Preview));
++                if crate::config::lapin_session() {
++                    children.push(menu_item(fl!("properties"), Action::LapinProperties));
++                } else {
++                    children.push(menu_item(fl!("show-details"), Action::Preview));
++                }
+                 children.push(menu::Item::Divider);
+                 children.push(menu_item(
+                     fl!("restore-from-trash"),
+@@ -829,15 +841,6 @@ pub fn command_bar<'a>(
+     let grid = tab_opt.is_some_and(|tab| tab.config.view == tab::View::Grid);
+     let has_tab = tab_opt.is_some();
+ 
+-    let button = |icon: &'static str, label: String, msg: Option<Message>| {
+-        let b = widget::button::text(label)
+-            .leading_icon(widget::icon::from_name(icon).size(16))
+-            .class(theme::Button::HeaderBar);
+-        match msg {
+-            Some(m) => b.on_press(m),
+-            None => b,
+-        }
+-    };
+     // Icon-only with a tooltip, for the edit actions, so the row fits narrow windows.
+     let tool = |icon: &'static str, label: String, msg: Option<Message>| {
+         let b = widget::button::icon(widget::icon::from_name(icon).size(16));
+-- 
+2.43.0
+
