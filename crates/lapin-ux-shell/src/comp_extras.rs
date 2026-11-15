@@ -148,7 +148,7 @@ impl Shell {
         {
             return; // the last one is still waiting on its notification
         }
-        self.extras.update_check = std::process::Command::new("lapin-ux-update").arg("--check").spawn().ok();
+        self.extras.update_check = crate::catalog::child_env_std(std::process::Command::new("lapin-ux-update").arg("--check")).spawn().ok();
     }
 
     /// Once a second: follow the night light schedule.
@@ -207,12 +207,14 @@ impl Shell {
         let Some(transform) = display::transform_for_orientation(&o) else { return Task::none() };
         self.extras.applied = Some(o);
         Task::future(async move {
-            let out = tokio::process::Command::new("cosmic-randr").args(["list", "--kdl"]).output().await;
+            let mut list = tokio::process::Command::new("cosmic-randr");
+            let out = crate::catalog::child_env_tokio(list.args(["list", "--kdl"])).output().await;
             if let Ok(out) = out {
                 let heads = display::parse_kdl(&String::from_utf8_lossy(&out.stdout));
                 if let Some(head) = heads.iter().find(|h| h.internal() && h.enabled) {
                     let args = display::rotate_command(head, transform);
-                    if let Err(e) = tokio::process::Command::new("cosmic-randr").args(&args).status().await {
+                    let mut set = tokio::process::Command::new("cosmic-randr");
+                    if let Err(e) = crate::catalog::child_env_tokio(set.args(&args)).status().await {
                         tracing::warn!("rotate: {e}");
                     }
                 }

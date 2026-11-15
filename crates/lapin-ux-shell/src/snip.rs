@@ -251,7 +251,8 @@ fn pictures_dir() -> PathBuf {
 /// Put the PNG on the clipboard (wl-copy stays around to serve it).
 async fn copy_png(path: &std::path::Path) {
     let Ok(file) = std::fs::File::open(path) else { return };
-    let _ = tokio::process::Command::new("wl-copy").args(["--type", "image/png"]).stdin(file).spawn();
+    let mut copy = tokio::process::Command::new("wl-copy");
+    let _ = crate::catalog::child_env_tokio(copy.args(["--type", "image/png"])).stdin(file).spawn();
 }
 
 async fn notify_saved(path: &std::path::Path) {

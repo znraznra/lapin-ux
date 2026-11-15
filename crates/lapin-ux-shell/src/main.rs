@@ -81,6 +81,21 @@ pub(crate) fn in_lapin_ux_session() -> bool {
 
 fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-shell");
+    // Protocol trace for drag and drop (#81): with
+    // `~/.local/state/lapin-ux/debug-wayland` present at sign-in, every Wayland
+    // message the shell sends and gets is written to the session log (a lot:
+    // turn it on for one test, then delete the file). Set before anything
+    // connects to the compositor or starts a thread.
+    if std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/state/lapin-ux/debug-wayland"))
+        .is_some_and(|p| p.exists())
+    {
+        // Preserve the original process value so launched apps don't inherit a
+        // tracing flag that was added solely for this shell session.
+        crate::catalog::set_child_wayland_debug(std::env::var("WAYLAND_DEBUG").ok());
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("WAYLAND_DEBUG", "1") };
+    }
     // Drag and drop diagnostics (#81): `touch ~/.local/state/lapin-ux/debug-dnd`
     // (or LAPIN_UX_DEBUG_DND=1) before signing in logs every drag event the
     // shell gets. libcosmic and iced log through the `log` crate, which the
@@ -123,7 +138,7 @@ fn main() -> cosmic::iced::Result {
     // Lapin UX session, hand the key to COSMIC's own launcher.
     if action.as_deref() == Some("start") && !in_lapin_ux_session() {
         use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new("cosmic-launcher").exec();
+        let err = crate::catalog::child_env_std(&mut std::process::Command::new("cosmic-launcher")).exec();
         eprintln!("lapin-ux-shell: not in an Lapin UX session and cosmic-launcher failed: {err}");
         return Ok(());
     }

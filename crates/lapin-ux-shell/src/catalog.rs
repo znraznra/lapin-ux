@@ -3,6 +3,7 @@
 //! them, and launching.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use lapin_ux_core::search::{self, Searchable};
 use cosmic::desktop::{
@@ -24,6 +25,61 @@ pub struct Catalog {
     resolved: HashMap<String, DesktopEntryData>,
     /// Newest modification time of the application folders when loaded.
     stamp: Option<std::time::SystemTime>,
+}
+
+/// If tracing is enabled by the debug marker, this captures the original
+/// process value for children. `None` means the shell added the switch itself.
+static CHILD_WAYLAND_DEBUG: OnceLock<Option<String>> = OnceLock::new();
+
+pub(crate) fn set_child_wayland_debug(original: Option<String>) {
+    let _ = CHILD_WAYLAND_DEBUG.set(original);
+}
+
+/// What a program the shell starts gets for `WAYLAND_DEBUG` (#81), given what
+/// the shell started with: put back when it was set, removed when only the
+/// tracing switch added it, untouched when tracing is off (`None`).
+fn child_wayland_debug(setting: Option<&Option<String>>) -> Option<Option<&str>> {
+    setting.map(|v| v.as_deref())
+}
+
+/// Gives a program the shell starts the `WAYLAND_DEBUG` value the shell itself
+/// started with.
+pub(crate) fn child_env_std(c: &mut std::process::Command) -> &mut std::process::Command {
+    match child_wayland_debug(CHILD_WAYLAND_DEBUG.get()) {
+        Some(Some(v)) => c.env("WAYLAND_DEBUG", v),
+        Some(None) => c.env_remove("WAYLAND_DEBUG"),
+        None => c,
+    }
+}
+
+/// [`child_env_std`] for a `tokio` command.
+pub(crate) fn child_env_tokio(c: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    match child_wayland_debug(CHILD_WAYLAND_DEBUG.get()) {
+        Some(Some(v)) => c.env("WAYLAND_DEBUG", v),
+        Some(None) => c.env_remove("WAYLAND_DEBUG"),
+        None => c,
+    }
+}
+
+#[cfg(test)]
+mod wayland_debug_tests {
+    use super::child_wayland_debug;
+
+    #[test]
+    fn tracing_off_leaves_the_environment_alone() {
+        assert_eq!(child_wayland_debug(None), None);
+    }
+
+    #[test]
+    fn added_by_the_switch_is_removed_for_children() {
+        assert_eq!(child_wayland_debug(Some(&None)), Some(None));
+    }
+
+    #[test]
+    fn an_existing_value_is_put_back_for_children() {
+        let original = Some("client".to_string());
+        assert_eq!(child_wayland_debug(Some(&original)), Some(Some("client")));
+    }
 }
 
 /// Newest mtime of the application folders: changes when an app is
@@ -166,6 +222,13 @@ pub async fn launch(exec: String, app_id: String, terminal: bool, token: Option<
     if let Some(t) = token {
         env.push(("XDG_ACTIVATION_TOKEN", t.clone()));
         env.push(("DESKTOP_STARTUP_ID", t));
+    }
+    // Do not leak a WAYLAND_DEBUG value added by the shell to launched apps.
+    // Preserve the original value if the user had set it before tracing began.
+    // `spawn_desktop_exec` can only set variables, not remove them, so an
+    // unset original becomes `0`, which libwayland treats like unset.
+    if let Some(original) = CHILD_WAYLAND_DEBUG.get() {
+        env.push(("WAYLAND_DEBUG", original.clone().unwrap_or_else(|| "0".into())));
     }
     desktop::spawn_desktop_exec(exec, env, Some(&app_id), terminal).await;
 }
