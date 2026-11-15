@@ -472,6 +472,19 @@ chmod a-w "$D/sounds"
 bash "$U" --settings-only --yes > "$HOME/out3.txt" 2>&1
 chmod u+w "$D/sounds"
 check "a scheme that can't move is kept, the rest of Lapin's folder goes" "[ -f \"$D/lapin-ux/sounds/reef/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && [ ! -e \"$D/lapin-ux/sounds/lapin-ux-custom\" ]"
+# odd names that can't move: a "..x" folder and a link whose target is gone
+rm -rf "$D/lapin-ux" "$D/sounds"; mkdir -p "$D/sounds" "$D/lapin-ux/sounds/..odd/stereo" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
+echo x > "$D/lapin-ux/sounds/..odd/stereo/bell.oga"
+printf '..odd\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+chmod a-w "$D/sounds"
+bash "$U" --settings-only --yes > "$HOME/out4.txt" 2>&1
+chmod u+w "$D/sounds"
+check "a '..x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/..odd/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ]"
+rm -rf "$D/lapin-ux" "$D/sounds"; mkdir -p "$D/sounds" "$D/lapin-ux/sounds" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
+ln -s "$HOME/gone-drive/lake" "$D/lapin-ux/sounds/lake"
+printf 'lake\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+bash "$U" --settings-only --yes > "$HOME/out5.txt" 2>&1
+check "a dangling scheme link is kept, not deleted" "[ -L \"$D/lapin-ux/sounds/lake\" ] && [ ! -e \"$D/lapin-ux/other\" ]"
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T; do

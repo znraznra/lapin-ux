@@ -587,14 +587,15 @@ restore_settings() {
     # Anything still in Lapin's sounds folder but its per-event sounds is a
     # scheme that couldn't move: keep that folder, remove the rest.
     local kept=0 entry
-    for entry in "$DATA/lapin-ux/sounds"/* "$DATA/lapin-ux/sounds"/.[!.]*; do
-        [ -e "$entry" ] && [ "${entry##*/}" != lapin-ux-custom ] && kept=1
+    # Every name counts: hidden ones, "..x", and links whose target is gone.
+    for entry in "$DATA/lapin-ux/sounds"/* "$DATA/lapin-ux/sounds"/.[!.]* "$DATA/lapin-ux/sounds"/..?*; do
+        { [ -e "$entry" ] || [ -L "$entry" ]; } && [ "${entry##*/}" != lapin-ux-custom ] && kept=1
     done
     local lapin_data=("$DATA/lapin-ux")
     if [ "$kept" = 1 ]; then
         lapin_data=("$DATA/lapin-ux/sounds/lapin-ux-custom")
-        for entry in "$DATA/lapin-ux"/* "$DATA/lapin-ux"/.[!.]*; do
-            [ -e "$entry" ] && [ "${entry##*/}" != sounds ] && lapin_data+=("$entry")
+        for entry in "$DATA/lapin-ux"/* "$DATA/lapin-ux"/.[!.]* "$DATA/lapin-ux"/..?*; do
+            { [ -e "$entry" ] || [ -L "$entry" ]; } && [ "${entry##*/}" != sounds ] && lapin_data+=("$entry")
         done
     fi
     for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "${lapin_data[@]}" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
