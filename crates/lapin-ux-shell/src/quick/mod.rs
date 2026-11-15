@@ -663,7 +663,7 @@ impl Shell {
             QuickMsg::Run(bin) => {
                 let close = self.close_panel();
                 let run = Task::future(async move {
-                    if let Err(e) = tokio::process::Command::new(bin).spawn() {
+                    if let Err(e) = crate::catalog::child_env_tokio(&mut tokio::process::Command::new(bin)).spawn() {
                         tracing::warn!("{bin}: {e}");
                     }
                     cosmic::Action::App(Message::Noop)
@@ -680,6 +680,7 @@ impl Shell {
         let argv = lapin_ux_core::system::settings_command(page, lapin_ux_core::system::lapin_settings_installed());
         let mut cmd = std::process::Command::new(&argv[0]);
         cmd.args(&argv[1..]);
+        crate::catalog::child_env_std(&mut cmd);
         Task::future(async move {
             if cosmic::process::spawn(cmd).await.is_none() {
                 tracing::warn!("could not start cosmic-settings");

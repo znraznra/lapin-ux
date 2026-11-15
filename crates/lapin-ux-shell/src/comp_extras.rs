@@ -148,7 +148,7 @@ impl Shell {
         {
             return; // the last one is still waiting on its notification
         }
-        self.extras.update_check = std::process::Command::new("lapin-ux-update").arg("--check").spawn().ok();
+        self.extras.update_check = crate::catalog::child_env_std(std::process::Command::new("lapin-ux-update").arg("--check")).spawn().ok();
     }
 
     /// Once a second: follow the night light schedule.

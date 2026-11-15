@@ -1114,7 +1114,7 @@ impl Application for Shell {
             if let Err(e) = lapin_ux_core::system::mark_welcomed() {
                 tracing::error!(path = %marker.display(), "couldn't write the Get Started marker: {e}");
             }
-            let _ = std::process::Command::new("lapin-ux-welcome").spawn();
+            let _ = crate::catalog::child_env_std(&mut std::process::Command::new("lapin-ux-welcome")).spawn();
         }
         crate::defaults::repair_at_start();
         crate::defaults::sync_icon_variant();

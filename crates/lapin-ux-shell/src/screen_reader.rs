@@ -88,7 +88,9 @@ pub fn follow(on: bool) {
     *started = on.then(std::time::Instant::now);
     drop(started);
     tracing::info!(on, "screen reader: {}", if on { "starting Orca" } else { "stopping Orca" });
-    match std::process::Command::new("orca").args(args).spawn() {
+    let mut orca = std::process::Command::new("orca");
+    orca.args(args);
+    match crate::catalog::child_env_std(&mut orca).spawn() {
         // Reap it when it ends, so no finished Orca lingers as a zombie.
         Ok(mut child) => {
             std::thread::spawn(move || {

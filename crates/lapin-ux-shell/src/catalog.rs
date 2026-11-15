@@ -225,6 +225,8 @@ pub async fn launch(exec: String, app_id: String, terminal: bool, token: Option<
     }
     // Do not leak a WAYLAND_DEBUG value added by the shell to launched apps.
     // Preserve the original value if the user had set it before tracing began.
+    // `spawn_desktop_exec` can only set variables, not remove them, so an
+    // unset original becomes `0`, which libwayland treats like unset.
     if let Some(original) = CHILD_WAYLAND_DEBUG.get() {
         env.push(("WAYLAND_DEBUG", original.clone().unwrap_or_else(|| "0".into())));
     }
