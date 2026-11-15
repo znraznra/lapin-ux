@@ -498,6 +498,16 @@ With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
 The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
 The tab bar is always shown, with a + that opens a new tab.
+Properties and groups (#143). The Properties window has two tabs, General (the
+name, Type, Size, Contains, File location, the dates, Opens with, and for a
+drive its used and free space and capacity with a bar) and Security (the
+permissions and the checksum), and an OK button. The details pane shows the
+same details and a Properties button. `tab::LAPIN_PROPERTIES_TAB` tells
+`Item::preview_view` which of the three to build. Sorted by date, the list is
+split into groups with a heading ("Today", "Yesterday", "Earlier this week",
+"Last week", "Earlier this month", "Last month", "Earlier this year", "A long
+time ago"); the headings take 32 px each in the row positions. The "…" menu
+has Select none and Invert selection. A tab shows the icon of its place.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)

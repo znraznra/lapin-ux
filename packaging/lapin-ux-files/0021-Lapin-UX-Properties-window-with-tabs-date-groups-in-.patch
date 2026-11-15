@@ -1,0 +1,467 @@
+From 35b7dff8a6d29447e512a2ae7d2331e057442efc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 08:23:40 +0800
+Subject: [PATCH] Lapin UX: Properties window with tabs, date groups in the
+ list, Select none and Invert selection
+
+---
+ i18n/en/cosmic_files.ftl |  16 +++++
+ src/app.rs               |  85 +++++++++++++++++++++-
+ src/menu.rs              |   2 +
+ src/tab.rs               | 147 +++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 247 insertions(+), 3 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 3d9113b..19665c2 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -453,3 +453,19 @@ file-location = File location
+ date-created = Date created
+ date-accessed = Date accessed
+ dimensions = Dimensions
++select-none = Select none
++invert-selection = Invert selection
++general = General
++security = Security
++used-space = Used space
++free-space = Free space
++capacity = Capacity
++group-today = Today
++group-yesterday = Yesterday
++group-this-week = Earlier this week
++group-last-week = Last week
++group-this-month = Earlier this month
++group-last-month = Last month
++group-this-year = Earlier this year
++group-long-ago = A long time ago
++ok = OK
+diff --git a/src/app.rs b/src/app.rs
+index 271d124..d3a7bf4 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -132,6 +132,8 @@ pub enum Action {
+     About,
+     AddToSidebar,
+     LapinProperties,
++    LapinSelectNone,
++    LapinSelectInvert,
+     Compress,
+     Copy,
+     CopyPath,
+@@ -206,6 +208,8 @@ impl Action {
+             Self::About => Message::ToggleContextPage(ContextPage::About),
+             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
+             Self::LapinProperties => Message::LapinProperties(entity_opt),
++            Self::LapinSelectNone => Message::TabMessage(entity_opt, tab::Message::LapinSelectNone),
++            Self::LapinSelectInvert => Message::TabMessage(entity_opt, tab::Message::LapinSelectInvert),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+             Self::CopyPath => Message::CopyPath(entity_opt),
+@@ -453,6 +457,9 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX's Properties window: pick a tab, close it.
++    LapinPropertiesTab(u8),
++    LapinCloseWindow(window::Id),
+     /// Lapin UX: open out or fold a folder in the navigation pane's tree.
+     LapinTreeToggle(PathBuf),
+     /// Lapin UX: something the navigation pane asked for, when the view draws it.
+@@ -686,7 +693,7 @@ impl DialogPages {
+ pub struct FavoriteIndex(usize);
+ 
+ /// Free and total bytes of the filesystem holding `path`.
+-fn disk_space(path: &Path) -> Option<(u64, u64)> {
++pub(crate) fn disk_space(path: &Path) -> Option<(u64, u64)> {
+     use std::os::unix::ffi::OsStrExt;
+     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+@@ -798,6 +805,8 @@ pub struct App {
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
+     lapin_pc: bool,
++    /// Lapin UX: the tab shown in Properties windows (0 General, 1 Security).
++    lapin_properties_tab: u8,
+     /// Lapin UX: the folders opened out in the navigation pane's tree.
+     lapin_expanded: BTreeSet<PathBuf>,
+     /// Lapin UX's progress window (#101): its id, whether it shows the
+@@ -1971,6 +1980,7 @@ impl App {
+         }
+         if let Some((title, location, focus_search)) = title_location_opt {
+             self.tab_model.text_set(tab, title);
++            self.lapin_tab_icon(tab);
+             return Task::batch([
+                 self.update_title(),
+                 self.update_watcher(),
+@@ -2706,6 +2716,22 @@ impl App {
+         }
+     }
+ 
++    /// Lapin UX (#143): a tab shows the icon of the place it is in.
++    fn lapin_tab_icon(&mut self, entity: Entity) {
++        if !crate::config::lapin_session() {
++            return;
++        }
++        let Some(tab) = self.tab_model.data::<Tab>(entity) else { return };
++        let handle = match &tab.location {
++            Location::Path(path) | Location::Desktop(path, ..) => tab::folder_icon_symbolic(path, 16),
++            Location::Trash => icon::from_name("user-trash-symbolic").size(16).handle(),
++            Location::Recents => icon::from_name("document-open-recent-symbolic").size(16).handle(),
++            Location::Network(..) => icon::from_name("network-workgroup-symbolic").size(16).handle(),
++            Location::Search(..) => icon::from_name("system-search-symbolic").size(16).handle(),
++        };
++        self.tab_model.icon_set(entity, icon::icon(handle).size(16));
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -3456,6 +3482,7 @@ impl Application for App {
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
+             lapin_pc: false,
++            lapin_properties_tab: 0,
+             lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+             lapin_progress_details: false,
+@@ -3839,6 +3866,13 @@ impl Application for App {
+                 }
+                 self.update_nav_model();
+             }
++            Message::LapinPropertiesTab(tab) => {
++                self.lapin_properties_tab = tab;
++            }
++            Message::LapinCloseWindow(id) => {
++                self.remove_window(&id);
++                return window::close(id);
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -4495,6 +4529,7 @@ impl Application for App {
+                         });
+                         if let Some(title) = title_opt {
+                             self.tab_model.text_set(entity, title);
++                            self.lapin_tab_icon(entity);
+                             commands.push(self.update_tab(entity, home_location.clone(), None));
+                         }
+                     }
+@@ -5459,6 +5494,9 @@ impl Application for App {
+                             self.context_page = ContextPage::NetworkDrive;
+                             self.set_show_context(true);
+                         }
++                        tab::Command::LapinProperties => {
++                            commands.push(self.open_properties_window(Some(entity)));
++                        }
+                         tab::Command::AddToSidebar(path) => {
+                             let mut favorites = self.config.favorites.clone();
+                             let favorite = Favorite::from_path(path);
+@@ -5482,6 +5520,7 @@ impl Application for App {
+                             self.activate_nav_model_location(&tab_path);
+ 
+                             self.tab_model.text_set(entity, tab_title);
++                            self.lapin_tab_icon(entity);
+                             // clear the prefix selection buffer when changing location
+                             self.type_select_prefix.clear();
+                             commands.push(Task::batch([
+@@ -5906,6 +5945,7 @@ impl Application for App {
+                     };
+                     if let Some(title) = title_opt {
+                         self.tab_model.text_set(entity, title);
++                        self.lapin_tab_icon(entity);
+                         return Task::batch([
+                             self.update_title(),
+                             self.update_watcher(),
+@@ -7406,8 +7446,8 @@ impl Application for App {
+                 widget::tab_bar::horizontal(&self.tab_model)
+                     .button_height(32)
+                     .button_spacing(theme::spacing().space_xxs)
+-                    .minimum_button_width(180)
+-                    .maximum_button_width(280)
++                    .minimum_button_width(200)
++                    .maximum_button_width(260)
+                     .width(Length::Shrink)
+                     .enable_tab_drag(String::from("x-cosmic-files/tab-dnd"))
+                     .on_reorder(Message::ReorderTab)
+@@ -7650,6 +7690,45 @@ impl Application for App {
+                     Some(element) => return widget::autosize::autosize(element, id.clone()).into(),
+                     None => widget::space::horizontal().into(),
+                 },
++                WindowKind::Preview(entity_opt, kind) if crate::config::lapin_session() => {
++                    // Lapin UX (#143): tabs on top, the tab's page, OK at the bottom.
++                    let space_s = theme::spacing().space_s;
++                    let tab = self.lapin_properties_tab.min(1);
++                    let tab_button = |label: String, i: u8| {
++                        widget::button::custom(widget::text::body(label))
++                            .padding([6, 14])
++                            .class(if tab == i { theme::Button::Standard } else { theme::Button::MenuRoot })
++                            .on_press(Message::LapinPropertiesTab(i))
++                    };
++                    tab::LAPIN_PROPERTIES_TAB.set(tab + 1);
++                    let page = self
++                        .preview(entity_opt, kind, true)
++                        .map(|x| Message::TabMessage(*entity_opt, x));
++                    tab::LAPIN_PROPERTIES_TAB.set(0);
++                    widget::column::with_capacity(4)
++                        .push(
++                            widget::row::with_capacity(2)
++                                .spacing(4)
++                                .padding([0, space_s])
++                                .push(tab_button(fl!("general"), 0))
++                                .push(tab_button(fl!("security"), 1)),
++                        )
++                        .push(widget::divider::horizontal::default())
++                        .push(
++                            widget::scrollable(widget::container(page).padding(space_s))
++                                .height(Length::Fill),
++                        )
++                        .push(
++                            widget::row::with_capacity(2)
++                                .padding(space_s)
++                                .push(widget::space::horizontal())
++                                .push(
++                                    widget::button::suggested(fl!("ok"))
++                                        .on_press(Message::LapinCloseWindow(id)),
++                                ),
++                        )
++                        .into()
++                }
+                 WindowKind::Preview(entity_opt, kind) => self
+                     .preview(entity_opt, kind, false)
+                     .map(|x| Message::TabMessage(*entity_opt, x)),
+diff --git a/src/menu.rs b/src/menu.rs
+index 35fd581..c54a8d0 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -792,6 +792,8 @@ pub fn menu_lists(
+             menu::Item::Button(fl!("history"), None, Action::EditHistory),
+             menu::Item::Divider,
+             menu::Item::Button(fl!("select-all"), None, Action::SelectAll),
++            menu::Item::Button(fl!("select-none"), None, Action::LapinSelectNone),
++            menu::Item::Button(fl!("invert-selection"), None, Action::LapinSelectInvert),
+             menu::Item::Divider,
+             menu_button_optional(fl!("menu-open-with"), Action::OpenWith, selected == 1),
+             menu_button_optional(fl!("pin-to-home"), Action::AddToSidebar, selected > 0),
+diff --git a/src/tab.rs b/src/tab.rs
+index 171fd4f..013c6a6 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1750,6 +1750,7 @@ pub enum Command {
+     Surface(cosmic::surface::Action<Message>),
+     AddNetworkDrive,
+     AddToSidebar(PathBuf),
++    LapinProperties,
+     AutoScroll(Option<f32>),
+     ChangeLocation(String, Location, Option<Vec<PathBuf>>),
+     Delete(Vec<PathBuf>),
+@@ -1823,6 +1824,10 @@ pub enum Message {
+     SearchContext(Location, SearchContextWrapper),
+     SearchReady(bool),
+     SelectAll,
++    /// Lapin UX: Select none, Invert selection, and the details pane's Properties button.
++    LapinSelectNone,
++    LapinSelectInvert,
++    LapinProperties,
+     SelectFirst,
+     SelectLast,
+     SetOpenWith(Mime, String),
+@@ -2497,6 +2502,29 @@ impl Item {
+         {
+             column = column.push(pair(fl!("contains"), fl!("status-items", items = children)));
+         }
++        // A drive (a folder something is mounted on): how full it is.
++        #[cfg(unix)]
++        if metadata.is_dir()
++            && let Some(path) = self.path_opt()
++            && {
++                use std::os::unix::fs::MetadataExt;
++                path.parent().and_then(|p| p.metadata().ok()).is_none_or(|p| p.dev() != metadata.dev())
++            }
++            && let Some((free, total)) = crate::app::disk_space(path)
++            && total > 0
++        {
++            let used = total.saturating_sub(free);
++            column = column
++                .push(widget::space::vertical().height(Length::Fixed(f32::from(space_xxs))))
++                .push(pair(fl!("used-space"), format!("{} ({})", format_size(used), fl!("bytes", bytes = used))))
++                .push(pair(fl!("free-space"), format!("{} ({})", format_size(free), fl!("bytes", bytes = free))))
++                .push(pair(fl!("capacity"), format!("{} ({})", format_size(total), fl!("bytes", bytes = total))))
++                .push(
++                    widget::progress_bar::determinate_linear(used as f32 / total as f32)
++                        .width(Length::Fill)
++                        .girth(Length::Fixed(14.0)),
++                );
++        }
+         if let Some(parent) = self.path_opt().and_then(|p| p.parent()) {
+             column = column.push(pair(fl!("file-location"), parent.display().to_string()));
+         }
+@@ -2571,6 +2599,7 @@ impl Item {
+             }
+         }
+ 
++        let open_with_settings = settings.len();
+         if let Some(metadata) = self.file_metadata() {
+             if metadata.is_dir() {
+                 if let Some(children) = self.metadata.children_count() {
+@@ -2747,12 +2776,39 @@ impl Item {
+ 
+         if let Some(path) = self.path_opt()
+             && self.selected
++            && !crate::config::lapin_session()
+         {
+             column = column.push(
+                 widget::button::standard(fl!("open")).on_press(Message::Open(Some(path.clone()))),
+             );
+         }
+ 
++        if crate::config::lapin_session() {
++            // Lapin UX (#143): the details pane has the details and a
++            // Properties button; the Properties window has General (details and
++            // Opens with) and Security (permissions, checksum).
++            let security = settings.split_off(open_with_settings);
++            match LAPIN_PROPERTIES_TAB.get() {
++                2 => {
++                    let mut column = widget::column::with_capacity(1);
++                    if !security.is_empty() {
++                        column = column.push(widget::settings::section().extend(security));
++                    }
++                    return column.into();
++                }
++                1 => {}
++                _ => {
++                    settings.clear();
++                    if self.path_opt().is_some() {
++                        column = column.push(
++                            widget::button::standard(fl!("properties"))
++                                .leading_icon(widget::icon::from_name("document-properties-symbolic").size(16))
++                                .on_press(Message::LapinProperties),
++                        );
++                    }
++                }
++            }
++        }
+         if !settings.is_empty() {
+             let mut section = widget::settings::section();
+             section = section.extend(settings);
+@@ -2841,6 +2897,60 @@ impl HeadingOptions {
+     }
+ }
+ 
++const LAPIN_GROUP_HEIGHT: f32 = 32.0;
++thread_local! {
++    /// Lapin UX: which part of an item's details to build: 0 the details pane,
++    /// 1 the Properties window's General tab, 2 its Security tab.
++    pub static LAPIN_PROPERTIES_TAB: Cell<u8> = const { Cell::new(0) };
++}
++/// Lapin UX: which date group a file is in (0 today … 7 long ago), folders included.
++fn lapin_date_group(item: &Item, now: &jiff::Zoned) -> u8 {
++    let Some(then) = (match &item.metadata {
++        ItemMetadata::Path { metadata, .. } => metadata.modified().ok(),
++        _ => None,
++    })
++    .and_then(|time| jiff::Zoned::try_from(time).ok()) else {
++        return 7;
++    };
++    let (today, day) = (now.date(), then.date());
++    // Days since a fixed day, so two dates can be compared as numbers.
++    let number = |d: jiff::civil::Date| -> i64 {
++        jiff::civil::date(1970, 1, 1).until(d).map(|span| i64::from(span.get_days())).unwrap_or(0)
++    };
++    let (t, d) = (number(today), number(day));
++    let week_start = t - i64::from(today.weekday().to_monday_zero_offset());
++    let months = |x: jiff::civil::Date| i32::from(x.year()) * 12 + i32::from(x.month());
++    if d >= t {
++        0
++    } else if d == t - 1 {
++        1
++    } else if d >= week_start {
++        2
++    } else if d >= week_start - 7 {
++        3
++    } else if months(day) == months(today) {
++        4
++    } else if months(today) - months(day) == 1 {
++        5
++    } else if day.year() == today.year() {
++        6
++    } else {
++        7
++    }
++}
++fn lapin_group_name(group: u8) -> String {
++    match group {
++        0 => fl!("group-today"),
++        1 => fl!("group-yesterday"),
++        2 => fl!("group-this-week"),
++        3 => fl!("group-last-week"),
++        4 => fl!("group-this-month"),
++        5 => fl!("group-last-month"),
++        6 => fl!("group-this-year"),
++        _ => fl!("group-long-ago"),
++    }
++}
++
+ /// Lapin UX's details view has a Type column between the date and the size.
+ const TYPE_WIDTH: f32 = 150.0;
+ fn lapin_columns() -> bool {
+@@ -4683,6 +4793,19 @@ impl Tab {
+                     self.search_context = None;
+                 }
+             }
++            Message::LapinSelectNone => {
++                self.select_none();
++            }
++            Message::LapinSelectInvert => {
++                if let Some(items) = self.items_opt_mut() {
++                    for item in items.iter_mut() {
++                        item.selected = !item.selected && !item.hidden;
++                    }
++                }
++            }
++            Message::LapinProperties => {
++                commands.push(Command::LapinProperties);
++            }
+             Message::SelectAll => {
+                 self.select_all();
+                 if self.select_focus.take().is_some() {
+@@ -6224,6 +6347,12 @@ impl Tab {
+         };
+ 
+         let mut drag_items = Vec::new();
++        let lapin_group_by_date = crate::config::lapin_session()
++            && matches!(self.mode, Mode::App)
++            && matches!(self.sort_options().0, HeadingOptions::Modified)
++            && matches!(self.location, Location::Path(_));
++        let lapin_now = jiff::Zoned::now();
++        let mut lapin_group: Option<u8> = None;
+         if let Some(items) = self.column_sort() {
+             let mut count = 0;
+             let mut hidden = 0;
+@@ -6241,6 +6370,24 @@ impl Tab {
+                     y += 1.0;
+                 }
+ 
++                // Lapin UX (#143): sorted by date, the files come in groups
++                // ("Today", "Earlier this week", …) with a heading each.
++                if lapin_group_by_date {
++                    let group = lapin_date_group(item, &lapin_now);
++                    if lapin_group != Some(group) {
++                        lapin_group = Some(group);
++                        column = column.push(
++                            widget::container(
++                                widget::text::body(lapin_group_name(group)).class(theme::Text::Accent),
++                            )
++                            .height(Length::Fixed(LAPIN_GROUP_HEIGHT))
++                            .align_y(Alignment::Center)
++                            .padding([0, space_s]),
++                        );
++                        y += LAPIN_GROUP_HEIGHT;
++                    }
++                }
++
+                 item.pos_opt.set(Some((count, 0)));
+                 let item_rect = Rectangle::new(
+                     Point::new(f32::from(space_s), y),
+-- 
+2.43.0
+
