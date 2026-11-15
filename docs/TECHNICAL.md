@@ -504,7 +504,9 @@ into one button when it is too narrow. The address bar under it
 has no Back/Forward pair of its own any more (the command bar has them).
 With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
-The right-click entry is called Properties and opens the details pane (name, type, size, dates, permissions).
+The right-click entry is called Properties and opens a window of its own
+("<name> Properties": name, type, size, dates, permissions), #75; the Details
+button still docks the same details beside the files.
 The tab bar is always shown, with a + that opens a new tab.
 The Home page (#73) has Quick access (pinned folders with a pin to unpin
 them, then up to 8 folders of your recent files), Favorites (pinned files) and
