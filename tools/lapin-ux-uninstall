@@ -190,7 +190,9 @@ item_save() {   # kind name dest
     [ "$DRY" = 1 ] && return 0
     mkdir -p "$(dirname "$3")"; rm -rf "$3" "$3.absent"
     if [ "$1" = dconf ]; then
-        dconf_ok && { dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null || :; }
+        # A successful read of an unset key leaves an empty copy (the existing
+        # "unset" convention); a failed read must leave no copy at all.
+        if dconf_ok && ! dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null; then rm -f "$3"; fi
         return 0
     fi
     f=$(item_path "$1" "$2")
@@ -246,7 +248,7 @@ item_default() {   # kind name
 # Does a value look like one Lapin UX sets? (Selawik, its icons and pointer,
 # wallpaper, shortcuts, focus policy, colours.) Used for installs from before
 # the per-session copies existed, and by the uninstaller as a last check.
-value_is_lapins() { [[ $1 =~ Selawik|Lapin-UX|Win11|$CURSOR ]]; }
+value_is_lapins() { [[ $1 =~ Selawik|Lapin-UX|Win11 ]] || [ "$1" = "'$CURSOR'" ] || [ "$1" = "$CURSOR" ]; }
 key_is_lapins() {   # id key file
     local f=$3
     [ -f "$f" ] || return 1
@@ -305,7 +307,7 @@ lapins_at() {   # kind name location-of-a-value
     dconf) [ -s "$3" ] && value_is_lapins "$(cat "$3")" ;;
     cosmic) key_is_lapins "${2%/*}" "${2#*/}" "$3" ;;
     cosmicdir) [ -d "$3" ] && theme_is_lapins "$3" ;;
-    pointer) grep -q "Inherits=$CURSOR" "$3" 2>/dev/null ;;
+    pointer) [ "$(inherited_pointer "$3")" = "$CURSOR" ] ;;
     esac
 }
 looks_lapins_now() {   # kind name

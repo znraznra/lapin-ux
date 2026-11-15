@@ -423,6 +423,17 @@ check "other desktop with no pointer set: unset again" "[ -z \"\$(rd cursor-them
 dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"
 bash "$DS" enter; bash "$DS" leave; pick Cursor-Concept-W11-Tail-HDPi-by-JepriCreations; rm -f "$L"; bash "$DS" leave
 check "no note: Lapin's bundled pointer still goes back" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ] && [ ! -e \"$P\" ]"
+# a pointer whose name only starts with Lapin's bundled one isn't Lapin's (dconf and file)
+B=Cursor-Concept-W11-Tail-HDPi-by-JepriCreations
+dconf write /org/gnome/desktop/interface/cursor-theme "'${B}-Alt'"; printf '[Icon Theme]\nName=Default\nInherits=%s-Alt\n' "$B" > "$P"
+bash "$DS" enter; pick "$B"; rm -f "$L"; bash "$DS" leave
+check "a pointer named like Lapin's bundled one plus a suffix goes back" "[ \"\$(rd cursor-theme)\" = \"'${B}-Alt'\" ] && grep -qx \"Inherits=${B}-Alt\" \"$P\""
+# a failed dconf read saves no copy (an unset key still saves an empty one)
+O="$HOME/.local/state/lapin-ux/other-desktops"
+FD=$(mktemp -d); printf '#!/bin/sh\n[ "$1" = read ] && exit 1\nexec /usr/bin/dconf "$@"\n' > "$FD/dconf"; chmod +x "$FD/dconf"
+dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"; rm -rf "$O"
+PATH="$FD:$PATH" bash "$DS" enter
+check "a failed dconf read leaves no saved copy" "[ ! -e \"$O/dconf/cursor-theme\" ]"
 # Back to the system's pointer inside Lapin UX resets the added one too
 pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1
