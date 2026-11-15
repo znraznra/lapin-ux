@@ -505,8 +505,9 @@ has no Back/Forward pair of its own any more (the command bar has them).
 With the details pane docked the bar is narrower still, so it drops its
 spacer and scrolls sideways.
 The right-click entry is called Properties and opens a window of its own
-("<name> Properties": name, type, size, dates, permissions), #75; the Details
-button still docks the same details beside the files.
+("<name> Properties", with General and Security tabs, described below), #75; the
+Details button docks a shorter details pane beside the files (its fields are
+listed below too).
 The tab bar is always shown, with a + that opens a new tab.
 The Home page (#73) has Quick access (pinned folders with a pin to unpin
 them, then up to 8 folders of your recent files), Favorites (pinned files) and
@@ -552,6 +553,17 @@ on pinned folders and an eject button on removable drives. The details pane
 sits beside the files (not in COSMIC's drawer, which would cover the rows
 above) and shows the name, then Type, Size, File location and the dates as
 label and value pairs.
+Properties and groups (#143). The Properties window has two tabs, General (the
+name, Type, Size, Contains, File location, the dates, Opens with, and for a
+drive its used and free space and capacity with a bar) and Security (the
+permissions and the checksum), and an OK button. The details pane shows the
+name, Type, Size, Contains, File location and the dates (no permissions, no
+Opens with) and a Properties button. `tab::LAPIN_PROPERTIES_TAB` tells
+`Item::preview_view` which of the three to build. Sorted by date, the list is
+split into groups with a heading ("Today", "Yesterday", "Earlier this week",
+"Last week", "Earlier this month", "Last month", "Earlier this year", "A long
+time ago"); the headings take 32 px each in the row positions. The "…" menu
+has Select none and Invert selection. A tab shows the icon of its place.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
