@@ -32,11 +32,17 @@
 - Settings > Personalization > Sounds: pick the scheme (config key
   `sound_theme` in `dev.lapinux.Shell`, empty = no sounds, read live by
   `lapin_ux_core::sound`), install schemes from an archive or folder into
-  `~/.local/share/sounds` (tracked in `~/.local/state/lapin-ux/sounds-added`,
-  only those can be removed there), and set a sound, silence or own file per
-  event. Per-event choices live in the `lapin-ux-custom` theme, so an installed
-  scheme is never edited. Uninstall removes `lapin-ux-custom` and leaves added
-  schemes (listing them). Battery and device events are listed but Lapin does
+  Lapin UX's own `~/.local/share/lapin-ux/sounds` (tracked in
+  `~/.local/state/lapin-ux/sounds-added`, only those can be removed there), and
+  set a sound, silence or own file per event. Per-event choices live in the
+  `lapin-ux-custom` theme there, so an installed scheme is never edited. Other
+  desktops don't look in that folder, so nothing picked or added in Lapin UX
+  shows in their sound settings (#134); sounds are looked up there first, then
+  in the usual places. At sign-in the shell moves what older versions put in
+  `~/.local/share/sounds` (`lapin-ux-custom` and the added schemes) into it.
+  Lapin UX writes no shared sound setting (`org.gnome.desktop.sound`,
+  xsettings). Uninstall removes `lapin-ux-custom`, and moves added schemes to
+  `~/.local/share/sounds` so they stay yours (listing them). Battery and device events are listed but Lapin does
   not play them yet.
 - Optional pointers by JepriCreations, installed on request
   (`lapin-ux-cursors`, offered by the installer and Get Started; see below).

@@ -570,7 +570,35 @@ restore_settings() {
 
     # Lapin UX's own files.
     local -a own=()
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "$DATA/lapin-ux" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
+    # Sound schemes added in Settings live in Lapin's own folder (#134); they
+    # are your files, so they move to the usual place before that folder goes.
+    if [ -s "$STATE/sounds-added" ]; then
+        local scheme
+        while IFS= read -r scheme; do
+            case "$scheme" in ''|*/*|lapin-ux-custom|freedesktop) continue ;; esac
+            [ -d "$DATA/lapin-ux/sounds/$scheme" ] || continue
+            # A scheme of that name is already there: keep both.
+            local dest="$DATA/sounds/$scheme" n=2
+            while [ -e "$dest" ]; do dest="$DATA/sounds/$scheme-$n"; n=$((n + 1)); done
+            run mkdir -p "$DATA/sounds" && run mv "$DATA/lapin-ux/sounds/$scheme" "$dest" \
+                || say "  (couldn't move the sound scheme $scheme; it stays in $DATA/lapin-ux/sounds)"
+        done < "$STATE/sounds-added"
+    fi
+    # Anything still in Lapin's sounds folder but its per-event sounds is a
+    # scheme that couldn't move: keep that folder, remove the rest.
+    local kept=0 entry
+    # Every name counts: hidden ones, "..x", and links whose target is gone.
+    for entry in "$DATA/lapin-ux/sounds"/* "$DATA/lapin-ux/sounds"/.[!.]* "$DATA/lapin-ux/sounds"/..?*; do
+        { [ -e "$entry" ] || [ -L "$entry" ]; } && [ "${entry##*/}" != lapin-ux-custom ] && kept=1
+    done
+    local lapin_data=("$DATA/lapin-ux")
+    if [ "$kept" = 1 ]; then
+        lapin_data=("$DATA/lapin-ux/sounds/lapin-ux-custom")
+        for entry in "$DATA/lapin-ux"/* "$DATA/lapin-ux"/.[!.]* "$DATA/lapin-ux"/..?*; do
+            { [ -e "$entry" ] || [ -L "$entry" ]; } && [ "${entry##*/}" != sounds ] && lapin_data+=("$entry")
+        done
+    fi
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "${lapin_data[@]}" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do { [ -e "$v" ] || [ -L "$v" ]; } && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"

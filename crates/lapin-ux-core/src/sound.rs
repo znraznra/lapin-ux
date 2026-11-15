@@ -138,11 +138,26 @@ pub fn find(theme: &str, event: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> 
 }
 
 /// XDG data dirs, user's first.
+/// The user's data dir (`~/.local/share`), shared with every desktop.
+fn shared_data() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share")))
+}
+
+/// Lapin UX's own data dir (`~/.local/share/lapin-ux`). Sound schemes added in
+/// Settings and the per-event sounds live in its `sounds/`, where other
+/// desktops don't look (#134).
+pub fn lapin_data() -> Option<PathBuf> {
+    shared_data().map(|d| d.join("lapin-ux"))
+}
+
+/// Where sounds are looked up: Lapin's own folder first, then the usual
+/// places (sound schemes installed for every desktop).
 pub fn data_dirs() -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if let Some(h) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share"))) {
-        v.push(h);
-    }
+    v.extend(lapin_data());
+    v.extend(shared_data());
     let sys = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
     v.extend(sys.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
     v
@@ -156,17 +171,75 @@ pub enum Choice {
     File(PathBuf),
 }
 
-/// What `lapin-ux-custom` says about `event` (only the user's data dir counts).
-pub fn custom_choice(event: &str, dirs: &[PathBuf]) -> Choice {
-    let Some(user) = dirs.first() else { return Choice::None };
-    let dir = user.join("sounds").join(CUSTOM).join("stereo");
-    if dir.join(format!("{event}.silent")).exists() {
-        return Choice::Silent;
+/// Move what Settings once put in `~/.local/share/sounds` (the per-event
+/// sounds, and the schemes added there, listed in `added`) into Lapin's own
+/// folder, so other desktops' sound settings don't list them (#134). Runs at
+/// every sign-in; does nothing once moved or when the target already exists.
+pub fn move_into_lapin(shared: &Path, lapin: &Path, added: &[String]) {
+    let from = shared.join("sounds");
+    let to = lapin.join("sounds");
+    let mut names: Vec<&str> = vec![CUSTOM];
+    names.extend(added.iter().map(String::as_str).filter(|n| !n.is_empty() && !n.contains('/') && *n != "freedesktop"));
+    for name in names {
+        let (a, b) = (from.join(name), to.join(name));
+        if a.is_dir() && !a.is_symlink() && !b.exists() {
+            let _ = std::fs::create_dir_all(&to);
+            if std::fs::rename(&a, &b).is_err() {
+                // Another filesystem (a linked sounds folder): copy, and remove
+                // the old one only when the whole copy worked.
+                if copy_dir(&a, &b).is_ok() {
+                    let _ = std::fs::remove_dir_all(&a);
+                } else {
+                    let _ = std::fs::remove_dir_all(&b);
+                }
+            }
+        }
     }
-    for ext in ["oga", "ogg", "wav", "flac", "mp3"] {
-        let p = dir.join(format!("{event}.{ext}"));
-        if p.is_file() {
-            return Choice::File(p);
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&src)?, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// `move_into_lapin` for this user, with the list Settings keeps.
+pub fn move_into_lapin_now() {
+    let (Some(shared), Some(lapin)) = (shared_data(), lapin_data()) else { return };
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")));
+    let added: Vec<String> = state
+        .and_then(|s| std::fs::read_to_string(s.join("lapin-ux/sounds-added")).ok())
+        .map(|t| t.lines().map(|l| l.trim().to_string()).collect())
+        .unwrap_or_default();
+    move_into_lapin(&shared, &lapin, &added);
+}
+
+/// What `lapin-ux-custom` says about `event`: Lapin's own data dir, then the
+/// user's shared one (where older versions kept it, if it couldn't be moved).
+pub fn custom_choice(event: &str, dirs: &[PathBuf]) -> Choice {
+    for user in dirs.iter().take(2) {
+        let dir = user.join("sounds").join(CUSTOM).join("stereo");
+        if dir.join(format!("{event}.silent")).exists() {
+            return Choice::Silent;
+        }
+        for ext in ["oga", "ogg", "wav", "flac", "mp3"] {
+            let p = dir.join(format!("{event}.{ext}"));
+            if p.is_file() {
+                return Choice::File(p);
+            }
         }
     }
     Choice::None
@@ -208,6 +281,42 @@ pub fn play_file(file: &Path) {
             });
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    #[test]
+    fn moves_custom_and_added_schemes_only() {
+        let t = std::env::temp_dir().join(format!("lapin-sound-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let shared = t.join("share");
+        let lapin = shared.join("lapin-ux");
+        for d in [CUSTOM, "mine", "theirs"] {
+            std::fs::create_dir_all(shared.join("sounds").join(d).join("stereo")).unwrap();
+        }
+        std::fs::write(shared.join("sounds").join(CUSTOM).join("stereo/bell.oga"), b"x").unwrap();
+        move_into_lapin(&shared, &lapin, &["mine".into(), "../x".into()]);
+        assert!(lapin.join("sounds").join(CUSTOM).join("stereo/bell.oga").is_file());
+        assert!(lapin.join("sounds/mine").is_dir());
+        assert!(!shared.join("sounds").join(CUSTOM).exists());
+        // A scheme Settings didn't add stays where it is.
+        assert!(shared.join("sounds/theirs").is_dir());
+        assert!(!lapin.join("sounds/theirs").exists());
+        // Nothing is overwritten.
+        std::fs::create_dir_all(shared.join("sounds").join(CUSTOM)).unwrap();
+        move_into_lapin(&shared, &lapin, &[]);
+        assert!(shared.join("sounds").join(CUSTOM).is_dir());
+        assert!(lapin.join("sounds").join(CUSTOM).join("stereo/bell.oga").is_file());
+        // A per-event choice left in the shared folder still counts.
+        let left = shared.join("sounds").join(CUSTOM).join("stereo");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("message.silent"), b"").unwrap();
+        assert!(matches!(custom_choice("message", &[lapin.clone(), shared.clone()]), Choice::Silent));
+        assert!(matches!(custom_choice("bell", &[lapin.clone(), shared.clone()]), Choice::File(_)));
+        let _ = std::fs::remove_dir_all(&t);
     }
 }
 
