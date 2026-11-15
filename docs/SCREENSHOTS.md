@@ -4,7 +4,7 @@
 
 Jump to: [The desktop](#the-desktop) · [The Settings app](#the-settings-app)
 
-> **How current are these?** The pictures below were taken between 20 and 21 October 2026. Since then the Start button, taskbar, lock screen, desktop icons, tray menus and Settings have changed a little, and the next round of pictures will come from the latest build (`879469e`). The list of screens to retake is in [#84](https://github.com/znraznra/lapin-ux/issues/84). Descriptions on this page are kept up to date; a picture may still show the older look.
+> **How current are these?** Sixteen pictures were retaken on 15 November 2026 on real hardware (quick settings, notification centre, taskbar, tray, desktop icons, and the Settings pages Home, About, Taskbar, Update, Fonts, Mouse pointers, Sounds and Find a setting); personal details in them are blurred. The rest are from 20 to 21 October 2026 and may show the older look; what is still to retake is in [#84](https://github.com/znraznra/lapin-ux/issues/84).
 
 ## The desktop
 
@@ -25,6 +25,10 @@ Jump to: [The desktop](#the-desktop) · [The Settings app](#the-settings-app)
 | ![Snap group on the taskbar](tour/snap-group.webp) **Snap groups** — windows snapped together come back together. | ![Title bars](tour/title-bars.webp) **Title bars** — the app's icon and name on the left. |
 | ![Touch keyboard](tour/touch-keyboard.webp) **Touch keyboard** — for tablets and touch screens. | ![Clipboard history](tour/clipboard-history.webp) **Clipboard history** — Super+V brings back what you copied earlier. |
 | ![Task Manager performance](tour/task-manager-performance.webp) **Task Manager: Performance** — live CPU, memory, disk and network graphs. | |
+
+| ![Desktop icons](tour/desktop-icons.webp) **Desktop icons** — This PC, Recycle Bin and your shortcuts, with two-line names. | ![Taskbar](tour/taskbar.webp) **Taskbar** — Start, Search, your apps, the tray and the clock. |
+| ![Tray drawer](tour/tray-drawer.webp) **Tray drawer** — the arrow keeps the icons you don't need in view. | ![Tray icon menu](tour/tray-menu.webp) **Tray menus** — right-click a tray icon for its app's menu. |
+| ![Snip notification](tour/snip-toast.webp) **Snip saved** — Print Screen copies the snip and saves it to Pictures. | |
 
 ## The Settings app
 
@@ -51,3 +55,10 @@ A Settings app laid out the way you'd expect (a sidebar of categories, a Home pa
 - [x] **Stage 5 — joining it up:** Find a setting shows suggestions as you type and a Search results page; Start, Control Panel, Super+X, the taskbar menu, quick settings, the notification centre and Super+I open the right page
 
 Under plain COSMIC the same app still looks like COSMIC Settings: the new layout switches on only in a Lapin UX session.
+
+### Retaken on 15 November 2026
+
+| | |
+|---|---|
+| ![Fonts settings](tour/settings-fonts.webp) **Fonts** — system and monospace fonts, text smoothing and contrast. | ![Mouse pointers settings](tour/settings-mouse-pointers.webp) **Mouse pointers** — pick a pointer or add your own. |
+| ![Sounds settings](tour/settings-sounds.webp) **Sounds** — a sound scheme and a sound per event. | ![About Lapin UX](tour/settings-about-lapin.webp) **About** — your Linux's details and the About Lapin UX card. |
