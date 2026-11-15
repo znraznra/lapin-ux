@@ -598,7 +598,7 @@ restore_settings() {
             { [ -e "$entry" ] || [ -L "$entry" ]; } && [ "${entry##*/}" != sounds ] && lapin_data+=("$entry")
         done
     fi
-    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "${lapin_data[@]}" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do [ -e "$v" ] && own+=("$v"); done
+    for v in "$COSMIC"/dev.lapinux.* "$STATE_HOME"/cosmic/dev.lapinux.* "$CACHE/lapin-ux" "${lapin_data[@]}" "$CFG/lapin-ux" "$DATA/icons/$CURSOR" "$DATA/sounds/lapin-ux-custom"; do { [ -e "$v" ] || [ -L "$v" ]; } && own+=("$v"); done
     if [ ${#own[@]} -gt 0 ]; then
         say "  Removing Lapin UX's own settings and files:"; printf '    %s\n' "${own[@]}"
         run rm -rf "${own[@]}"
