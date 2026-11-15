@@ -147,7 +147,11 @@ reviewed files. Every excluded file needs a separate review.
   `fixed: needs retest` label and the "what changed, what to retest" comment on
   the issue after the merge, not when the PR is opened (link the PR in it).
 - Put repo docs that the change affects (`README.md`, `docs/TECHNICAL.md`,
-  `docs/WORKLOG.md`, `docs/wiki/`) in the same PR. The claude.ai Project docs
+  `docs/WORKLOG.md`, `docs/wiki/`) in the same PR. Feature details go in the
+  file for their area under `docs/technical/` (shell, settings, system-parts,
+  look-and-sound, explorer, session), not at the end of `docs/TECHNICAL.md`:
+  separate files keep parallel PRs from conflicting. Add a new file there (and
+  a line in the list in `docs/TECHNICAL.md`) for a new area. The claude.ai Project docs
   live outside the repo and are updated after the merge.
 - A PR that touches `packaging/**/*.patch` says in its description that the
   patches were rebuilt from the pinned commit and that `git diff packaging/`
