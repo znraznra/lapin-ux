@@ -525,6 +525,19 @@ name are counted in the copy's progress callback), sampled twice a second.
 The window closes when everything is done. Closing it by hand keeps the
 operations going and shows COSMIC's own progress strip in the Explorer window
 until they finish. Name conflicts still use COSMIC's Replace dialog.
+Layout (#143), top to bottom: the tabs and a + in the title bar
+(`header_start`); a navigation row with Back, Forward, Up, Refresh, the address
+bar (the path as crumbs in a rounded box; click its blank part to type a path)
+and an always-there search box ("Search <folder>", emptying it ends the
+search); the command bar (New menu, Cut, Copy, Paste, Rename, Delete, then the
+Sort, View and "…" menus, and Details with its label at the right); then the
+navigation pane beside the files; then a status bar (item count, selection
+count and size, and the list/grid buttons). The rows span the window, so the
+view draws the navigation pane itself (`nav_pane`, the same `nav_bar` widget;
+`nav_bar()` and `nav_model()` return nothing in the Lapin session, which also
+keeps libcosmic's pane toggle out of the title bar). `Tab::location_view_part`
+gives the address and the column headings separately. File dialogs and
+COSMIC's own session are unchanged.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
