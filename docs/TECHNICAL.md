@@ -655,7 +655,8 @@ A second switch, `~/.local/state/lapin-ux/debug-wayland`, makes the shell print
 every Wayland message it sends and gets (`WAYLAND_DEBUG=1`, set first thing in
 `main`) to the session log, to see whether the compositor offers a drag to the
 shell's surfaces at all (`wl_data_device.enter`). It is very chatty: use it for
-one test and delete the file.
+one test, then delete the file and sign out and back in (deleting it does not
+change the environment of the shell that is already running).
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
