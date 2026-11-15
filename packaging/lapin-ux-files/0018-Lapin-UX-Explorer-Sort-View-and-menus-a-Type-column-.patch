@@ -1,0 +1,372 @@
+From c1534c2e2441c960bf5d29d593fbf9fe998c69d0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 07:58:20 +0800
+Subject: [PATCH 18/20] =?UTF-8?q?Lapin=20UX:=20Explorer=20Sort,=20View=20a?=
+ =?UTF-8?q?nd=20=E2=80=A6=20menus,=20a=20Type=20column,=20This=20PC=20in?=
+ =?UTF-8?q?=20two=20groups?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ i18n/en/cosmic_files.ftl | 12 +++++++
+ src/app.rs               | 72 +++++++++++++++++++++++--------------
+ src/menu.rs              | 78 +++++++++++++++++++++++++++-------------
+ src/tab.rs               | 66 ++++++++++++++++++++++++++--------
+ 4 files changed, 162 insertions(+), 66 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index c97edd2..3095b73 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -435,3 +435,15 @@ status-selected = {$items ->
+     [one] 1 item selected
+    *[other] {$items} items selected
+ }
++date-modified = Date modified
++type-column = Type
++type-folder = File folder
++type-file = {$ext} File
++type-plain = File
++ascending = Ascending
++descending = Descending
++large-icons = Large icons
++details-pane = Details pane
++hidden-items = Hidden items
++options = Options
++network-locations = Network locations
+diff --git a/src/app.rs b/src/app.rs
+index 99a2c27..6443ff6 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -1009,12 +1009,13 @@ impl App {
+         let cosmic_theme::Spacing {
+             space_xxs, space_xs, space_s, ..
+         } = theme::spacing();
+-        // (name, icon, location, path to measure)
+-        let mut drives: Vec<(String, icon::Handle, Location, Option<PathBuf>)> = vec![(
++        // (name, icon, location, path to measure, on the network)
++        let mut drives: Vec<(String, icon::Handle, Location, Option<PathBuf>, bool)> = vec![(
+             fl!("filesystem"),
+             icon::from_name("drive-harddisk-symbolic").size(32).handle(),
+             Location::Path(PathBuf::from("/")),
+             Some(PathBuf::from("/")),
++            false,
+         )];
+         let mut items: Vec<_> = self.mounter_items.values().flatten().collect();
+         items.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.name(), &b.name()));
+@@ -1028,36 +1029,53 @@ impl App {
+             let handle = item
+                 .icon(false)
+                 .unwrap_or_else(|| icon::from_name("drive-harddisk-symbolic").size(32).handle());
+-            drives.push((item.name(), handle, location, path));
++            drives.push((item.name(), handle, location, path, item.is_remote()));
+         }
+-        let mut list = widget::column::with_capacity(drives.len() + 2)
+-            .spacing(space_s)
+-            .padding(space_s)
+-            .push(widget::text::title4(fl!("devices-and-drives")));
+-        for (name, handle, location, path) in drives {
+-            let mut text = widget::column::with_capacity(3).spacing(space_xxs).push(widget::text::body(name));
+-            if let Some((free, total)) = path.as_deref().and_then(disk_space) {
+-                let used = if total == 0 { 0.0 } else { 1.0 - free as f32 / total as f32 };
+-                text = text
+-                    .push(widget::progress_bar::determinate_linear(used).width(Length::Fixed(260.0)).girth(Length::Fixed(10.0)))
+-                    .push(widget::text::caption(fl!(
+-                        "free-of",
+-                        free = tab::format_size_public(free),
+-                        total = tab::format_size_public(total)
+-                    )));
++        let mut list = widget::column::with_capacity(4).spacing(space_s).padding(space_s);
++        // Two groups, as people know them: this computer's drives, then the network's.
++        for (remote, title) in [(false, fl!("devices-and-drives")), (true, fl!("network-locations"))] {
++            let mut tiles: Vec<Element<'_, Message>> = Vec::new();
++            for (name, handle, location, path, _) in drives.iter().filter(|d| d.4 == remote) {
++                let mut text = widget::column::with_capacity(3)
++                    .spacing(space_xxs)
++                    .push(widget::text::body(name.clone()));
++                if let Some((free, total)) = path.as_deref().and_then(disk_space) {
++                    let used = if total == 0 { 0.0 } else { 1.0 - free as f32 / total as f32 };
++                    text = text
++                        .push(widget::progress_bar::determinate_linear(used).width(Length::Fixed(230.0)).girth(Length::Fixed(14.0)))
++                        .push(widget::text::caption(fl!(
++                            "free-of",
++                            free = tab::format_size_public(free),
++                            total = tab::format_size_public(total)
++                        )));
++                }
++                tiles.push(
++                    widget::button::custom(
++                        widget::row::with_capacity(2)
++                            .spacing(space_xs)
++                            .align_y(Alignment::Center)
++                            .push(icon::icon(handle.clone()).size(48))
++                            .push(text),
++                    )
++                    .width(Length::Fixed(320.0))
++                    .padding(space_xs)
++                    .class(theme::Button::MenuItem)
++                    .on_press(Message::TabMessage(None, tab::Message::Location(location.clone())))
++                    .into(),
++                );
+             }
+-            list = list.push(
+-                widget::button::custom(
+-                    widget::row::with_capacity(2)
++            if tiles.is_empty() {
++                continue;
++            }
++            list = list
++                .push(
++                    widget::row::with_capacity(3)
+                         .spacing(space_xs)
+                         .align_y(Alignment::Center)
+-                        .push(icon::icon(handle).size(48))
+-                        .push(text),
++                        .push(widget::text::body(title).class(theme::Text::Accent))
++                        .push(widget::divider::horizontal::default()),
+                 )
+-                .padding(space_xs)
+-                .class(theme::Button::MenuItem)
+-                .on_press(Message::TabMessage(None, tab::Message::Location(location))),
+-            );
++                .push(widget::flex_row(tiles).row_spacing(space_xxs).column_spacing(space_xs));
+         }
+         widget::scrollable(list).height(Length::Fill).into()
+     }
+diff --git a/src/menu.rs b/src/menu.rs
+index 50d264c..b98055e 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -608,7 +608,7 @@ pub fn menu_lists(
+         (fl!("move-to-trash"), Action::Delete)
+     };
+ 
+-    let mut menus = vec![
++    let menus = vec![
+                 (
+                     fl!("file"),
+                     vec![
+@@ -750,29 +750,59 @@ pub fn menu_lists(
+                 ),
+     ];
+     if crate::config::lapin_session() {
+-        // Sort and View stay as menus; the rest of File and Edit goes under "…"
+-        // (the common ones are buttons in the command bar).
+-        let mut file = None;
+-        let mut edit = None;
+-        let mut sort = None;
+-        let mut view = None;
+-        for (label, items) in menus.drain(..) {
+-            if label == fl!("file") {
+-                file = Some(items);
+-            } else if label == fl!("edit") {
+-                edit = Some(items);
+-            } else if label == fl!("sort") {
+-                sort = Some((label, items));
+-            } else {
+-                view = Some((label, items));
+-            }
+-        }
+-        let mut more = file.unwrap_or_default();
+-        more.push(menu::Item::Divider);
+-        more.extend(edit.unwrap_or_default());
+-        menus.extend(sort);
+-        menus.extend(view);
+-        menus.push((fl!("more"), more));
++        // Lapin UX: Sort, View and "…" as people know them (#143).
++        let (name, ascending) = sort_options.map_or((tab::HeadingOptions::Name, true), |(n, d, _)| (n, d));
++        let date = if in_trash { tab::HeadingOptions::TrashedOn } else { tab::HeadingOptions::Modified };
++        let by = |label: String, heading: tab::HeadingOptions| {
++            menu::Item::CheckBox(label, None, name == heading, Action::SetSort(heading, ascending))
++        };
++        let sort = vec![
++            by(fl!("name"), tab::HeadingOptions::Name),
++            by(fl!("date-modified"), date),
++            by(fl!("size"), tab::HeadingOptions::Size),
++            menu::Item::Divider,
++            menu::Item::CheckBox(fl!("ascending"), None, ascending, Action::SetSort(name, true)),
++            menu::Item::CheckBox(fl!("descending"), None, !ascending, Action::SetSort(name, false)),
++        ];
++        let grid = tab_opt.is_some_and(|tab| matches!(tab.config.view, tab::View::Grid));
++        let view = vec![
++            menu::Item::CheckBox(fl!("large-icons"), None, grid, Action::TabViewGrid),
++            menu::Item::CheckBox(fl!("details"), None, tab_opt.is_some() && !grid, Action::TabViewList),
++            menu::Item::Divider,
++            menu::Item::CheckBox(fl!("details-pane"), None, config.show_details, Action::Preview),
++            menu::Item::Divider,
++            menu::Item::CheckBox(
++                fl!("hidden-items"),
++                None,
++                tab_opt.is_some_and(|tab| tab.config.show_hidden),
++                Action::ToggleShowHidden,
++            ),
++            menu::Item::CheckBox(
++                fl!("list-directories-first"),
++                None,
++                tab_opt.is_some_and(|tab| tab.config.folders_first),
++                Action::ToggleFoldersFirst,
++            ),
++            menu::Item::Divider,
++            menu::Item::Button(fl!("zoom-in"), None, Action::ZoomIn),
++            menu::Item::Button(fl!("default-size"), None, Action::ZoomDefault),
++            menu::Item::Button(fl!("zoom-out"), None, Action::ZoomOut),
++        ];
++        let more = vec![
++            menu::Item::Button(fl!("history"), None, Action::EditHistory),
++            menu::Item::Divider,
++            menu::Item::Button(fl!("select-all"), None, Action::SelectAll),
++            menu::Item::Divider,
++            menu_button_optional(fl!("menu-open-with"), Action::OpenWith, selected == 1),
++            menu_button_optional(fl!("pin-to-home"), Action::AddToSidebar, selected > 0),
++            menu_button_optional(fl!("restore-from-trash"), Action::RestoreFromTrash, selected > 0 && in_trash),
++            menu::Item::Divider,
++            menu_button_optional(fl!("properties"), Action::LapinProperties, selected > 0),
++            menu::Item::Button(fl!("options"), None, Action::Settings),
++            menu::Item::Button(fl!("menu-about"), None, Action::About),
++        ];
++        let _ = (can_paste, selected_dir, selected_gallery, &sort_item);
++        return vec![(fl!("sort"), sort), (fl!("view"), view), (fl!("more"), more)];
+     }
+     menus
+ }
+diff --git a/src/tab.rs b/src/tab.rs
+index 2186804..1c87a54 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -2766,6 +2766,25 @@ impl HeadingOptions {
+     }
+ }
+ 
++/// Lapin UX's details view has a Type column between the date and the size.
++const TYPE_WIDTH: f32 = 150.0;
++fn lapin_columns() -> bool {
++    crate::config::lapin_session()
++}
++fn modified_cell<'a>(modified: String, kind: Option<String>, width: f32) -> Element<'a, Message> {
++    match kind {
++        Some(kind) => widget::row::with_capacity(2)
++            .push(widget::text::body(modified).width(Length::Fixed(width)))
++            .push(
++                widget::text::body(kind)
++                    .width(Length::Fixed(TYPE_WIDTH))
++                    .wrapping(text::Wrapping::None),
++            )
++            .into(),
++        None => widget::text::body(modified).width(Length::Fixed(width)).into(),
++    }
++}
++
+ /// Which half of the location row to build (Lapin UX splits it).
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum LocationPart {
+@@ -5379,7 +5398,8 @@ impl Tab {
+         let name_width = 300.0;
+         let modified_width = 200.0;
+         let size_width = 100.0;
+-        let condensed = size.width < (name_width + modified_width + size_width);
++        let condensed = size.width
++            < (name_width + modified_width + size_width + if lapin_columns() { TYPE_WIDTH - 100.0 } else { 0.0 });
+ 
+         let (sort_name, sort_direction, _) = self.sort_options();
+         let heading_item = |name, width, msg| {
+@@ -5403,7 +5423,7 @@ impl Tab {
+                 .into()
+         };
+ 
+-        let heading_row = widget::row::with_children([
++        let mut headings = vec![
+             heading_item(fl!("name"), Length::Fill, HeadingOptions::Name),
+             if self.location.is_trash() {
+                 heading_item(
+@@ -5413,13 +5433,21 @@ impl Tab {
+                 )
+             } else {
+                 heading_item(
+-                    fl!("modified"),
++                    if lapin_columns() { fl!("date-modified") } else { fl!("modified") },
+                     Length::Fixed(modified_width),
+                     HeadingOptions::Modified,
+                 )
+             },
+-            heading_item(fl!("size"), Length::Fixed(size_width), HeadingOptions::Size),
+-        ])
++        ];
++        if lapin_columns() {
++            headings.push(
++                widget::container(widget::text::heading(fl!("type-column")))
++                    .width(Length::Fixed(TYPE_WIDTH))
++                    .into(),
++            );
++        }
++        headings.push(heading_item(fl!("size"), Length::Fixed(size_width), HeadingOptions::Size));
++        let heading_row = widget::row::with_children(headings)
+         .align_y(Alignment::Center)
+         .height(Length::Fixed((space_m + 4).into()))
+         .padding([0, space_xxs]);
+@@ -6088,7 +6116,8 @@ impl Tab {
+         let name_width = 300.0;
+         let modified_width = 200.0;
+         let size_width = 100.0;
+-        let condensed = size.width < (name_width + modified_width + size_width);
++        let condensed = size.width
++            < (name_width + modified_width + size_width + if lapin_columns() { TYPE_WIDTH - 100.0 } else { 0.0 });
+         let is_search = matches!(self.location, Location::Search(..));
+         let icon_size = if condensed || is_search {
+             icon_sizes.list_condensed()
+@@ -6166,6 +6195,19 @@ impl Tab {
+                         _ => String::new(),
+                     };
+ 
++                    // Lapin UX: a Type column, as in the familiar details view.
++                    let type_text: Option<String> = lapin_columns().then(|| {
++                        if item.metadata.is_dir() {
++                            fl!("type-folder")
++                        } else {
++                            match Path::new(&item.name).extension().and_then(|e| e.to_str()) {
++                                Some(ext) if !ext.is_empty() && ext.len() <= 8 => {
++                                    fl!("type-file", ext = ext.to_uppercase())
++                                }
++                                _ => fl!("type-plain"),
++                            }
++                        }
++                    });
+                     let size_text = match &item.metadata {
+                         ItemMetadata::Path {
+                             metadata,
+@@ -6267,9 +6309,7 @@ impl Tab {
+                             ])
+                             .width(Length::Fill)
+                             .into(),
+-                            widget::text::body(modified_text.clone())
+-                                .width(Length::Fixed(modified_width))
+-                                .into(),
++                            modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+                             widget::text::body(size_text.clone())
+                                 .width(Length::Fixed(size_width))
+                                 .into(),
+@@ -6286,9 +6326,7 @@ impl Tab {
+                             Item::list_display_name(item.display_name.clone())
+                                 .width(Length::Fill)
+                                 .into(),
+-                            widget::text::body(modified_text.clone())
+-                                .width(Length::Fixed(modified_width))
+-                                .into(),
++                            modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+                             widget::text::body(size_text.clone())
+                                 .width(Length::Fixed(size_width))
+                                 .into(),
+@@ -6380,9 +6418,7 @@ impl Tab {
+                                 ])
+                                 .width(Length::Fill)
+                                 .into(),
+-                                widget::text::body(modified_text.clone())
+-                                    .width(Length::Fixed(modified_width))
+-                                    .into(),
++                                modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+                                 widget::text::body(size_text.clone())
+                                     .width(Length::Fixed(size_width))
+                                     .into(),
+-- 
+2.43.0
+

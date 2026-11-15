@@ -1,0 +1,490 @@
+From e4803ba532eb4991345aabc062d9468cd616a78e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 08:04:14 +0800
+Subject: [PATCH 19/20] Lapin UX: navigation pane as a tree, with pins and
+ folders that open out
+
+---
+ src/app.rs | 399 ++++++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 287 insertions(+), 112 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 6443ff6..cf1eadb 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -453,6 +453,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX: open out or fold a folder in the navigation pane's tree.
++    LapinTreeToggle(PathBuf),
+     /// Lapin UX: something the navigation pane asked for, when the view draws it.
+     LapinAction(Box<cosmic::Action<Message>>),
+     /// Lapin UX's progress window (#101): sample the speeds, open or close it.
+@@ -711,6 +713,30 @@ struct LapinSpeed {
+     eta: Option<f64>,
+ }
+ 
++/// Lapin UX: a navigation pane row that is a folder in the tree (#143).
++#[derive(Clone, Debug)]
++struct LapinTree {
++    path: PathBuf,
++    depth: u16,
++    expandable: bool,
++}
++
++/// The folders in `dir` that aren't hidden, by name (at most 300).
++fn lapin_subfolders(dir: &Path) -> Vec<PathBuf> {
++    let mut dirs: Vec<PathBuf> = fs::read_dir(dir)
++        .map(|rd| {
++            rd.flatten()
++                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
++                .map(|e| e.path())
++                .filter(|p| p.is_dir())
++                .take(300)
++                .collect()
++        })
++        .unwrap_or_default();
++    dirs.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.to_string_lossy(), &b.to_string_lossy()));
++    dirs
++}
++
+ #[derive(Clone, Copy, PartialEq, Eq)]
+ enum LapinNav {
+     Home,
+@@ -772,6 +798,8 @@ pub struct App {
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
+     lapin_pc: bool,
++    /// Lapin UX: the folders opened out in the navigation pane's tree.
++    lapin_expanded: BTreeSet<PathBuf>,
+     /// Lapin UX's progress window (#101): its id, whether it shows the
+     /// details, whether you closed it during the current operations, and the
+     /// speed samples per operation.
+@@ -2445,6 +2473,227 @@ impl App {
+         ))
+     }
+ 
++    /// The right-click entries of one navigation pane entry.
++    fn nav_menu_items(&self, entity: Entity) -> Vec<widget::menu::Item<NavMenuAction, String>> {
++        let favorite_index_opt = self.nav_model.data::<FavoriteIndex>(entity);
++        let location_opt = self.nav_model.data::<Location>(entity);
++
++        let mut items: Vec<widget::menu::Item<NavMenuAction, String>> = Vec::with_capacity(7);
++
++        // Lapin UX's own entries (#72): This PC folds its drives; Home and
++        // Gallery have nothing to add.
++        if let Some(nav) = self.nav_model.data::<LapinNav>(entity) {
++            if matches!(nav, LapinNav::ThisPc) {
++                items.push(cosmic::widget::menu::Item::Button(
++                    if self.lapin_drives_collapsed { fl!("show-drives") } else { fl!("hide-drives") },
++                    None,
++                    NavMenuAction::LapinToggleDrives,
++                ));
++            }
++            return items;
++        }
++
++        if location_opt
++            .and_then(Location::path_opt)
++            .is_some_and(|x| x.is_file())
++        {
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("open"),
++                None,
++                NavMenuAction::Open(entity),
++            ));
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("menu-open-with"),
++                None,
++                NavMenuAction::OpenWith(entity),
++            ));
++        } else {
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("open-in-new-tab"),
++                None,
++                NavMenuAction::OpenInNewTab(entity),
++            ));
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("open-in-new-window"),
++                None,
++                NavMenuAction::OpenInNewWindow(entity),
++            ));
++        }
++        if let Some(path) = location_opt.and_then(Location::path_opt) {
++            let selected_dir = usize::from(path.is_dir());
++            let action_items: Vec<_> = self
++                .config
++                .context_actions
++                .iter()
++                .enumerate()
++                .filter(|(_, action)| action.matches_selection(1, selected_dir))
++                .map(|(i, action)| {
++                    cosmic::widget::menu::Item::Button(
++                        action.name.clone(),
++                        None,
++                        NavMenuAction::RunContextAction(entity, i),
++                    )
++                })
++                .collect();
++
++            if !action_items.is_empty() {
++                items.push(cosmic::widget::menu::Item::Divider);
++                items.extend(action_items);
++            }
++        }
++        items.push(cosmic::widget::menu::Item::Divider);
++        if matches!(location_opt, Some(Location::Path(..))) {
++            items.push(cosmic::widget::menu::Item::Button(
++                if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") },
++                None,
++                NavMenuAction::Preview(entity),
++            ));
++        }
++        items.push(cosmic::widget::menu::Item::Divider);
++        if favorite_index_opt.is_some() {
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("change-sidebar-label"),
++                None,
++                NavMenuAction::ChangeSidebarLabel(entity),
++            ));
++            items.push(cosmic::widget::menu::Item::Button(
++                if crate::config::lapin_session() { fl!("unpin-from-home") } else { fl!("remove-from-sidebar") },
++                None,
++                NavMenuAction::RemoveFromSidebar(entity),
++            ));
++        }
++
++        if matches!(location_opt, Some(Location::Recents)) && tab::has_recents() {
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("clear-recents-history"),
++                None,
++                NavMenuAction::ClearRecents,
++            ));
++        }
++
++        if matches!(location_opt, Some(Location::Trash)) && !Trash::is_empty() {
++            items.push(cosmic::widget::menu::Item::Button(
++                fl!("empty-trash"),
++                None,
++                NavMenuAction::EmptyTrash,
++            ));
++        }
++        items
++    }
++
++    /// Lapin UX (#143): the navigation pane as a tree. Every entry of the
++    /// model is a row: a chevron when it can be opened out, its icon and name,
++    /// and a pin for pinned folders. Same handlers as COSMIC's `nav_bar`.
++    fn lapin_tree_pane(&self) -> Element<'_, cosmic::Action<Message>> {
++        use cosmic::widget::dnd_destination::DndDestination;
++        let cosmic_theme::Spacing { space_xxs, space_xs, .. } = theme::spacing();
++        let app = |m: Message| cosmic::Action::App(m);
++        let mut column = widget::column::with_capacity(self.nav_model.len() + 4).spacing(2);
++        for entity in self.nav_model.iter() {
++            if self.nav_model.divider_above(entity) == Some(true) {
++                column = column.push(
++                    widget::container(widget::divider::horizontal::default()).padding([space_xxs, space_xs]),
++                );
++            }
++            let indent = self.nav_model.indent(entity).unwrap_or(0);
++            let tree = self.nav_model.data::<LapinTree>(entity);
++            let this_pc = matches!(self.nav_model.data::<LapinNav>(entity), Some(LapinNav::ThisPc));
++            let chevron: Element<'_, cosmic::Action<Message>> = if this_pc {
++                widget::button::icon(
++                    icon::from_name(if self.lapin_drives_collapsed { "go-next-symbolic" } else { "go-down-symbolic" }).size(12),
++                )
++                .padding(4)
++                .on_press(app(Message::NavMenuAction(NavMenuAction::LapinToggleDrives)))
++                .into()
++            } else if let Some(tree) = tree.filter(|t| t.expandable) {
++                widget::button::icon(
++                    icon::from_name(if self.lapin_expanded.contains(&tree.path) { "go-down-symbolic" } else { "go-next-symbolic" })
++                        .size(12),
++                )
++                .padding(4)
++                .on_press(app(Message::LapinTreeToggle(tree.path.clone())))
++                .into()
++            } else {
++                widget::space::horizontal().width(Length::Fixed(20.0)).into()
++            };
++            let mut row = widget::row::with_capacity(5)
++                .spacing(space_xxs)
++                .align_y(Alignment::Center)
++                .push(widget::space::horizontal().width(Length::Fixed(f32::from(indent) * 16.0)))
++                .push(chevron);
++            if let Some(icon) = self.nav_model.icon(entity) {
++                row = row.push(icon.clone());
++            }
++            row = row.push(
++                widget::text::body(self.nav_model.text(entity).unwrap_or_default().to_string())
++                    .width(Length::Fill)
++                    .wrapping(cosmic::iced::widget::text::Wrapping::None),
++            );
++            if self.nav_model.data::<FavoriteIndex>(entity).is_some() {
++                row = row.push(icon::from_name("view-pin-symbolic").size(14));
++            } else if self.nav_model.is_closable(entity) {
++                row = row.push(
++                    widget::button::icon(icon::from_name("media-eject-symbolic").size(14))
++                        .padding(4)
++                        .on_press(app(Message::NavBarClose(entity))),
++                );
++            }
++            let button = widget::button::custom(row)
++                .width(Length::Fill)
++                .padding([6, space_xxs])
++                .class(if self.nav_model.is_active(entity) {
++                    theme::Button::Standard
++                } else {
++                    theme::Button::MenuItem
++                })
++                .on_press(cosmic::Action::Cosmic(cosmic::app::Action::NavBar(entity)));
++            let area = crate::mouse_area::MouseArea::new(button).on_middle_press(move |_| {
++                cosmic::Action::App(Message::NavMenuAction(NavMenuAction::OpenInNewTab(entity)))
++            });
++            let mut menu = widget::context_menu(
++                area,
++                Some(cosmic::widget::menu::items(&HashMap::new(), self.nav_menu_items(entity))),
++            )
++            .on_surface_action(|action| cosmic::Action::Surface(action.flatten()));
++            if let Some(id) = self.core().main_window_id() {
++                menu = menu.window_id(id);
++            }
++            column = column.push(
++                DndDestination::for_data::<ClipboardPaste>(menu, move |data, action| {
++                    cosmic::Action::App(Message::DndDropNav(entity, data, action))
++                })
++                .on_enter(move |_, _, _| cosmic::Action::App(Message::DndEnterNav(entity)))
++                .on_leave(|| cosmic::Action::App(Message::DndExitNav)),
++            );
++        }
++        widget::container(widget::scrollable(column.padding([space_xxs, space_xs])))
++            .width(Length::Fixed(280.0))
++            .height(Length::Fill)
++            .into()
++    }
++
++    /// Lapin UX: the folders inside `dir`, as tree rows under it (and theirs,
++    /// for the ones that are opened out).
++    fn lapin_tree_children(
++        mut model: segmented_button::ModelBuilder<segmented_button::SingleSelect>,
++        dir: &Path,
++        depth: u16,
++        expanded: &BTreeSet<PathBuf>,
++    ) -> segmented_button::ModelBuilder<segmented_button::SingleSelect> {
++        for path in lapin_subfolders(dir) {
++            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
++            let tree = LapinTree { path: path.clone(), depth, expandable: !lapin_subfolders(&path).is_empty() };
++            let open = tree.expandable && expanded.contains(&path);
++            let location = Location::Path(path.clone());
++            let handle = tab::folder_icon_symbolic(&path, 16);
++            model = model.insert(move |b| b.text(name.clone()).icon(icon::icon(handle.clone()).size(16)).data(location.clone()).data(tree.clone()));
++            if open && depth < 12 {
++                model = Self::lapin_tree_children(model, &path, depth + 1, expanded);
++            }
++        }
++        model
++    }
++
+     fn update_nav_model(&mut self) {
+         let mut nav_model = segmented_button::ModelBuilder::default();
+ 
+@@ -2551,10 +2800,28 @@ impl App {
+         if lapin && self.lapin_drives_collapsed {
+             nav_items.clear();
+         }
++        if lapin && !self.lapin_drives_collapsed {
++            // This computer's own disk first, then the other drives.
++            let root = PathBuf::from("/");
++            let tree = LapinTree { path: root.clone(), depth: 1, expandable: true };
++            nav_model = nav_model.insert(|b| {
++                b.text(fl!("filesystem"))
++                    .icon(icon::icon(icon::from_name("drive-harddisk-symbolic").size(16).handle()).size(16))
++                    .data(Location::Path(root.clone()))
++                    .data(tree.clone())
++            });
++            if self.lapin_expanded.contains(&root) {
++                nav_model = Self::lapin_tree_children(nav_model, &root, 2, &self.lapin_expanded);
++            }
++        }
+         // Add items to nav model
+         for (i, (key, item)) in nav_items.into_iter().enumerate() {
++            let lapin_drive = item.path().filter(|_| lapin && !item.is_remote());
+             nav_model = nav_model.insert(|mut b| {
+                 b = b.text(item.name()).data(MounterData(key, item.clone()));
++                if let Some(path) = &lapin_drive {
++                    b = b.data(LapinTree { path: path.clone(), depth: 1, expandable: true });
++                }
+                 let uri = item.uri();
+                 if let Some(path) = item.path() {
+                     if item.is_remote() {
+@@ -2587,10 +2854,17 @@ impl App {
+ 
+         self.nav_model = nav_model.build();
+         if lapin {
+-            // The drives sit under This PC.
+-            let drives: Vec<_> = self.nav_model.iter().filter(|&id| self.nav_model.data::<MounterData>(id).is_some()).collect();
+-            for id in drives {
+-                self.nav_model.indent_set(id, 1);
++            // The drives sit under This PC, and the tree's folders under them.
++            let rows: Vec<_> = self
++                .nav_model
++                .iter()
++                .filter_map(|id| match self.nav_model.data::<LapinTree>(id) {
++                    Some(tree) => Some((id, tree.depth)),
++                    None => self.nav_model.data::<MounterData>(id).map(|_| (id, 1)),
++                })
++                .collect();
++            for (id, depth) in rows {
++                self.nav_model.indent_set(id, depth);
+             }
+         }
+ 
+@@ -3170,6 +3444,7 @@ impl Application for App {
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
+             lapin_pc: false,
++            lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+             lapin_progress_details: false,
+             lapin_progress_hidden: false,
+@@ -3276,112 +3551,7 @@ impl Application for App {
+     }
+ 
+     fn nav_context_menu(&self) -> Option<Vec<widget::menu::Tree<cosmic::Action<Self::Message>>>> {
+-        let items = self.nav_model.iter().map(|entity| {
+-            let favorite_index_opt = self.nav_model.data::<FavoriteIndex>(entity);
+-            let location_opt = self.nav_model.data::<Location>(entity);
+-
+-            let mut items: Vec<widget::menu::Item<NavMenuAction, String>> = Vec::with_capacity(7);
+-
+-            // Lapin UX's own entries (#72): This PC folds its drives; Home and
+-            // Gallery have nothing to add.
+-            if let Some(nav) = self.nav_model.data::<LapinNav>(entity) {
+-                if matches!(nav, LapinNav::ThisPc) {
+-                    items.push(cosmic::widget::menu::Item::Button(
+-                        if self.lapin_drives_collapsed { fl!("show-drives") } else { fl!("hide-drives") },
+-                        None,
+-                        NavMenuAction::LapinToggleDrives,
+-                    ));
+-                }
+-                return items;
+-            }
+-
+-            if location_opt
+-                .and_then(Location::path_opt)
+-                .is_some_and(|x| x.is_file())
+-            {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("open"),
+-                    None,
+-                    NavMenuAction::Open(entity),
+-                ));
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("menu-open-with"),
+-                    None,
+-                    NavMenuAction::OpenWith(entity),
+-                ));
+-            } else {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("open-in-new-tab"),
+-                    None,
+-                    NavMenuAction::OpenInNewTab(entity),
+-                ));
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("open-in-new-window"),
+-                    None,
+-                    NavMenuAction::OpenInNewWindow(entity),
+-                ));
+-            }
+-            if let Some(path) = location_opt.and_then(Location::path_opt) {
+-                let selected_dir = usize::from(path.is_dir());
+-                let action_items: Vec<_> = self
+-                    .config
+-                    .context_actions
+-                    .iter()
+-                    .enumerate()
+-                    .filter(|(_, action)| action.matches_selection(1, selected_dir))
+-                    .map(|(i, action)| {
+-                        cosmic::widget::menu::Item::Button(
+-                            action.name.clone(),
+-                            None,
+-                            NavMenuAction::RunContextAction(entity, i),
+-                        )
+-                    })
+-                    .collect();
+-
+-                if !action_items.is_empty() {
+-                    items.push(cosmic::widget::menu::Item::Divider);
+-                    items.extend(action_items);
+-                }
+-            }
+-            items.push(cosmic::widget::menu::Item::Divider);
+-            if matches!(location_opt, Some(Location::Path(..))) {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    if crate::config::lapin_session() { fl!("properties") } else { fl!("show-details") },
+-                    None,
+-                    NavMenuAction::Preview(entity),
+-                ));
+-            }
+-            items.push(cosmic::widget::menu::Item::Divider);
+-            if favorite_index_opt.is_some() {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("change-sidebar-label"),
+-                    None,
+-                    NavMenuAction::ChangeSidebarLabel(entity),
+-                ));
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    if crate::config::lapin_session() { fl!("unpin-from-home") } else { fl!("remove-from-sidebar") },
+-                    None,
+-                    NavMenuAction::RemoveFromSidebar(entity),
+-                ));
+-            }
+-
+-            if matches!(location_opt, Some(Location::Recents)) && tab::has_recents() {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("clear-recents-history"),
+-                    None,
+-                    NavMenuAction::ClearRecents,
+-                ));
+-            }
+-
+-            if matches!(location_opt, Some(Location::Trash)) && !Trash::is_empty() {
+-                items.push(cosmic::widget::menu::Item::Button(
+-                    fl!("empty-trash"),
+-                    None,
+-                    NavMenuAction::EmptyTrash,
+-                ));
+-            }
+-            items
+-        });
++        let items = self.nav_model.iter().map(|entity| self.nav_menu_items(entity));
+ 
+         Some(cosmic::widget::menu::nav_context(
+             &HashMap::new(),
+@@ -3651,6 +3821,12 @@ impl Application for App {
+             Message::LapinAction(action) => {
+                 return Task::done(*action);
+             }
++            Message::LapinTreeToggle(path) => {
++                if !self.lapin_expanded.remove(&path) {
++                    self.lapin_expanded.insert(path);
++                }
++                self.update_nav_model();
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -7369,8 +7545,7 @@ impl Application for App {
+             // Lapin UX: the navigation pane sits beside the files, under the
+             // rows above, which span the window.
+             let pane = (crate::config::lapin_session() && matches!(self.mode, Mode::App))
+-                .then(|| self.nav_pane())
+-                .flatten()
++                .then(|| self.lapin_tree_pane())
+                 .map(|pane: Element<'_, cosmic::Action<Message>>| {
+                     pane.map(|action| Message::LapinAction(Box::new(action)))
+                 });
+-- 
+2.43.0
+
