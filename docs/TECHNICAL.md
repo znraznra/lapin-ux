@@ -571,6 +571,14 @@ Cancel beside OK (both close it: changes apply at once).
 The details view keeps its columns until the file area is narrower than 480 px
 (COSMIC switches to two-line rows under 600 px), so a normal window at 125%
 scale still shows Name, Date modified, Type and Size.
+Fixes from Tako's retest (#143, #101): the progress window closes while a
+question is up (Replace or skip?) and comes back afterwards, and opens small
+(150 px, 330 px with details); the tab strip takes the press, so dragging a tab
+reorders tabs instead of moving the window (the title bar drags from presses
+nothing took); the details pane only follows the Details setting, so Options or
+History in COSMIC's drawer don't hide it; clicking the Type heading sorts by
+type (folders, then by extension; again reverses), on top of the usual order
+(`Tab::lapin_sort_type`, not saved).
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
