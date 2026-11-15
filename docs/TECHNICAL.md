@@ -538,6 +538,20 @@ view draws the navigation pane itself (`nav_pane`, the same `nav_bar` widget;
 keeps libcosmic's pane toggle out of the title bar). `Tab::location_view_part`
 gives the address and the column headings separately. File dialogs and
 COSMIC's own session are unchanged.
+More of the familiar layout (#143). Menus: Sort (Name, Date modified, Size,
+Ascending, Descending), View (Large icons, Details, Details pane, Hidden items,
+folders first, zoom) and "…" (History, Select all, Open with, Pin to Home,
+Properties, Options, About). The details view has a Type column ("File folder",
+"PNG File"). This PC lists "Devices and drives" and "Network locations" as two
+groups of tiles. The navigation pane is a tree drawn by the Explorer itself
+(`lapin_tree_pane`): rows come from the same model and use the same handlers
+as COSMIC's `nav_bar` (select, middle click, right-click entries, drops), plus
+a chevron for This PC, the drives and their folders (`LapinTree`,
+`lapin_expanded`; a folder's children are read when it is opened out), a pin
+on pinned folders and an eject button on removable drives. The details pane
+sits beside the files (not in COSMIC's drawer, which would cover the rows
+above) and shows the name, then Type, Size, File location and the dates as
+label and value pairs.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
