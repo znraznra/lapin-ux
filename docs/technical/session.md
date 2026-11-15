@@ -82,8 +82,11 @@
 A second switch, `~/.local/state/lapin-ux/debug-wayland`, makes the shell print
 every Wayland message it sends and gets (`WAYLAND_DEBUG=1`, set first thing in
 `main`) to the session log, to see whether the compositor offers a drag to the
-shell's surfaces at all (`wl_data_device.enter`). It is very chatty: use it for
-one test and delete the file.
+shell's surfaces at all (`wl_data_device.enter`). The shell reads it once, when
+it starts: create the file, then sign out and in; after the test delete it and
+sign out and in again (deleting it alone doesn't stop the running shell's
+trace). Apps the shell starts don't inherit the switch. It is very chatty, so
+use it for one test.
 
 **First-run defaults** (written once; your later changes are never overwritten)
 - Theme: blue accent, 4 px control / 8 px window corners, frosted shell surfaces.
