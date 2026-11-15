@@ -1,0 +1,287 @@
+From 1385690babae848de92f0ad32cadca396d602a26 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 20:19:52 +0800
+Subject: [PATCH] Lapin UX: Explorer Home has Quick access, Favorites and
+ Recent, with Pin to Home
+
+---
+ i18n/en/cosmic_files.ftl |   9 ++
+ src/app.rs               | 193 ++++++++++++++++++++++++++++-----------
+ src/menu.rs              |   2 +-
+ 3 files changed, 152 insertions(+), 52 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index f583e21..e3df323 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -402,3 +402,12 @@ devices-and-drives = Devices and drives
+ free-of = { $free } free of { $total }
+ more = More
+ properties = Properties
++quick-access = Quick access
++favorites = Favorites
++recent = Recent
++pinned = Pinned
++recent-folder = Recent folder
++pin-to-home = Pin to Home
++unpin-from-home = Unpin from Home
++no-recent-files = Files you open show up here.
++pin-files-hint = Right-click a file and choose Pin to Home to keep it here.
+diff --git a/src/app.rs b/src/app.rs
+index a495c3f..4077053 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -449,6 +449,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    /// Lapin UX: unpin a favourite from Home (#73), by its index in the config.
++    LapinUnpin(usize),
+     TabNew,
+     TabRescan(
+         Entity,
+@@ -818,72 +820,150 @@ impl App {
+     /// Lapin UX: the Home page (#73): quick-access folders (the sidebar's
+     /// favourites) and the files used most recently.
+     fn lapin_home_view(&self) -> Element<'_, Message> {
++        // Lapin UX Home (#73): Quick access (pinned folders, then folders you
++        // used recently), Favorites (pinned files), then Recent files.
+         let cosmic_theme::Spacing {
+             space_xxs, space_xs, space_s, ..
+         } = theme::spacing();
+-        let mut place_buttons: Vec<Element<'_, Message>> = Vec::new();
+-        for favorite in &self.config.favorites {
++        let recent_files: Vec<PathBuf> = recently_used_xbel::parse_file()
++            .map(|files| {
++                files
++                    .bookmarks
++                    .into_iter()
++                    .rev()
++                    .filter_map(|b| tab::uri_to_path(b.href))
++                    .filter(|p| p.exists())
++                    .take(200)
++                    .collect()
++            })
++            .unwrap_or_default();
++
++        let tile = |path: &PathBuf, name: String, location: Location, unpin: Option<usize>| -> Element<'_, Message> {
++            let mut row = widget::row::with_capacity(3)
++                .spacing(space_xs)
++                .align_y(Alignment::Center)
++                .push(icon::icon(tab::folder_icon_symbolic(path, 24)).size(24))
++                .push(
++                    widget::column::with_capacity(2)
++                        .push(widget::text::body(name))
++                        .push(widget::text::caption(if unpin.is_some() { fl!("pinned") } else { fl!("recent-folder") })),
++                );
++            if let Some(i) = unpin {
++                row = row.push(
++                    widget::tooltip(
++                        widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
++                        widget::text::body(fl!("unpin-from-home")),
++                        widget::tooltip::Position::Bottom,
++                    ),
++                );
++            }
++            widget::button::custom(row)
++                .width(Length::Fixed(240.0))
++                .padding(space_xs)
++                .class(theme::Button::MenuItem)
++                .on_press(Message::TabMessage(None, tab::Message::Location(location)))
++                .into()
++        };
++
++        let mut quick: Vec<Element<'_, Message>> = Vec::new();
++        let mut pinned_dirs: Vec<PathBuf> = Vec::new();
++        let mut pinned_files = widget::column::with_capacity(8).spacing(space_xxs);
++        let mut any_file = false;
++        for (i, favorite) in self.config.favorites.iter().enumerate() {
+             let Some(path) = favorite.path_opt() else { continue };
+             let name = favorite.display_name().unwrap_or_else(|| fl!("filesystem"));
+-            let location = match favorite {
+-                Favorite::Network { uri, name, path } => {
+-                    Location::Network(uri.clone(), name.clone(), Some(path.to_owned()))
+-                }
+-                _ => Location::Path(path.clone()),
+-            };
+-            place_buttons.push(
+-                widget::button::custom(
++            if path.is_dir() || matches!(favorite, Favorite::Network { .. }) {
++                let location = match favorite {
++                    Favorite::Network { uri, name, path } => {
++                        Location::Network(uri.clone(), name.clone(), Some(path.to_owned()))
++                    }
++                    _ => Location::Path(path.clone()),
++                };
++                pinned_dirs.push(path.clone());
++                quick.push(tile(&path, name, location, Some(i)));
++            } else {
++                any_file = true;
++                let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
++                pinned_files = pinned_files.push(
+                     widget::row::with_capacity(2)
++                        .align_y(Alignment::Center)
++                        .push(
++                            widget::button::custom(
++                                widget::row::with_capacity(4)
++                                    .spacing(space_xs)
++                                    .align_y(Alignment::Center)
++                                    .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(&path, None, false), 24)).size(24))
++                                    .push(widget::text::body(name))
++                                    .push(widget::space::horizontal())
++                                    .push(widget::text::caption(parent)),
++                            )
++                            .width(Length::Fill)
++                            .padding(space_xs)
++                            .class(theme::Button::MenuItem)
++                            .on_press(Message::LapinOpen(path.clone())),
++                        )
++                        .push(widget::tooltip(
++                            widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
++                            widget::text::body(fl!("unpin-from-home")),
++                            widget::tooltip::Position::Bottom,
++                        )),
++                );
++            }
++        }
++        // Folders you used recently: the folders of your recent files.
++        let mut recent_dirs: Vec<PathBuf> = Vec::new();
++        for f in &recent_files {
++            let Some(dir) = f.parent() else { continue };
++            if recent_dirs.len() == 8 {
++                break;
++            }
++            if !pinned_dirs.iter().any(|p| p == dir) && !recent_dirs.iter().any(|p| p == dir) && dir.is_dir() {
++                recent_dirs.push(dir.to_path_buf());
++            }
++        }
++        for dir in recent_dirs {
++            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
++            quick.push(tile(&dir, name, Location::Path(dir.clone()), None));
++        }
++        let quick = widget::flex_row(quick).row_spacing(space_xs).column_spacing(space_xs);
++
++        let mut recent = widget::column::with_capacity(12).spacing(space_xxs);
++        let mut shown = 0;
++        for path in recent_files.iter().take(12) {
++            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
++            let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
++            recent = recent.push(
++                widget::button::custom(
++                    widget::row::with_capacity(4)
+                         .spacing(space_xs)
+                         .align_y(Alignment::Center)
+-                        .push(icon::icon(tab::folder_icon_symbolic(&path, 24)).size(24))
+-                        .push(widget::text::body(name)),
++                        .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(path, None, false), 24)).size(24))
++                        .push(widget::text::body(name))
++                        .push(widget::space::horizontal())
++                        .push(widget::text::caption(parent)),
+                 )
++                .width(Length::Fill)
+                 .padding(space_xs)
+                 .class(theme::Button::MenuItem)
+-                .on_press(Message::TabMessage(None, tab::Message::Location(location)))
+-                .into(),
++                .on_press(Message::LapinOpen(path.clone())),
+             );
++            shown += 1;
+         }
+-        let places = widget::flex_row(place_buttons).row_spacing(space_xs).column_spacing(space_xs);
+-        let mut recent = widget::column::with_capacity(12).spacing(space_xxs);
+-        if let Ok(files) = recently_used_xbel::parse_file() {
+-            let mut shown = 0;
+-            for bookmark in files.bookmarks.into_iter().rev() {
+-                if shown == 12 {
+-                    break;
+-                }
+-                let Some(path) = tab::uri_to_path(bookmark.href) else { continue };
+-                let (Some(name), true) = (path.file_name().map(|n| n.to_string_lossy().into_owned()), path.exists()) else { continue };
+-                let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+-                recent = recent.push(
+-                    widget::button::custom(
+-                        widget::row::with_capacity(3)
+-                            .spacing(space_xs)
+-                            .align_y(Alignment::Center)
+-                            .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(&path, None, false), 24)).size(24))
+-                            .push(widget::text::body(name))
+-                            .push(widget::space::horizontal())
+-                            .push(widget::text::caption(parent)),
+-                    )
+-                    .width(Length::Fill)
+-                    .padding(space_xs)
+-                    .class(theme::Button::MenuItem)
+-                    .on_press(Message::LapinOpen(path)),
+-                );
+-                shown += 1;
+-            }
+-            if shown == 0 {
+-                recent = recent.push(widget::text::body(fl!("recents")));
+-            }
++        if shown == 0 {
++            recent = recent.push(widget::text::caption(fl!("no-recent-files")));
++        }
++        if !any_file {
++            pinned_files = pinned_files.push(widget::text::caption(fl!("pin-files-hint")));
+         }
+         widget::scrollable(
+-            widget::column::with_capacity(4)
++            widget::column::with_capacity(6)
+                 .spacing(space_s)
+                 .padding(space_s)
+-                .push(widget::text::title4(fl!("home")))
+-                .push(places)
+-                .push(widget::text::title4(fl!("recents")))
++                .push(widget::text::title4(fl!("quick-access")))
++                .push(quick)
++                .push(widget::text::title4(fl!("favorites")))
++                .push(pinned_files)
++                .push(widget::text::title4(fl!("recent")))
+                 .push(recent),
+         )
+         .height(Length::Fill)
+@@ -1927,8 +2007,11 @@ impl App {
+ 
+         for (favorite_i, favorite) in self.config.favorites.iter().enumerate() {
+             if let Some(path) = favorite.path_opt() {
+-                // Lapin UX has its own Home entry at the top.
+-                if crate::config::lapin_session() && dirs::home_dir().as_deref() == Some(path.as_path()) {
++                // Lapin UX has its own Home entry at the top, and pinned files
++                // are on the Home page only (#73).
++                if crate::config::lapin_session()
++                    && (dirs::home_dir().as_deref() == Some(path.as_path()) || !path.is_dir())
++                {
+                     continue;
+                 }
+                 let name = favorite.display_name().unwrap_or_else(|| fl!("filesystem"));
+@@ -3100,6 +3183,14 @@ impl Application for App {
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
++            Message::LapinUnpin(i) => {
++                let mut favorites = self.config.favorites.clone();
++                if i < favorites.len() {
++                    favorites.remove(i);
++                    config_set!(favorites, favorites);
++                    return self.update_config();
++                }
++            }
+             Message::AddToSidebar(entity_opt) => {
+                 let mut favorites = self.config.favorites.clone();
+                 // check if the selected entity is in the current tab
+diff --git a/src/menu.rs b/src/menu.rs
+index aed8ca1..b5f8fb5 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -245,7 +245,7 @@ pub fn context_menu<'a>(
+                 } else {
+                     if matches!(tab.mode, tab::Mode::App) {
+                         children.push(menu::Item::Divider);
+-                        children.push(menu_item(fl!("add-to-sidebar"), Action::AddToSidebar));
++                        children.push(menu_item(if crate::config::lapin_session() { fl!("pin-to-home") } else { fl!("add-to-sidebar") }, Action::AddToSidebar));
+                     }
+                     children.push(menu::Item::Divider);
+                     if tab.location.is_recents() {
+-- 
+2.43.0
+
