@@ -27,6 +27,6 @@ Refs #
 - [ ] A change to a COSMIC program is a patch in `packaging/lapin-ux-*/` rebuilt from the pinned commit, and `git diff packaging/` shows only my change
 - [ ] Anything I added to a COSMIC program only applies inside a Lapin session
 - [ ] A new write to a shared COSMIC or GTK setting is added to `items()` in `tools/lapin-ux-uninstall`
-- [ ] Docs updated (README, `docs/TECHNICAL.md`, or `docs/wiki/`)
+- [ ] Docs updated (README, `docs/TECHNICAL.md` or the area file in `docs/technical/`, or `docs/wiki/`)
 - [ ] My wording describes what the thing does, without comparing it to another operating system (see CONTRIBUTING.md)
 - [ ] I read the [Code of Conduct](../CODE_OF_CONDUCT.md), and my change can be released under GPL-3.0-only
