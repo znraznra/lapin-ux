@@ -1,0 +1,466 @@
+From daea7458aefa7447fcc3748fcffe41ee7f487b2d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:28:51 +0800
+Subject: [PATCH 30/31] Lapin UX: Properties General page in the familiar
+ layout, with Apply
+
+Refs #143. The General tab shows the icon and an editable name, then
+sections split by lines: Type of file and Opens with (Change... lists the
+apps), Location, Size and Size on disk (or Size and Contains for a folder),
+the dates written out in full, and Read-only and Hidden. Changes wait for OK
+or Apply (greyed out until something changed); Cancel drops them. Renaming
+and Hidden (a leading dot) go through the usual rename operation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |  15 +++
+ src/app.rs               | 140 ++++++++++++++++++++++++++--
+ src/tab.rs               | 193 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 339 insertions(+), 9 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 1a20859..2627e78 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -471,3 +471,18 @@ group-this-year = Earlier this year
+ group-long-ago = A long time ago
+ ok = OK
+ read-only = Read-only
++
++# Lapin UX: Properties window
++type-of-file = Type of file:
++opens-with = Opens with:
++change = Change...
++location = Location:
++size-on-disk = Size on disk:
++attributes = Attributes:
++hidden = Hidden
++apply = Apply
++props-size = Size:
++props-contains = Contains:
++props-created = Created:
++props-modified = Modified:
++props-accessed = Accessed:
+diff --git a/src/app.rs b/src/app.rs
+index 422a28a..69c8c56 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -460,6 +460,9 @@ pub enum Message {
+     /// Lapin UX: nothing to do (a press that only had to be taken).
+     LapinNoop,
+     LapinPageClick(String, Box<Message>),
++    LapinPropsEdit(window::Id, tab::LapinPropsEdit),
++    LapinPropsApply(window::Id, bool),
++    LapinPropsCancel(window::Id),
+     /// Lapin UX's Properties window: pick a tab, close it.
+     LapinPropertiesTab(u8),
+     LapinCloseWindow(window::Id),
+@@ -813,6 +816,8 @@ pub struct App {
+     /// Lapin UX: the item picked on Home or This PC, and the last click (for double-click).
+     lapin_page_selected: Option<String>,
+     lapin_page_click: Option<(String, std::time::Instant)>,
++    /// Lapin UX: Properties windows' General page changes, until OK or Apply.
++    lapin_props: HashMap<window::Id, (PathBuf, tab::LapinPropsDraft)>,
+     /// Lapin UX: the tab shown in Properties windows (0 General, 1 Security).
+     lapin_properties_tab: u8,
+     /// Lapin UX: the folders opened out in the navigation pane's tree.
+@@ -1059,6 +1064,32 @@ impl App {
+         .into()
+     }
+ 
++    /// Lapin UX: the file a Properties window shows.
++    fn lapin_window_item(&self, id: window::Id) -> Option<&tab::Item> {
++        let Some(Window { kind: WindowKind::Preview(entity_opt, kind), .. }) = self.windows.get(&id) else {
++            return None;
++        };
++        let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
++        match kind {
++            PreviewKind::Custom(PreviewItem(item)) => Some(item),
++            PreviewKind::Location(location) => self
++                .tab_model
++                .data::<Tab>(entity)?
++                .items_opt()?
++                .iter()
++                .find(|item| item.location_opt.as_ref() == Some(location)),
++            PreviewKind::Selected => {
++                let tab = self.tab_model.data::<Tab>(entity)?;
++                let mut selected = tab.items_opt()?.iter().filter(|item| item.selected);
++                match (selected.next(), selected.next()) {
++                    (Some(item), None) => Some(item),
++                    (None, _) => tab.parent_item_opt.as_deref(),
++                    _ => None,
++                }
++            }
++        }
++    }
++
+     /// Lapin UX: an item on Home or This PC: the soft grey box when picked.
+     fn lapin_page_class(&self, key: &str) -> theme::Button {
+         if self.lapin_page_selected.as_deref() == Some(key) {
+@@ -3579,6 +3610,7 @@ impl Application for App {
+             lapin_pane_page: None,
+             lapin_page_selected: None,
+             lapin_page_click: None,
++            lapin_props: HashMap::new(),
+             lapin_properties_tab: 0,
+             lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+@@ -3975,6 +4007,61 @@ impl Application for App {
+                 return window::close(id);
+             }
+             Message::LapinNoop => {}
++            Message::LapinPropsEdit(id, edit) => {
++                let Some(item) = self.lapin_window_item(id) else { return Task::none() };
++                let (Some(path), initial) = (item.path_opt().cloned(), item.lapin_props_initial()) else {
++                    return Task::none();
++                };
++                let entry = self.lapin_props.entry(id).or_insert_with(|| (path.clone(), initial.clone()));
++                if entry.0 != path {
++                    *entry = (path, initial);
++                }
++                match edit {
++                    tab::LapinPropsEdit::Name(name) => entry.1.name = name,
++                    tab::LapinPropsEdit::ReadOnly(on) => entry.1.read_only = on,
++                    tab::LapinPropsEdit::Hidden(on) => entry.1.hidden = on,
++                    tab::LapinPropsEdit::ChooseApp => entry.1.choosing_app = !entry.1.choosing_app,
++                }
++            }
++            Message::LapinPropsApply(id, close) => {
++                // Lapin UX: OK and Apply make the General page's changes: the
++                // name (a leading dot for Hidden) and Read-only.
++                let mut tasks = Vec::new();
++                if let (Some((path, draft)), Some(item)) = (self.lapin_props.remove(&id), self.lapin_window_item(id)) {
++                    let initial = item.lapin_props_initial();
++                    #[cfg(unix)]
++                    if draft.read_only != initial.read_only
++                        && let Some(metadata) = item.file_metadata()
++                    {
++                        use std::os::unix::fs::MetadataExt;
++                        let mode = metadata.mode();
++                        let mode = if draft.read_only { mode & !0o222 } else { mode | 0o200 };
++                        tasks.push(self.operation(Operation::SetPermissions { path: path.clone(), mode }));
++                    }
++                    let base = draft.name.trim().trim_start_matches('.').to_string();
++                    let new_name = if draft.hidden { format!(".{base}") } else { base.clone() };
++                    if !base.is_empty()
++                        && !base.contains('/')
++                        && (draft.name != initial.name || draft.hidden != initial.hidden)
++                        && let Some(parent) = path.parent()
++                    {
++                        let to = parent.join(&new_name);
++                        if to != path {
++                            tasks.push(self.operation(Operation::Rename { from: path, to }));
++                        }
++                    }
++                }
++                if close {
++                    self.remove_window(&id);
++                    tasks.push(window::close(id));
++                }
++                return Task::batch(tasks);
++            }
++            Message::LapinPropsCancel(id) => {
++                self.lapin_props.remove(&id);
++                self.remove_window(&id);
++                return window::close(id);
++            }
+             Message::LapinPageClick(key, open) => {
+                 // Lapin UX (#149): a click picks an item on Home or This PC, a
+                 // second click on it soon after opens it.
+@@ -7912,11 +7999,36 @@ impl Application for App {
+                             .class(if tab == i { theme::Button::Standard } else { theme::Button::MenuRoot })
+                             .on_press(Message::LapinPropertiesTab(i))
+                     };
+-                    tab::LAPIN_PROPERTIES_TAB.set(tab + 1);
+-                    let page = self
+-                        .preview(entity_opt, kind, true)
+-                        .map(|x| Message::TabMessage(*entity_opt, x));
+-                    tab::LAPIN_PROPERTIES_TAB.set(0);
++                    let entity_opt = *entity_opt;
++                    let general = (tab == 0).then(|| self.lapin_window_item(id)).flatten().map(|item| {
++                        let initial = item.lapin_props_initial();
++                        let draft = self
++                            .lapin_props
++                            .get(&id)
++                            .filter(|(path, _)| item.path_opt() == Some(path))
++                            .map_or_else(|| initial.clone(), |(_, d)| d.clone());
++                        let mut changed = draft.clone();
++                        changed.choosing_app = false;
++                        let changed = changed != initial;
++                        let page = item
++                            .lapin_general_view(&self.mime_app_cache, self.config.tab.military_time, &draft)
++                            .map(move |x| match x {
++                                tab::Message::LapinPropsEdit(edit) => Message::LapinPropsEdit(id, edit),
++                                other => Message::TabMessage(entity_opt, other),
++                            });
++                        (page, changed)
++                    });
++                    let (page, changed) = match general {
++                        Some((page, changed)) => (page, changed),
++                        None => {
++                            tab::LAPIN_PROPERTIES_TAB.set(tab + 1);
++                            let page = self
++                                .preview(&entity_opt, kind, true)
++                                .map(move |x| Message::TabMessage(entity_opt, x));
++                            tab::LAPIN_PROPERTIES_TAB.set(0);
++                            (page, false)
++                        }
++                    };
+                     widget::column::with_capacity(4)
+                         .push(
+                             widget::row::with_capacity(2)
+@@ -7927,9 +8039,13 @@ impl Application for App {
+                         )
+                         .push(widget::divider::horizontal::default())
+                         .push(
+-                            widget::scrollable(widget::container(page).padding(space_s))
+-                                .height(Length::Fill),
++                            widget::container(
++                                widget::scrollable(widget::container(page).padding(space_s))
++                                    .height(Length::Fill),
++                            )
++                            .class(lapin_layer_style()),
+                         )
++                        .push(widget::divider::horizontal::default())
+                         .push(
+                             widget::row::with_capacity(2)
+                                 .padding(space_s)
+@@ -7937,11 +8053,17 @@ impl Application for App {
+                                 .spacing(8)
+                                 .push(
+                                     widget::button::suggested(fl!("ok"))
+-                                        .on_press(Message::LapinCloseWindow(id)),
++                                        .on_press(Message::LapinPropsApply(id, true)),
+                                 )
+                                 .push(
+                                     widget::button::standard(fl!("cancel"))
+-                                        .on_press(Message::LapinCloseWindow(id)),
++                                        .class(tab::lapin_box_button())
++                                        .on_press(Message::LapinPropsCancel(id)),
++                                )
++                                .push(
++                                    widget::button::standard(fl!("apply"))
++                                        .class(tab::lapin_box_button())
++                                        .on_press_maybe(changed.then_some(Message::LapinPropsApply(id, false))),
+                                 ),
+                         )
+                         .into()
+diff --git a/src/tab.rs b/src/tab.rs
+index 547b3d4..451cc22 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1829,6 +1829,8 @@ pub enum Message {
+     /// Lapin UX: a column resize starts, and how far it has been dragged.
+     LapinColStart(usize),
+     LapinColDrag(usize, f32),
++    /// Lapin UX: a change on the Properties window's General page.
++    LapinPropsEdit(LapinPropsEdit),
+     LapinSelectInvert,
+     LapinGroupToggle(u8),
+     LapinSortType,
+@@ -4863,6 +4865,7 @@ impl Tab {
+                     self.lapin_collapsed.insert(group);
+                 }
+             }
++            Message::LapinPropsEdit(_) => {}
+             Message::LapinColStart(_) => LAPIN_DRAG_START.set(LAPIN_WIDTHS.get()),
+             Message::LapinColDrag(k, dx) => {
+                 let start = LAPIN_DRAG_START.get();
+@@ -8533,3 +8536,193 @@ pub fn lapin_box_button() -> theme::Button {
+         pressed: Box::new(|f, t| shade(t.pressed(f, false, &theme::Button::Standard), t, 0xf0)),
+     }
+ }
++
++/// Lapin UX: what the Properties window's General page has been changed to,
++/// kept until OK or Apply.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct LapinPropsDraft {
++    pub name: String,
++    pub read_only: bool,
++    pub hidden: bool,
++    pub choosing_app: bool,
++}
++
++#[derive(Clone, Debug)]
++pub enum LapinPropsEdit {
++    Name(String),
++    ReadOnly(bool),
++    Hidden(bool),
++    ChooseApp,
++}
++
++impl Item {
++    /// Lapin UX: the General page's values as the file is now.
++    pub fn lapin_props_initial(&self) -> LapinPropsDraft {
++        #[cfg(unix)]
++        let read_only = {
++            use std::os::unix::fs::MetadataExt;
++            self.file_metadata().is_some_and(|m| m.mode() & 0o222 == 0)
++        };
++        #[cfg(not(unix))]
++        let read_only = false;
++        LapinPropsDraft {
++            name: self.name.trim_start_matches('.').to_string(),
++            read_only,
++            hidden: self.name.starts_with('.'),
++            choosing_app: false,
++        }
++    }
++
++    /// Lapin UX: the type as people know it ("PNG File", "File folder").
++    pub fn lapin_type_text(&self) -> String {
++        if self.metadata.is_dir() {
++            return fl!("type-folder");
++        }
++        match self.path_opt().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
++            Some(ext) if !ext.is_empty() && ext.len() <= 8 => {
++                format!("{} (.{})", fl!("type-file", ext = ext.to_uppercase()), ext)
++            }
++            _ => fl!("type-plain"),
++        }
++    }
++
++    /// Lapin UX: the Properties window's General page, laid out as people
++    /// know it: icon and name, then sections split by lines.
++    pub fn lapin_general_view<'a>(
++        &'a self,
++        mime_app_cache: &'a mime_app::MimeAppCache,
++        military_time: bool,
++        draft: &LapinPropsDraft,
++    ) -> Element<'a, Message> {
++        let cosmic_theme::Spacing { space_xxs, space_s, .. } = theme::spacing();
++        let label_width = 130.0;
++        let row = |label: String, value: Element<'a, Message>| -> Element<'a, Message> {
++            widget::row::with_capacity(2)
++                .align_y(Alignment::Center)
++                .push(widget::text::body(label).width(Length::Fixed(label_width)))
++                .push(value)
++                .into()
++        };
++        let text = |s: String| -> Element<'a, Message> { widget::text::body(s).into() };
++        let mut column = widget::column::with_capacity(16).spacing(space_s);
++        column = column.push(
++            widget::row::with_capacity(2)
++                .spacing(space_s)
++                .align_y(Alignment::Center)
++                .push(widget::container(self.preview()).width(Length::Fixed(label_width - space_s as f32)).height(Length::Fixed(40.0)))
++                .push(
++                    widget::text_input("", draft.name.clone())
++                        .on_input(|name| Message::LapinPropsEdit(LapinPropsEdit::Name(name))),
++                ),
++        );
++        column = column.push(widget::divider::horizontal::default());
++        column = column.push(row(fl!("type-of-file"), text(self.lapin_type_text())));
++        if !self.metadata.is_dir() {
++            let apps = mime_app_cache.get_apps_for_mime(&self.mime, false);
++            let current = apps.iter().find(|(app, _)| app.is_default(&self.mime)).or(apps.first());
++            let mut value = widget::row::with_capacity(4).spacing(space_xxs).align_y(Alignment::Center);
++            if let Some((app, _)) = current {
++                value = value
++                    .push(widget::icon::icon(app.icon()).size(16))
++                    .push(widget::text::body(app.name.clone()));
++            }
++            value = value.push(widget::space::horizontal()).push(
++                widget::button::standard(fl!("change"))
++                    .class(lapin_box_button())
++                    .on_press(Message::LapinPropsEdit(LapinPropsEdit::ChooseApp)),
++            );
++            column = column.push(row(fl!("opens-with"), value.width(Length::Fill).into()));
++            if draft.choosing_app {
++                let mut list = widget::column::with_capacity(apps.len()).spacing(2);
++                for (app, _) in &apps {
++                    list = list.push(
++                        widget::button::custom(
++                            widget::row::with_capacity(2)
++                                .spacing(space_xxs)
++                                .align_y(Alignment::Center)
++                                .push(widget::icon::icon(app.icon()).size(16))
++                                .push(widget::text::body(app.name.clone())),
++                        )
++                        .width(Length::Fill)
++                        .class(theme::Button::MenuItem)
++                        .on_press(Message::SetOpenWith(self.mime.clone(), app.id.clone())),
++                    );
++                }
++                column = column.push(
++                    widget::row::with_capacity(2)
++                        .push(widget::space::horizontal().width(Length::Fixed(label_width)))
++                        .push(list),
++                );
++            }
++        }
++        column = column.push(widget::divider::horizontal::default());
++        if let Some(parent) = self.path_opt().and_then(|p| p.parent()) {
++            column = column.push(row(fl!("location"), text(parent.display().to_string())));
++        }
++        if let Some(metadata) = self.file_metadata() {
++            if metadata.is_dir() {
++                let size = match &self.dir_size {
++                    DirSize::Calculating(_) => fl!("calculating"),
++                    DirSize::Directory(size) => { let size = *size; format!("{} ({})", format_size(size), fl!("bytes", bytes = size)) }
++                    DirSize::NotDirectory => String::new(),
++                    DirSize::Error(err) => err.clone(),
++                };
++                if !size.is_empty() {
++                    column = column.push(row(fl!("props-size"), text(size)));
++                }
++                if let Some(children) = self.metadata.children_count() {
++                    column = column.push(row(fl!("props-contains"), text(fl!("status-items", items = children))));
++                }
++            } else {
++                let len = metadata.len();
++                column = column.push(row(fl!("props-size"), text(format!("{} ({})", format_size(len), fl!("bytes", bytes = len)))));
++                #[cfg(unix)]
++                {
++                    use std::os::unix::fs::MetadataExt;
++                    let on_disk = metadata.blocks() * 512;
++                    column = column.push(row(
++                        fl!("size-on-disk"),
++                        text(format!("{} ({})", format_size(on_disk), fl!("bytes", bytes = on_disk))),
++                    ));
++                }
++            }
++            column = column.push(widget::divider::horizontal::default());
++            let long = |time: SystemTime| -> String {
++                let Ok(ts) = jiff::Timestamp::try_from(time) else { return String::new() };
++                let zoned = ts.to_zoned(jiff::tz::TimeZone::system());
++                if military_time {
++                    zoned.strftime("%A, %-d %B %Y, %H:%M:%S").to_string()
++                } else {
++                    zoned.strftime("%A, %-d %B %Y, %-I:%M:%S %P").to_string()
++                }
++            };
++            for (label, time) in [
++                (fl!("props-created"), metadata.created()),
++                (fl!("props-modified"), metadata.modified()),
++                (fl!("props-accessed"), metadata.accessed()),
++            ] {
++                if let Ok(time) = time {
++                    column = column.push(row(label, text(long(time))));
++                }
++            }
++        }
++        column = column.push(widget::divider::horizontal::default());
++        column = column.push(row(
++            fl!("attributes"),
++            widget::row::with_capacity(2)
++                .spacing(space_s)
++                .push(
++                    widget::checkbox(draft.read_only)
++                        .label(fl!("read-only"))
++                        .on_toggle(|on| Message::LapinPropsEdit(LapinPropsEdit::ReadOnly(on))),
++                )
++                .push(
++                    widget::checkbox(draft.hidden)
++                        .label(fl!("hidden"))
++                        .on_toggle(|on| Message::LapinPropsEdit(LapinPropsEdit::Hidden(on))),
++                )
++                .into(),
++        ));
++        column.into()
++    }
++}
+-- 
+2.43.0
+

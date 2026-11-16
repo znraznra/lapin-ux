@@ -85,7 +85,7 @@ has Select none and Invert selection. A tab shows the icon of its place.
 A group heading folds its group away and back (`Tab::lapin_collapsed`; folded
 files have no row). Properties' General tab has a Read-only box (it clears
 every write permission; unticking gives the owner's back) and the window has
-Cancel beside OK (both close it: changes apply at once).
+Cancel beside OK (since the retest round below, OK applies the changes and closes the window, and Cancel drops them).
 The details view keeps its columns until the file area is narrower than 480 px
 (COSMIC switches to two-line rows under 600 px), so a normal window at 125%
 scale still shows Name, Date modified, Type and Size.
@@ -101,17 +101,43 @@ Light mode, matched to Tako's reference (#143): the command bar, files and
 status bar sit on their own layer (`lapin_layer_style`: plain white in light
 mode, the window colour in dark) below the tabs and address row; the details
 pane is light grey (`lapin_details_style`). Details rows are 32 px with 16 px
-icons and no lines between them. The search box is the address's lightly
+icons and no lines between them (24 px since the next round). The search box is the address's lightly
 rounded box with no outline until focused (`lapin_box_input`), tabs are 240 px
 each (a fixed-width box around the tab strip) and shrink when there are too
 many, the open place in the pane is a soft grey box (`lapin_pane_selected`),
 and Recents isn't in the pane (recent files are on Home).
 In the details pane the picture sits on a grey band across the top
 (`lapin_band_style`) and the rest is padded below it; the Properties button is
-a lightly rounded box with a thin outline (`lapin_box_button`). View > Compact
-view packs the details rows closer (24 px instead of 32); it's saved in Lapin's
-own `dev.lapinux.Explorer` settings (`compact_view`), so it needs nothing in
-the uninstaller beyond the usual `dev.lapinux.*` removal.
+a lightly rounded box with a thin outline (`lapin_box_button`).
+Tako's retest of that round (#143, #149, #101):
+- Details rows are always 24 px (the Compact view toggle is gone).
+- The tab strip is sized to the room left beside + and the window buttons
+  (from the window's width), so + always shows; past that the tabs shrink.
+- History, Options, About and Add network drive open in the details pane
+  (`lapin_pane_page`, `lapin_pane_page_view`) with a title and a close button,
+  not in COSMIC's drawer column, which never opens in the Lapin session. The
+  pane goes back to the details when a file or folder is clicked or the place
+  changes.
+- On Home and This PC a click picks an item (the soft grey box) and a second
+  click on it within half a second opens it (`LapinPageClick`).
+- The Replace question offers Replace, Skip and Keep both, with Apply to all
+  when there are several clashes (`ReplaceResult::KeepBoth(bool)`); a kept copy
+  is named "name (1).ext".
+- Date modified, Type and Size can be resized by dragging the handle just before
+  each heading (`MouseArea::on_drag_delta`, 60 to 600 px, kept while Explorer
+  is open).
+- Properties' General tab follows the familiar layout (`lapin_general_view`):
+  icon and an editable name, then sections split by lines: Type of file, Opens
+  with (Change… lists the apps), Location, Size and Size on disk (Size and
+  Contains for folders), the dates written out in full, and Read-only and
+  Hidden. Changes wait in `lapin_props` until OK or Apply (greyed out until
+  something changed); Cancel drops them. A new name or Hidden (a leading dot)
+  goes through the usual rename operation.
+- Home's headings look like the group headings elsewhere, Quick access uses the
+  full-colour folder icons, and Favorites and Recent are lists with Name, Date
+  accessed and File location columns. Home and This PC name their tab. The
+  Network page is called Networks, and Empty trash and Add network drive are in
+  the "…" menu instead of a bar under the files.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)

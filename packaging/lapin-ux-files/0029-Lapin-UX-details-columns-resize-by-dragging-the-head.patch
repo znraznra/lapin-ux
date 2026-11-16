@@ -1,0 +1,262 @@
+From 2cd963e7200f589abfbb3311b6196c16b7c027dd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:17:08 +0800
+Subject: [PATCH 29/31] Lapin UX: details columns resize by dragging the
+ heading edges
+
+Refs #143. Each of Date modified, Type and Size has a handle just before it
+in the headings; dragging it resizes that column (60 to 600 px), with a
+resize pointer over the handle. Widths last while Explorer is open.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ src/mouse_area.rs | 28 +++++++++++++-
+ src/tab.rs        | 98 ++++++++++++++++++++++++++++++++++++-----------
+ 2 files changed, 102 insertions(+), 24 deletions(-)
+
+diff --git a/src/mouse_area.rs b/src/mouse_area.rs
+index cbb7bbb..b0f46c6 100644
+--- a/src/mouse_area.rs
++++ b/src/mouse_area.rs
+@@ -22,6 +22,9 @@ pub struct MouseArea<'a, Message> {
+     content: Element<'a, Message>,
+     on_auto_scroll: Option<Box<dyn OnAutoScroll<'a, Message>>>,
+     on_drag: Option<Box<dyn OnDrag<'a, Message>>>,
++    /// Lapin UX: how far the pointer moved sideways since the press (for
++    /// resizing columns), with a resize pointer over the area.
++    on_drag_delta: Option<Box<dyn Fn(f32) -> Message + 'a>>,
+     on_double_click: Option<Box<dyn OnMouseButton<'a, Message>>>,
+     on_press: Option<Box<dyn OnMouseButton<'a, Message>>>,
+     on_drag_end: Option<Box<dyn OnMouseButton<'a, Message>>>,
+@@ -67,6 +70,12 @@ impl<'a, Message> MouseArea<'a, Message> {
+ 
+     /// The message to emit on a double click.
+     #[must_use]
++    /// Lapin UX: the message for a sideways drag that started here.
++    pub fn on_drag_delta(mut self, message: impl Fn(f32) -> Message + 'a) -> Self {
++        self.on_drag_delta = Some(Box::new(message));
++        self
++    }
++
+     pub fn on_double_click(mut self, message: impl OnMouseButton<'a, Message>) -> Self {
+         self.on_double_click = Some(Box::new(message));
+         self
+@@ -294,6 +303,7 @@ impl<'a, Message> MouseArea<'a, Message> {
+             content: content.into(),
+             on_auto_scroll: None,
+             on_drag: None,
++            on_drag_delta: None,
+             on_drag_end: None,
+             on_double_click: None,
+             on_press: None,
+@@ -409,6 +419,9 @@ where
+         viewport: &Rectangle,
+         renderer: &Renderer,
+     ) -> mouse::Interaction {
++        if self.on_drag_delta.is_some() && cursor.is_over(layout.bounds()) {
++            return mouse::Interaction::ResizingHorizontally;
++        }
+         self.content.as_widget().mouse_interaction(
+             &tree.children[0],
+             layout,
+@@ -574,6 +587,12 @@ fn update<Message: Clone>(
+         shell.request_redraw();
+     }
+ 
++    if let (Some(message), Some(initiated), Event::Mouse(mouse::Event::CursorMoved { position })) =
++        (widget.on_drag_delta.as_ref(), state.drag_initiated, event)
++    {
++        shell.publish(message(position.x - initiated.x));
++    }
++
+     if let Event::Mouse(mouse::Event::CursorMoved { position }) = event {
+         let virtual_position = Point::new(
+             viewport.x - layout_bounds.x + position.x,
+@@ -628,7 +647,7 @@ fn update<Message: Clone>(
+                 }
+             }
+         }
+-        if widget.on_drag.is_some() {
++        if widget.on_drag.is_some() || widget.on_drag_delta.is_some() {
+             state.drag_initiated = cursor.position();
+         }
+ 
+@@ -638,6 +657,13 @@ fn update<Message: Clone>(
+         }
+     }
+ 
++    // Lapin UX: a column resize ends on any release, moved or not.
++    if widget.on_drag_delta.is_some()
++        && matches!(event, Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)))
++    {
++        state.drag_initiated = None;
++    }
++
+     let distance_dragged = state
+         .drag_initiated
+         .map(|initiated| initiated.distance(cursor.position().unwrap_or_default()))
+diff --git a/src/tab.rs b/src/tab.rs
+index 43225f0..547b3d4 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1826,6 +1826,9 @@ pub enum Message {
+     SelectAll,
+     /// Lapin UX: Select none, Invert selection, and the details pane's Properties button.
+     LapinSelectNone,
++    /// Lapin UX: a column resize starts, and how far it has been dragged.
++    LapinColStart(usize),
++    LapinColDrag(usize, f32),
+     LapinSelectInvert,
+     LapinGroupToggle(u8),
+     LapinSortType,
+@@ -2995,13 +2998,27 @@ const TYPE_WIDTH: f32 = 150.0;
+ fn lapin_columns() -> bool {
+     crate::config::lapin_session()
+ }
++
++thread_local! {
++    /// Lapin UX: the widths of the Date modified, Type and Size columns,
++    /// changed by dragging the heading edges, and the widths when a drag began.
++    static LAPIN_WIDTHS: Cell<[f32; 3]> = const { Cell::new([200.0, TYPE_WIDTH, 100.0]) };
++    static LAPIN_DRAG_START: Cell<[f32; 3]> = const { Cell::new([200.0, TYPE_WIDTH, 100.0]) };
++}
++
++fn lapin_widths() -> [f32; 3] {
++    LAPIN_WIDTHS.get()
++}
++
++/// Lapin UX: the width of a column-resize handle in the headings.
++const LAPIN_HANDLE: f32 = 8.0;
+ fn modified_cell<'a>(modified: String, kind: Option<String>, width: f32) -> Element<'a, Message> {
+     match kind {
+         Some(kind) => widget::row::with_capacity(2)
+             .push(widget::text::body(modified).width(Length::Fixed(width)))
+             .push(
+                 widget::text::body(kind)
+-                    .width(Length::Fixed(TYPE_WIDTH))
++                    .width(Length::Fixed(lapin_widths()[1]))
+                     .wrapping(text::Wrapping::None),
+             )
+             .into(),
+@@ -4846,6 +4863,15 @@ impl Tab {
+                     self.lapin_collapsed.insert(group);
+                 }
+             }
++            Message::LapinColStart(_) => LAPIN_DRAG_START.set(LAPIN_WIDTHS.get()),
++            Message::LapinColDrag(k, dx) => {
++                let start = LAPIN_DRAG_START.get();
++                let mut widths = LAPIN_WIDTHS.get();
++                if let (Some(w), Some(s)) = (widths.get_mut(k), start.get(k)) {
++                    *w = (s - dx).clamp(60.0, 600.0);
++                }
++                LAPIN_WIDTHS.set(widths);
++            }
+             Message::LapinSelectNone => {
+                 self.select_none();
+             }
+@@ -5671,8 +5697,11 @@ impl Tab {
+ 
+         //TODO: allow resizing?
+         let name_width = 300.0;
+-        let modified_width = 200.0;
+-        let size_width = 100.0;
++        let (modified_width, size_width) = if lapin_columns() {
++            (lapin_widths()[0], lapin_widths()[2])
++        } else {
++            (200.0, 100.0)
++        };
+         let condensed = size.width
+             < (name_width + modified_width + size_width + if lapin_columns() { -120.0 } else { 0.0 });
+ 
+@@ -5698,27 +5727,44 @@ impl Tab {
+                 .into()
+         };
+ 
+-        let mut headings = vec![
+-            heading_item(fl!("name"), Length::Fill, HeadingOptions::Name),
+-            if self.location.is_trash() {
+-                heading_item(
+-                    fl!("trashed-on"),
+-                    Length::Fixed(modified_width),
+-                    HeadingOptions::TrashedOn,
+-                )
+-            } else {
+-                heading_item(
+-                    if lapin_columns() { fl!("date-modified") } else { fl!("modified") },
+-                    Length::Fixed(modified_width),
+-                    HeadingOptions::Modified,
+-                )
+-            },
+-        ];
+-        if lapin_columns() {
++        // Lapin UX: a handle at the left edge of each column; dragging it
++        // resizes that column (the handle is part of the column's width).
++        let lapin = lapin_columns();
++        let handle = |k: usize| -> Element<'_, Message> {
++            mouse_area::MouseArea::new(
++                widget::container(rule::vertical(1))
++                    .width(Length::Fixed(LAPIN_HANDLE))
++                    .height(Length::Fixed(16.0))
++                    .center_x(Length::Fixed(LAPIN_HANDLE)),
++            )
++            .on_press(move |_| Message::LapinColStart(k))
++            .on_drag_delta(move |dx| Message::LapinColDrag(k, dx))
++            .into()
++        };
++        let cut = if lapin { LAPIN_HANDLE } else { 0.0 };
++        let mut headings = vec![heading_item(fl!("name"), Length::Fill, HeadingOptions::Name)];
++        if lapin {
++            headings.push(handle(0));
++        }
++        headings.push(if self.location.is_trash() {
++            heading_item(
++                fl!("trashed-on"),
++                Length::Fixed(modified_width - cut),
++                HeadingOptions::TrashedOn,
++            )
++        } else {
++            heading_item(
++                if lapin { fl!("date-modified") } else { fl!("modified") },
++                Length::Fixed(modified_width - cut),
++                HeadingOptions::Modified,
++            )
++        });
++        if lapin {
++            headings.push(handle(1));
+             let mut row = widget::row::with_capacity(2)
+                 .align_y(Alignment::Center)
+                 .spacing(space_xxxs)
+-                .width(Length::Fixed(TYPE_WIDTH))
++                .width(Length::Fixed(lapin_widths()[1] - cut))
+                 .push(widget::text::heading(fl!("type-column")));
+             if let Some(ascending) = self.lapin_sort_type {
+                 row = row.push(
+@@ -5726,7 +5772,10 @@ impl Tab {
+                 );
+             }
+             headings.push(mouse_area::MouseArea::new(row).on_press(|_| Message::LapinSortType).into());
++            headings.push(handle(2));
+         }
++        // The handles sit just before the column they resize, inside the
++        // previous column's width, so the headings line up with the rows.
+         headings.push(heading_item(fl!("size"), Length::Fixed(size_width), HeadingOptions::Size));
+         let heading_row = widget::row::with_children(headings)
+         .align_y(Alignment::Center)
+@@ -6395,8 +6444,11 @@ impl Tab {
+         let size = self.size_opt.get().unwrap_or_else(|| Size::new(0.0, 0.0));
+         //TODO: allow resizing?
+         let name_width = 300.0;
+-        let modified_width = 200.0;
+-        let size_width = 100.0;
++        let (modified_width, size_width) = if lapin_columns() {
++            (lapin_widths()[0], lapin_widths()[2])
++        } else {
++            (200.0, 100.0)
++        };
+         let condensed = size.width
+             < (name_width + modified_width + size_width + if lapin_columns() { -120.0 } else { 0.0 });
+         let is_search = matches!(self.location, Location::Search(..));
+-- 
+2.43.0
+

@@ -1,0 +1,127 @@
+From 29a9c3079004269390560de4e3d6026776b0f31a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:07:33 +0800
+Subject: [PATCH 28/31] Lapin UX: Keep both for every name clash, named "name
+ (1)"
+
+Refs #101. In the Lapin session the Replace question offers Replace, Skip
+and Keep both (with Apply to all when there are several clashes), and a kept
+copy is named "name (1).ext".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ src/app.rs                 | 39 ++++++++++++++++++++++++++++++++++++--
+ src/operation/mod.rs       | 11 +++++++----
+ src/operation/recursive.rs |  9 +++++++--
+ 3 files changed, 51 insertions(+), 8 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index db7cc3b..422a28a 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -7388,7 +7388,42 @@ impl Application for App {
+                             )))
+                             .id(REPLACE_BUTTON_ID.clone()),
+                     );
+-                if *multiple {
++                if crate::config::lapin_session() {
++                    // Lapin UX (#101): Replace, Skip or Keep both (a copy with a
++                    // number added), for one file or for every clash.
++                    let mut dialog = dialog;
++                    if *multiple {
++                        dialog = dialog.control(
++                            widget::checkbox(*apply_to_all)
++                                .label(format!("{} ({})", fl!("apply-to-all"), *conflict_count))
++                                .on_toggle(|apply_to_all| {
++                                    Message::DialogUpdate(DialogPage::Replace {
++                                        from: from.clone(),
++                                        to: to.clone(),
++                                        multiple: *multiple,
++                                        apply_to_all,
++                                        conflict_count: *conflict_count,
++                                        tx: tx.clone(),
++                                    })
++                                }),
++                        );
++                    }
++                    dialog
++                        .secondary_action(
++                            widget::row::with_capacity(2)
++                                .spacing(space_xxs)
++                                .push(widget::button::standard(fl!("skip")).on_press(Message::ReplaceResult(
++                                    ReplaceResult::Skip(*apply_to_all),
++                                )))
++                                .push(widget::button::standard(fl!("keep-both")).on_press(Message::ReplaceResult(
++                                    ReplaceResult::KeepBoth(*apply_to_all),
++                                ))),
++                        )
++                        .tertiary_action(
++                            widget::button::text(fl!("cancel"))
++                                .on_press(Message::ReplaceResult(ReplaceResult::Cancel)),
++                        )
++                } else if *multiple {
+                     dialog
+                         .control(
+                             widget::checkbox(*apply_to_all)
+@@ -7421,7 +7456,7 @@ impl Application for App {
+                         )
+                         .tertiary_action(
+                             widget::button::text(fl!("keep-both"))
+-                                .on_press(Message::ReplaceResult(ReplaceResult::KeepBoth)),
++                                .on_press(Message::ReplaceResult(ReplaceResult::KeepBoth(false))),
+                         )
+                 }
+             }
+diff --git a/src/operation/mod.rs b/src/operation/mod.rs
+index 8c6fa12..43e8f37 100644
+--- a/src/operation/mod.rs
++++ b/src/operation/mod.rs
+@@ -81,7 +81,7 @@ fn get_directory_name(file_name: &str) -> &str {
+ #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+ pub enum ReplaceResult {
+     Replace(bool),
+-    KeepBoth,
++    KeepBoth(bool),
+     Skip(bool),
+     Cancel,
+ }
+@@ -303,9 +303,12 @@ pub fn copy_unique_path(from: &Path, to: &Path) -> PathBuf {
+             let new_name = if n == 0 {
+                 file_name.to_string()
+             } else {
+-                match ext {
+-                    Some(ref ext) => format!("{} ({} {}).{}", stem, fl!("copy_noun"), n, ext),
+-                    None => format!("{} ({} {})", stem, fl!("copy_noun"), n),
++                // Lapin UX (#101): the usual "name (1).ext".
++                match (&ext, crate::config::lapin_session()) {
++                    (Some(ext), true) => format!("{stem} ({n}).{ext}"),
++                    (None, true) => format!("{stem} ({n})"),
++                    (Some(ext), false) => format!("{} ({} {}).{}", stem, fl!("copy_noun"), n, ext),
++                    (None, false) => format!("{} ({} {})", stem, fl!("copy_noun"), n),
+                 }
+             };
+ 
+diff --git a/src/operation/recursive.rs b/src/operation/recursive.rs
+index 84e4cc9..b3d16cf 100644
+--- a/src/operation/recursive.rs
++++ b/src/operation/recursive.rs
+@@ -268,8 +268,13 @@ impl Context {
+                 compio::fs::remove_file(&op.to).await?;
+                 Ok(ControlFlow::Continue(op.to.clone()))
+             }
+-            ReplaceResult::KeepBoth => match op.to.parent() {
+-                Some(to_parent) => Ok(ControlFlow::Continue(copy_unique_path(&op.from, to_parent))),
++            ReplaceResult::KeepBoth(apply_to_all) => match op.to.parent() {
++                Some(to_parent) => {
++                    if apply_to_all {
++                        self.replace_result_opt = Some(replace_result);
++                    }
++                    Ok(ControlFlow::Continue(copy_unique_path(&op.from, to_parent)))
++                }
+                 None => Err(format!("failed to get parent of {}", op.to.display()).into()),
+             },
+             ReplaceResult::Skip(apply_to_all) => {
+-- 
+2.43.0
+
