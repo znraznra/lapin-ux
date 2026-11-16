@@ -372,6 +372,21 @@ cmd_restore() {
     rm -rf "$STATE"
 }
 
+# The command of greetd's [default_session], quotes and a trailing comment
+# taken off ("" when there's none).
+greetd_default_command() {
+    awk '
+        /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
+        sec == "[default_session]" && /^[[:space:]]*command[[:space:]]*=/ {
+            v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+            q = substr(v, 1, 1)
+            if (q == "\"" || q == "\047") { v = substr(v, 2); i = index(v, q); if (i) v = substr(v, 1, i - 1) }
+            else { sub(/[[:space:]]*#.*$/, "", v); sub(/[[:space:]]+$/, "", v) }
+            print v; exit
+        }
+    ' "$R/etc/greetd/config.toml" 2>/dev/null
+}
+
 # After an upgrade: someone who already uses Lapin UX's sign-in screen gets
 # the newer splash hand-off without running use-lapin again.
 cmd_refresh() {
@@ -379,7 +394,7 @@ cmd_refresh() {
     lock
     have_record && [ "$(current_dm)" = greetd.service ] && [ ! -f "$STATE/login-restored" ] || return 0
     # Only when greetd runs Lapin UX's sign-in screen (not your own greeter).
-    grep -q '^command = "cosmic-greeter-start"$' "$R/etc/greetd/config.toml" 2>/dev/null || return 0
+    [ "$(greetd_default_command)" = cosmic-greeter-start ] || return 0
     splash_handoff_use
 }
 

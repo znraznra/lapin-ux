@@ -173,6 +173,13 @@ rm -f "$D"
 printf '[default_session]\ncommand = "tuigreet"\n' > "$ROOT/etc/greetd/config.toml"
 bash "$T" refresh >/dev/null 2>&1
 check "no override for someone else's greeter" '[ ! -e "$D" ]'
+printf "[terminal]\nvt = 1\n\n[default_session]\ncommand = 'cosmic-greeter-start'   # mine\nuser = \"cosmic-greeter\"\n" > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "single quotes and a comment still count as Lapin's" '[ -f "$D" ]'
+rm -f "$D"
+printf '[initial_session]\ncommand = "cosmic-greeter-start"\n\n[default_session]\ncommand = "tuigreet"\n' > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "only [default_session]'s command counts" '[ ! -e "$D" ]'
 
 echo "N: a restore that keeps the record (boot animation failed) stops refresh"
 newroot plymouth bgrt gdm
