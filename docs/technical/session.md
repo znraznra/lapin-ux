@@ -166,8 +166,10 @@ use it for one test.
 like unlocking, with no break. When Lapin UX's sign-in screen is in use,
 `lapin-ux-login` writes `/etc/systemd/system/greetd.service`, a full copy of
 the installed unit (systemd can't drop an `After=` from a drop-in). `refresh`,
-run by the desktop package's `post_upgrade`, writes it for people who already
-use Lapin's sign-in screen. A `greetd.service` of your own in `/etc` is saved
+run by the desktop package's `post_upgrade` and, when greetd itself is
+updated, by the pacman hook `lapin-ux-greetd.hook` (so the copy keeps up with
+greetd's own unit), writes it for people who already use Lapin's sign-in
+screen. A `greetd.service` of your own in `/etc` is saved
 first and comes back with `restore`. It works the way display managers such as
 GDM do:
 - `plymouth-quit-wait.service` is taken out of greetd's `After=`, and
