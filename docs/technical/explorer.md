@@ -106,6 +106,12 @@ rounded box with no outline until focused (`lapin_box_input`), tabs are 240 px
 each (a fixed-width box around the tab strip) and shrink when there are too
 many, the open place in the pane is a soft grey box (`lapin_pane_selected`),
 and Recents isn't in the pane (recent files are on Home).
+In the details pane the picture sits on a grey band across the top
+(`lapin_band_style`) and the rest is padded below it; the Properties button is
+a lightly rounded box with a thin outline (`lapin_box_button`). View > Compact
+view packs the details rows closer (24 px instead of 32); it's saved in Lapin's
+own `dev.lapinux.Explorer` settings (`compact_view`), so it needs nothing in
+the uninstaller beyond the usual `dev.lapinux.*` removal.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
