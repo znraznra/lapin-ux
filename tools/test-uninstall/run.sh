@@ -472,6 +472,20 @@ chmod a-w "$D/sounds"
 bash "$U" --settings-only --yes > "$HOME/out3.txt" 2>&1
 chmod u+w "$D/sounds"
 check "a scheme that can't move is kept, the rest of Lapin's folder goes" "[ -f \"$D/lapin-ux/sounds/reef/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && [ ! -e \"$D/lapin-ux/sounds/lapin-ux-custom\" ]"
+# the same with a hidden scheme (.ocean): the keep check sees dot-folders too
+rm -rf "$D/lapin-ux"
+mkdir -p "$D/lapin-ux/sounds/.tide/stereo" "$D/lapin-ux/sounds/lapin-ux-custom" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
+echo x > "$D/lapin-ux/sounds/.tide/stereo/bell.oga"
+printf '.tide\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+chmod a-w "$D/sounds"
+# record every mv the uninstaller runs, then do it for real
+mkdir -p "$HOME/mvlog-bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/mv.log"\nexec %s "$@"\n' "$HOME" "$(command -v mv)" > "$HOME/mvlog-bin/mv"
+chmod +x "$HOME/mvlog-bin/mv"
+PATH="$HOME/mvlog-bin:$PATH" bash "$U" --settings-only --yes > "$HOME/out4.txt" 2>&1
+chmod u+w "$D/sounds"
+check "the move of the hidden scheme was tried" "grep -q 'lapin-ux/sounds/.tide' \"$HOME/mv.log\""
+check "a hidden scheme that can't move is kept too" "[ -f \"$D/lapin-ux/sounds/.tide/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && grep -q \"couldn't move the sound scheme .tide\" \"$HOME/out4.txt\""
 # odd names that can't move: a "..x" folder and a link whose target is gone
 rm -rf "$D/lapin-ux" "$D/sounds"; mkdir -p "$D/sounds" "$D/lapin-ux/sounds/..odd/stereo" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
 echo x > "$D/lapin-ux/sounds/..odd/stereo/bell.oga"
