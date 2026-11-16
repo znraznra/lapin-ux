@@ -1,0 +1,285 @@
+From 2837a6a7029d28c7db6cfa9dfff29f2bde590110 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 08:34:33 +0800
+Subject: [PATCH] Lapin UX: details pane picture on a grey band, plain
+ Properties button, Compact view
+
+Refs #143. In the details pane the picture sits on a grey band across the
+top and the rest is padded below; the Properties button is a lightly rounded
+box with a thin outline. View > Compact view packs the details rows closer
+(24 px instead of 32); it's kept in Lapin's own dev.lapinux.Explorer
+settings. COSMIC's own session is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |   1 +
+ src/app.rs               |  33 ++++--------
+ src/menu.rs              |   1 +
+ src/tab.rs               | 105 ++++++++++++++++++++++++++++++++++++---
+ 4 files changed, 110 insertions(+), 30 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 77505e0..978bef5 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -444,6 +444,7 @@ ascending = Ascending
+ descending = Descending
+ large-icons = Large icons
+ details-pane = Details pane
++compact-view = Compact view
+ hidden-items = Hidden items
+ options = Options
+ network-locations = Network locations
+diff --git a/src/app.rs b/src/app.rs
+index 5dc7a7b..5cb6e37 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -133,6 +133,7 @@ pub enum Action {
+     AddToSidebar,
+     LapinProperties,
+     LapinSelectNone,
++    LapinCompact,
+     LapinSelectInvert,
+     Compress,
+     Copy,
+@@ -209,6 +210,7 @@ impl Action {
+             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
+             Self::LapinProperties => Message::LapinProperties(entity_opt),
+             Self::LapinSelectNone => Message::TabMessage(entity_opt, tab::Message::LapinSelectNone),
++            Self::LapinCompact => Message::LapinCompact,
+             Self::LapinSelectInvert => Message::TabMessage(entity_opt, tab::Message::LapinSelectInvert),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+@@ -459,6 +461,7 @@ pub enum Message {
+     LapinOpen(PathBuf),
+     /// Lapin UX: nothing to do (a press that only had to be taken).
+     LapinNoop,
++    LapinCompact,
+     /// Lapin UX's Properties window: pick a tab, close it.
+     LapinPropertiesTab(u8),
+     LapinCloseWindow(window::Id),
+@@ -3428,6 +3431,9 @@ impl Application for App {
+     /// Creates the application, and optionally emits command on initialize.
+     fn init(mut core: Core, flags: Self::Flags) -> (Self, Task<Self::Message>) {
+         core.window.context_is_overlay = false;
++        if crate::config::lapin_session() {
++            tab::lapin_compact_load();
++        }
+         match flags.mode {
+             Mode::App => {
+                 core.window.show_context = flags.config.show_details;
+@@ -3888,6 +3894,7 @@ impl Application for App {
+                 return window::close(id);
+             }
+             Message::LapinNoop => {}
++            Message::LapinCompact => tab::lapin_compact_toggle(),
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -7645,15 +7652,11 @@ impl Application for App {
+             let details = self.lapin_details_pane().map(|(entity_opt, kind)| {
+                 let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
+                 widget::container(widget::scrollable(
+-                    widget::container(
+-                        self.preview(&entity_opt, kind, true)
+-                            .map(move |x| Message::TabMessage(Some(entity), x)),
+-                    )
+-                    .padding(space_s),
++                    self.preview(&entity_opt, kind, true)
++                        .map(move |x| Message::TabMessage(Some(entity), x)),
+                 ))
+                 .width(Length::Fixed(360.0))
+                 .height(Length::Fill)
+-                .class(lapin_details_style())
+             });
+             let files = match pane {
+                 Some(pane) => Element::from(
+@@ -8560,24 +8563,6 @@ fn lapin_layer_style() -> theme::Container<'static> {
+     })
+ }
+ 
+-/// Lapin UX: the details pane: a light grey card in light mode, COSMIC's
+-/// card in dark mode.
+-fn lapin_details_style() -> theme::Container<'static> {
+-    theme::Container::custom(|t| {
+-        let c = t.cosmic();
+-        let bg: cosmic::iced::Color = if c.is_dark {
+-            c.primary(false).base.into()
+-        } else {
+-            cosmic::iced::Color::from_rgb8(0xf9, 0xf9, 0xf9)
+-        };
+-        cosmic::iced::widget::container::Style {
+-            background: Some(bg.into()),
+-            text_color: Some(c.primary(false).on.into()),
+-            ..Default::default()
+-        }
+-    })
+-}
+-
+ /// Lapin UX: the search box: the same lightly rounded box as the address,
+ /// not a pill, with no outline until it's focused.
+ fn lapin_box_input() -> theme::TextInput {
+diff --git a/src/menu.rs b/src/menu.rs
+index c54a8d0..c0dd8f8 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -771,6 +771,7 @@ pub fn menu_lists(
+             menu::Item::Divider,
+             menu::Item::CheckBox(fl!("details-pane"), None, config.show_details, Action::Preview),
+             menu::Item::Divider,
++            menu::Item::CheckBox(fl!("compact-view"), None, tab::lapin_compact(), Action::LapinCompact),
+             menu::Item::CheckBox(
+                 fl!("hidden-items"),
+                 None,
+diff --git a/src/tab.rs b/src/tab.rs
+index f4b66d0..30da5f6 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -2562,11 +2562,16 @@ impl Item {
+ 
+         let mut column = widget::column::with_capacity(4).spacing(space_m);
+ 
+-        column = column.push(
+-            widget::container(self.preview())
+-                .center_x(Length::Fill)
+-                .max_height(THUMBNAIL_SIZE as f32),
+-        );
++        // Lapin UX: in the details pane the picture sits on a grey band across
++        // the top, and the rest is padded below it.
++        let lapin_pane = crate::config::lapin_session() && LAPIN_PROPERTIES_TAB.get() == 0;
++        if !lapin_pane {
++            column = column.push(
++                widget::container(self.preview())
++                    .center_x(Length::Fill)
++                    .max_height(THUMBNAIL_SIZE as f32),
++            );
++        }
+ 
+         let mut details = widget::column::with_capacity(8).spacing(space_xxxs);
+         details = details.push(widget::selectable_text::heading(self.name.clone()));
+@@ -2825,6 +2830,7 @@ impl Item {
+                         column = column.push(
+                             widget::button::standard(fl!("properties"))
+                                 .leading_icon(widget::icon::from_name("document-properties-symbolic").size(16))
++                                .class(lapin_box_button())
+                                 .on_press(Message::LapinProperties),
+                         );
+                     }
+@@ -2837,6 +2843,17 @@ impl Item {
+             column = column.push(section);
+         }
+ 
++        if lapin_pane {
++            return widget::column::with_capacity(2)
++                .push(
++                    widget::container(self.preview())
++                        .center(Length::Fill)
++                        .height(Length::Fixed(240.0))
++                        .class(lapin_band_style()),
++                )
++                .push(widget::container(column).padding(theme::spacing().space_s))
++                .into();
++        }
+         column.into()
+     }
+ 
+@@ -6392,7 +6409,8 @@ impl Tab {
+         let lapin_rows = crate::config::lapin_session() && !condensed && !is_search;
+         let icon_size = if lapin_rows { (icon_size / 2).max(16) } else { icon_size };
+         let row_height = if lapin_rows {
+-            icon_size + 16
++            // Compact view (View > Compact view) packs them closer.
++            icon_size + if lapin_compact() { 8 } else { 16 }
+         } else {
+             icon_size + 2 * space_xxs
+         };
+@@ -7305,6 +7323,10 @@ impl Tab {
+             column = column.push(section);
+         }
+ 
++        // Lapin UX: the details pane has no padding of its own.
++        if crate::config::lapin_session() {
++            return widget::container(column).padding(theme::spacing().space_s).into();
++        }
+         column.into()
+     }
+     pub fn view<'a>(
+@@ -8418,3 +8440,74 @@ mod tests {
+         Ok(())
+     }
+ }
++
++/// Lapin UX: Compact view (smaller row spacing in the details view). Kept in
++/// Lapin's own `dev.lapinux.Explorer` settings.
++static LAPIN_COMPACT: atomic::AtomicBool = atomic::AtomicBool::new(false);
++const LAPIN_EXPLORER_CONFIG: &str = "dev.lapinux.Explorer";
++
++pub fn lapin_compact() -> bool {
++    LAPIN_COMPACT.load(atomic::Ordering::Relaxed)
++}
++
++pub fn lapin_compact_load() {
++    use cosmic::cosmic_config::ConfigGet;
++    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        && let Ok(on) = config.get::<bool>("compact_view")
++    {
++        LAPIN_COMPACT.store(on, atomic::Ordering::Relaxed);
++    }
++}
++
++pub fn lapin_compact_toggle() {
++    use cosmic::cosmic_config::ConfigSet;
++    let on = !lapin_compact();
++    LAPIN_COMPACT.store(on, atomic::Ordering::Relaxed);
++    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        && let Err(err) = config.set("compact_view", on)
++    {
++        log::warn!("failed to save compact view: {err}");
++    }
++}
++
++/// Lapin UX: the grey band behind the picture in the details pane.
++pub fn lapin_band_style() -> theme::Container<'static> {
++    theme::Container::custom(|t| {
++        let c = t.cosmic();
++        let bg: cosmic::iced::Color = if c.is_dark {
++            c.primary(false).base.into()
++        } else {
++            cosmic::iced::Color::from_rgb8(0xf3, 0xf3, 0xf3)
++        };
++        cosmic::iced::widget::container::Style {
++            background: Some(bg.into()),
++            ..Default::default()
++        }
++    })
++}
++
++/// Lapin UX: a plain button: a lightly rounded box with a thin outline, not
++/// a pill.
++pub fn lapin_box_button() -> theme::Button {
++    use cosmic::widget::button::Catalog;
++    fn boxed(mut s: cosmic::widget::button::Style, t: &cosmic::Theme) -> cosmic::widget::button::Style {
++        let c = t.cosmic();
++        s.border_radius = c.corner_radii.radius_s.into();
++        s.border_width = 1.0;
++        s.border_color = c.background(false).component.divider.into();
++        s
++    }
++    // Light mode: near-white, a touch darker on hover and press.
++    fn shade(mut s: cosmic::widget::button::Style, t: &cosmic::Theme, v: u8) -> cosmic::widget::button::Style {
++        if !t.cosmic().is_dark {
++            s.background = Some(cosmic::iced::Color::from_rgb8(v, v, v).into());
++        }
++        boxed(s, t)
++    }
++    theme::Button::Custom {
++        active: Box::new(|f, t| shade(t.active(f, false, &theme::Button::Standard), t, 0xfb)),
++        disabled: Box::new(|t| boxed(t.disabled(&theme::Button::Standard), t)),
++        hovered: Box::new(|f, t| shade(t.hovered(f, false, &theme::Button::Standard), t, 0xf6)),
++        pressed: Box::new(|f, t| shade(t.pressed(f, false, &theme::Button::Standard), t, 0xf0)),
++    }
++}
+-- 
+2.43.0
+

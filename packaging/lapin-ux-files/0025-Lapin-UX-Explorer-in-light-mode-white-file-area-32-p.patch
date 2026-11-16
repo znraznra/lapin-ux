@@ -1,0 +1,246 @@
+From 122e59885d7de4545d106f8c20bbf240660b9591 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:31:39 +0800
+Subject: [PATCH] Lapin UX: Explorer in light mode: white file area, 32 px
+ rows, flat search box, wider tabs
+
+Matches the light-mode reference (Refs #143): the command bar, files and
+status bar sit on a plain white layer below the tabs and address row; the
+details pane is light grey; rows are 32 px with 16 px icons and no lines
+between them; the search box is the same lightly rounded box as the
+address; tabs are 240 px and shrink when there are too many; the open
+place in the pane is a soft grey box; Recents is no longer in the pane
+(recent files are on Home). COSMIC's own session is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ src/app.rs | 115 +++++++++++++++++++++++++++++++++++++++++++++++------
+ src/tab.rs |  12 +++++-
+ 2 files changed, 113 insertions(+), 14 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index d05a957..5dc7a7b 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -2386,6 +2386,7 @@ impl App {
+             .push(
+                 widget::text_input::search_input(fl!("search-place", name = place), self.search_get().unwrap_or(""))
+                     .width(Length::Fixed(260.0))
++                    .style(lapin_box_input())
+                     .id(self.search_id.clone())
+                     .on_clear(Message::SearchClear)
+                     .on_input(Message::SearchInput),
+@@ -2664,7 +2665,7 @@ impl App {
+                 .width(Length::Fill)
+                 .padding([6, space_xxs])
+                 .class(if self.nav_model.is_active(entity) {
+-                    theme::Button::Standard
++                    lapin_pane_selected()
+                 } else {
+                     theme::Button::MenuItem
+                 })
+@@ -2758,7 +2759,8 @@ impl App {
+             });
+         }
+ 
+-        if self.config.show_recents {
++        // Lapin UX: recent files are on the Home page, not in the pane.
++        if self.config.show_recents && !crate::config::lapin_session() {
+             nav_model = nav_model.insert(|b| {
+                 let b = b
+                     .text(fl!("recents"))
+@@ -7472,12 +7474,12 @@ impl Application for App {
+             // took the press on, so the tab strip takes it: dragging a tab
+             // reorders tabs instead of moving the window.
+             return vec![
+-                crate::mouse_area::MouseArea::new(widget::tab_bar::horizontal(&self.tab_model)
++                widget::container(crate::mouse_area::MouseArea::new(widget::tab_bar::horizontal(&self.tab_model)
+                     .button_height(32)
+                     .button_spacing(theme::spacing().space_xxs)
+-                    .minimum_button_width(200)
+-                    .maximum_button_width(260)
+-                    .width(Length::Shrink)
++                    .minimum_button_width(120)
++                    .maximum_button_width(240)
++                    .width(Length::Fill)
+                     .enable_tab_drag(String::from("x-cosmic-files/tab-dnd"))
+                     .on_reorder(Message::ReorderTab)
+                     .tab_drag_threshold(25.)
+@@ -7487,7 +7489,10 @@ impl Application for App {
+                     .on_dnd_leave(|_| Message::DndExitTab)
+                     .on_dnd_drop(|entity, data, action| Message::DndDropTab(entity, data, action))
+                     .drag_id(self.tab_drag_id))
+-                    .on_press(|_| Message::LapinNoop)
++                    .on_press(|_| Message::LapinNoop))
++                    // Fixed-size tabs (240 px each) that shrink when there
++                    // are too many to fit.
++                    .width(Length::Fixed(240.0 * self.tab_model.len().max(1) as f32))
+                     .into(),
+                 widget::tooltip(
+                     widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
+@@ -7598,7 +7603,12 @@ impl Application for App {
+         if crate::config::lapin_session() {
+             tab_column = tab_column.push(self.lapin_nav_row());
+             tab_column = tab_column.push(widget::divider::horizontal::default());
+-            tab_column = tab_column.push(menu::command_bar(
++        }
++        // Lapin UX: the command bar, files and status bar sit on their own
++        // layer (plain white in light mode) below the tabs and address row.
++        let mut lapin_layer = widget::column::with_capacity(4);
++        if crate::config::lapin_session() {
++            lapin_layer = lapin_layer.push(menu::command_bar(
+                 &self.core,
+                 &self.config,
+                 &self.modifiers,
+@@ -7606,6 +7616,7 @@ impl Application for App {
+                 self.tab_model.data::<Tab>(entity),
+                 self.clipboard_has_content(),
+             ));
++            lapin_layer = lapin_layer.push(widget::divider::horizontal::default());
+         }
+         let mut body: Option<Element<'_, Message>> = None;
+         if crate::config::lapin_session() && self.lapin_pc {
+@@ -7642,9 +7653,9 @@ impl Application for App {
+                 ))
+                 .width(Length::Fixed(360.0))
+                 .height(Length::Fill)
+-                .class(theme::Container::Card)
++                .class(lapin_details_style())
+             });
+-            tab_column = tab_column.push(match pane {
++            let files = match pane {
+                 Some(pane) => Element::from(
+                     widget::row::with_capacity(3)
+                         .push(pane)
+@@ -7653,11 +7664,22 @@ impl Application for App {
+                         .height(Length::Fill),
+                 ),
+                 None => body,
+-            });
++            };
++            if crate::config::lapin_session() {
++                lapin_layer = lapin_layer.push(files);
++            } else {
++                tab_column = tab_column.push(files);
++            }
+         }
+ 
+         if crate::config::lapin_session() {
+-            tab_column = tab_column.push(self.lapin_status_bar());
++            lapin_layer = lapin_layer.push(self.lapin_status_bar());
++            tab_column = tab_column.push(
++                widget::container(lapin_layer)
++                    .width(Length::Fill)
++                    .height(Length::Fill)
++                    .class(lapin_layer_style()),
++            );
+         }
+ 
+         // The toaster is added on top of an empty element to ensure that it does not override context menus
+@@ -8519,3 +8541,72 @@ pub(crate) mod test_utils {
+         );
+     }
+ }
++
++/// Lapin UX: the layer under the address row: plain white in light mode,
++/// the usual window colour in dark mode.
++fn lapin_layer_style() -> theme::Container<'static> {
++    theme::Container::custom(|t| {
++        let c = t.cosmic();
++        let bg: cosmic::iced::Color = if c.is_dark {
++            c.background(false).base.into()
++        } else {
++            cosmic::iced::Color::WHITE
++        };
++        cosmic::iced::widget::container::Style {
++            background: Some(bg.into()),
++            text_color: Some(c.background(false).on.into()),
++            ..Default::default()
++        }
++    })
++}
++
++/// Lapin UX: the details pane: a light grey card in light mode, COSMIC's
++/// card in dark mode.
++fn lapin_details_style() -> theme::Container<'static> {
++    theme::Container::custom(|t| {
++        let c = t.cosmic();
++        let bg: cosmic::iced::Color = if c.is_dark {
++            c.primary(false).base.into()
++        } else {
++            cosmic::iced::Color::from_rgb8(0xf9, 0xf9, 0xf9)
++        };
++        cosmic::iced::widget::container::Style {
++            background: Some(bg.into()),
++            text_color: Some(c.primary(false).on.into()),
++            ..Default::default()
++        }
++    })
++}
++
++/// Lapin UX: the search box: the same lightly rounded box as the address,
++/// not a pill, with no outline until it's focused.
++fn lapin_box_input() -> theme::TextInput {
++    use cosmic::widget::text_input::StyleSheet;
++    fn boxed(mut a: cosmic::widget::text_input::Appearance, t: &cosmic::Theme) -> cosmic::widget::text_input::Appearance {
++        a.border_radius = t.cosmic().corner_radii.radius_s.into();
++        a
++    }
++    fn flat(mut a: cosmic::widget::text_input::Appearance, t: &cosmic::Theme) -> cosmic::widget::text_input::Appearance {
++        a.border_width = 0.0;
++        boxed(a, t)
++    }
++    theme::TextInput::Custom {
++        active: Box::new(|t| flat(t.active(&theme::TextInput::Search), t)),
++        error: Box::new(|t| boxed(t.error(&theme::TextInput::Search), t)),
++        hovered: Box::new(|t| flat(t.hovered(&theme::TextInput::Search), t)),
++        focused: Box::new(|t| boxed(t.focused(&theme::TextInput::Search), t)),
++        disabled: Box::new(|t| boxed(t.disabled(&theme::TextInput::Search), t)),
++    }
++}
++
++/// Lapin UX: the open place in the navigation pane: a soft grey box (the
++/// hover colour of the rows), not a pill.
++fn lapin_pane_selected() -> theme::Button {
++    use cosmic::widget::button::Catalog;
++    theme::Button::Custom {
++        active: Box::new(|f, t| t.hovered(f, false, &theme::Button::MenuItem)),
++        disabled: Box::new(|t| t.disabled(&theme::Button::MenuItem)),
++        hovered: Box::new(|f, t| t.pressed(f, false, &theme::Button::MenuItem)),
++        pressed: Box::new(|f, t| t.pressed(f, false, &theme::Button::MenuItem)),
++    }
++}
+diff --git a/src/tab.rs b/src/tab.rs
+index d9e7508..f4b66d0 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -6388,7 +6388,14 @@ impl Tab {
+         } else {
+             icon_sizes.list()
+         };
+-        let row_height = icon_size + 2 * space_xxs;
++        // Lapin UX: small icons in 32 px rows, the usual Details view.
++        let lapin_rows = crate::config::lapin_session() && !condensed && !is_search;
++        let icon_size = if lapin_rows { (icon_size / 2).max(16) } else { icon_size };
++        let row_height = if lapin_rows {
++            icon_size + 16
++        } else {
++            icon_size + 2 * space_xxs
++        };
+ 
+         let mut column = widget::column::with_capacity(3);
+         let mut y: f32 = 0.0;
+@@ -6431,7 +6438,8 @@ impl Tab {
+                     continue;
+                 }
+ 
+-                if count > 0 {
++                // Lapin UX: no lines between rows.
++                if count > 0 && !crate::config::lapin_session() {
+                     column = column
+                         .push(widget::container(rule::horizontal(1)).padding([0, rule_padding]));
+                     y += 1.0;
+-- 
+2.43.0
+
