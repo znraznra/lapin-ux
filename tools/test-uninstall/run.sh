@@ -472,6 +472,15 @@ chmod a-w "$D/sounds"
 bash "$U" --settings-only --yes > "$HOME/out3.txt" 2>&1
 chmod u+w "$D/sounds"
 check "a scheme that can't move is kept, the rest of Lapin's folder goes" "[ -f \"$D/lapin-ux/sounds/reef/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && [ ! -e \"$D/lapin-ux/sounds/lapin-ux-custom\" ]"
+# the same with a hidden scheme (.ocean): the keep check sees dot-folders too
+rm -rf "$D/lapin-ux"
+mkdir -p "$D/lapin-ux/sounds/.tide/stereo" "$D/lapin-ux/sounds/lapin-ux-custom" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
+echo x > "$D/lapin-ux/sounds/.tide/stereo/bell.oga"
+printf '.tide\n' > "$HOME/.local/state/lapin-ux/sounds-added"
+chmod a-w "$D/sounds"
+bash "$U" --settings-only --yes > "$HOME/out4.txt" 2>&1
+chmod u+w "$D/sounds"
+check "a hidden scheme that can't move is kept too" "[ -f \"$D/lapin-ux/sounds/.tide/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ]"
 # odd names that can't move: a "..x" folder and a link whose target is gone
 rm -rf "$D/lapin-ux" "$D/sounds"; mkdir -p "$D/sounds" "$D/lapin-ux/sounds/..odd/stereo" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
 echo x > "$D/lapin-ux/sounds/..odd/stereo/bell.oga"
