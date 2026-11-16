@@ -169,7 +169,9 @@ the installed unit (systemd can't drop an `After=` from a drop-in). `refresh`,
 run by the desktop package's `post_upgrade` and, when greetd itself is
 updated, by the pacman hook `lapin-ux-greetd.hook` (so the copy keeps up with
 greetd's own unit), writes it for people who already use Lapin's sign-in
-screen. A `greetd.service` of your own in `/etc` is saved
+screen. An existing copy is refreshed even while another login manager is on,
+so switching greetd back on directly with `systemctl` doesn't bring back an
+old copy. A `greetd.service` of your own in `/etc` is saved
 first and comes back with `restore`. It works the way display managers such as
 GDM do:
 - `plymouth-quit-wait.service` is taken out of greetd's `After=`, and

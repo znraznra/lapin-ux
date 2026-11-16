@@ -181,6 +181,15 @@ printf '[initial_session]\ncommand = "cosmic-greeter-start"\n\n[default_session]
 bash "$T" refresh >/dev/null 2>&1
 check "only [default_session]'s command counts" '[ ! -e "$D" ]'
 
+echo "P: Lapin's copy is kept current while another login manager is on"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+ln -sfn /usr/lib/systemd/system/gdm.service "$ROOT/etc/systemd/system/display-manager.service"
+sed -i 's/^ExecStart=greetd$/ExecStart=greetd --new/' "$ROOT/usr/lib/systemd/system/greetd.service"
+bash "$T" refresh >/dev/null 2>&1
+check "the copy follows greetd's updated unit" 'grep -qx "ExecStart=greetd --new" "$D"'
+
 echo "N: a restore that keeps the record (boot animation failed) stops refresh"
 newroot plymouth bgrt gdm
 bash "$T" use-lapin >/dev/null 2>&1

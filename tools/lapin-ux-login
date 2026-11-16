@@ -392,7 +392,10 @@ greetd_default_command() {
 cmd_refresh() {
     need_root refresh
     lock
-    have_record && [ "$(current_dm)" = greetd.service ] && [ ! -f "$STATE/login-restored" ] || return 0
+    have_record && [ ! -f "$STATE/login-restored" ] || return 0
+    # greetd is the login now, or Lapin's copy is already there (kept current even
+    # while another login manager is on, in case greetd is switched back on directly).
+    [ "$(current_dm)" = greetd.service ] || handoff_is_ours || return 0
     # Only when greetd runs Lapin UX's sign-in screen (not your own greeter).
     [ "$(greetd_default_command)" = cosmic-greeter-start ] || return 0
     splash_handoff_use
