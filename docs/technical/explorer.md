@@ -138,6 +138,15 @@ Tako's retest of that round (#143, #149, #101):
   accessed and File location columns. Home and This PC name their tab. The
   Network page is called Networks, and Empty trash and Add network drive are in
   the "…" menu instead of a bar under the files.
+Map network drive (#153): "…" > Map network drive... opens in the details pane
+with a folder address (`smb://server/share`) and an optional name. Finish
+saves the drive (`tab::LapinMapped`, key `mapped_drives` in Lapin's own
+`dev.lapinux.Explorer`, removed with the other `dev.lapinux.*` settings on
+uninstall) and connects it through COSMIC's network-drive code. A mapped drive
+is always listed under This PC, on the page and in the left pane, connected or
+not; opening one that isn't connected connects it first (`LapinOpenMapped`),
+and a whole server (`smb://server`) is browsed instead. "…" > Disconnect
+network drive forgets the drive shown and disconnects it.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
