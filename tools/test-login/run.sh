@@ -137,4 +137,20 @@ check "the first record is still there" '[ "$(cat "$ROOT/var/lib/lapin-ux/login/
 bash "$T" restore >/dev/null 2>&1
 check "restore still brings gdm back" '[ "$(dm_now)" = gdm.service ]'
 
+echo "L: the splash hands over to the sign-in screen, and restore takes that away (#100)"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf
+check "greetd drop-in is written" '[ -f "$D" ]'
+check "greetd no longer waits for plymouth-quit-wait" 'grep -qx "After=" "$D" && ! grep -q plymouth-quit-wait "$D"'
+check "plymouth-quit is kept from closing the splash early" 'grep -qx "Conflicts=plymouth-quit.service" "$D"'
+check "the splash stays on screen until the sign-in screen draws" 'grep -q "plymouth quit --retain-splash" "$D"'
+rm -f "$D"
+bash "$T" refresh >/dev/null 2>&1
+check "refresh (after an upgrade) writes it back" '[ -f "$D" ]'
+bash "$T" restore >/dev/null 2>&1
+check "restore removes the drop-in" '[ ! -e "$D" ] && [ ! -d "$ROOT/etc/systemd/system/greetd.service.d" ]'
+bash "$T" refresh >/dev/null 2>&1
+check "refresh does nothing when Lapin's sign-in screen isn't used" '[ ! -e "$D" ]'
+
 [ "$fail" = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }

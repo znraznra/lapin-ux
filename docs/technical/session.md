@@ -161,3 +161,23 @@ use it for one test.
 | Ctrl + Super + D | New desktop |
 | Super + Shift + S | Screenshot |
 | Ctrl + Alt + Del | Sign-out / power dialog |
+
+**Boot splash to sign-in screen (#100).** Tako's rule: signing in should feel
+like unlocking, with no break. When Lapin UX's sign-in screen is in use,
+`lapin-ux-login` writes
+`/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf` (and `refresh`,
+run by the desktop package's `post_upgrade`, writes it for people who already
+use it). It works the way display managers such as GDM do:
+- greetd no longer waits for `plymouth-quit-wait` (`After=` is reset to
+  systemd-user-sessions, plymouth-start, getty@tty1 and logind),
+  `Conflicts=plymouth-quit.service` keeps Plymouth from closing early, and
+  `OnFailure=plymouth-quit.service` still closes it if greetd fails.
+- `ExecStartPre=plymouth quit --retain-splash` leaves the splash's last picture
+  on screen until the sign-in screen draws over it.
+- The boot text on tty1 is cleared and its cursor hidden (`setterm`), so the
+  moment between the sign-in screen closing and a session drawing, Lapin UX's
+  or another desktop's, is plain black instead of text.
+
+`restore` removes the file. It can't be checked in the sandbox (no KMS or
+Plymouth), so it needs Tako's hardware. Tests: scenario L in
+`tools/test-login/run.sh`.

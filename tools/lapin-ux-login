@@ -7,6 +7,7 @@
 #                              have now is saved first.
 #   lapin-ux-login restore     put your former sign-in screen and boot animation back
 #   lapin-ux-login status      what is saved and what is set now
+#   lapin-ux-login refresh     after an upgrade: update the splash hand-off (when Lapin's is in use)
 #
 # "use-lapin" never switches anything it can't undo: the first thing it does
 # is save the current display manager (the enabled service and its config),
@@ -239,7 +240,40 @@ TOML
         fi
         if [ -n "$dm" ]; then systemctl disable "$dm" >/dev/null 2>&1 || true; fi
     fi
+    splash_handoff_use
     say "Sign-in screen: Lapin UX's, from the next start-up."
+}
+
+# The splash hands over to the sign-in screen with nothing in between (#100):
+# greetd no longer waits for Plymouth to quit (plymouth-quit-wait), Plymouth
+# leaves its last picture on screen until the sign-in screen draws, and the
+# boot text on tty1 is cleared with the cursor hidden, so the moments between
+# the sign-in screen and a session are plain black, never text. The same
+# ordering display managers such as GDM use. Removed by restore.
+HANDOFF=$R/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf
+splash_handoff_use() {
+    mkdir -p "$(dirname "$HANDOFF")" || return 0
+    cat > "$HANDOFF" <<'UNIT'
+# Lapin UX: hand the boot splash straight to the sign-in screen (#100).
+# Removed by: lapin-ux-login restore
+[Unit]
+After=
+After=systemd-user-sessions.service plymouth-start.service getty@tty1.service systemd-logind.service
+Conflicts=plymouth-quit.service
+OnFailure=plymouth-quit.service
+
+[Service]
+ExecStartPre=-/usr/bin/plymouth quit --retain-splash
+ExecStartPre=-/bin/sh -c 'command -v setterm >/dev/null && setterm --term linux --clear all --cursor off </dev/tty1 >/dev/tty1 2>/dev/null; true'
+UNIT
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+splash_handoff_restore() {
+    [ -e "$HANDOFF" ] || return 0
+    rm -f "$HANDOFF" || return 1
+    rmdir "$(dirname "$HANDOFF")" 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
 login_restore() {   # fails, leaving greetd as it is, when your own can't be enabled again
@@ -251,6 +285,7 @@ login_restore() {   # fails, leaving greetd as it is, when your own can't be ena
             return 1
         fi
     fi
+    splash_handoff_restore || return 1
     if [ -f "$STATE/greetd-config.toml" ]; then cp -a "$STATE/greetd-config.toml" "$R/etc/greetd/config.toml" || return 1
     elif [ -f "$STATE/greetd-config.absent" ]; then rm -f "$R/etc/greetd/config.toml"; fi
     if [ "$was" != yes ] && [ "$dm" != greetd.service ]; then
@@ -292,6 +327,15 @@ cmd_restore() {
     rm -rf "$STATE"
 }
 
+# After an upgrade: someone who already uses Lapin UX's sign-in screen gets
+# the newer splash hand-off without running use-lapin again.
+cmd_refresh() {
+    need_root refresh
+    lock
+    have_record && [ "$(current_dm)" = greetd.service ] || return 0
+    splash_handoff_use
+}
+
 cmd_status() {
     say "Display manager now: $(current_dm || true)"
     say "Boot animation now:   $(current_theme || true)"
@@ -305,7 +349,8 @@ cmd_status() {
 case "${1:-}" in
 use-lapin) cmd_use; exit $? ;;
 restore) cmd_restore; exit $? ;;
+refresh) cmd_refresh; exit $? ;;
 status) cmd_status ;;
--h|--help|"") sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+-h|--help|"") sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command: $1 (use-lapin, restore or status)" ;;
 esac
