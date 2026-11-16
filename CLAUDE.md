@@ -117,6 +117,11 @@ copy of, or a "road to", any other operating system.
   shader constant that stays 0 outside a Lapin session. In a sandbox keep it
   applied to `~/.cargo/git/checkouts/cryoglyph-*/e429a02` and run
   `cargo clean -p cryoglyph` after changing it (cargo doesn't notice).
+- Drag and drop (#81): smithay-clipboard is patched too
+  (`packaging/smithay-clipboard/`, `cargo-lapin` only,
+  `_patch_smithay_clipboard`). In a sandbox keep it applied to
+  `~/.cargo/git/checkouts/smithay-clipboard-*/859b02c` and run
+  `cargo clean -p smithay-clipboard` after changing it.
 
 ## Bugs from real hardware
 
