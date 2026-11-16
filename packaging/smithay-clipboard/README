@@ -1,0 +1,14 @@
+Patch to smithay-clipboard, the Wayland clipboard and drag-and-drop code
+under libcosmic's iced (#81): a drop is read from the seat that has the drag
+offer when smithay-clipboard doesn't know a "latest seat" yet (it learns it
+from a click or key press on one of the client's surfaces). Without it, the
+first drag onto the shell's desktop after signing in, made before touching the
+shell, didn't land.
+
+Applied by packaging/arch/PKGBUILD (_patch_smithay_clipboard) to the copy in
+Lapin's private cargo home (cargo-lapin), which builds the shell.
+
+In a sandbox: `git apply` it in
+~/.cargo/git/checkouts/smithay-clipboard-*/859b02c, then
+`cargo clean -p smithay-clipboard` before building the shell: cargo doesn't
+notice edited git checkouts.

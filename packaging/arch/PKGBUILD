@@ -80,6 +80,7 @@ prepare() {
     CARGO_HOME="$srcdir/cargo-lapin" cargo fetch --locked --target "$host"
     _patch_iced_a11y "$srcdir/cargo-lapin"
     _patch_cryoglyph "$srcdir/cargo-lapin"
+    _patch_smithay_clipboard "$srcdir/cargo-lapin"
 
     cd "$srcdir/cosmic-comp"
     git reset -q --hard && git clean -fdq   # also drop files our patches added
@@ -190,6 +191,18 @@ _patch_cryoglyph() {
     [ "$patched" = 1 ] || { echo "cryoglyph not found in $1" >&2; return 1; }
 }
 
+# Drag and drop (#81): the shell takes a drop before its first click
+# (smithay-clipboard, the Wayland clipboard and drag-and-drop code under iced).
+_patch_smithay_clipboard() {
+    local dir patched=0
+    for dir in "$1"/git/checkouts/smithay-clipboard-*/*/; do
+        [ -f "$dir/src/dnd/state.rs" ] || continue
+        _patch_checkout "$dir" "$1" "$_src"/packaging/smithay-clipboard/*.patch || return 1
+        patched=1
+    done
+    [ "$patched" = 1 ] || { echo "smithay-clipboard not found in $1" >&2; return 1; }
+}
+
 # After re-patching a cargo home, make cargo rebuild the patched crates (and,
 # through them, everything that uses them) in that build's target folder.
 _clean_repatched() { # home target-dir
@@ -197,7 +210,7 @@ _clean_repatched() { # home target-dir
     flag="$srcdir/.repatched-$(basename "$1")"
     [ -f "$flag" ] || return 0
     for c in libcosmic iced iced_core iced_futures iced_graphics iced_renderer iced_runtime \
-        iced_tiny_skia iced_wgpu iced_widget iced_winit iced_accessibility cryoglyph; do
+        iced_tiny_skia iced_wgpu iced_widget iced_winit iced_accessibility cryoglyph smithay-clipboard; do
         CARGO_HOME="$1" CARGO_TARGET_DIR="$2" cargo clean --frozen --release -p "$c" >/dev/null 2>&1 || true
     done
     rm -f "$flag"

@@ -1,0 +1,66 @@
+From: Lapin UX
+Subject: [PATCH] Take a drop before the first click (#81)
+
+smithay-clipboard reads a drop from the "latest seat", which it only knows
+after a click or key press on one of the client's surfaces. The shell's
+desktop never had one right after sign-in, so the first drag onto it was
+lost. When the latest seat has no drag offer, use the seat that has one.
+---
+diff --git a/src/dnd/state.rs b/src/dnd/state.rs
+index b4145e7..9cfabdf 100644
+--- a/src/dnd/state.rs
++++ b/src/dnd/state.rs
+@@ -392,12 +392,11 @@ where
+ 
+     fn user_selected_action(&mut self, a: DndAction) -> std::io::Result<()> {
+         let latest = self
+-            .latest_seat
+-            .as_ref()
++            .dnd_offer_seat()
+             .ok_or_else(|| Error::new(ErrorKind::Other, "no events received on any seat"))?;
+         let seat = self
+             .seats
+-            .get_mut(latest)
++            .get_mut(&latest)
+             .ok_or_else(|| Error::new(ErrorKind::Other, "active seat lost"))?;
+ 
+         let offer = seat
+@@ -414,15 +413,35 @@ where
+     }
+ 
+     /// Load data for the given target.
++    /// The seat a drag offer came on: the latest seat when it has one, else
++    /// any seat with an offer. A client that hasn't had a click or key press
++    /// yet (no latest seat) can still take a drop. (Lapin UX, #81)
++    fn dnd_offer_seat(&self) -> Option<ObjectId> {
++        let has_offer = |id: &ObjectId| {
++            self.seats
++                .get(id)
++                .and_then(|s| s.data_device.as_ref())
++                .is_some_and(|d| d.data().drag_offer().is_some())
++        };
++        match self.latest_seat.as_ref() {
++            Some(latest) if has_offer(latest) => Some(latest.clone()),
++            latest => self
++                .seats
++                .keys()
++                .find(|id| has_offer(id))
++                .cloned()
++                .or_else(|| latest.cloned()),
++        }
++    }
++
+     pub fn load_dnd(&mut self, mut mime_type: MimeType, peek: bool) -> std::io::Result<()> {
+         let cur_id = self.cur_id();
+         let latest = self
+-            .latest_seat
+-            .as_ref()
++            .dnd_offer_seat()
+             .ok_or_else(|| Error::new(ErrorKind::Other, "no events received on any seat"))?;
+         let seat = self
+             .seats
+-            .get_mut(latest)
++            .get_mut(&latest)
+             .ok_or_else(|| Error::new(ErrorKind::Other, "active seat lost"))?;
+ 
+         let offer = seat
