@@ -181,5 +181,5 @@ GDM do:
   or another desktop's, is plain black instead of text.
 
 `restore` removes it (and marks the sign-in screen as given back, so `refresh` leaves it alone even when the record stays for the boot animation). It can't be checked in the sandbox (no KMS or
-Plymouth), so it needs Tako's hardware. Tests: scenarios L, M and N in
+Plymouth), so it needs Tako's hardware. Tests: scenarios L to O in
 `tools/test-login/run.sh`.

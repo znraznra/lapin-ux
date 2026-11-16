@@ -165,6 +165,15 @@ check "ours replaces it while in use" 'grep -q "Lapin UX: hand the boot splash" 
 bash "$T" restore >/dev/null 2>&1
 check "yours is back after restore" 'grep -qx "Description=mine" "$D"'
 
+echo "O: refresh leaves greetd alone when it runs another greeter"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+rm -f "$D"
+printf '[default_session]\ncommand = "tuigreet"\n' > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "no override for someone else's greeter" '[ ! -e "$D" ]'
+
 echo "N: a restore that keeps the record (boot animation failed) stops refresh"
 newroot plymouth bgrt gdm
 bash "$T" use-lapin >/dev/null 2>&1

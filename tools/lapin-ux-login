@@ -332,7 +332,10 @@ login_restore() {   # fails, leaving greetd as it is, when your own can't be ena
     fi
     # The sign-in screen is yours again even if the record stays (for the boot
     # animation): refresh mustn't put the hand-off back.
-    : > "$STATE/login-restored"
+    if ! : > "$STATE/login-restored"; then
+        say "Sign-in screen: couldn't note that it's yours again in $STATE; run lapin-ux-login restore again."
+        return 1
+    fi
     return 0
 }
 
@@ -375,6 +378,8 @@ cmd_refresh() {
     need_root refresh
     lock
     have_record && [ "$(current_dm)" = greetd.service ] && [ ! -f "$STATE/login-restored" ] || return 0
+    # Only when greetd runs Lapin UX's sign-in screen (not your own greeter).
+    grep -q '^command = "cosmic-greeter-start"$' "$R/etc/greetd/config.toml" 2>/dev/null || return 0
     splash_handoff_use
 }
 
