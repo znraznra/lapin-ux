@@ -1,0 +1,369 @@
+From 95d08cac042a109909ed95b63d2066c9025bde6a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:57:53 +0800
+Subject: [PATCH] Lapin UX: Map network drive
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Refs #153. "…" > Map network drive... opens in the details pane: a folder
+address (smb://server/share) and an optional name. Finish remembers the drive
+in Lapin's own dev.lapinux.Explorer settings and connects it. A mapped drive
+always shows under This PC (page and left pane), connected or not; opening one
+that isn't connected connects it first, and a whole server (smb://server) is
+browsed. "…" > Disconnect network drive forgets the drive shown and
+disconnects it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |   9 +++
+ src/app.rs               | 147 +++++++++++++++++++++++++++++++++++++--
+ src/menu.rs              |   8 ++-
+ src/tab.rs               |  36 ++++++++++
+ 4 files changed, 192 insertions(+), 8 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 2627e78..6007464 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -486,3 +486,12 @@ props-contains = Contains:
+ props-created = Created:
+ props-modified = Modified:
+ props-accessed = Accessed:
++
++# Lapin UX: mapped network drives
++map-network-drive = Map network drive
++map-network-drive-menu = Map network drive...
++disconnect-network-drive = Disconnect network drive
++map-folder = Folder (for example smb://server/share)
++map-name = Name (optional)
++map-name-hint = Shown under This PC
++finish = Finish
+diff --git a/src/app.rs b/src/app.rs
+index 92e6e86..230d9ca 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -134,6 +134,7 @@ pub enum Action {
+     LapinProperties,
+     LapinSelectNone,
+     LapinAddNetworkDrive,
++    LapinDisconnect,
+     LapinSelectInvert,
+     Compress,
+     Copy,
+@@ -211,6 +212,7 @@ impl Action {
+             Self::LapinProperties => Message::LapinProperties(entity_opt),
+             Self::LapinSelectNone => Message::TabMessage(entity_opt, tab::Message::LapinSelectNone),
+             Self::LapinAddNetworkDrive => Message::ToggleContextPage(ContextPage::NetworkDrive),
++            Self::LapinDisconnect => Message::LapinDisconnect,
+             Self::LapinSelectInvert => Message::TabMessage(entity_opt, tab::Message::LapinSelectInvert),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+@@ -465,6 +467,10 @@ pub enum Message {
+     LapinPropsEdit(window::Id, tab::LapinPropsEdit),
+     LapinPropsApply(window::Id, bool),
+     LapinPropsCancel(window::Id),
++    LapinMapName(String),
++    LapinNavSelectThisPc,
++    LapinOpenMapped(String),
++    LapinDisconnect,
+     /// Lapin UX's Properties window: pick a tab, close it.
+     LapinPropertiesTab(u8),
+     LapinCloseWindow(window::Id),
+@@ -820,6 +826,11 @@ pub struct App {
+     lapin_page_click: Option<(String, std::time::Instant)>,
+     /// Lapin UX: Properties windows' General page changes, until OK or Apply.
+     lapin_props: HashMap<window::Id, (PathBuf, tab::LapinPropsDraft)>,
++    /// Lapin UX (#153): mapped network drives, the name typed for a new one,
++    /// and the drive to open once it's connected.
++    lapin_mapped: Vec<tab::LapinMapped>,
++    lapin_map_name: String,
++    lapin_open_after_mount: Option<String>,
+     /// Lapin UX: the tab shown in Properties windows (0 General, 1 Security).
+     lapin_properties_tab: u8,
+     /// Lapin UX: the folders opened out in the navigation pane's tree.
+@@ -1127,6 +1138,20 @@ impl App {
+                 .unwrap_or_else(|| icon::from_name("drive-harddisk-symbolic").size(32).handle());
+             drives.push((item.name(), handle, location, path, item.is_remote()));
+         }
++        // Mapped network drives (#153) that aren't connected now still show.
++        for mapped in &self.lapin_mapped {
++            let base = mapped.uri.trim_end_matches('/');
++            if drives.iter().any(|d| matches!(&d.2, Location::Network(uri, ..) if uri.trim_end_matches('/') == base)) {
++                continue;
++            }
++            drives.push((
++                mapped.name.clone(),
++                icon::from_name("folder-remote").size(32).handle(),
++                Location::Network(mapped.uri.clone(), mapped.name.clone(), None),
++                None,
++                true,
++            ));
++        }
+         let mut list = widget::column::with_capacity(4).spacing(space_s).padding(space_s);
+         // Two groups, as people know them: this computer's drives, then the network's.
+         for (remote, title) in [(false, fl!("devices-and-drives")), (true, fl!("network-locations"))] {
+@@ -1158,7 +1183,12 @@ impl App {
+                     .class(self.lapin_page_class(&format!("pc:{name}")))
+                     .on_press(Message::LapinPageClick(
+                         format!("pc:{name}"),
+-                        Box::new(Message::TabMessage(None, tab::Message::Location(location.clone()))),
++                        Box::new(match location {
++                            Location::Network(uri, _, None) if self.lapin_mapped.iter().any(|d| d.uri == *uri) => {
++                                Message::LapinOpenMapped(uri.clone())
++                            }
++                            _ => Message::TabMessage(None, tab::Message::Location(location.clone())),
++                        }),
+                     ))
+                     .into(),
+                 );
+@@ -2529,13 +2559,16 @@ impl App {
+                     input = input
+                         .on_input(Message::NetworkDriveInput)
+                         .on_submit(|_| Message::NetworkDriveSubmit);
+-                    widget::button::standard(fl!("connect")).on_press(Message::NetworkDriveSubmit)
++                    widget::button::standard(fl!("finish")).on_press(Message::NetworkDriveSubmit)
+                 };
+                 (
+-                    fl!("add-network-drive"),
+-                    widget::column::with_capacity(3)
++                    fl!("map-network-drive"),
++                    widget::column::with_capacity(6)
+                         .spacing(space_s)
++                        .push(widget::text::body(fl!("map-folder")))
+                         .push(input)
++                        .push(widget::text::body(fl!("map-name")))
++                        .push(widget::text_input(fl!("map-name-hint"), &self.lapin_map_name).on_input(Message::LapinMapName))
+                         .push(widget::row::with_capacity(2).push(widget::space::horizontal()).push(button.class(tab::lapin_box_button())))
+                         .push(self.network_drive())
+                         .into(),
+@@ -3009,6 +3042,24 @@ impl App {
+             });
+         }
+ 
++        // Lapin UX (#153): mapped network drives that aren't connected stay
++        // under This PC too.
++        if lapin && !self.lapin_drives_collapsed {
++            for mapped in &self.lapin_mapped {
++                let base = mapped.uri.trim_end_matches('/');
++                let connected = self.mounter_items.values().flatten().any(|item| item.uri().trim_end_matches('/') == base);
++                if connected {
++                    continue;
++                }
++                let (name, uri) = (mapped.name.clone(), mapped.uri.clone());
++                nav_model = nav_model.insert(move |b| {
++                    b.text(name.clone())
++                        .icon(icon::icon(icon::from_name("folder-remote-symbolic").size(16).handle()).size(16))
++                        .data(Location::Network(uri.clone(), name.clone(), None))
++                        .data(LapinMappedRow)
++                });
++            }
++        }
+         if lapin {
+             if !MOUNTERS.is_empty() {
+                 nav_model = nav_model.insert(networks_entry);
+@@ -3024,7 +3075,11 @@ impl App {
+                 .iter()
+                 .filter_map(|id| match self.nav_model.data::<LapinTree>(id) {
+                     Some(tree) => Some((id, tree.depth)),
+-                    None => self.nav_model.data::<MounterData>(id).map(|_| (id, 1)),
++                    None => self
++                        .nav_model
++                        .data::<MounterData>(id)
++                        .map(|_| (id, 1))
++                        .or_else(|| self.nav_model.data::<LapinMappedRow>(id).map(|_| (id, 1))),
+                 })
+                 .collect();
+             for (id, depth) in rows {
+@@ -3612,6 +3667,9 @@ impl Application for App {
+             lapin_page_selected: None,
+             lapin_page_click: None,
+             lapin_props: HashMap::new(),
++            lapin_mapped: if crate::config::lapin_session() { tab::lapin_mapped_load() } else { Vec::new() },
++            lapin_map_name: String::new(),
++            lapin_open_after_mount: None,
+             lapin_properties_tab: 0,
+             lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+@@ -3768,6 +3826,11 @@ impl Application for App {
+             }
+             None => {}
+         }
++        if self.nav_model.data::<LapinMappedRow>(entity).is_some()
++            && let Some(Location::Network(uri, ..)) = self.nav_model.data::<Location>(entity)
++        {
++            return Task::done(cosmic::Action::App(Message::LapinOpenMapped(uri.clone())));
++        }
+         if let Some(location) = self.nav_model.data::<Location>(entity) {
+             let should_open = match location {
+                 #[cfg(feature = "gvfs")]
+@@ -4064,6 +4127,52 @@ impl Application for App {
+                 }
+                 return Task::batch(tasks);
+             }
++            Message::LapinMapName(name) => self.lapin_map_name = name,
++            Message::LapinNavSelectThisPc => {
++                let pc = self.nav_model.iter().find(|e| matches!(self.nav_model.data::<LapinNav>(*e), Some(LapinNav::ThisPc)));
++                if let Some(pc) = pc {
++                    return self.on_nav_select(pc);
++                }
++            }
++            Message::LapinOpenMapped(uri) => {
++                // A whole server (smb://server) is browsed, not connected.
++                let share = uri.split_once("://").map_or(uri.as_str(), |(_, r)| r).trim_end_matches('/').contains('/');
++                if !share {
++                    let name = self.lapin_mapped.iter().find(|d| d.uri == uri).map(|d| d.name.clone()).unwrap_or_default();
++                    return Task::done(cosmic::Action::App(Message::TabMessage(
++                        None,
++                        tab::Message::Location(Location::Network(uri, name, None)),
++                    )));
++                }
++                // A mapped share that isn't connected: connect it, then open it.
++                if let Some((mounter_key, mounter)) = MOUNTERS.iter().next() {
++                    self.lapin_open_after_mount = Some(uri.clone());
++                    self.network_drive_connecting = Some((*mounter_key, uri.clone()));
++                    return mounter.network_drive(uri).map(|_| cosmic::action::none());
++                }
++            }
++            Message::LapinDisconnect => {
++                // Forget the mapped drive of the place shown, and disconnect it.
++                let uri = match self.tab_model.active_data::<Tab>().map(|t| &t.location) {
++                    Some(Location::Network(uri, ..)) => uri.clone(),
++                    _ => return Task::none(),
++                };
++                self.lapin_mapped.retain(|d| !uri.starts_with(d.uri.trim_end_matches('/')));
++                tab::lapin_mapped_save(&self.lapin_mapped);
++                let mut tasks = Vec::new();
++                for (key, items) in &self.mounter_items {
++                    for item in items.iter() {
++                        if item.is_mounted() && uri.starts_with(item.uri().trim_end_matches('/'))
++                            && let Some(mounter) = MOUNTERS.get(key)
++                        {
++                            tasks.push(mounter.unmount(item.clone()).map(|()| cosmic::action::none()));
++                        }
++                    }
++                }
++                self.update_nav_model();
++                tasks.push(Task::done(cosmic::Action::App(Message::LapinNavSelectThisPc)));
++                return Task::batch(tasks);
++            }
+             Message::LapinPropsCancel(id) => {
+                 self.lapin_props.remove(&id);
+                 self.remove_window(&id);
+@@ -4840,6 +4949,22 @@ impl Application for App {
+                 self.network_drive_input = input;
+             }
+             Message::NetworkDriveSubmit => {
++                // Lapin UX (#153): Map network drive remembers the drive, so it
++                // stays under This PC.
++                if crate::config::lapin_session() {
++                    let uri = self.network_drive_input.trim().to_string();
++                    if !uri.is_empty() && !self.lapin_mapped.iter().any(|d| d.uri == uri) {
++                        let name = match self.lapin_map_name.trim() {
++                            "" => tab::lapin_mapped_name(&uri),
++                            name => name.to_string(),
++                        };
++                        self.lapin_mapped.push(tab::LapinMapped { name, uri });
++                        tab::lapin_mapped_save(&self.lapin_mapped);
++                        self.lapin_map_name.clear();
++                        self.update_nav_model();
++                    }
++                    self.lapin_pane_page = None;
++                }
+                 //TODO: know which mounter to use for network drives
+                 if let Some((mounter_key, mounter)) = MOUNTERS.iter().next() {
+                     self.network_drive_connecting =
+@@ -4864,6 +4989,14 @@ impl Application for App {
+                 match res {
+                     Ok(true) => {
+                         log::info!("connected to {uri:?}");
++                        if self.lapin_open_after_mount.as_deref() == Some(uri.as_str()) {
++                            self.lapin_open_after_mount = None;
++                            let name = self.lapin_mapped.iter().find(|d| d.uri == uri).map(|d| d.name.clone()).unwrap_or_default();
++                            return Task::done(cosmic::Action::App(Message::TabMessage(
++                                None,
++                                tab::Message::Location(Location::Network(uri.clone(), name, None)),
++                            )));
++                        }
+                         if matches!(self.context_page, ContextPage::NetworkDrive) {
+                             self.set_show_context(false);
+                         }
+@@ -8831,6 +8964,10 @@ pub(crate) mod test_utils {
+     }
+ }
+ 
++/// Lapin UX (#153): marks a mapped network drive's row in the pane.
++#[derive(Clone, Copy, Debug)]
++struct LapinMappedRow;
++
+ /// Lapin UX: the layer under the address row: plain white in light mode,
+ /// the usual window colour in dark mode.
+ fn lapin_layer_style() -> theme::Container<'static> {
+diff --git a/src/menu.rs b/src/menu.rs
+index 81a0e7f..cba1a44 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -799,10 +799,12 @@ pub fn menu_lists(
+             menu_button_optional(fl!("pin-to-home"), Action::AddToSidebar, selected > 0),
+             menu_button_optional(fl!("restore-from-trash"), Action::RestoreFromTrash, selected > 0 && in_trash),
+             menu_button_optional(fl!("empty-trash"), Action::EmptyTrash, in_trash),
++            menu::Item::Divider,
++            menu::Item::Button(fl!("map-network-drive-menu"), None, Action::LapinAddNetworkDrive),
+             menu_button_optional(
+-                fl!("add-network-drive"),
+-                Action::LapinAddNetworkDrive,
+-                tab_opt.is_some_and(|tab| matches!(&tab.location, tab::Location::Network(uri, ..) if uri == "network:///")),
++                fl!("disconnect-network-drive"),
++                Action::LapinDisconnect,
++                tab_opt.is_some_and(|tab| matches!(&tab.location, tab::Location::Network(uri, ..) if uri != "network:///")),
+             ),
+             menu::Item::Divider,
+             menu_button_optional(fl!("properties"), Action::LapinProperties, selected > 0),
+diff --git a/src/tab.rs b/src/tab.rs
+index c602ce9..1013812 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -8738,3 +8738,39 @@ impl Item {
+         column.into()
+     }
+ }
++
++/// Lapin UX (#153): a mapped network drive: always listed under This PC,
++/// connected when opened. Kept in Lapin's own `dev.lapinux.Explorer`.
++#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++pub struct LapinMapped {
++    pub name: String,
++    pub uri: String,
++}
++
++const LAPIN_EXPLORER_CONFIG: &str = "dev.lapinux.Explorer";
++
++pub fn lapin_mapped_load() -> Vec<LapinMapped> {
++    use cosmic::cosmic_config::ConfigGet;
++    cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        .ok()
++        .and_then(|c| c.get::<Vec<LapinMapped>>("mapped_drives").ok())
++        .unwrap_or_default()
++}
++
++pub fn lapin_mapped_save(drives: &[LapinMapped]) {
++    use cosmic::cosmic_config::ConfigSet;
++    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        && let Err(err) = config.set("mapped_drives", drives.to_vec())
++    {
++        log::warn!("failed to save mapped drives: {err}");
++    }
++}
++
++/// Lapin UX: a name for a share from its address ("share on 192.168.1.55").
++pub fn lapin_mapped_name(uri: &str) -> String {
++    let rest = uri.split_once("://").map_or(uri, |(_, r)| r).trim_end_matches('/');
++    match rest.split_once('/') {
++        Some((host, share)) if !share.is_empty() => format!("{} ({host})", share.rsplit('/').next().unwrap_or(share)),
++        _ => rest.to_string(),
++    }
++}
+-- 
+2.43.0
+
