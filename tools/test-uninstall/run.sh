@@ -480,7 +480,7 @@ printf '.tide\n' > "$HOME/.local/state/lapin-ux/sounds-added"
 chmod a-w "$D/sounds"
 bash "$U" --settings-only --yes > "$HOME/out4.txt" 2>&1
 chmod u+w "$D/sounds"
-check "a hidden scheme that can't move is kept too" "[ -f \"$D/lapin-ux/sounds/.tide/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ]"
+check "a hidden scheme that can't move is kept too" "[ -f \"$D/lapin-ux/sounds/.tide/stereo/bell.oga\" ] && [ ! -e \"$D/lapin-ux/other\" ] && grep -q \"couldn't move the sound scheme .tide\" \"$HOME/out4.txt\""
 # odd names that can't move: a "..x" folder and a link whose target is gone
 rm -rf "$D/lapin-ux" "$D/sounds"; mkdir -p "$D/sounds" "$D/lapin-ux/sounds/..odd/stereo" "$D/lapin-ux/other" "$HOME/.local/state/lapin-ux"
 echo x > "$D/lapin-ux/sounds/..odd/stereo/bell.oga"
