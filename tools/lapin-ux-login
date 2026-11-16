@@ -7,6 +7,7 @@
 #                              have now is saved first.
 #   lapin-ux-login restore     put your former sign-in screen and boot animation back
 #   lapin-ux-login status      what is saved and what is set now
+#   lapin-ux-login refresh     after an upgrade: update the splash hand-off (when Lapin's is in use)
 #
 # "use-lapin" never switches anything it can't undo: the first thing it does
 # is save the current display manager (the enabled service and its config),
@@ -212,6 +213,7 @@ login_use() {
     command -v greetd >/dev/null 2>&1 || [ -n "$R" ] || { say "Sign-in screen: greetd isn't installed, so it was left as it is."; return 2; }
     [ -x "$R/usr/bin/cosmic-greeter-start" ] || command -v cosmic-greeter-start >/dev/null 2>&1 \
         || { say "Sign-in screen: Lapin UX's isn't installed, so it was left as it is."; return 2; }
+    rm -f "$STATE/login-restored"
     mkdir -p "$R/etc/greetd"
     cat > "$R/etc/greetd/config.toml" <<'TOML'
 # Lapin UX's sign-in screen. Your earlier file is kept in /var/lib/lapin-ux/login
@@ -239,7 +241,80 @@ TOML
         fi
         if [ -n "$dm" ]; then systemctl disable "$dm" >/dev/null 2>&1 || true; fi
     fi
-    say "Sign-in screen: Lapin UX's, from the next start-up."
+    if splash_handoff_use; then
+        say "Sign-in screen: Lapin UX's, from the next start-up."
+    else
+        say "Sign-in screen: Lapin UX's, from the next start-up (the boot splash may show text before it; run lapin-ux-login refresh to try again)."
+        return 1
+    fi
+}
+
+# The splash hands over to the sign-in screen with nothing in between (#100):
+# greetd no longer waits for Plymouth to quit (plymouth-quit-wait), Plymouth
+# leaves its last picture on screen until the sign-in screen draws, and the
+# boot text on tty1 is cleared with the cursor hidden, so the moments between
+# the sign-in screen and a session are plain black, never text. The same
+# ordering display managers such as GDM use.
+# systemd can't drop an After= from a drop-in, so this is a full copy of the
+# installed greetd.service in /etc with that one ordering taken out and the
+# lines above added. An /etc/systemd/system/greetd.service of your own is saved
+# first and comes back with restore.
+HANDOFF=$R/etc/systemd/system/greetd.service
+HANDOFF_MARK="# Lapin UX: hand the boot splash straight to the sign-in screen (#100)."
+VENDOR_GREETD=$R/usr/lib/systemd/system/greetd.service
+
+handoff_is_ours() { [ -f "$HANDOFF" ] && head -n1 "$HANDOFF" | grep -qxF "$HANDOFF_MARK"; }
+
+splash_handoff_use() {
+    [ -f "$VENDOR_GREETD" ] || { say "Boot splash hand-off: greetd.service isn't where it's expected; left as it is."; return 1; }
+    # Your own override is kept once (the first record is never overwritten).
+    if [ -f "$HANDOFF" ] && ! handoff_is_ours && [ ! -f "$STATE/greetd-unit.service" ]; then
+        local backup; backup=$(mktemp "$STATE/greetd-unit.service.XXXXXX") || return 1
+        cp -a "$HANDOFF" "$backup" && mv -f "$backup" "$STATE/greetd-unit.service" || { rm -f "$backup"; return 1; }
+    fi
+    local tmp; tmp=$(mktemp "$HANDOFF.lapin-ux.XXXXXX") || return 1
+    if ! {
+        echo "$HANDOFF_MARK"
+        echo "# Made by lapin-ux-login from $VENDOR_GREETD; removed by: lapin-ux-login restore"
+        awk '
+            /^\[/ { if (sec == "[Unit]") unit_extra(); if (sec == "[Service]") service_extra(); sec = $0; print; next }
+            sec == "[Unit]" && /^After=/ {
+                n = split(substr($0, 7), parts, /[ \t]+/); out = ""
+                for (k = 1; k <= n; k++) if (parts[k] != "" && parts[k] != "plymouth-quit-wait.service") out = out (out == "" ? "" : " ") parts[k]
+                if (out != "") print "After=" out
+                next
+            }
+            { print }
+            END { if (sec == "[Unit]") unit_extra(); if (sec == "[Service]") service_extra() }
+            function unit_extra() {
+                if (done_unit++) return
+                print "After=plymouth-start.service systemd-logind.service"
+                print "Conflicts=plymouth-quit.service"
+                print "OnFailure=plymouth-quit.service"
+            }
+            function service_extra() {
+                if (done_service++) return
+                print "ExecStartPre=-/usr/bin/plymouth quit --retain-splash"
+                print "ExecStartPre=-/bin/sh -c \047command -v setterm >/dev/null && setterm --term linux --clear all --cursor off </dev/tty1 >/dev/tty1 2>/dev/null; true\047"
+            }
+        ' "$VENDOR_GREETD"
+    } > "$tmp" || ! grep -q '^Conflicts=plymouth-quit.service$' "$tmp" || ! grep -q '^ExecStartPre=-/usr/bin/plymouth quit --retain-splash$' "$tmp"; then
+        rm -f "$tmp"
+        say "Boot splash hand-off: couldn't write $HANDOFF; left as it was."
+        return 1
+    fi
+    chmod 644 "$tmp" && mv -f "$tmp" "$HANDOFF" || { rm -f "$tmp"; return 1; }
+    rm -f "$STATE/login-restored"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+splash_handoff_restore() {
+    if handoff_is_ours; then rm -f "$HANDOFF" || return 1; fi
+    if [ -f "$STATE/greetd-unit.service" ]; then cp -a "$STATE/greetd-unit.service" "$HANDOFF" || return 1; fi
+    # An older Lapin UX wrote a drop-in instead.
+    rm -f "$R/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf"
+    rmdir "$R/etc/systemd/system/greetd.service.d" 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
 login_restore() {   # fails, leaving greetd as it is, when your own can't be enabled again
@@ -251,10 +326,17 @@ login_restore() {   # fails, leaving greetd as it is, when your own can't be ena
             return 1
         fi
     fi
+    splash_handoff_restore || return 1
     if [ -f "$STATE/greetd-config.toml" ]; then cp -a "$STATE/greetd-config.toml" "$R/etc/greetd/config.toml" || return 1
     elif [ -f "$STATE/greetd-config.absent" ]; then rm -f "$R/etc/greetd/config.toml"; fi
     if [ "$was" != yes ] && [ "$dm" != greetd.service ]; then
         systemctl disable greetd.service >/dev/null 2>&1 || true
+    fi
+    # The sign-in screen is yours again even if the record stays (for the boot
+    # animation): refresh mustn't put the hand-off back.
+    if ! : > "$STATE/login-restored"; then
+        say "Sign-in screen: couldn't note that it's yours again in $STATE; run lapin-ux-login restore again."
+        return 1
     fi
     return 0
 }
@@ -292,6 +374,35 @@ cmd_restore() {
     rm -rf "$STATE"
 }
 
+# The command of greetd's [default_session], quotes and a trailing comment
+# taken off ("" when there's none).
+greetd_default_command() {
+    awk '
+        /^[[:space:]]*\[/ { sec = $0; sub(/#.*$/, "", sec); gsub(/[[:space:]]/, "", sec); next }
+        sec == "[default_session]" && /^[[:space:]]*command[[:space:]]*=/ {
+            v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+            q = substr(v, 1, 1)
+            if (q == "\"" || q == "\047") { v = substr(v, 2); i = index(v, q); if (i) v = substr(v, 1, i - 1) }
+            else { sub(/[[:space:]]*#.*$/, "", v); sub(/[[:space:]]+$/, "", v) }
+            print v; exit
+        }
+    ' "$R/etc/greetd/config.toml" 2>/dev/null
+}
+
+# After an upgrade: someone who already uses Lapin UX's sign-in screen gets
+# the newer splash hand-off without running use-lapin again.
+cmd_refresh() {
+    need_root refresh
+    lock
+    have_record && [ ! -f "$STATE/login-restored" ] || return 0
+    # greetd is the login now, or Lapin's copy is already there (kept current even
+    # while another login manager is on, in case greetd is switched back on directly).
+    [ "$(current_dm)" = greetd.service ] || handoff_is_ours || return 0
+    # Only when greetd runs Lapin UX's sign-in screen (not your own greeter).
+    [ "$(greetd_default_command)" = cosmic-greeter-start ] || return 0
+    splash_handoff_use
+}
+
 cmd_status() {
     say "Display manager now: $(current_dm || true)"
     say "Boot animation now:   $(current_theme || true)"
@@ -305,7 +416,8 @@ cmd_status() {
 case "${1:-}" in
 use-lapin) cmd_use; exit $? ;;
 restore) cmd_restore; exit $? ;;
+refresh) cmd_refresh; exit $? ;;
 status) cmd_status ;;
--h|--help|"") sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+-h|--help|"") sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command: $1 (use-lapin, restore or status)" ;;
 esac

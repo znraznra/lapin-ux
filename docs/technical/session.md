@@ -172,3 +172,31 @@ use it for one test.
 | Ctrl + Super + D | New desktop |
 | Super + Shift + S | Screenshot |
 | Ctrl + Alt + Del | Sign-out / power dialog |
+
+**Boot splash to sign-in screen (#100).** Tako's rule: signing in should feel
+like unlocking, with no break. When Lapin UX's sign-in screen is in use,
+`lapin-ux-login` writes `/etc/systemd/system/greetd.service`, a full copy of
+the installed unit (systemd can't drop an `After=` from a drop-in). `refresh`,
+run by the desktop package's `post_upgrade` and, when greetd itself is
+updated, by the pacman hook `lapin-ux-greetd.hook` (so the copy keeps up with
+greetd's own unit), writes it for people who already use Lapin's sign-in
+screen. An existing copy is refreshed even while another login manager is on,
+so switching greetd back on directly with `systemctl` doesn't bring back an
+old copy. The file is generated: edits made to it are replaced on the next
+refresh, so local changes belong in a drop-in
+(`/etc/systemd/system/greetd.service.d/*.conf`), which still applies on top. A `greetd.service` of your own in `/etc` is saved
+first and comes back with `restore`. It works the way display managers such as
+GDM do:
+- `plymouth-quit-wait.service` is taken out of greetd's `After=`, and
+  `After=plymouth-start.service systemd-logind.service`,
+  `Conflicts=plymouth-quit.service` (so Plymouth isn't closed early) and
+  `OnFailure=plymouth-quit.service` (still closed if greetd fails) are added.
+- `ExecStartPre=plymouth quit --retain-splash` leaves the splash's last picture
+  on screen until the sign-in screen draws over it.
+- The boot text on tty1 is cleared and its cursor hidden (`setterm`), so the
+  moment between the sign-in screen closing and a session drawing, Lapin UX's
+  or another desktop's, is plain black instead of text.
+
+`restore` removes it (and marks the sign-in screen as given back, so `refresh` leaves it alone even when the record stays for the boot animation). It can't be checked in the sandbox (no KMS or
+Plymouth), so it needs Tako's hardware. Tests: scenarios L to O in
+`tools/test-login/run.sh`.

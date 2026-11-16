@@ -22,6 +22,8 @@ newroot() {   # [plymouth|noplymouth] [bgrt|nobgrt] [dm]
     : > "$ROOT/usr/share/plymouth/themes/spinner/animation-0001.png"
     : > "$ROOT/usr/share/plymouth/themes/spinner/watermark.png"
     printf '#!/bin/sh\n' > "$ROOT/usr/bin/cosmic-greeter-start"; chmod +x "$ROOT/usr/bin/cosmic-greeter-start"
+    mkdir -p "$ROOT/usr/lib/systemd/system"
+    printf '[Unit]\nDescription=Greeter daemon\nAfter=systemd-user-sessions.service plymouth-quit-wait.service\nAfter=getty@tty1.service\nConflicts=getty@tty1.service\n\n[Service]\nType=simple\nExecStart=greetd\nRestart=always\n\n[Install]\nAlias=display-manager.service\n' > "$ROOT/usr/lib/systemd/system/greetd.service"
     printf '[Daemon]\nTheme=bgrt\n' > "$ROOT/etc/plymouth/plymouthd.conf"
     if [ "${1:-plymouth}" = plymouth ]; then echo 'HOOKS=(base udev plymouth autodetect)' > "$ROOT/etc/mkinitcpio.conf"; fi
     if [ "${2:-bgrt}" = bgrt ]; then : > "$ROOT/sys/firmware/acpi/bgrt/image"; fi
@@ -136,5 +138,92 @@ check "reports 'not set up'" '[ $rc = 2 ]'
 check "the first record is still there" '[ "$(cat "$ROOT/var/lib/lapin-ux/login/dm")" = gdm.service ]'
 bash "$T" restore >/dev/null 2>&1
 check "restore still brings gdm back" '[ "$(dm_now)" = gdm.service ]'
+
+echo "L: the splash hands over to the sign-in screen, and restore takes that away (#100)"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+check "a full greetd unit is written in /etc" '[ -f "$D" ] && grep -q "^ExecStart=greetd$" "$D" && grep -q "^Alias=display-manager.service$" "$D"'
+check "greetd no longer waits for plymouth-quit-wait" '! grep -q plymouth-quit-wait "$D" && grep -q "^After=systemd-user-sessions.service$" "$D" && grep -q "^After=getty@tty1.service$" "$D"'
+check "plymouth-quit is kept from closing the splash early" 'grep -qx "Conflicts=plymouth-quit.service" "$D" && grep -qx "OnFailure=plymouth-quit.service" "$D"'
+check "the splash stays on screen until the sign-in screen draws" 'awk "/^\\[Service\\]/{s=1} s&&/plymouth quit --retain-splash/{f=1} END{exit !f}" "$D"'
+check "tty1 is cleared with a quoted shell line" 'grep -q "^ExecStartPre=-/bin/sh -c '"'"'command -v setterm" "$D"'
+rm -f "$D"
+bash "$T" refresh >/dev/null 2>&1
+check "refresh (after an upgrade) writes it back" '[ -f "$D" ]'
+bash "$T" restore >/dev/null 2>&1
+check "restore removes it" '[ ! -e "$D" ]'
+bash "$T" refresh >/dev/null 2>&1
+check "refresh does nothing when Lapin's sign-in screen isn't used" '[ ! -e "$D" ]'
+
+echo "M: your own greetd.service override is kept and comes back"
+newroot plymouth bgrt gdm
+D=$ROOT/etc/systemd/system/greetd.service
+printf '[Unit]\nDescription=mine\n' > "$D"
+bash "$T" use-lapin >/dev/null 2>&1
+check "ours replaces it while in use" 'grep -q "Lapin UX: hand the boot splash" "$D"'
+bash "$T" restore >/dev/null 2>&1
+check "yours is back after restore" 'grep -qx "Description=mine" "$D"'
+
+echo "O: refresh leaves greetd alone when it runs another greeter"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+rm -f "$D"
+printf '[default_session]\ncommand = "tuigreet"\n' > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "no override for someone else's greeter" '[ ! -e "$D" ]'
+printf "[terminal]\nvt = 1\n\n[default_session]  # the sign-in screen\ncommand = 'cosmic-greeter-start'   # mine\nuser = \"cosmic-greeter\"\n" > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "single quotes and a comment still count as Lapin's" '[ -f "$D" ]'
+rm -f "$D"
+printf '[initial_session]\ncommand = "cosmic-greeter-start"\n\n[default_session]\ncommand = "tuigreet"\n' > "$ROOT/etc/greetd/config.toml"
+bash "$T" refresh >/dev/null 2>&1
+check "only [default_session]'s command counts" '[ ! -e "$D" ]'
+
+echo "P: Lapin's copy is kept current while another login manager is on"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+ln -sfn /usr/lib/systemd/system/gdm.service "$ROOT/etc/systemd/system/display-manager.service"
+sed -i 's/^ExecStart=greetd$/ExecStart=greetd --new/' "$ROOT/usr/lib/systemd/system/greetd.service"
+bash "$T" refresh >/dev/null 2>&1
+check "the copy follows greetd's updated unit" 'grep -qx "ExecStart=greetd --new" "$D"'
+
+echo "Q: a hand-off that can't be written is reported by use-lapin and refresh"
+newroot plymouth bgrt gdm
+rm -f "$ROOT/usr/lib/systemd/system/greetd.service"
+bash "$T" use-lapin >/dev/null 2>&1; rc=$?
+check "use-lapin exits with a failure" '[ $rc != 0 ]'
+check "the sign-in screen itself is still set up" '[ "$(dm_now)" = greetd.service ]'
+bash "$T" refresh >/dev/null 2>&1; rc=$?
+check "refresh exits with a failure" '[ $rc != 0 ]'
+
+echo "R: when the new unit can't be written, both commands fail and the old one stays"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+cp "$D" "$ROOT/before.service"
+sed -i 's/^ExecStart=greetd$/ExecStart=greetd --changed/' "$ROOT/usr/lib/systemd/system/greetd.service"
+check "setup: the vendor unit really changed" 'grep -qx "ExecStart=greetd --changed" "$ROOT/usr/lib/systemd/system/greetd.service"'
+chmod a-w "$ROOT/etc/systemd/system"
+bash "$T" refresh >/dev/null 2>&1; rc=$?
+check "refresh fails when the temporary file can't be made" '[ $rc != 0 ]'
+check "the unit in place is unchanged after refresh" 'cmp -s "$D" "$ROOT/before.service"'
+bash "$T" use-lapin >/dev/null 2>&1; rc=$?
+check "use-lapin fails too" '[ $rc != 0 ]'
+check "the unit in place is unchanged after use-lapin" 'cmp -s "$D" "$ROOT/before.service"'
+check "no temporary file is left" '! ls "$ROOT"/etc/systemd/system/greetd.service.lapin-ux.* >/dev/null 2>&1'
+chmod u+w "$ROOT/etc/systemd/system"
+
+echo "N: a restore that keeps the record (boot animation failed) stops refresh"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+FAKE_PLYMOUTH_FAILS=1 bash "$T" restore >/dev/null 2>&1
+unset FAKE_PLYMOUTH_FAILS
+ln -sfn /usr/lib/systemd/system/greetd.service "$ROOT/etc/systemd/system/display-manager.service"
+bash "$T" refresh >/dev/null 2>&1
+check "the override isn't put back" '[ ! -e "$D" ]'
 
 [ "$fail" = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }

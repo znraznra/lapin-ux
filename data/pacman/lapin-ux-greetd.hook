@@ -1,0 +1,13 @@
+# Lapin UX (#100): when greetd itself is updated, refresh Lapin UX's copy of
+# greetd.service in /etc, so it carries the new unit's settings. Does nothing
+# unless Lapin UX's sign-in screen is in use.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = greetd
+
+[Action]
+Description = Lapin UX: refreshing the sign-in screen's greetd.service...
+When = PostTransaction
+Exec = /usr/bin/lapin-ux-login refresh
