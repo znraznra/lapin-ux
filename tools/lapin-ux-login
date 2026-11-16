@@ -213,6 +213,7 @@ login_use() {
     command -v greetd >/dev/null 2>&1 || [ -n "$R" ] || { say "Sign-in screen: greetd isn't installed, so it was left as it is."; return 2; }
     [ -x "$R/usr/bin/cosmic-greeter-start" ] || command -v cosmic-greeter-start >/dev/null 2>&1 \
         || { say "Sign-in screen: Lapin UX's isn't installed, so it was left as it is."; return 2; }
+    rm -f "$STATE/login-restored"
     mkdir -p "$R/etc/greetd"
     cat > "$R/etc/greetd/config.toml" <<'TOML'
 # Lapin UX's sign-in screen. Your earlier file is kept in /var/lib/lapin-ux/login
@@ -240,8 +241,11 @@ TOML
         fi
         if [ -n "$dm" ]; then systemctl disable "$dm" >/dev/null 2>&1 || true; fi
     fi
-    splash_handoff_use
-    say "Sign-in screen: Lapin UX's, from the next start-up."
+    if splash_handoff_use; then
+        say "Sign-in screen: Lapin UX's, from the next start-up."
+    else
+        say "Sign-in screen: Lapin UX's, from the next start-up (the boot splash may show text before it; run lapin-ux-login refresh to try again)."
+    fi
 }
 
 # The splash hands over to the sign-in screen with nothing in between (#100):
@@ -249,30 +253,65 @@ TOML
 # leaves its last picture on screen until the sign-in screen draws, and the
 # boot text on tty1 is cleared with the cursor hidden, so the moments between
 # the sign-in screen and a session are plain black, never text. The same
-# ordering display managers such as GDM use. Removed by restore.
-HANDOFF=$R/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf
-splash_handoff_use() {
-    mkdir -p "$(dirname "$HANDOFF")" || return 0
-    cat > "$HANDOFF" <<'UNIT'
-# Lapin UX: hand the boot splash straight to the sign-in screen (#100).
-# Removed by: lapin-ux-login restore
-[Unit]
-After=
-After=systemd-user-sessions.service plymouth-start.service getty@tty1.service systemd-logind.service
-Conflicts=plymouth-quit.service
-OnFailure=plymouth-quit.service
+# ordering display managers such as GDM use.
+# systemd can't drop an After= from a drop-in, so this is a full copy of the
+# installed greetd.service in /etc with that one ordering taken out and the
+# lines above added. An /etc/systemd/system/greetd.service of your own is saved
+# first and comes back with restore.
+HANDOFF=$R/etc/systemd/system/greetd.service
+HANDOFF_MARK="# Lapin UX: hand the boot splash straight to the sign-in screen (#100)."
+VENDOR_GREETD=$R/usr/lib/systemd/system/greetd.service
 
-[Service]
-ExecStartPre=-/usr/bin/plymouth quit --retain-splash
-ExecStartPre=-/bin/sh -c 'command -v setterm >/dev/null && setterm --term linux --clear all --cursor off </dev/tty1 >/dev/tty1 2>/dev/null; true'
-UNIT
+handoff_is_ours() { [ -f "$HANDOFF" ] && head -n1 "$HANDOFF" | grep -qxF "$HANDOFF_MARK"; }
+
+splash_handoff_use() {
+    [ -f "$VENDOR_GREETD" ] || { say "Boot splash hand-off: greetd.service isn't where it's expected; left as it is."; return 1; }
+    # Your own override is kept once (the first record is never overwritten).
+    if [ -f "$HANDOFF" ] && ! handoff_is_ours && [ ! -f "$STATE/greetd-unit.service" ]; then
+        cp -a "$HANDOFF" "$STATE/greetd-unit.service" || return 1
+    fi
+    local tmp; tmp=$(mktemp "$HANDOFF.lapin-ux.XXXXXX") || return 1
+    if ! {
+        echo "$HANDOFF_MARK"
+        echo "# Made by lapin-ux-login from $VENDOR_GREETD; removed by: lapin-ux-login restore"
+        awk '
+            /^\[/ { if (sec == "[Unit]") unit_extra(); if (sec == "[Service]") service_extra(); sec = $0; print; next }
+            sec == "[Unit]" && /^After=/ {
+                n = split(substr($0, 7), parts, /[ \t]+/); out = ""
+                for (k = 1; k <= n; k++) if (parts[k] != "" && parts[k] != "plymouth-quit-wait.service") out = out (out == "" ? "" : " ") parts[k]
+                if (out != "") print "After=" out
+                next
+            }
+            { print }
+            END { if (sec == "[Unit]") unit_extra(); if (sec == "[Service]") service_extra() }
+            function unit_extra() {
+                if (done_unit++) return
+                print "After=plymouth-start.service systemd-logind.service"
+                print "Conflicts=plymouth-quit.service"
+                print "OnFailure=plymouth-quit.service"
+            }
+            function service_extra() {
+                if (done_service++) return
+                print "ExecStartPre=-/usr/bin/plymouth quit --retain-splash"
+                print "ExecStartPre=-/bin/sh -c \047command -v setterm >/dev/null && setterm --term linux --clear all --cursor off </dev/tty1 >/dev/tty1 2>/dev/null; true\047"
+            }
+        ' "$VENDOR_GREETD"
+    } > "$tmp" || ! grep -q '^Conflicts=plymouth-quit.service$' "$tmp" || ! grep -q '^ExecStartPre=-/usr/bin/plymouth quit --retain-splash$' "$tmp"; then
+        rm -f "$tmp"
+        say "Boot splash hand-off: couldn't write $HANDOFF; left as it was."
+        return 1
+    fi
+    chmod 644 "$tmp" && mv -f "$tmp" "$HANDOFF" || { rm -f "$tmp"; return 1; }
+    rm -f "$STATE/login-restored"
     systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
 splash_handoff_restore() {
-    [ -e "$HANDOFF" ] || return 0
-    rm -f "$HANDOFF" || return 1
-    rmdir "$(dirname "$HANDOFF")" 2>/dev/null || true
+    if handoff_is_ours; then rm -f "$HANDOFF" || return 1; fi
+    if [ -f "$STATE/greetd-unit.service" ]; then cp -a "$STATE/greetd-unit.service" "$HANDOFF" || return 1; fi
+    # An older Lapin UX wrote a drop-in instead.
+    rm -f "$R/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf"
+    rmdir "$R/etc/systemd/system/greetd.service.d" 2>/dev/null || true
     systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
@@ -291,6 +330,9 @@ login_restore() {   # fails, leaving greetd as it is, when your own can't be ena
     if [ "$was" != yes ] && [ "$dm" != greetd.service ]; then
         systemctl disable greetd.service >/dev/null 2>&1 || true
     fi
+    # The sign-in screen is yours again even if the record stays (for the boot
+    # animation): refresh mustn't put the hand-off back.
+    : > "$STATE/login-restored"
     return 0
 }
 
@@ -332,7 +374,7 @@ cmd_restore() {
 cmd_refresh() {
     need_root refresh
     lock
-    have_record && [ "$(current_dm)" = greetd.service ] || return 0
+    have_record && [ "$(current_dm)" = greetd.service ] && [ ! -f "$STATE/login-restored" ] || return 0
     splash_handoff_use
 }
 

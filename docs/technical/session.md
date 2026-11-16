@@ -164,20 +164,22 @@ use it for one test.
 
 **Boot splash to sign-in screen (#100).** Tako's rule: signing in should feel
 like unlocking, with no break. When Lapin UX's sign-in screen is in use,
-`lapin-ux-login` writes
-`/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf` (and `refresh`,
+`lapin-ux-login` writes `/etc/systemd/system/greetd.service`, a full copy of
+the installed unit (systemd can't drop an `After=` from a drop-in). `refresh`,
 run by the desktop package's `post_upgrade`, writes it for people who already
-use it). It works the way display managers such as GDM do:
-- greetd no longer waits for `plymouth-quit-wait` (`After=` is reset to
-  systemd-user-sessions, plymouth-start, getty@tty1 and logind),
-  `Conflicts=plymouth-quit.service` keeps Plymouth from closing early, and
-  `OnFailure=plymouth-quit.service` still closes it if greetd fails.
+use Lapin's sign-in screen. A `greetd.service` of your own in `/etc` is saved
+first and comes back with `restore`. It works the way display managers such as
+GDM do:
+- `plymouth-quit-wait.service` is taken out of greetd's `After=`, and
+  `After=plymouth-start.service systemd-logind.service`,
+  `Conflicts=plymouth-quit.service` (so Plymouth isn't closed early) and
+  `OnFailure=plymouth-quit.service` (still closed if greetd fails) are added.
 - `ExecStartPre=plymouth quit --retain-splash` leaves the splash's last picture
   on screen until the sign-in screen draws over it.
 - The boot text on tty1 is cleared and its cursor hidden (`setterm`), so the
   moment between the sign-in screen closing and a session drawing, Lapin UX's
   or another desktop's, is plain black instead of text.
 
-`restore` removes the file. It can't be checked in the sandbox (no KMS or
-Plymouth), so it needs Tako's hardware. Tests: scenario L in
+`restore` removes it (and marks the sign-in screen as given back, so `refresh` leaves it alone even when the record stays for the boot animation). It can't be checked in the sandbox (no KMS or
+Plymouth), so it needs Tako's hardware. Tests: scenarios L, M and N in
 `tools/test-login/run.sh`.

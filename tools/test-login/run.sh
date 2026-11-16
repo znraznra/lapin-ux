@@ -22,6 +22,8 @@ newroot() {   # [plymouth|noplymouth] [bgrt|nobgrt] [dm]
     : > "$ROOT/usr/share/plymouth/themes/spinner/animation-0001.png"
     : > "$ROOT/usr/share/plymouth/themes/spinner/watermark.png"
     printf '#!/bin/sh\n' > "$ROOT/usr/bin/cosmic-greeter-start"; chmod +x "$ROOT/usr/bin/cosmic-greeter-start"
+    mkdir -p "$ROOT/usr/lib/systemd/system"
+    printf '[Unit]\nDescription=Greeter daemon\nAfter=systemd-user-sessions.service plymouth-quit-wait.service\nAfter=getty@tty1.service\nConflicts=getty@tty1.service\n\n[Service]\nType=simple\nExecStart=greetd\nRestart=always\n\n[Install]\nAlias=display-manager.service\n' > "$ROOT/usr/lib/systemd/system/greetd.service"
     printf '[Daemon]\nTheme=bgrt\n' > "$ROOT/etc/plymouth/plymouthd.conf"
     if [ "${1:-plymouth}" = plymouth ]; then echo 'HOOKS=(base udev plymouth autodetect)' > "$ROOT/etc/mkinitcpio.conf"; fi
     if [ "${2:-bgrt}" = bgrt ]; then : > "$ROOT/sys/firmware/acpi/bgrt/image"; fi
@@ -140,17 +142,37 @@ check "restore still brings gdm back" '[ "$(dm_now)" = gdm.service ]'
 echo "L: the splash hands over to the sign-in screen, and restore takes that away (#100)"
 newroot plymouth bgrt gdm
 bash "$T" use-lapin >/dev/null 2>&1
-D=$ROOT/etc/systemd/system/greetd.service.d/lapin-ux-splash.conf
-check "greetd drop-in is written" '[ -f "$D" ]'
-check "greetd no longer waits for plymouth-quit-wait" 'grep -qx "After=" "$D" && ! grep -q plymouth-quit-wait "$D"'
-check "plymouth-quit is kept from closing the splash early" 'grep -qx "Conflicts=plymouth-quit.service" "$D"'
-check "the splash stays on screen until the sign-in screen draws" 'grep -q "plymouth quit --retain-splash" "$D"'
+D=$ROOT/etc/systemd/system/greetd.service
+check "a full greetd unit is written in /etc" '[ -f "$D" ] && grep -q "^ExecStart=greetd$" "$D" && grep -q "^Alias=display-manager.service$" "$D"'
+check "greetd no longer waits for plymouth-quit-wait" '! grep -q plymouth-quit-wait "$D" && grep -q "^After=systemd-user-sessions.service$" "$D" && grep -q "^After=getty@tty1.service$" "$D"'
+check "plymouth-quit is kept from closing the splash early" 'grep -qx "Conflicts=plymouth-quit.service" "$D" && grep -qx "OnFailure=plymouth-quit.service" "$D"'
+check "the splash stays on screen until the sign-in screen draws" 'awk "/^\\[Service\\]/{s=1} s&&/plymouth quit --retain-splash/{f=1} END{exit !f}" "$D"'
+check "tty1 is cleared with a quoted shell line" 'grep -q "^ExecStartPre=-/bin/sh -c '"'"'command -v setterm" "$D"'
 rm -f "$D"
 bash "$T" refresh >/dev/null 2>&1
 check "refresh (after an upgrade) writes it back" '[ -f "$D" ]'
 bash "$T" restore >/dev/null 2>&1
-check "restore removes the drop-in" '[ ! -e "$D" ] && [ ! -d "$ROOT/etc/systemd/system/greetd.service.d" ]'
+check "restore removes it" '[ ! -e "$D" ]'
 bash "$T" refresh >/dev/null 2>&1
 check "refresh does nothing when Lapin's sign-in screen isn't used" '[ ! -e "$D" ]'
+
+echo "M: your own greetd.service override is kept and comes back"
+newroot plymouth bgrt gdm
+D=$ROOT/etc/systemd/system/greetd.service
+printf '[Unit]\nDescription=mine\n' > "$D"
+bash "$T" use-lapin >/dev/null 2>&1
+check "ours replaces it while in use" 'grep -q "Lapin UX: hand the boot splash" "$D"'
+bash "$T" restore >/dev/null 2>&1
+check "yours is back after restore" 'grep -qx "Description=mine" "$D"'
+
+echo "N: a restore that keeps the record (boot animation failed) stops refresh"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+FAKE_PLYMOUTH_FAILS=1 bash "$T" restore >/dev/null 2>&1
+unset FAKE_PLYMOUTH_FAILS
+ln -sfn /usr/lib/systemd/system/greetd.service "$ROOT/etc/systemd/system/display-manager.service"
+bash "$T" refresh >/dev/null 2>&1
+check "the override isn't put back" '[ ! -e "$D" ]'
 
 [ "$fail" = 0 ] && echo "All checks passed." || { echo "Some checks FAILED."; exit 1; }
