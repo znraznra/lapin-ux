@@ -376,7 +376,7 @@ cmd_restore() {
 # taken off ("" when there's none).
 greetd_default_command() {
     awk '
-        /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
+        /^[[:space:]]*\[/ { sec = $0; sub(/#.*$/, "", sec); gsub(/[[:space:]]/, "", sec); next }
         sec == "[default_session]" && /^[[:space:]]*command[[:space:]]*=/ {
             v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
             q = substr(v, 1, 1)
