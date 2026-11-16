@@ -1,0 +1,265 @@
+From d0245aace3822d847bfa3d90d9d1a0fe1719fa2b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:36:38 +0800
+Subject: [PATCH 31/31] Lapin UX: Home, Network and Recycle Bin in the new
+ design
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Refs #143. Home's headings look like the group headings elsewhere (accent
+text, chevron, line), Quick access uses the full-colour folder icons, and
+Favorites and Recent are lists with Name, Date accessed and File location
+columns. Home and This PC set the tab's name and icon. The Network page is
+called Networks (not network:///). Empty trash and Add network drive move from
+the bar under the files to the "…" menu.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ src/app.rs  | 101 ++++++++++++++++++++++++++++++++++++++--------------
+ src/menu.rs |   6 ++++
+ src/tab.rs  |  14 +++++++-
+ 3 files changed, 93 insertions(+), 28 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 69c8c56..92e6e86 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -133,6 +133,7 @@ pub enum Action {
+     AddToSidebar,
+     LapinProperties,
+     LapinSelectNone,
++    LapinAddNetworkDrive,
+     LapinSelectInvert,
+     Compress,
+     Copy,
+@@ -209,6 +210,7 @@ impl Action {
+             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
+             Self::LapinProperties => Message::LapinProperties(entity_opt),
+             Self::LapinSelectNone => Message::TabMessage(entity_opt, tab::Message::LapinSelectNone),
++            Self::LapinAddNetworkDrive => Message::ToggleContextPage(ContextPage::NetworkDrive),
+             Self::LapinSelectInvert => Message::TabMessage(entity_opt, tab::Message::LapinSelectInvert),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+@@ -907,7 +909,7 @@ impl App {
+         // Lapin UX Home (#73): Quick access (pinned folders, then folders you
+         // used recently), Favorites (pinned files), then Recent files.
+         let cosmic_theme::Spacing {
+-            space_xxs, space_xs, space_s, ..
++            space_xs, space_s, ..
+         } = theme::spacing();
+         let recent_files: Vec<PathBuf> = recently_used_xbel::parse_file()
+             .map(|files| {
+@@ -926,7 +928,7 @@ impl App {
+             let mut row = widget::row::with_capacity(3)
+                 .spacing(space_xs)
+                 .align_y(Alignment::Center)
+-                .push(icon::icon(tab::folder_icon_symbolic(path, 24)).size(24))
++                .push(icon::icon(tab::folder_icon(path, 32)).size(32))
+                 .push(
+                     widget::column::with_capacity(2)
+                         .push(widget::text::body(name))
+@@ -955,7 +957,7 @@ impl App {
+ 
+         let mut quick: Vec<Element<'_, Message>> = Vec::new();
+         let mut pinned_dirs: Vec<PathBuf> = Vec::new();
+-        let mut pinned_files = widget::column::with_capacity(8).spacing(space_xxs);
++        let mut pinned_files = widget::column::with_capacity(9).spacing(0);
+         let mut any_file = false;
+         for (i, favorite) in self.config.favorites.iter().enumerate() {
+             let Some(path) = favorite.path_opt() else { continue };
+@@ -976,17 +978,9 @@ impl App {
+                     widget::row::with_capacity(2)
+                         .align_y(Alignment::Center)
+                         .push(
+-                            widget::button::custom(
+-                                widget::row::with_capacity(4)
+-                                    .spacing(space_xs)
+-                                    .align_y(Alignment::Center)
+-                                    .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(&path, None, false), 24)).size(24))
+-                                    .push(widget::text::body(name))
+-                                    .push(widget::space::horizontal())
+-                                    .push(widget::text::caption(parent)),
+-                            )
++                            widget::button::custom(lapin_file_columns(&path, name, parent))
+                             .width(Length::Fill)
+-                            .padding(space_xs)
++                            .padding([4, space_xs])
+                             .class(self.lapin_page_class(&format!("p:{}", path.display())))
+                             .on_press(Message::LapinPageClick(
+                                 format!("p:{}", path.display()),
+@@ -1018,23 +1012,15 @@ impl App {
+         }
+         let quick = widget::flex_row(quick).row_spacing(space_xs).column_spacing(space_xs);
+ 
+-        let mut recent = widget::column::with_capacity(12).spacing(space_xxs);
++        let mut recent = widget::column::with_capacity(13).spacing(0).push(lapin_file_headings());
+         let mut shown = 0;
+         for path in recent_files.iter().take(12) {
+             let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+             let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+             recent = recent.push(
+-                widget::button::custom(
+-                    widget::row::with_capacity(4)
+-                        .spacing(space_xs)
+-                        .align_y(Alignment::Center)
+-                        .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(path, None, false), 24)).size(24))
+-                        .push(widget::text::body(name))
+-                        .push(widget::space::horizontal())
+-                        .push(widget::text::caption(parent)),
+-                )
++                widget::button::custom(lapin_file_columns(path, name, parent))
+                 .width(Length::Fill)
+-                .padding(space_xs)
++                .padding([4, space_xs])
+                 .class(self.lapin_page_class(&format!("r:{}", path.display())))
+                 .on_press(Message::LapinPageClick(
+                     format!("r:{}", path.display()),
+@@ -1049,15 +1035,30 @@ impl App {
+         if !any_file {
+             pinned_files = pinned_files.push(widget::text::caption(fl!("pin-files-hint")));
+         }
++        // The headings look like the group headings in folders and on This PC.
++        let heading = |title: String| -> Element<'_, Message> {
++            widget::row::with_capacity(3)
++                .spacing(space_xs)
++                .align_y(Alignment::Center)
++                .push(icon::from_name("pan-down-symbolic").size(16))
++                .push(widget::text::body(title).class(theme::Text::Accent))
++                .push(widget::divider::horizontal::default())
++                .into()
++        };
++        let pinned_files = if any_file {
++            widget::column::with_capacity(2).push(lapin_file_headings()).push(pinned_files)
++        } else {
++            widget::column::with_capacity(1).push(pinned_files)
++        };
+         widget::scrollable(
+             widget::column::with_capacity(6)
+                 .spacing(space_s)
+                 .padding(space_s)
+-                .push(widget::text::title4(fl!("quick-access")))
++                .push(heading(fl!("quick-access")))
+                 .push(quick)
+-                .push(widget::text::title4(fl!("favorites")))
++                .push(heading(fl!("favorites")))
+                 .push(pinned_files)
+-                .push(widget::text::title4(fl!("recent")))
++                .push(heading(fl!("recent")))
+                 .push(recent),
+         )
+         .height(Length::Fill)
+@@ -3744,10 +3745,16 @@ impl Application for App {
+         match self.nav_model.data::<LapinNav>(entity).copied() {
+             Some(LapinNav::Home) => {
+                 self.lapin_home = true;
++                let active = self.tab_model.active();
++                self.tab_model.text_set(active, fl!("home"));
++                self.tab_model.icon_set(active, icon::icon(icon::from_name("user-home-symbolic").size(16).handle()).size(16));
+                 return Task::none();
+             }
+             Some(LapinNav::ThisPc) => {
+                 self.lapin_pc = true;
++                let active = self.tab_model.active();
++                self.tab_model.text_set(active, fl!("this-pc"));
++                self.tab_model.icon_set(active, icon::icon(icon::from_name("computer-symbolic").size(16).handle()).size(16));
+                 return Task::none();
+             }
+             Some(LapinNav::Gallery) => {
+@@ -8874,3 +8881,43 @@ fn lapin_pane_selected() -> theme::Button {
+         pressed: Box::new(|f, t| t.pressed(f, false, &theme::Button::MenuItem)),
+     }
+ }
++
++/// Lapin UX: the column headings over Home's file lists.
++fn lapin_file_headings<'a>() -> Element<'a, Message> {
++    let space_xs = theme::spacing().space_xs;
++    widget::row::with_capacity(3)
++        .padding([4, space_xs])
++        .push(widget::text::heading(fl!("name")).width(Length::FillPortion(3)))
++        .push(widget::text::heading(fl!("date-accessed")).width(Length::Fixed(200.0)))
++        .push(widget::text::heading(fl!("file-location")).width(Length::FillPortion(2)))
++        .into()
++}
++
++/// Lapin UX: one file on Home: icon and name, when it was last opened, and
++/// its folder.
++fn lapin_file_columns<'a>(path: &Path, name: String, parent: String) -> Element<'a, Message> {
++    let space_xs = theme::spacing().space_xs;
++    let accessed = std::fs::metadata(path)
++        .and_then(|m| m.accessed())
++        .ok()
++        .and_then(|t| jiff::Timestamp::try_from(t).ok())
++        .map(|ts| ts.to_zoned(jiff::tz::TimeZone::system()).strftime("%d/%m/%Y %-I:%M %P").to_string())
++        .unwrap_or_default();
++    widget::row::with_capacity(3)
++        .align_y(Alignment::Center)
++        .push(
++            widget::row::with_capacity(2)
++                .spacing(space_xs)
++                .align_y(Alignment::Center)
++                .width(Length::FillPortion(3))
++                .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(path, None, false), 16)).size(16))
++                .push(widget::text::body(name)),
++        )
++        .push(widget::text::body(accessed).width(Length::Fixed(200.0)))
++        .push(
++            widget::text::body(parent)
++                .width(Length::FillPortion(2))
++                .wrapping(cosmic::iced::widget::text::Wrapping::None),
++        )
++        .into()
++}
+diff --git a/src/menu.rs b/src/menu.rs
+index c54a8d0..81a0e7f 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -798,6 +798,12 @@ pub fn menu_lists(
+             menu_button_optional(fl!("menu-open-with"), Action::OpenWith, selected == 1),
+             menu_button_optional(fl!("pin-to-home"), Action::AddToSidebar, selected > 0),
+             menu_button_optional(fl!("restore-from-trash"), Action::RestoreFromTrash, selected > 0 && in_trash),
++            menu_button_optional(fl!("empty-trash"), Action::EmptyTrash, in_trash),
++            menu_button_optional(
++                fl!("add-network-drive"),
++                Action::LapinAddNetworkDrive,
++                tab_opt.is_some_and(|tab| matches!(&tab.location, tab::Location::Network(uri, ..) if uri == "network:///")),
++            ),
+             menu::Item::Divider,
+             menu_button_optional(fl!("properties"), Action::LapinProperties, selected > 0),
+             menu::Item::Button(fl!("options"), None, Action::Settings),
+diff --git a/src/tab.rs b/src/tab.rs
+index 451cc22..c602ce9 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1683,7 +1683,16 @@ impl Location {
+             Self::Recents => {
+                 fl!("recents")
+             }
+-            Self::Network(display_name, ..) => display_name.clone(),
++            Self::Network(uri, name, ..) => {
++                // Lapin UX: the Network page has a name, not network:///.
++                if crate::config::lapin_session() && uri == "network:///" {
++                    fl!("networks")
++                } else if crate::config::lapin_session() && !name.is_empty() {
++                    name.clone()
++                } else {
++                    uri.clone()
++                }
++            }
+         }
+     }
+ 
+@@ -7024,6 +7033,9 @@ impl Tab {
+         }
+         tab_column = tab_column.push(context_menu);
+         match &self.location {
++            // Lapin UX: Empty Recycle Bin and Add network drive are in the
++            // command bar's "…" menu, not in a bar under the files.
++            _ if crate::config::lapin_session() => {}
+             Location::Trash | Location::Search(SearchLocation::Trash, ..) => {
+                 if let Some(items) = self.items_opt()
+                     && !items.is_empty()
+-- 
+2.43.0
+

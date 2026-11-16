@@ -1,0 +1,413 @@
+From 6b33a33dc5404733d44a3dfdbe1030c0ac3bbe29 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 11:02:10 +0800
+Subject: [PATCH 27/31] Lapin UX: retest round: + stays, tighter rows, pages in
+ the details pane, double-click on Home and This PC
+
+Refs #143, #149. Tabs are sized to the room beside + and the window
+buttons, so + never drops off. Details rows are always 24 px (Compact view
+is gone). History, Options, About and Add network drive open in the details
+pane with a title and a close button, and the pane goes back to the details
+when a file or folder is clicked or the place changes. On Home and This PC a
+click picks an item and a double-click opens it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016CkhomYUp7uVySJk724Amq
+---
+ i18n/en/cosmic_files.ftl |   2 +-
+ src/app.rs               | 166 +++++++++++++++++++++++++++++++++------
+ src/menu.rs              |   1 -
+ src/tab.rs               |  34 +-------
+ 4 files changed, 147 insertions(+), 56 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 978bef5..1a20859 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -444,9 +444,9 @@ ascending = Ascending
+ descending = Descending
+ large-icons = Large icons
+ details-pane = Details pane
+-compact-view = Compact view
+ hidden-items = Hidden items
+ options = Options
++about = About
+ network-locations = Network locations
+ bytes = {$bytes} bytes
+ contains = Contains
+diff --git a/src/app.rs b/src/app.rs
+index 5cb6e37..db7cc3b 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -133,7 +133,6 @@ pub enum Action {
+     AddToSidebar,
+     LapinProperties,
+     LapinSelectNone,
+-    LapinCompact,
+     LapinSelectInvert,
+     Compress,
+     Copy,
+@@ -210,7 +209,6 @@ impl Action {
+             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
+             Self::LapinProperties => Message::LapinProperties(entity_opt),
+             Self::LapinSelectNone => Message::TabMessage(entity_opt, tab::Message::LapinSelectNone),
+-            Self::LapinCompact => Message::LapinCompact,
+             Self::LapinSelectInvert => Message::TabMessage(entity_opt, tab::Message::LapinSelectInvert),
+             Self::Compress => Message::Compress(entity_opt),
+             Self::Copy => Message::Copy(entity_opt),
+@@ -461,7 +459,7 @@ pub enum Message {
+     LapinOpen(PathBuf),
+     /// Lapin UX: nothing to do (a press that only had to be taken).
+     LapinNoop,
+-    LapinCompact,
++    LapinPageClick(String, Box<Message>),
+     /// Lapin UX's Properties window: pick a tab, close it.
+     LapinPropertiesTab(u8),
+     LapinCloseWindow(window::Id),
+@@ -810,6 +808,11 @@ pub struct App {
+     nav_bar_context_id: segmented_button::Entity,
+     lapin_home: bool,
+     lapin_pc: bool,
++    /// Lapin UX: History, Options, About or Add network drive shown in the details pane.
++    lapin_pane_page: Option<ContextPage>,
++    /// Lapin UX: the item picked on Home or This PC, and the last click (for double-click).
++    lapin_page_selected: Option<String>,
++    lapin_page_click: Option<(String, std::time::Instant)>,
+     /// Lapin UX: the tab shown in Properties windows (0 General, 1 Security).
+     lapin_properties_tab: u8,
+     /// Lapin UX: the folders opened out in the navigation pane's tree.
+@@ -933,11 +936,15 @@ impl App {
+                     ),
+                 );
+             }
++            let key = format!("d:{}", path.display());
+             widget::button::custom(row)
+                 .width(Length::Fixed(240.0))
+                 .padding(space_xs)
+-                .class(theme::Button::MenuItem)
+-                .on_press(Message::TabMessage(None, tab::Message::Location(location)))
++                .class(self.lapin_page_class(&key))
++                .on_press(Message::LapinPageClick(
++                    key,
++                    Box::new(Message::TabMessage(None, tab::Message::Location(location))),
++                ))
+                 .into()
+         };
+ 
+@@ -975,8 +982,11 @@ impl App {
+                             )
+                             .width(Length::Fill)
+                             .padding(space_xs)
+-                            .class(theme::Button::MenuItem)
+-                            .on_press(Message::LapinOpen(path.clone())),
++                            .class(self.lapin_page_class(&format!("p:{}", path.display())))
++                            .on_press(Message::LapinPageClick(
++                                format!("p:{}", path.display()),
++                                Box::new(Message::LapinOpen(path.clone())),
++                            )),
+                         )
+                         .push(widget::tooltip(
+                             widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
+@@ -1020,8 +1030,11 @@ impl App {
+                 )
+                 .width(Length::Fill)
+                 .padding(space_xs)
+-                .class(theme::Button::MenuItem)
+-                .on_press(Message::LapinOpen(path.clone())),
++                .class(self.lapin_page_class(&format!("r:{}", path.display())))
++                .on_press(Message::LapinPageClick(
++                    format!("r:{}", path.display()),
++                    Box::new(Message::LapinOpen(path.clone())),
++                )),
+             );
+             shown += 1;
+         }
+@@ -1046,6 +1059,15 @@ impl App {
+         .into()
+     }
+ 
++    /// Lapin UX: an item on Home or This PC: the soft grey box when picked.
++    fn lapin_page_class(&self, key: &str) -> theme::Button {
++        if self.lapin_page_selected.as_deref() == Some(key) {
++            lapin_pane_selected()
++        } else {
++            theme::Button::MenuItem
++        }
++    }
++
+     /// Lapin UX: the This PC page, every drive with how full it is.
+     fn lapin_pc_view(&self) -> Element<'_, Message> {
+         let cosmic_theme::Spacing {
+@@ -1101,8 +1123,11 @@ impl App {
+                     )
+                     .width(Length::Fixed(320.0))
+                     .padding(space_xs)
+-                    .class(theme::Button::MenuItem)
+-                    .on_press(Message::TabMessage(None, tab::Message::Location(location.clone())))
++                    .class(self.lapin_page_class(&format!("pc:{name}")))
++                    .on_press(Message::LapinPageClick(
++                        format!("pc:{name}"),
++                        Box::new(Message::TabMessage(None, tab::Message::Location(location.clone()))),
++                    ))
+                     .into(),
+                 );
+             }
+@@ -2452,6 +2477,62 @@ impl App {
+             .into()
+     }
+ 
++    /// Lapin UX: History, Options, About or Add network drive in the details
++    /// pane: the page's name and a close button, then the page, in the same
++    /// layout as the details.
++    fn lapin_pane_page_view(&self, page: &ContextPage) -> Option<Element<'_, Message>> {
++        let cosmic_theme::Spacing { space_xs, space_s, .. } = theme::spacing();
++        let (title, body): (String, Element<'_, Message>) = match page {
++            ContextPage::About => (
++                fl!("about"),
++                widget::about(&self.about, |url| Message::LaunchUrl(url.to_string())),
++            ),
++            ContextPage::EditHistory => (fl!("edit-history"), self.edit_history()),
++            ContextPage::Settings => (fl!("options"), self.settings()),
++            ContextPage::NetworkDrive => {
++                let mut input = widget::text_input(fl!("enter-server-address"), &self.network_drive_input);
++                let button = if self.network_drive_connecting.is_some() {
++                    widget::button::standard(fl!("connecting"))
++                } else {
++                    input = input
++                        .on_input(Message::NetworkDriveInput)
++                        .on_submit(|_| Message::NetworkDriveSubmit);
++                    widget::button::standard(fl!("connect")).on_press(Message::NetworkDriveSubmit)
++                };
++                (
++                    fl!("add-network-drive"),
++                    widget::column::with_capacity(3)
++                        .spacing(space_s)
++                        .push(input)
++                        .push(widget::row::with_capacity(2).push(widget::space::horizontal()).push(button.class(tab::lapin_box_button())))
++                        .push(self.network_drive())
++                        .into(),
++                )
++            }
++            ContextPage::Preview(..) => return None,
++        };
++        let header = widget::row::with_capacity(3)
++            .align_y(Alignment::Center)
++            .push(widget::text::title4(title))
++            .push(widget::space::horizontal())
++            .push(
++                widget::button::icon(icon::from_name("window-close-symbolic").size(16))
++                    .on_press(Message::ToggleContextPage(page.clone())),
++            );
++        Some(
++            widget::container(widget::scrollable(
++                widget::column::with_capacity(2)
++                    .spacing(space_s)
++                    .padding([space_xs, space_s])
++                    .push(header)
++                    .push(body),
++            ))
++            .width(Length::Fixed(360.0))
++            .height(Length::Fill)
++            .into(),
++        )
++    }
++
+     /// The navigation pane: COSMIC's `nav_bar`, or the pane Lapin UX puts
+     /// beside the files itself.
+     fn nav_pane(&self) -> Option<Element<'_, cosmic::Action<Message>>> {
+@@ -3431,9 +3512,6 @@ impl Application for App {
+     /// Creates the application, and optionally emits command on initialize.
+     fn init(mut core: Core, flags: Self::Flags) -> (Self, Task<Self::Message>) {
+         core.window.context_is_overlay = false;
+-        if crate::config::lapin_session() {
+-            tab::lapin_compact_load();
+-        }
+         match flags.mode {
+             Mode::App => {
+                 core.window.show_context = flags.config.show_details;
+@@ -3498,6 +3576,9 @@ impl Application for App {
+             nav_bar_context_id: segmented_button::Entity::null(),
+             lapin_home: false,
+             lapin_pc: false,
++            lapin_pane_page: None,
++            lapin_page_selected: None,
++            lapin_page_click: None,
+             lapin_properties_tab: 0,
+             lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+@@ -3894,7 +3975,20 @@ impl Application for App {
+                 return window::close(id);
+             }
+             Message::LapinNoop => {}
+-            Message::LapinCompact => tab::lapin_compact_toggle(),
++            Message::LapinPageClick(key, open) => {
++                // Lapin UX (#149): a click picks an item on Home or This PC, a
++                // second click on it soon after opens it.
++                let now = std::time::Instant::now();
++                let double = self.lapin_page_click.as_ref().is_some_and(|(k, t)| {
++                    *k == key && now.duration_since(*t) < std::time::Duration::from_millis(500)
++                });
++                if double {
++                    self.lapin_page_click = None;
++                    return Task::done(cosmic::Action::App(*open));
++                }
++                self.lapin_page_selected = Some(key.clone());
++                self.lapin_page_click = Some((key, now));
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -5501,6 +5595,14 @@ impl Application for App {
+             }
+             Message::TabMessage(entity_opt, tab_message) => {
+                 let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
++                // Lapin UX: picking a file or folder, or going somewhere, puts
++                // the details back in the pane.
++                if matches!(
++                    tab_message,
++                    tab::Message::Click(Some(_)) | tab::Message::DoubleClick(_) | tab::Message::Location(_)
++                ) {
++                    self.lapin_pane_page = None;
++                }
+                 // The context menu opens on right-button release, so refresh paste availability now
+                 let right_click = matches!(tab_message, tab::Message::RightClick(..));
+ 
+@@ -5785,6 +5887,19 @@ impl Application for App {
+                 return self.update_config();
+             }
+             Message::ToggleContextPage(context_page) => {
++                // Lapin UX: History, Options, About and Add network drive open
++                // in the details pane, not in a column of their own.
++                if crate::config::lapin_session()
++                    && matches!(self.mode, Mode::App)
++                    && !matches!(context_page, ContextPage::Preview(..))
++                {
++                    self.lapin_pane_page = if self.lapin_pane_page.as_ref() == Some(&context_page) {
++                        None
++                    } else {
++                        Some(context_page)
++                    };
++                    return Task::none();
++                }
+                 //TODO: ensure context menus are closed
+                 if self.context_page == context_page
+                     || matches!(self.context_page, ContextPage::Preview(_, _))
+@@ -6452,10 +6567,7 @@ impl Application for App {
+             return None;
+         }
+         // Lapin UX: the details are in the pane beside the files, never here.
+-        if crate::config::lapin_session()
+-            && matches!(self.mode, Mode::App)
+-            && matches!(self.context_page, ContextPage::Preview(..))
+-        {
++        if crate::config::lapin_session() && matches!(self.mode, Mode::App) {
+             return None;
+         }
+ 
+@@ -7499,7 +7611,15 @@ impl Application for App {
+                     .on_press(|_| Message::LapinNoop))
+                     // Fixed-size tabs (240 px each) that shrink when there
+                     // are too many to fit.
+-                    .width(Length::Fixed(240.0 * self.tab_model.len().max(1) as f32))
++                    // Fixed-size tabs (240 px each) that shrink once they fill
++                    // the room left beside + and the window buttons, so + stays.
++                    .width(Length::Fixed({
++                        let wanted = 240.0 * self.tab_model.len().max(1) as f32;
++                        match self.size {
++                            Some(size) => wanted.min((size.width - 220.0).max(240.0)),
++                            None => wanted,
++                        }
++                    }))
+                     .into(),
+                 widget::tooltip(
+                     widget::button::icon(widget::icon::from_name("list-add-symbolic").size(16))
+@@ -7649,7 +7769,8 @@ impl Application for App {
+                 .map(|pane: Element<'_, cosmic::Action<Message>>| {
+                     pane.map(|action| Message::LapinAction(Box::new(action)))
+                 });
+-            let details = self.lapin_details_pane().map(|(entity_opt, kind)| {
++            let pane_page = self.lapin_pane_page.as_ref().and_then(|page| self.lapin_pane_page_view(page));
++            let details = pane_page.or_else(|| self.lapin_details_pane().map(|(entity_opt, kind)| {
+                 let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
+                 widget::container(widget::scrollable(
+                     self.preview(&entity_opt, kind, true)
+@@ -7657,7 +7778,8 @@ impl Application for App {
+                 ))
+                 .width(Length::Fixed(360.0))
+                 .height(Length::Fill)
+-            });
++                .into()
++            }));
+             let files = match pane {
+                 Some(pane) => Element::from(
+                     widget::row::with_capacity(3)
+diff --git a/src/menu.rs b/src/menu.rs
+index c0dd8f8..c54a8d0 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -771,7 +771,6 @@ pub fn menu_lists(
+             menu::Item::Divider,
+             menu::Item::CheckBox(fl!("details-pane"), None, config.show_details, Action::Preview),
+             menu::Item::Divider,
+-            menu::Item::CheckBox(fl!("compact-view"), None, tab::lapin_compact(), Action::LapinCompact),
+             menu::Item::CheckBox(
+                 fl!("hidden-items"),
+                 None,
+diff --git a/src/tab.rs b/src/tab.rs
+index 30da5f6..43225f0 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -6405,12 +6405,11 @@ impl Tab {
+         } else {
+             icon_sizes.list()
+         };
+-        // Lapin UX: small icons in 32 px rows, the usual Details view.
++        // Lapin UX: small icons in 24 px rows, the usual Details view.
+         let lapin_rows = crate::config::lapin_session() && !condensed && !is_search;
+         let icon_size = if lapin_rows { (icon_size / 2).max(16) } else { icon_size };
+         let row_height = if lapin_rows {
+-            // Compact view (View > Compact view) packs them closer.
+-            icon_size + if lapin_compact() { 8 } else { 16 }
++            icon_size + 8
+         } else {
+             icon_size + 2 * space_xxs
+         };
+@@ -8441,35 +8440,6 @@ mod tests {
+     }
+ }
+ 
+-/// Lapin UX: Compact view (smaller row spacing in the details view). Kept in
+-/// Lapin's own `dev.lapinux.Explorer` settings.
+-static LAPIN_COMPACT: atomic::AtomicBool = atomic::AtomicBool::new(false);
+-const LAPIN_EXPLORER_CONFIG: &str = "dev.lapinux.Explorer";
+-
+-pub fn lapin_compact() -> bool {
+-    LAPIN_COMPACT.load(atomic::Ordering::Relaxed)
+-}
+-
+-pub fn lapin_compact_load() {
+-    use cosmic::cosmic_config::ConfigGet;
+-    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
+-        && let Ok(on) = config.get::<bool>("compact_view")
+-    {
+-        LAPIN_COMPACT.store(on, atomic::Ordering::Relaxed);
+-    }
+-}
+-
+-pub fn lapin_compact_toggle() {
+-    use cosmic::cosmic_config::ConfigSet;
+-    let on = !lapin_compact();
+-    LAPIN_COMPACT.store(on, atomic::Ordering::Relaxed);
+-    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
+-        && let Err(err) = config.set("compact_view", on)
+-    {
+-        log::warn!("failed to save compact view: {err}");
+-    }
+-}
+-
+ /// Lapin UX: the grey band behind the picture in the details pane.
+ pub fn lapin_band_style() -> theme::Container<'static> {
+     theme::Container::custom(|t| {
+-- 
+2.43.0
+
