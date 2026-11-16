@@ -46,6 +46,17 @@
   delete the file (and unset `LAPIN_UX_DEBUG_DND` if you used it), then sign
   out and in again; it applies to the
   whole session).
+- Desktop drag and drop (#81) was broken by the screen reader wrapper
+  (`lapin_ux_ui::a11y::group`, #44): the wrapper passed everything to its
+  content except `drag_destinations`, so the desktop's drop target was never
+  reported to the compositor and every drop over the desktop was a "leave".
+  The wrapper now passes `drag_destinations`, `id` and `set_id` on too. Checked
+  in the nested compositor: a file dragged from Explorer onto the desktop is
+  moved to the Desktop folder. One edge remains in smithay-clipboard: the shell
+  only knows which seat to read a drop from after a click or key press on one
+  of its surfaces, so a drag made before touching the shell at all after
+  signing in doesn't land; clicking anywhere on the desktop or taskbar once is
+  enough.
 - Less work per frame (#51): every message makes iced rebuild and redraw
   every shell surface, so the shell keeps messages few. Pointer motion is a
   message only while the left button is held or at the Show desktop corner

@@ -244,6 +244,24 @@ pub mod a11y {
         ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
             self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
         }
+        // Drag and drop (#81): the drop targets inside (the desktop's, for
+        // one) are only known to the compositor if their rectangles are
+        // passed on; without this nothing could be dropped on a wrapped surface.
+        fn drag_destinations(
+            &self,
+            state: &Tree,
+            layout: Layout<'_>,
+            renderer: &Renderer,
+            dnd_rectangles: &mut cosmic::iced::core::clipboard::DndDestinationRectangles,
+        ) {
+            self.content.as_widget().drag_destinations(state, layout, renderer, dnd_rectangles);
+        }
+        fn id(&self) -> Option<cosmic::iced::core::widget::Id> {
+            self.content.as_widget().id()
+        }
+        fn set_id(&mut self, id: cosmic::iced::core::widget::Id) {
+            self.content.as_widget_mut().set_id(id);
+        }
         fn a11y_nodes(&self, layout: Layout<'_>, state: &Tree, cursor: mouse::Cursor) -> iced_accessibility::A11yTree {
             use iced_accessibility::accesskit::{Node, Rect, Role};
             use iced_accessibility::{A11yNode, A11yTree};
