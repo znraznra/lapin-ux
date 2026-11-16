@@ -171,7 +171,9 @@ updated, by the pacman hook `lapin-ux-greetd.hook` (so the copy keeps up with
 greetd's own unit), writes it for people who already use Lapin's sign-in
 screen. An existing copy is refreshed even while another login manager is on,
 so switching greetd back on directly with `systemctl` doesn't bring back an
-old copy. A `greetd.service` of your own in `/etc` is saved
+old copy. The file is generated: edits made to it are replaced on the next
+refresh, so local changes belong in a drop-in
+(`/etc/systemd/system/greetd.service.d/*.conf`), which still applies on top. A `greetd.service` of your own in `/etc` is saved
 first and comes back with `restore`. It works the way display managers such as
 GDM do:
 - `plymouth-quit-wait.service` is taken out of greetd's `After=`, and

@@ -245,6 +245,7 @@ TOML
         say "Sign-in screen: Lapin UX's, from the next start-up."
     else
         say "Sign-in screen: Lapin UX's, from the next start-up (the boot splash may show text before it; run lapin-ux-login refresh to try again)."
+        return 1
     fi
 }
 

@@ -190,6 +190,15 @@ sed -i 's/^ExecStart=greetd$/ExecStart=greetd --new/' "$ROOT/usr/lib/systemd/sys
 bash "$T" refresh >/dev/null 2>&1
 check "the copy follows greetd's updated unit" 'grep -qx "ExecStart=greetd --new" "$D"'
 
+echo "Q: a hand-off that can't be written is reported by use-lapin and refresh"
+newroot plymouth bgrt gdm
+rm -f "$ROOT/usr/lib/systemd/system/greetd.service"
+bash "$T" use-lapin >/dev/null 2>&1; rc=$?
+check "use-lapin exits with a failure" '[ $rc != 0 ]'
+check "the sign-in screen itself is still set up" '[ "$(dm_now)" = greetd.service ]'
+bash "$T" refresh >/dev/null 2>&1; rc=$?
+check "refresh exits with a failure" '[ $rc != 0 ]'
+
 echo "N: a restore that keeps the record (boot animation failed) stops refresh"
 newroot plymouth bgrt gdm
 bash "$T" use-lapin >/dev/null 2>&1
