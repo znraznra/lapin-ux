@@ -269,7 +269,8 @@ splash_handoff_use() {
     [ -f "$VENDOR_GREETD" ] || { say "Boot splash hand-off: greetd.service isn't where it's expected; left as it is."; return 1; }
     # Your own override is kept once (the first record is never overwritten).
     if [ -f "$HANDOFF" ] && ! handoff_is_ours && [ ! -f "$STATE/greetd-unit.service" ]; then
-        cp -a "$HANDOFF" "$STATE/greetd-unit.service" || return 1
+        local backup; backup=$(mktemp "$STATE/greetd-unit.service.XXXXXX") || return 1
+        cp -a "$HANDOFF" "$backup" && mv -f "$backup" "$STATE/greetd-unit.service" || { rm -f "$backup"; return 1; }
     fi
     local tmp; tmp=$(mktemp "$HANDOFF.lapin-ux.XXXXXX") || return 1
     if ! {
