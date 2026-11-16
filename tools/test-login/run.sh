@@ -199,6 +199,22 @@ check "the sign-in screen itself is still set up" '[ "$(dm_now)" = greetd.servic
 bash "$T" refresh >/dev/null 2>&1; rc=$?
 check "refresh exits with a failure" '[ $rc != 0 ]'
 
+echo "R: when the new unit can't be written, both commands fail and the old one stays"
+newroot plymouth bgrt gdm
+bash "$T" use-lapin >/dev/null 2>&1
+D=$ROOT/etc/systemd/system/greetd.service
+cp "$D" "$ROOT/before.service"
+sed -i 's/^ExecStart=greetd$/ExecStart=greetd --changed/' "$ROOT/usr/lib/systemd/system/greetd.service"
+chmod a-w "$ROOT/etc/systemd/system"
+bash "$T" refresh >/dev/null 2>&1; rc=$?
+check "refresh fails when the temporary file can't be made" '[ $rc != 0 ]'
+check "the unit in place is unchanged after refresh" 'cmp -s "$D" "$ROOT/before.service"'
+bash "$T" use-lapin >/dev/null 2>&1; rc=$?
+check "use-lapin fails too" '[ $rc != 0 ]'
+check "the unit in place is unchanged after use-lapin" 'cmp -s "$D" "$ROOT/before.service"'
+check "no temporary file is left" '! ls "$ROOT"/etc/systemd/system/greetd.service.lapin-ux.* >/dev/null 2>&1'
+chmod u+w "$ROOT/etc/systemd/system"
+
 echo "N: a restore that keeps the record (boot animation failed) stops refresh"
 newroot plymouth bgrt gdm
 bash "$T" use-lapin >/dev/null 2>&1
