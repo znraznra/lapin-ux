@@ -205,6 +205,7 @@ bash "$T" use-lapin >/dev/null 2>&1
 D=$ROOT/etc/systemd/system/greetd.service
 cp "$D" "$ROOT/before.service"
 sed -i 's/^ExecStart=greetd$/ExecStart=greetd --changed/' "$ROOT/usr/lib/systemd/system/greetd.service"
+check "setup: the vendor unit really changed" 'grep -qx "ExecStart=greetd --changed" "$ROOT/usr/lib/systemd/system/greetd.service"'
 chmod a-w "$ROOT/etc/systemd/system"
 bash "$T" refresh >/dev/null 2>&1; rc=$?
 check "refresh fails when the temporary file can't be made" '[ $rc != 0 ]'
