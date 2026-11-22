@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use cosmic::app::Task;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::IcedMargin;
-use cosmic::iced::platform_specific::shell::commands::layer_surface::{set_exclusive_zone, set_input_zone, set_size, Anchor};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{set_exclusive_zone, set_input_zone, Anchor};
 use cosmic::iced::Rectangle;
 use cosmic::iced::window;
 
@@ -176,18 +176,18 @@ impl Shell {
         use cosmic::iced::platform_specific::shell::commands::layer_surface::set_anchor;
         let anchor = self.bar_anchor();
         let mut tasks = vec![self.close_start(), self.close_popup(), self.close_panel()];
+        // The fit decides the thickness (small buttons), so settle it first and
+        // queue exactly one size per bar: batched tasks have no order.
+        self.update_taskbar_fit();
         let ids: Vec<window::Id> = self.bars.iter().map(|b| b.id).collect();
         for id in ids {
             tasks.push(set_anchor(id, anchor));
-            // The bar's thickness is a height on top or bottom, a width on a side.
-            tasks.push(if self.vertical() {
-                set_size(id, Some(self.bar_thickness()), None)
-            } else {
-                set_size(id, None, Some(self.bar_thickness()))
-            });
+            tasks.push(self.bar_size_task(id));
             let revealed = self.bars.iter().find(|b| b.id == id).is_none_or(|b| b.revealed);
             tasks.push(self.resize_bar(id, revealed));
         }
+        // Icons are laid out for the new free area.
+        self.refresh_desktop_size();
         Task::batch(tasks)
     }
 

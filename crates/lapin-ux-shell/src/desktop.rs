@@ -339,6 +339,16 @@ impl Shell {
         }
     }
 
+    /// The taskbar moved or changed thickness: recompute the desktop's free
+    /// area from its output's size, so icons are laid out for the new edge.
+    pub(crate) fn refresh_desktop_size(&mut self) {
+        let Some(output) = self.desktop.as_ref().map(|d| d.output.clone()) else { return };
+        let size = self.bars.iter().find(|b| b.output == output).and_then(|b| Some((b.output_width?, b.output_height?)));
+        if let Some(size) = size {
+            self.desktop_resized(&output, size);
+        }
+    }
+
     pub(crate) fn reload_desktop(&mut self) {
         let sort = self.config.desktop_sort;
         let locales = cosmic::desktop::fde::get_languages_from_env();

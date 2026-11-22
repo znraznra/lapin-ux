@@ -112,7 +112,8 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     let mut center: Vec<Element<'a, Message>> = vec![track(shell, rect_key(bar.id, "start"), start_btn)];
 
     if shell.config.show_search && vertical {
-        // A side bar is too narrow for the box: an icon that opens the same search (#41).
+        // A side bar is too narrow for the box: an icon that opens Start with
+        // its search box focused (the bar has no input of its own here, #41).
         center.push(
             button::custom(container(icon::from_name("system-search-symbolic").size(style::task_icon() / 2 + 4)).center(Length::Fill))
                 .width(style::task_button())
@@ -120,7 +121,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
                 .padding(0)
                 .class(style::flat_button(false))
                 .name("Search")
-                .on_press(Message::BarSearchOpen(bar.id))
+                .on_press(Message::OpenStartAt(crate::app::StartPage::Home))
                 .into(),
         );
     } else if shell.config.show_search {

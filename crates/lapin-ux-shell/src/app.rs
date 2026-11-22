@@ -1758,7 +1758,7 @@ impl Shell {
             }
             Message::OpenStartAt(page) => {
                 let close = self.close_panel();
-                let open = if self.start.is_none() { self.open_start() } else { Task::none() };
+                let open = if self.start.is_none() { self.open_start() } else { text_input::focus(SEARCH_ID.clone()) };
                 if let Some(s) = &mut self.start {
                     s.page = page;
                     s.selected = None;
