@@ -1,0 +1,708 @@
+From 8f7e57ce64231e8c61b1c2ad6b266503f0ca14c8 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 12:24:30 +0800
+Subject: [PATCH] Lapin UX: Explorer pages per tab, right-click menus, details
+ pane follows the page
+
+Refs #168 #169 #170 #175
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ i18n/en/cosmic_files.ftl |   1 +
+ src/app.rs               | 475 ++++++++++++++++++++++++++++++++-------
+ 2 files changed, 397 insertions(+), 79 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 6007464..6d6c2b8 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -89,6 +89,7 @@ open-folder = Open folder
+ open-in-new-tab = Open in new tab
+ open-in-new-window = Open in new window
+ open-item-location = Open item location
++select-to-see-details = Select a file or folder to see its details.
+ open-multiple-files = Open multiple files
+ open-multiple-folders = Open multiple folders
+ save = Save
+diff --git a/src/app.rs b/src/app.rs
+index 230d9ca..469360d 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -342,6 +342,28 @@ impl MenuAction for NavMenuAction {
+     }
+ }
+ 
++/// Lapin UX (#169): the right-click menu of an item on Home or This PC. The
++/// target is the item that was right-clicked (`App::lapin_page_selected`).
++#[derive(Copy, Clone, Debug, Eq, PartialEq)]
++pub enum LapinPageAction {
++    Open,
++    OpenInNewTab,
++    OpenFolder,
++    CopyPath,
++    Properties,
++    Unpin,
++    RemoveFromRecent,
++    Disconnect,
++}
++
++impl MenuAction for LapinPageAction {
++    type Message = Message;
++
++    fn message(&self) -> Self::Message {
++        Message::LapinPageAction(*self)
++    }
++}
++
+ /// Messages that are used specifically by our [`App`].
+ #[derive(Clone, Debug)]
+ pub enum Message {
+@@ -461,6 +483,8 @@ pub enum Message {
+     LapinHome(bool),
+     /// Lapin UX: open a file from the Home page.
+     LapinOpen(PathBuf),
++    LapinPageAction(LapinPageAction),
++    LapinPageSelect(String),
+     /// Lapin UX: nothing to do (a press that only had to be taken).
+     LapinNoop,
+     LapinPageClick(String, Box<Message>),
+@@ -817,12 +841,17 @@ pub struct App {
+     core: Core,
+     about: About,
+     nav_bar_context_id: segmented_button::Entity,
++    /// Lapin UX: which Lapin page (Home or This PC) each tab shows, so tabs
++    /// don't share it (#175). `lapin_home` and `lapin_pc` mirror the active tab's.
++    lapin_pages: HashMap<Entity, LapinNav>,
+     lapin_home: bool,
+     lapin_pc: bool,
+     /// Lapin UX: History, Options, About or Add network drive shown in the details pane.
+     lapin_pane_page: Option<ContextPage>,
+     /// Lapin UX: the item picked on Home or This PC, and the last click (for double-click).
+     lapin_page_selected: Option<String>,
++    /// What the details pane shows for `lapin_page_selected` on Home and This PC (#170).
++    lapin_page_preview: Option<PreviewKind>,
+     lapin_page_click: Option<(String, std::time::Instant)>,
+     /// Lapin UX: Properties windows' General page changes, until OK or Apply.
+     lapin_props: HashMap<window::Id, (PathBuf, tab::LapinPropsDraft)>,
+@@ -916,6 +945,27 @@ impl App {
+ 
+     /// Lapin UX: the Home page (#73): quick-access folders (the sidebar's
+     /// favourites) and the files used most recently.
++    /// Lapin UX: points `lapin_home` / `lapin_pc` at the active tab's page and
++    /// lets the sidebar highlight follow it (#175).
++    fn lapin_sync_pages(&mut self) {
++        let page = self.lapin_pages.get(&self.tab_model.active()).copied();
++        // A pick belongs to the page it was made on (#170).
++        self.lapin_page_selected = None;
++        self.lapin_page_preview = None;
++        self.lapin_page_click = None;
++        self.lapin_home = page == Some(LapinNav::Home);
++        self.lapin_pc = page == Some(LapinNav::ThisPc);
++        if let Some(page) = page {
++            let id = self
++                .nav_model
++                .iter()
++                .find(|&id| self.nav_model.data::<LapinNav>(id) == Some(&page));
++            if let Some(id) = id {
++                self.nav_model.activate(id);
++            }
++        }
++    }
++
+     fn lapin_home_view(&self) -> Element<'_, Message> {
+         // Lapin UX Home (#73): Quick access (pinned folders, then folders you
+         // used recently), Favorites (pinned files), then Recent files.
+@@ -955,15 +1005,15 @@ impl App {
+                 );
+             }
+             let key = format!("d:{}", path.display());
+-            widget::button::custom(row)
++            let button = widget::button::custom(row)
+                 .width(Length::Fixed(240.0))
+                 .padding(space_xs)
+                 .class(self.lapin_page_class(&key))
+                 .on_press(Message::LapinPageClick(
+-                    key,
++                    key.clone(),
+                     Box::new(Message::TabMessage(None, tab::Message::Location(location))),
+-                ))
+-                .into()
++                ));
++            self.lapin_page_menu(key, button.into())
+         };
+ 
+         let mut quick: Vec<Element<'_, Message>> = Vec::new();
+@@ -985,18 +1035,25 @@ impl App {
+             } else {
+                 any_file = true;
+                 let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
++                let key = format!("p:{}", path.display());
++                let row_button = widget::button::custom(lapin_file_columns(&path, name, parent))
++                    .width(Length::Fill)
++                    .padding([4, space_xs])
++                    .class(self.lapin_page_class(&key))
++                    .on_press(Message::LapinPageClick(
++                        key.clone(),
++                        Box::new(Message::LapinOpen(path.clone())),
++                    ));
+                 pinned_files = pinned_files.push(
+                     widget::row::with_capacity(2)
+                         .align_y(Alignment::Center)
+                         .push(
+-                            widget::button::custom(lapin_file_columns(&path, name, parent))
+-                            .width(Length::Fill)
+-                            .padding([4, space_xs])
+-                            .class(self.lapin_page_class(&format!("p:{}", path.display())))
+-                            .on_press(Message::LapinPageClick(
+-                                format!("p:{}", path.display()),
+-                                Box::new(Message::LapinOpen(path.clone())),
+-                            )),
++                            widget::container(widget::tooltip(
++                                self.lapin_page_menu(key, row_button.into()),
++                                widget::text::body(path.display().to_string()),
++                                widget::tooltip::Position::Bottom,
++                            ))
++                            .width(Length::Fill),
+                         )
+                         .push(widget::tooltip(
+                             widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
+@@ -1028,15 +1085,22 @@ impl App {
+         for path in recent_files.iter().take(12) {
+             let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+             let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+-            recent = recent.push(
+-                widget::button::custom(lapin_file_columns(path, name, parent))
++            let key = format!("r:{}", path.display());
++            let row_button = widget::button::custom(lapin_file_columns(path, name, parent))
+                 .width(Length::Fill)
+                 .padding([4, space_xs])
+-                .class(self.lapin_page_class(&format!("r:{}", path.display())))
++                .class(self.lapin_page_class(&key))
+                 .on_press(Message::LapinPageClick(
+-                    format!("r:{}", path.display()),
++                    key.clone(),
+                     Box::new(Message::LapinOpen(path.clone())),
+-                )),
++                ));
++            recent = recent.push(
++                widget::container(widget::tooltip(
++                    self.lapin_page_menu(key, row_button.into()),
++                    widget::text::body(path.display().to_string()),
++                    widget::tooltip::Position::Bottom,
++                ))
++                .width(Length::Fill),
+             );
+             shown += 1;
+         }
+@@ -1111,12 +1175,123 @@ impl App {
+         }
+     }
+ 
+-    /// Lapin UX: the This PC page, every drive with how full it is.
+-    fn lapin_pc_view(&self) -> Element<'_, Message> {
+-        let cosmic_theme::Spacing {
+-            space_xxs, space_xs, space_s, ..
+-        } = theme::spacing();
+-        // (name, icon, location, path to measure, on the network)
++    /// Lapin UX (#153): forget the mapped drive for `uri` and disconnect it.
++    fn lapin_disconnect(&mut self, uri: &str) -> Task<Message> {
++        self.lapin_mapped.retain(|d| !uri.starts_with(d.uri.trim_end_matches('/')));
++        tab::lapin_mapped_save(&self.lapin_mapped);
++        let mut tasks = Vec::new();
++        for (key, items) in &self.mounter_items {
++            for item in items.iter() {
++                if item.is_mounted()
++                    && uri.starts_with(item.uri().trim_end_matches('/'))
++                    && let Some(mounter) = MOUNTERS.get(key)
++                {
++                    tasks.push(mounter.unmount(item.clone()).map(|()| cosmic::action::none()));
++                }
++            }
++        }
++        self.update_nav_model();
++        tasks.push(Task::done(cosmic::Action::App(Message::LapinNavSelectThisPc)));
++        Task::batch(tasks)
++    }
++
++    /// Lapin UX: what opening a drive on This PC does.
++    fn lapin_pc_open_message(&self, location: &Location) -> Message {
++        match location {
++            Location::Network(uri, _, None) if self.lapin_mapped.iter().any(|d| d.uri == *uri) => {
++                Message::LapinOpenMapped(uri.clone())
++            }
++            _ => Message::TabMessage(None, tab::Message::Location(location.clone())),
++        }
++    }
++
++    /// Lapin UX (#169): the path an item on Home or This PC stands for.
++    fn lapin_page_path(&self, key: &str) -> Option<PathBuf> {
++        if let Some(p) = key
++            .strip_prefix("d:")
++            .or_else(|| key.strip_prefix("p:"))
++            .or_else(|| key.strip_prefix("r:"))
++        {
++            return Some(PathBuf::from(p));
++        }
++        let name = key.strip_prefix("pc:")?;
++        self.lapin_pc_drives().into_iter().find(|d| d.0 == name).and_then(|d| d.3)
++    }
++
++    /// Lapin UX (#169, #170): pick an item on Home or This PC, so it shows
++    /// highlighted and the details pane describes it.
++    fn lapin_page_pick(&mut self, key: String) {
++        self.lapin_page_preview = self.lapin_page_path(&key).and_then(|path| {
++            match tab::item_from_path(&path, IconSizes::default()) {
++                Ok(item) => Some(PreviewKind::Custom(PreviewItem(Box::new(item)))),
++                Err(err) => {
++                    log::warn!("failed to get item from path {}: {}", path.display(), err);
++                    None
++                }
++            }
++        });
++        self.lapin_page_selected = Some(key);
++    }
++
++    /// Lapin UX (#169): the index of a pinned item in the favorites.
++    fn lapin_favorite_index(&self, path: &Path) -> Option<usize> {
++        self.config
++            .favorites
++            .iter()
++            .position(|f| f.path_opt().as_deref() == Some(path))
++    }
++
++    /// Lapin UX (#169): right-click on an item of Home or This PC picks it and
++    /// opens a menu for it, the way the file list's items have one.
++    fn lapin_page_menu<'a>(&'a self, key: String, content: Element<'a, Message>) -> Element<'a, Message> {
++        let path = self.lapin_page_path(&key);
++        let button = |label: String, action: LapinPageAction| {
++            widget::menu::Item::Button(label, None, action)
++        };
++        let mut items: Vec<widget::menu::Item<LapinPageAction, String>> = Vec::with_capacity(6);
++        items.push(button(fl!("open"), LapinPageAction::Open));
++        let is_dir = path.as_deref().is_some_and(Path::is_dir);
++        if key.starts_with("p:") || key.starts_with("r:") {
++            if path.as_deref().and_then(Path::parent).is_some() {
++                items.push(button(fl!("open-item-location"), LapinPageAction::OpenFolder));
++            }
++        } else if is_dir {
++            items.push(button(fl!("open-in-new-tab"), LapinPageAction::OpenInNewTab));
++        }
++        if path.is_some() {
++            items.push(button(fl!("copy-path"), LapinPageAction::CopyPath));
++            items.push(button(fl!("properties"), LapinPageAction::Properties));
++        }
++        if let Some(p) = path.as_deref() {
++            if !key.starts_with("pc:") && !key.starts_with("r:") && self.lapin_favorite_index(p).is_some() {
++                items.push(button(fl!("unpin-from-home"), LapinPageAction::Unpin));
++            }
++        }
++        if key.starts_with("r:") {
++            items.push(button(fl!("remove-from-recents"), LapinPageAction::RemoveFromRecent));
++        }
++        if let Some(name) = key.strip_prefix("pc:")
++            && self.lapin_pc_drives().iter().any(|d| {
++                d.0 == name && matches!(&d.2, Location::Network(uri, ..) if self.lapin_mapped.iter().any(|m| uri.starts_with(m.uri.trim_end_matches('/'))))
++            })
++        {
++            items.push(button(fl!("disconnect-network-drive"), LapinPageAction::Disconnect));
++        }
++        let mut menu = widget::context_menu(
++            content,
++            Some(widget::menu::items(&HashMap::new(), items)),
++        )
++        .on_open(Message::LapinPageSelect(key))
++        .on_surface_action(Message::Surface);
++        if let Some(id) = self.core().main_window_id() {
++            menu = menu.window_id(id);
++        }
++        menu.into()
++    }
++
++    /// Lapin UX: the drives This PC lists: (name, icon, location, path to
++    /// measure, on the network).
++    fn lapin_pc_drives(&self) -> Vec<(String, icon::Handle, Location, Option<PathBuf>, bool)> {
+         let mut drives: Vec<(String, icon::Handle, Location, Option<PathBuf>, bool)> = vec![(
+             fl!("filesystem"),
+             icon::from_name("drive-harddisk-symbolic").size(32).handle(),
+@@ -1152,6 +1327,15 @@ impl App {
+                 true,
+             ));
+         }
++        drives
++    }
++
++    /// Lapin UX: the This PC page, every drive with how full it is.
++    fn lapin_pc_view(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing {
++            space_xxs, space_xs, space_s, ..
++        } = theme::spacing();
++        let drives = self.lapin_pc_drives();
+         let mut list = widget::column::with_capacity(4).spacing(space_s).padding(space_s);
+         // Two groups, as people know them: this computer's drives, then the network's.
+         for (remote, title) in [(false, fl!("devices-and-drives")), (true, fl!("network-locations"))] {
+@@ -1170,28 +1354,19 @@ impl App {
+                             total = tab::format_size_public(total)
+                         )));
+                 }
+-                tiles.push(
+-                    widget::button::custom(
+-                        widget::row::with_capacity(2)
+-                            .spacing(space_xs)
+-                            .align_y(Alignment::Center)
+-                            .push(icon::icon(handle.clone()).size(48))
+-                            .push(text),
+-                    )
+-                    .width(Length::Fixed(320.0))
+-                    .padding(space_xs)
+-                    .class(self.lapin_page_class(&format!("pc:{name}")))
+-                    .on_press(Message::LapinPageClick(
+-                        format!("pc:{name}"),
+-                        Box::new(match location {
+-                            Location::Network(uri, _, None) if self.lapin_mapped.iter().any(|d| d.uri == *uri) => {
+-                                Message::LapinOpenMapped(uri.clone())
+-                            }
+-                            _ => Message::TabMessage(None, tab::Message::Location(location.clone())),
+-                        }),
+-                    ))
+-                    .into(),
+-                );
++                let key = format!("pc:{name}");
++                let button = widget::button::custom(
++                    widget::row::with_capacity(2)
++                        .spacing(space_xs)
++                        .align_y(Alignment::Center)
++                        .push(icon::icon(handle.clone()).size(48))
++                        .push(text),
++                )
++                .width(Length::Fixed(320.0))
++                .padding(space_xs)
++                .class(self.lapin_page_class(&key))
++                .on_press(Message::LapinPageClick(key.clone(), Box::new(self.lapin_pc_open_message(location))));
++                tiles.push(self.lapin_page_menu(key, button.into()));
+             }
+             if tiles.is_empty() {
+                 continue;
+@@ -2178,7 +2353,14 @@ impl App {
+                 _ => None,
+             }
+         };
++        self.open_properties_kind(entity_opt, preview_kind)
++    }
+ 
++    fn open_properties_kind(
++        &mut self,
++        entity_opt: Option<Entity>,
++        preview_kind: Option<PreviewKind>,
++    ) -> Task<Message> {
+         if let Some(preview_kind) = preview_kind {
+             let mut settings = window::Settings {
+                 decorations: true,
+@@ -2871,7 +3053,27 @@ impl App {
+     fn lapin_details_pane(&self) -> Option<(Option<Entity>, &PreviewKind)> {
+         const SELECTED: PreviewKind = PreviewKind::Selected;
+         (crate::config::lapin_session() && matches!(self.mode, Mode::App) && self.config.show_details)
+-            .then_some((None, &SELECTED))
++            .then_some(())
++            .and_then(|()| {
++                // Home and This PC are not the tab's files: the pane follows
++                // what was picked on the page instead, and says so when
++                // nothing is (#170).
++                if self.lapin_home || self.lapin_pc {
++                    self.lapin_page_preview.as_ref().map(|kind| (None, kind))
++                } else {
++                    Some((None, &SELECTED))
++                }
++            })
++    }
++
++    /// Lapin UX (#170): what the details pane says when there is nothing to describe.
++    fn lapin_details_empty(&self) -> Element<'_, Message> {
++        let cosmic_theme::Spacing { space_s, .. } = theme::spacing();
++        widget::container(widget::text::body(fl!("select-to-see-details")))
++            .padding(space_s)
++            .width(Length::Fixed(360.0))
++            .height(Length::Fill)
++            .into()
+     }
+ 
+     /// Lapin UX (#143): a tab shows the icon of the place it is in.
+@@ -3431,6 +3633,10 @@ impl App {
+                 }
+             }
+         }
++        if children.is_empty() && crate::config::lapin_session() {
++            // Lapin UX (#170): say what to do instead of showing a blank pane.
++            children.push(widget::text::body(fl!("select-to-see-details")).into());
++        }
+         widget::column::with_children(children)
+             .padding(if context_drawer {
+                 [0, 0, 0, 0]
+@@ -3661,10 +3867,12 @@ impl Application for App {
+             core,
+             about,
+             nav_bar_context_id: segmented_button::Entity::null(),
++            lapin_pages: HashMap::new(),
+             lapin_home: false,
+             lapin_pc: false,
+             lapin_pane_page: None,
+             lapin_page_selected: None,
++            lapin_page_preview: None,
+             lapin_page_click: None,
+             lapin_props: HashMap::new(),
+             lapin_mapped: if crate::config::lapin_session() { tab::lapin_mapped_load() } else { Vec::new() },
+@@ -3797,20 +4005,23 @@ impl Application for App {
+     }
+ 
+     fn on_nav_select(&mut self, entity: Entity) -> Task<Self::Message> {
+-        self.lapin_home = false;
+-        self.lapin_pc = false;
++        let active_tab = self.tab_model.active();
++        self.lapin_pages.remove(&active_tab);
++        self.lapin_sync_pages();
+         self.nav_model.activate(entity);
+         match self.nav_model.data::<LapinNav>(entity).copied() {
+             Some(LapinNav::Home) => {
+-                self.lapin_home = true;
+                 let active = self.tab_model.active();
++                self.lapin_pages.insert(active, LapinNav::Home);
++                self.lapin_sync_pages();
+                 self.tab_model.text_set(active, fl!("home"));
+                 self.tab_model.icon_set(active, icon::icon(icon::from_name("user-home-symbolic").size(16).handle()).size(16));
+                 return Task::none();
+             }
+             Some(LapinNav::ThisPc) => {
+-                self.lapin_pc = true;
+                 let active = self.tab_model.active();
++                self.lapin_pages.insert(active, LapinNav::ThisPc);
++                self.lapin_sync_pages();
+                 self.tab_model.text_set(active, fl!("this-pc"));
+                 self.tab_model.icon_set(active, icon::icon(icon::from_name("computer-symbolic").size(16).handle()).size(16));
+                 return Task::none();
+@@ -4001,9 +4212,11 @@ impl Application for App {
+     /// Handle application events here.
+     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
+         // Lapin UX: going anywhere closes the Home page.
+-        if matches!(message, Message::TabMessage(_, tab::Message::Location(_))) {
+-            self.lapin_home = false;
+-            self.lapin_pc = false;
++        // Only the tab that navigates loses its page (#175).
++        if let Message::TabMessage(entity_opt, tab::Message::Location(_)) = &message {
++            let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
++            self.lapin_pages.remove(&entity);
++            self.lapin_sync_pages();
+         }
+         // Helper for updating config values efficiently
+         macro_rules! config_set {
+@@ -4034,8 +4247,13 @@ impl Application for App {
+ 
+         match message {
+             Message::LapinHome(on) => {
+-                self.lapin_home = on;
+-                self.lapin_pc = false;
++                let active = self.tab_model.active();
++                if on {
++                    self.lapin_pages.insert(active, LapinNav::Home);
++                } else {
++                    self.lapin_pages.remove(&active);
++                }
++                self.lapin_sync_pages();
+                 if on {
+                     // Home in the sidebar shows as the open place.
+                     let id = self
+@@ -4157,21 +4375,103 @@ impl Application for App {
+                     Some(Location::Network(uri, ..)) => uri.clone(),
+                     _ => return Task::none(),
+                 };
+-                self.lapin_mapped.retain(|d| !uri.starts_with(d.uri.trim_end_matches('/')));
+-                tab::lapin_mapped_save(&self.lapin_mapped);
+-                let mut tasks = Vec::new();
+-                for (key, items) in &self.mounter_items {
+-                    for item in items.iter() {
+-                        if item.is_mounted() && uri.starts_with(item.uri().trim_end_matches('/'))
+-                            && let Some(mounter) = MOUNTERS.get(key)
++                return self.lapin_disconnect(&uri);
++            }
++            Message::LapinPageSelect(key) => {
++                // Lapin UX (#169, #170): right-click picks the item too, and the
++                // details pane follows it.
++                self.lapin_page_pick(key);
++                self.lapin_page_click = None;
++            }
++            Message::LapinPageAction(action) => {
++                let Some(key) = self.lapin_page_selected.clone() else {
++                    return Task::none();
++                };
++                let path = self.lapin_page_path(&key);
++                match action {
++                    LapinPageAction::Open => {
++                        if let Some(name) = key.strip_prefix("pc:") {
++                            let location = self
++                                .lapin_pc_drives()
++                                .into_iter()
++                                .find(|d| d.0 == name)
++                                .map(|d| d.2);
++                            if let Some(location) = location {
++                                let message = self.lapin_pc_open_message(&location);
++                                return Task::done(cosmic::Action::App(message));
++                            }
++                        } else if let Some(path) = path {
++                            if path.is_dir() {
++                                return Task::done(cosmic::Action::App(Message::TabMessage(
++                                    None,
++                                    tab::Message::Location(Location::Path(path)),
++                                )));
++                            }
++                            return self.open_file(&[path]);
++                        }
++                    }
++                    LapinPageAction::OpenInNewTab => {
++                        if let Some(path) = path.filter(|p| p.is_dir()) {
++                            return self.open_tab(Location::Path(path), false, None);
++                        }
++                    }
++                    LapinPageAction::OpenFolder => {
++                        if let Some(path) = path
++                            && let Some(parent) = path.parent().map(Path::to_path_buf)
+                         {
+-                            tasks.push(mounter.unmount(item.clone()).map(|()| cosmic::action::none()));
++                            return self.open_tab(Location::Path(parent), true, Some(vec![path]));
++                        }
++                    }
++                    LapinPageAction::CopyPath => {
++                        if let Some(path) = path {
++                            return clipboard::write(path.display().to_string());
++                        }
++                    }
++                    LapinPageAction::Properties => {
++                        if let Some(path) = path {
++                            match tab::item_from_path(&path, IconSizes::default()) {
++                                Ok(item) => {
++                                    return self.open_properties_kind(
++                                        None,
++                                        Some(PreviewKind::Custom(PreviewItem(Box::new(item)))),
++                                    );
++                                }
++                                Err(err) => {
++                                    log::warn!(
++                                        "failed to get item from path {}: {}",
++                                        path.display(),
++                                        err
++                                    );
++                                }
++                            }
++                        }
++                    }
++                    LapinPageAction::Unpin => {
++                        if let Some(i) = path.as_deref().and_then(|p| self.lapin_favorite_index(p)) {
++                            return Task::done(cosmic::Action::App(Message::LapinUnpin(i)));
++                        }
++                    }
++                    LapinPageAction::RemoveFromRecent => {
++                        if let Some(path) = path {
++                            return self.operation(Operation::RemoveFromRecents {
++                                paths: vec![path].into_boxed_slice(),
++                            });
++                        }
++                    }
++                    LapinPageAction::Disconnect => {
++                        let uri = key.strip_prefix("pc:").and_then(|name| {
++                            self.lapin_pc_drives().into_iter().find(|d| d.0 == name).and_then(
++                                |d| match d.2 {
++                                    Location::Network(uri, ..) => Some(uri),
++                                    _ => None,
++                                },
++                            )
++                        });
++                        if let Some(uri) = uri {
++                            return self.lapin_disconnect(&uri);
+                         }
+                     }
+                 }
+-                self.update_nav_model();
+-                tasks.push(Task::done(cosmic::Action::App(Message::LapinNavSelectThisPc)));
+-                return Task::batch(tasks);
+             }
+             Message::LapinPropsCancel(id) => {
+                 self.lapin_props.remove(&id);
+@@ -4189,7 +4489,7 @@ impl Application for App {
+                     self.lapin_page_click = None;
+                     return Task::done(cosmic::Action::App(*open));
+                 }
+-                self.lapin_page_selected = Some(key.clone());
++                self.lapin_page_pick(key.clone());
+                 self.lapin_page_click = Some((key, now));
+             }
+             Message::LapinOpen(path) => {
+@@ -5725,6 +6025,7 @@ impl Application for App {
+ 
+                 // Activate new tab
+                 self.tab_model.activate(entity);
++                self.lapin_sync_pages();
+                 if let Some(tab) = self.tab_model.data::<Tab>(entity) {
+                     {
+                         //Restore scroll
+@@ -5799,6 +6100,7 @@ impl Application for App {
+ 
+                 // Remove item
+                 self.tab_model.remove(entity);
++                self.lapin_pages.remove(&entity);
+ 
+                 tasks.push(self.update_watcher());
+ 
+@@ -8032,16 +8334,27 @@ impl Application for App {
+                     pane.map(|action| Message::LapinAction(Box::new(action)))
+                 });
+             let pane_page = self.lapin_pane_page.as_ref().and_then(|page| self.lapin_pane_page_view(page));
+-            let details = pane_page.or_else(|| self.lapin_details_pane().map(|(entity_opt, kind)| {
+-                let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
+-                widget::container(widget::scrollable(
+-                    self.preview(&entity_opt, kind, true)
+-                        .map(move |x| Message::TabMessage(Some(entity), x)),
+-                ))
+-                .width(Length::Fixed(360.0))
+-                .height(Length::Fill)
+-                .into()
+-            }));
++            let details = pane_page.or_else(|| {
++                let shown = crate::config::lapin_session()
++                    && matches!(self.mode, Mode::App)
++                    && self.config.show_details;
++                match self.lapin_details_pane() {
++                    Some((entity_opt, kind)) => {
++                        let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
++                        Some(
++                            widget::container(widget::scrollable(
++                                self.preview(&entity_opt, kind, true)
++                                    .map(move |x| Message::TabMessage(Some(entity), x)),
++                            ))
++                            .width(Length::Fixed(360.0))
++                            .height(Length::Fill)
++                            .into(),
++                        )
++                    }
++                    None if shown => Some(self.lapin_details_empty()),
++                    None => None,
++                }
++            });
+             let files = match pane {
+                 Some(pane) => Element::from(
+                     widget::row::with_capacity(3)
+@@ -9048,9 +9361,13 @@ fn lapin_file_columns<'a>(path: &Path, name: String, parent: String) -> Element<
+                 .align_y(Alignment::Center)
+                 .width(Length::FillPortion(3))
+                 .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(path, None, false), 16)).size(16))
+-                .push(widget::text::body(name)),
++                .push(widget::text::body(name).wrapping(cosmic::iced::widget::text::Wrapping::None)),
++        )
++        .push(
++            widget::text::body(accessed)
++                .width(Length::Fixed(200.0))
++                .wrapping(cosmic::iced::widget::text::Wrapping::None),
+         )
+-        .push(widget::text::body(accessed).width(Length::Fixed(200.0)))
+         .push(
+             widget::text::body(parent)
+                 .width(Length::FillPortion(2))
+-- 
+2.56.1
+
