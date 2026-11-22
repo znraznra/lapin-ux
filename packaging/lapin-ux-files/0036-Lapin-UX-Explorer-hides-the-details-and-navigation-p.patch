@@ -1,0 +1,73 @@
+From c70f1a55f9e30b815c10d0e07093c28445e2925a Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:53:13 +0800
+Subject: [PATCH] Lapin UX: Explorer hides the details and navigation panes
+ when the window is too narrow (Refs #151)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 469360d..ba879e9 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -3021,7 +3021,7 @@ impl App {
+             );
+         }
+         widget::container(widget::scrollable(column.padding([space_xxs, space_xs])))
+-            .width(Length::Fixed(280.0))
++            .width(Length::Fixed(LAPIN_PANE_WIDTH))
+             .height(Length::Fill)
+             .into()
+     }
+@@ -8328,13 +8328,23 @@ impl Application for App {
+         if let Some(body) = body {
+             // Lapin UX: the navigation pane sits beside the files, under the
+             // rows above, which span the window.
+-            let pane = (crate::config::lapin_session() && matches!(self.mode, Mode::App))
++            // Lapin UX (#151): the file list keeps a usable width. The details
++            // pane gives way first, then the navigation pane, and both come
++            // back when the window has room again.
++            let width = self.size.map_or(f32::MAX, |size| size.width);
++            let show_pane = width >= LAPIN_PANE_WIDTH + LAPIN_MIN_FILES_WIDTH;
++            let show_details =
++                width >= LAPIN_PANE_WIDTH + LAPIN_DETAILS_WIDTH + LAPIN_MIN_FILES_WIDTH;
++            let pane = (crate::config::lapin_session() && matches!(self.mode, Mode::App) && show_pane)
+                 .then(|| self.lapin_tree_pane())
+                 .map(|pane: Element<'_, cosmic::Action<Message>>| {
+                     pane.map(|action| Message::LapinAction(Box::new(action)))
+                 });
+             let pane_page = self.lapin_pane_page.as_ref().and_then(|page| self.lapin_pane_page_view(page));
+             let details = pane_page.or_else(|| {
++                if !show_details && crate::config::lapin_session() && matches!(self.mode, Mode::App) {
++                    return None;
++                }
+                 let shown = crate::config::lapin_session()
+                     && matches!(self.mode, Mode::App)
+                     && self.config.show_details;
+@@ -8346,7 +8356,7 @@ impl Application for App {
+                                 self.preview(&entity_opt, kind, true)
+                                     .map(move |x| Message::TabMessage(Some(entity), x)),
+                             ))
+-                            .width(Length::Fixed(360.0))
++                            .width(Length::Fixed(LAPIN_DETAILS_WIDTH))
+                             .height(Length::Fill)
+                             .into(),
+                         )
+@@ -9322,6 +9332,11 @@ fn lapin_box_input() -> theme::TextInput {
+ 
++/// Lapin UX (#151): widths the narrow-window rules work from.
++const LAPIN_PANE_WIDTH: f32 = 280.0;
++const LAPIN_DETAILS_WIDTH: f32 = 360.0;
++const LAPIN_MIN_FILES_WIDTH: f32 = 420.0;
++
+ /// Lapin UX: the open place in the navigation pane: a soft grey box (the
+ /// hover colour of the rows), not a pill.
+ fn lapin_pane_selected() -> theme::Button {
+     use cosmic::widget::button::Catalog;
+     theme::Button::Custom {
+-- 
+2.56.1
+
