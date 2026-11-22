@@ -18,6 +18,14 @@ const RIGHT_SIDE: f32 = 330.0;
 impl Shell {
     /// Room left for app buttons on the main taskbar.
     fn button_space(&self) -> f32 {
+        if self.vertical() {
+            // A side bar stacks everything: Start, search, Task view, the
+            // buttons, then the tray and clock at the bottom.
+            let height = self.main_bar().and_then(|b| b.output_height).unwrap_or(800) as f32;
+            let fixed = 16.0 + 44.0 * 3.0 + 200.0;
+            let sides = if self.config.alignment == TaskbarAlignment::Center { 2.0 * 200.0 } else { 200.0 };
+            return (height - sides - fixed).max(0.0);
+        }
         let width = self.main_bar().and_then(|b| b.output_width).unwrap_or(1280) as f32;
         let mut fixed = 16.0 + 44.0 + 44.0; // padding, Start, Task view
         if self.config.show_search {
@@ -28,7 +36,9 @@ impl Shell {
         (width - sides - fixed).max(0.0)
     }
 
-    pub(crate) fn sync_taskbar_fit(&mut self) -> Task<Message> {
+    /// Recompute the fit and the small-button flag. True when the flag (and
+    /// so the bar's thickness) changed.
+    pub(crate) fn update_taskbar_fit(&mut self) -> bool {
         let main = self.main_bar().map(|b| b.output_name.clone());
         let buttons = self.taskbar.buttons_for(main.clone().flatten().as_deref(), true, self.config.multi_display);
         let combined = buttons.len();
@@ -39,17 +49,31 @@ impl Shell {
         }
         self.fit = f;
         if f.small == style::small_taskbar() {
-            return Task::none();
+            return false;
         }
         style::set_small_taskbar(f.small);
-        let h = style::taskbar_height();
+        true
+    }
+
+    /// One `set_size` for a bar at the current thickness: a height on top or
+    /// bottom, a width on a side.
+    pub(crate) fn bar_size_task(&self, id: cosmic::iced::window::Id) -> Task<Message> {
+        let t = self.bar_thickness();
+        if self.vertical() { set_size(id, Some(t), None) } else { set_size(id, None, Some(t)) }
+    }
+
+    pub(crate) fn sync_taskbar_fit(&mut self) -> Task<Message> {
+        if !self.update_taskbar_fit() {
+            return Task::none();
+        }
         let mut tasks = Vec::new();
         let bars: Vec<_> = self.bars.iter().map(|b| (b.id, b.revealed)).collect();
         for (id, revealed) in bars {
-            tasks.push(set_size(id, None, Some(h)));
+            tasks.push(self.bar_size_task(id));
             tasks.push(self.resize_bar_pub(id, revealed));
         }
         // The desktop's free area changes with the bar.
+        self.refresh_desktop_size();
         Task::batch(tasks)
     }
 }

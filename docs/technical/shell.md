@@ -4,6 +4,14 @@
 
 **Taskbar** (`lapin-ux-shell`), one per monitor
 - Centered (or left-aligned) Start button, Search box, pinned and running apps.
+- **Taskbar location** (#41): Settings > Personalization > Taskbar > *Taskbar
+  location on screen* (Bottom, Top, Left, Right) or the taskbar's right-click
+  menu. Key `position` in `dev.lapinux.Shell`, applied live. On the left or
+  right the bar is 48 or 56 px wide: Start on top, icon-only Search, Task view,
+  apps stacked, tray and clock at the bottom; the running marker sits on the
+  inner edge and alignment Center/Left becomes Center/Top. Start, panels,
+  pop-ups, toasts, auto-hide and the work area follow the edge. Start and
+  panels on a side bar anchor to its bottom corner.
 - The Search box is a real text field: click it to type on the taskbar (the
   taskbar takes the keyboard only meanwhile); Enter shows the results in
   Start; Esc or clicking away clears it.

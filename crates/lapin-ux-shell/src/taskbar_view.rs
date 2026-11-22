@@ -8,7 +8,7 @@ use cosmic::widget::{self, button, column, container, icon, mouse_area, row, tex
 use cosmic::Element;
 
 use crate::app::{Bar, Message, Popup, PopupKind, PowerAction, Shell, rect_key};
-use crate::config::TaskbarAlignment;
+use crate::config::{TaskbarAlignment, TaskbarPosition};
 use crate::style;
 use crate::wayland::WindowId as Handle;
 
@@ -108,12 +108,23 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     .name("Start")
     .on_press(Message::ToggleStart);
 
-    let mut center = row::with_capacity(16)
-        .spacing(4)
-        .align_y(Alignment::Center)
-        .push(track(shell, rect_key(bar.id, "start"), start_btn));
+    let vertical = shell.vertical();
+    let mut center: Vec<Element<'a, Message>> = vec![track(shell, rect_key(bar.id, "start"), start_btn)];
 
-    if shell.config.show_search {
+    if shell.config.show_search && vertical {
+        // A side bar is too narrow for the box: an icon that opens Start with
+        // its search box focused (the bar has no input of its own here, #41).
+        center.push(
+            button::custom(container(icon::from_name("system-search-symbolic").size(style::task_icon() / 2 + 4)).center(Length::Fill))
+                .width(style::task_button())
+                .height(style::task_button())
+                .padding(0)
+                .class(style::flat_button(false))
+                .name("Search")
+                .on_press(Message::OpenStartAt(crate::app::StartPage::Home))
+                .into(),
+        );
+    } else if shell.config.show_search {
         // A real search box, like Windows': click to type here; Enter shows
         // the results in Start. Until it's clicked it's a picture of one, so
         // the taskbar never takes the keyboard from apps.
@@ -143,27 +154,29 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .class(style::search_pill());
         if editing {
-            center = center.push(container(pill).padding([0, 4]));
+            center.push(container(pill).padding([0, 4]).into());
         } else {
-            center = center.push(
+            center.push(
                 button::custom(pill)
                     .padding([0, 4])
                     .class(style::flat_button(false))
-                    .on_press(Message::BarSearchOpen(bar.id)),
+                    .on_press(Message::BarSearchOpen(bar.id))
+                    .into(),
             );
         }
     }
 
     // Task view, like the benchmark's button after Search.
     let tv_open = matches!(shell.panel.as_ref().map(|p| &p.kind), Some(crate::panels::PanelKind::TaskView(_)));
-    center = center.push(
+    center.push(
         button::custom(container(icon(icon::from_svg_bytes(TASK_VIEW_ICON)).size(style::task_icon())).center(Length::Fill))
             .width(style::task_button())
             .height(style::task_button())
             .padding(0)
             .class(style::flat_button(tv_open))
             .name("Task view")
-            .on_press(Message::TaskView(crate::taskview::TaskViewMsg::Toggle)),
+            .on_press(Message::TaskView(crate::taskview::TaskViewMsg::Toggle))
+            .into(),
     );
 
     // Task buttons get their own row so the widget tree keeps a stable
@@ -189,7 +202,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     }
     // "Combine buttons: never" (or when the taskbar has room): a labelled
     // button per window; apps without windows keep their icon-only button.
-    let tasks: Vec<Element<'_, Message>> = if shell.fit.labels {
+    let tasks: Vec<Element<'_, Message>> = if shell.fit.labels && !vertical {
         buttons
             .into_iter()
             .flat_map(|b| {
@@ -210,12 +223,16 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     } else {
         buttons.into_iter().map(|b| task_button(shell, bar, b, None)).collect()
     };
-    center = center.push(row::with_children(tasks).spacing(4).align_y(Alignment::Center));
+    center.push(if vertical {
+        column::with_children(tasks).spacing(4).align_x(Alignment::Center).into()
+    } else {
+        row::with_children(tasks).spacing(4).align_y(Alignment::Center).into()
+    });
 
     // Seconds only when the user turned them on, on either taskbar size
     // (#38; Settings > Taskbar behaviors or Time & language > Date & time).
     let clock_style = shell.clock_style();
-    let mut time = column::with_capacity(2).align_x(Alignment::End);
+    let mut time = column::with_capacity(2).align_x(if vertical { Alignment::Center } else { Alignment::End });
     time = time.push(text::caption(clock_style.time(&shell.now)).size(12.0));
     if !style::small_taskbar() {
         time = time.push(text::caption(clock_style.date(&shell.now)).size(12.0));
@@ -225,7 +242,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         clock_content = clock_content.push(notify_badge(shell.notify));
     }
     let clock = button::custom(clock_content)
-    .padding(if style::small_taskbar() { [0, 10] } else { [4, 10] })
+    .padding(if vertical { [4, 2] } else if style::small_taskbar() { [0, 10] } else { [4, 10] })
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
     .on_press(Message::ClockClick(bar.id));
 
@@ -236,8 +253,8 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     if main_bar && shell.tray.iter().any(|t| !shell.tray_inline(t)) {
         let open = matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::TrayOverflow));
         let btn = button::custom(container(icon::from_name("pan-up-symbolic").size(16)).center(Length::Fill))
-            .width(28)
-            .height(style::task_button())
+            .width(if vertical { style::task_button() } else { 28.0 })
+            .height(if vertical { 28.0 } else { style::task_button() })
             .padding(0)
             .class(style::flat_button(open))
             .name("Show hidden icons")
@@ -250,14 +267,24 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     if main_bar {
         tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
     }
-    let mut right = row::with_capacity(4).spacing(2).align_y(Alignment::Center);
-    right = right.push(row::with_children(tray).spacing(0).align_y(Alignment::Center));
+    let mut right: Vec<Element<'_, Message>> = Vec::with_capacity(4);
+    right.push(if vertical {
+        column::with_children(tray).align_x(Alignment::Center).into()
+    } else {
+        row::with_children(tray).spacing(0).align_y(Alignment::Center).into()
+    });
     let status = crate::quick::status_icons(shell);
     let mut status_slot: Vec<Element<'_, Message>> = Vec::with_capacity(1);
     if !status.is_empty() {
-        let btn = button::custom(container(row::with_children(status).spacing(8).align_y(Alignment::Center)).center_y(Length::Fill))
-            .height(style::task_button())
-            .padding([0, 10])
+        let icons: Element<'_, Message> = if vertical {
+            column::with_children(status).spacing(6).align_x(Alignment::Center).into()
+        } else {
+            row::with_children(status).spacing(8).align_y(Alignment::Center).into()
+        };
+        let btn = button::custom(container(icons).center_y(Length::Fill))
+            .height(if vertical { Length::Shrink } else { Length::Fixed(style::task_button() as f32) })
+            .padding(if vertical { [8, 0] } else { [0, 10] })
+            .width(if vertical { Length::Fill } else { Length::Shrink })
             .class(style::flat_button(shell.quick_open()))
             .name("Quick settings")
             .on_press(Message::Quick(crate::quick::QuickMsg::Toggle));
@@ -274,7 +301,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     // Touch keyboard button (Windows shows it next to the input indicator).
     if shell.config.touch_keyboard_button {
         let btn = button::custom(container(icon::from_name("input-keyboard-symbolic").size(16)).center(Length::Fill))
-            .width(32)
+            .width(if vertical { style::task_button() } else { 32.0 })
             .height(style::task_button())
             .padding(0)
             .class(style::flat_button(false))
@@ -287,38 +314,71 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         status_slot.insert(0, ind);
     }
     // Own row so the widget tree keeps its shape when the icons come and go.
-    right = right.push(row::with_children(status_slot));
-    right = right.push(track(shell, rect_key(bar.id, "clock"), clock));
+    right.push(if vertical {
+        column::with_children(status_slot).align_x(Alignment::Center).into()
+    } else {
+        row::with_children(status_slot).into()
+    });
+    right.push(track(shell, rect_key(bar.id, "clock"), clock));
     if shell.config.show_desktop_corner {
         // Resting on it peeks at the desktop (see bar_pointer).
-        right = right.push(
-            button::custom(widget::Space::new().width(6).height(Length::Fill))
+        let (w, h) = if vertical { (Length::Fill, Length::Fixed(6.0)) } else { (Length::Fixed(6.0), Length::Fill) };
+        right.push(
+            button::custom(widget::Space::new().width(w).height(h))
                 .padding(0)
-                .height(Length::Fill)
+                .width(w)
+                .height(h)
                 .class(style::flat_button(false))
                 .name("Show desktop")
-                .on_press(Message::ShowDesktop),
+                .on_press(Message::ShowDesktop)
+                .into(),
         );
     }
+    let right: Element<'_, Message> = if vertical {
+        column::with_children(right).spacing(2).align_x(Alignment::Center).into()
+    } else {
+        row::with_children(right).spacing(2).align_y(Alignment::Center).into()
+    };
+    let center: Element<'_, Message> = if vertical {
+        column::with_children(center).spacing(4).align_x(Alignment::Center).into()
+    } else {
+        row::with_children(center).spacing(4).align_y(Alignment::Center).into()
+    };
 
-    let content: Element<'_, Message> = match shell.config.alignment {
+    let content: Element<'_, Message> = if vertical {
+        match shell.config.alignment {
+            TaskbarAlignment::Center => column::with_children(vec![
+                widget::Space::new().height(Length::Fill).into(),
+                center,
+                container(right).height(Length::Fill).align_y(Alignment::End).into(),
+            ])
+            .align_x(Alignment::Center)
+            .into(),
+            TaskbarAlignment::Left => column::with_children(vec![
+                container(center).height(Length::Fill).into(),
+                right,
+            ])
+            .align_x(Alignment::Center)
+            .into(),
+        }
+    } else { match shell.config.alignment {
         TaskbarAlignment::Center => row::with_children(vec![
             widget::Space::new().width(Length::Fill).into(),
-            center.into(),
+            center,
             container(right).width(Length::Fill).align_x(Alignment::End).into(),
         ])
         .align_y(Alignment::Center)
         .into(),
         TaskbarAlignment::Left => row::with_children(vec![
             container(center).width(Length::Fill).into(),
-            right.into(),
+            right,
         ])
         .align_y(Alignment::Center)
         .into(),
-    };
+    } };
 
     let bar_body = container(content)
-        .padding([4, 4, 4, 12])
+        .padding(if vertical { [12, 4, 4, 4] } else { [4, 4, 4, 12] })
         .width(Length::Fill)
         .height(Length::Fill)
         .align_y(Alignment::Center)
@@ -332,21 +392,30 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
 fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>, label: Option<(Handle, String, bool)>) -> Element<'a, Message> {
     let active = b.active();
     let badge = shell.badge_for(&b.app).copied().unwrap_or_default();
+    let vertical = shell.vertical();
+    // The running line is 3 px thick on the bar's inner edge: along the
+    // bottom on a horizontal bar, up and down on a side bar (#41).
+    let (long, short) = (|n: f32| if vertical { (3.0, n) } else { (n, 3.0) }, 3.0_f32);
+    let _ = short;
+    let space = |n: f32| {
+        let (w, h) = long(n);
+        widget::Space::new().width(w).height(h)
+    };
     let indicator: Element<'_, Message> = if let Some(p) = badge.progress() {
-        // Progress replaces the running line, like the benchmark.
+        // Progress replaces the running line.
         let fill = (24.0 * p).round().max(2.0);
-        container(container(widget::Space::new().width(fill).height(3)).class(style::progress_fill()))
-            .width(24)
+        let (tw, th) = long(24.0);
+        container(container(space(fill)).class(style::progress_fill()))
+            .width(tw)
+            .height(th)
             .class(style::progress_track())
             .into()
     } else if b.urgent() || badge.urgent {
-        container(widget::Space::new().width(16).height(3)).class(style::urgent_indicator()).into()
+        container(space(16.0)).class(style::urgent_indicator()).into()
     } else if b.running() {
-        container(widget::Space::new().width(if active { 16 } else { 6 }).height(3))
-            .class(style::indicator(active))
-            .into()
+        container(space(if active { 16.0 } else { 6.0 })).class(style::indicator(active)).into()
     } else {
-        widget::Space::new().width(6).height(3).into()
+        space(6.0).into()
     };
 
     // The icon sits dead centre (equal space on all four sides, like Start
@@ -394,9 +463,24 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>, label: Opt
         container(indicator)
             .width(Length::Fill)
             .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::End)
-            .padding([0, 0, 1, 0])
+            .align_x(match shell.config.position {
+                TaskbarPosition::Left => Alignment::Start,
+                TaskbarPosition::Right => Alignment::End,
+                _ => Alignment::Center,
+            })
+            .align_y(if vertical {
+                Alignment::Center
+            } else if shell.top_bar() {
+                Alignment::Start
+            } else {
+                Alignment::End
+            })
+            .padding(match shell.config.position {
+                TaskbarPosition::Top => [1, 0, 0, 0],
+                TaskbarPosition::Left => [0, 0, 0, 1],
+                TaskbarPosition::Right => [0, 1, 0, 0],
+                TaskbarPosition::Bottom => [0, 0, 1, 0],
+            })
             .into(),
     );
     let content = cosmic::iced::widget::Stack::with_children(layers).width(Length::Fill).height(Length::Fill);
@@ -691,6 +775,14 @@ fn taskbar_menu(shell: &Shell, popup: cosmic::iced::window::Id) -> Element<'_, M
     let center = shell.config.alignment == TaskbarAlignment::Center;
     items.push(menu_check("Center taskbar icons", center, Message::TaskbarOption(O::Align(TaskbarAlignment::Center))));
     items.push(menu_check("Left-align taskbar icons", !center, Message::TaskbarOption(O::Align(TaskbarAlignment::Left))));
+    for (label, p) in [
+        ("Taskbar at the bottom", TaskbarPosition::Bottom),
+        ("Taskbar at the top", TaskbarPosition::Top),
+        ("Taskbar on the left", TaskbarPosition::Left),
+        ("Taskbar on the right", TaskbarPosition::Right),
+    ] {
+        items.push(menu_check(label, shell.config.position == p, Message::TaskbarOption(O::Position(p))));
+    }
     items.push(menu_divider());
     items.push(menu_check("Automatically hide the taskbar", shell.config.auto_hide, Message::TaskbarOption(O::ToggleAutoHide)));
     items.push(menu_check("Show Search box", shell.config.show_search, Message::TaskbarOption(O::ToggleSearch)));

@@ -272,6 +272,7 @@ impl Shell {
         if self.desktop.is_some() {
             return Task::none();
         }
+        let free = self.free_size(size);
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
         let dir = model::desktop_dir(&home, &config);
@@ -280,9 +281,9 @@ impl Shell {
         self.desktop = Some(DesktopView {
             id,
             output: output.clone(),
-            width: size.0 as f32,
-            // The taskbar reserves its height; the surface gets the rest.
-            height: size.1.saturating_sub(crate::style::taskbar_height()) as f32,
+            // The taskbar reserves its height (or width on a side bar); the surface gets the rest.
+            width: free.0 as f32,
+            height: free.1 as f32,
             dir,
             items: Vec::new(),
             stamp: None,
@@ -315,6 +316,12 @@ impl Shell {
         })
     }
 
+    /// The output's size minus what the taskbar reserves (#41).
+    fn free_size(&self, size: (u32, u32)) -> (u32, u32) {
+        let t = self.bar_thickness();
+        if self.vertical() { (size.0.saturating_sub(t), size.1) } else { (size.0, size.1.saturating_sub(t)) }
+    }
+
     pub(crate) fn destroy_desktop(&mut self) -> Task<Message> {
         match self.desktop.take() {
             Some(d) => destroy_layer_surface(d.id),
@@ -323,11 +330,22 @@ impl Shell {
     }
 
     pub(crate) fn desktop_resized(&mut self, output: &WlOutput, size: (u32, u32)) {
+        let free = self.free_size(size);
         if let Some(d) = &mut self.desktop
             && &d.output == output
         {
-            d.width = size.0 as f32;
-            d.height = size.1.saturating_sub(crate::style::taskbar_height()) as f32;
+            d.width = free.0 as f32;
+            d.height = free.1 as f32;
+        }
+    }
+
+    /// The taskbar moved or changed thickness: recompute the desktop's free
+    /// area from its output's size, so icons are laid out for the new edge.
+    pub(crate) fn refresh_desktop_size(&mut self) {
+        let Some(output) = self.desktop.as_ref().map(|d| d.output.clone()) else { return };
+        let size = self.bars.iter().find(|b| b.output == output).and_then(|b| Some((b.output_width?, b.output_height?)));
+        if let Some(size) = size {
+            self.desktop_resized(&output, size);
         }
     }
 

@@ -29,7 +29,7 @@ Lapin UX is built so there is nothing to learn: the taskbar, Start menu with sea
 
 ## Features
 
-- **Where things are.** Taskbar along the bottom, Start in the centre, quick settings and the clock at the right.
+- **Where things are.** Taskbar along the bottom (or the top, left or right edge if you prefer), Start in the centre, quick settings and the clock at the right.
 - **How things behave.** Click to open or minimise, right-click for recent files, drag to snap, Alt+Tab with live thumbnails.
 - **Keys you already know.** Alt+Tab, Alt+F4, Ctrl+Shift+Esc, Ctrl+Alt+Del and the Super key shortcuts.
 - **No setup chores.** One installer, everyday tasks in Settings instead of config files.

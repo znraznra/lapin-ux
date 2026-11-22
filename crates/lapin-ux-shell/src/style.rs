@@ -24,6 +24,11 @@ pub fn taskbar_height() -> u32 {
     if small_taskbar() { 40 } else { 48 }
 }
 
+/// Width of a taskbar on the left or right edge: one task icon plus padding (#41).
+pub fn taskbar_width() -> u32 {
+    if small_taskbar() { 48 } else { 56 }
+}
+
 pub fn task_button() -> f32 {
     if small_taskbar() { 32.0 } else { 40.0 }
 }
