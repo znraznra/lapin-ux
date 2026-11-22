@@ -31,6 +31,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
 | Sun 22 Nov | Explorer pop-ups (new item, rename, delete, replace, errors) in Lapin's design, stage 1 (#163). | Retest |
+| Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 
 ## Phase dates
 
