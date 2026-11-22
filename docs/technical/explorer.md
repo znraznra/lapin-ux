@@ -179,3 +179,17 @@ return as soon as the window has room again, since the rule is worked out from
 the current width every time the window is drawn, not from a stored flag. Pages
 you opened yourself from the command bar (History, Options, About) stay. This is
 Lapin-only (`config::lapin_session()`); COSMIC's own session is stock.
+
+## Name and About (#173)
+
+In a Lapin session the app is called **Explorer** everywhere: the window title
+in `update_title`, and Start, search, the taskbar, Alt+Tab and Task Manager
+through `lapin_names()` in `crates/lapin-ux-shell/src/catalog.rs` (the shared
+`.desktop` file keeps "COSMIC Files", so COSMIC's own session is untouched).
+The menu item reads "About Lapin Explorer" and the About page names Lapin
+Explorer, its version (from `/usr/share/lapin-ux/version`), the Lapin UX and
+support links, and credits COSMIC Files by System76 (GPL-3.0-only). No
+developer contact is listed because the About widget turns those into mail
+links. The Explorer app icon is not part of this change. Patch
+`packaging/lapin-ux-files/0034-*`; outside a Lapin session both strings and the
+About page are stock.
