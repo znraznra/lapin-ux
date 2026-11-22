@@ -185,6 +185,18 @@ as it is and logged, and the final folder cleanup no longer reports
 Lapin-only (`config::lapin_session()`). Still open under #172: a folder-level
 merge / keep both / skip question, and one shared conflict dialog with the desktop.
 
+## Properties window size and tabs (#171)
+
+In a Lapin session the Properties window opens at one fixed size (590 by 820,
+minimum and maximum the same, not resizable), the usual way. The General and
+Security tabs use the same tab bar as Explorer's own tabs (`lapin_props_tabs`,
+a `segmented_button` model; `Message::LapinPropertiesTab` carries the entity).
+Only the page scrolls: the tab bar and OK, Cancel and Apply stay in place,
+because the Lapin arm of `view_window` returns early without the outer
+scrollable that wraps every other window. COSMIC's own session keeps its
+resizable window (`config::lapin_session()`). Patch:
+`packaging/lapin-ux-files/0034`.
+
 ## Name and About (#173)
 
 In a Lapin session the app is called **Explorer** everywhere: the window title
