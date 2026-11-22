@@ -38,7 +38,7 @@ a change to one area only touches that file.
 - [Look and sound](technical/look-and-sound.md): Text rendering, sounds and pointers.
 - [Explorer and file dialogs](technical/explorer.md): The Explorer (`lapin-explorer`) and the Open/Save dialogs.
 - [Session and first-run defaults](technical/session.md): The session (`lapin-ux-session`) and the defaults written on first run.
-- Static analysis: `.github/workflows/codeql.yml` (CodeQL for Rust and Python, no build) and `.github/workflows/semgrep.yml` (Semgrep `p/default` and `p/secrets`) upload findings to the Security tab. They only report and are not blocking until the first findings are triaged.
+- Static analysis: CodeQL runs through the repository's default setup (actions, Python and Rust), not a workflow, because GitHub rejects advanced-workflow uploads while the default setup is on. `.github/workflows/semgrep.yml` (Semgrep `p/default` and `p/secrets`) uploads findings to the Security tab. Both only report and are not blocking until the first findings are triaged.
 
 ## Architecture
 
