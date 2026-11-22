@@ -477,7 +477,7 @@ fn removable_menu(shell: &Shell) -> Element<'_, Message> {
         if i > 0 {
             items.push(menu_divider());
         }
-        items.push(menu_item("drive-removable-media-symbolic", rm::eject_label(d), Message::RemovableEject(i)));
+        items.push(menu_item("drive-removable-media-symbolic", rm::eject_label(d), Message::RemovableEject(d.path.clone())));
         for v in rm::shown_volumes(d) {
             items.push(
                 container(text::body(rm::volume_name(v)).class(style::dim_text()))

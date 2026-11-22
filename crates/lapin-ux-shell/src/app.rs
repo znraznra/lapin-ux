@@ -210,7 +210,8 @@ pub enum Message {
     Removable(crate::removable::Event),
     RemovableClick(window::Id),
     RemovableSettings,
-    RemovableEject(usize),
+    /// The drive's UDisks object path, so a list update between render and click can't eject another drive.
+    RemovableEject(String),
     RemovableDone(String, Result<(), String>),
     /// Stable tray id, show inline on the taskbar.
     TrayPin(String, bool),
@@ -1785,8 +1786,8 @@ impl Shell {
                 let close = self.close_popup();
                 return Task::batch([close, self.open_settings("bluetooth")]);
             }
-            Message::RemovableEject(i) => {
-                let Some(drive) = self.removable.get(i).cloned() else { return Task::none() };
+            Message::RemovableEject(path) => {
+                let Some(drive) = self.removable.iter().find(|d| d.path == path).cloned() else { return self.close_popup() };
                 let name = lapin_ux_core::removable::drive_name(&drive.props);
                 let close = self.close_popup();
                 return Task::batch([

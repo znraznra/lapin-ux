@@ -50,43 +50,59 @@ async fn proxy<'a>(conn: &Connection, path: &'a str, iface: &'a str) -> zbus::Re
 pub fn subscription() -> Subscription<Event> {
     Subscription::run(|| {
         stream::channel(4, move |mut out: futures::channel::mpsc::Sender<Event>| async move {
-            let conn = match Connection::system().await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("removable: no system bus: {e}");
-                    return futures::future::pending().await;
-                }
-            };
-            let rules = [
-                MatchRule::builder().msg_type(zbus::message::Type::Signal).sender(UDISKS).map(|b| b.build()),
-                MatchRule::builder()
-                    .msg_type(zbus::message::Type::Signal)
-                    .sender("org.freedesktop.DBus")
-                    .and_then(|b| b.member("NameOwnerChanged"))
-                    .and_then(|b| b.add_arg(UDISKS))
-                    .map(|b| b.build()),
-            ];
-            let mut streams = Vec::new();
-            for rule in rules.into_iter().flatten() {
-                match MessageStream::for_match_rule(rule, &conn, Some(64)).await {
-                    Ok(st) => streams.push(st),
-                    Err(e) => tracing::debug!("removable: match rule: {e}"),
-                }
-            }
-            let mut signals = futures::stream::select_all(streams);
+            // Reconnect after a bounded delay when the bus is unreachable or
+            // the signal streams end, rebuilding the connection each time.
             loop {
-                // No UDisks2 (not running yet): keep the last list, try again on the next signal.
-                if let Some(drives) = snapshot(&conn).await {
-                    let _ = out.send(Event::Drives(drives)).await;
-                }
-                if signals.next().await.is_none() {
-                    return futures::future::pending().await;
-                }
-                tokio::time::sleep(Duration::from_millis(350)).await;
-                while let Some(Some(_)) = signals.next().now_or_never() {}
+                watch(&mut out).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         })
     })
+}
+
+/// One connection's worth of watching. Returns when the bus can't be reached
+/// or the signal streams end.
+async fn watch(out: &mut futures::channel::mpsc::Sender<Event>) {
+    let conn = match Connection::system().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("removable: no system bus: {e}");
+            return;
+        }
+    };
+    let rules = [
+        MatchRule::builder().msg_type(zbus::message::Type::Signal).sender(UDISKS).map(|b| b.build()),
+        MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender("org.freedesktop.DBus")
+            .and_then(|b| b.member("NameOwnerChanged"))
+            .and_then(|b| b.add_arg(UDISKS))
+            .map(|b| b.build()),
+    ];
+    let mut streams = Vec::new();
+    for rule in rules.into_iter().flatten() {
+        match MessageStream::for_match_rule(rule, &conn, Some(64)).await {
+            Ok(st) => streams.push(st),
+            Err(e) => tracing::debug!("removable: match rule: {e}"),
+        }
+    }
+    if streams.is_empty() {
+        return;
+    }
+    let mut signals = futures::stream::select_all(streams);
+    loop {
+        // No UDisks2 (not running yet): keep the last list, try again on the next signal.
+        if let Some(drives) = snapshot(&conn).await {
+            if out.send(Event::Drives(drives)).await.is_err() {
+                return futures::future::pending().await;
+            }
+        }
+        if signals.next().await.is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        while let Some(Some(_)) = signals.next().now_or_never() {}
+    }
 }
 
 async fn managed(conn: &Connection) -> Option<Managed> {
@@ -111,6 +127,7 @@ fn drives_from(objs: &Managed) -> Vec<Drive> {
             ejectable: get(d, "Ejectable").unwrap_or(false),
             can_power_off: get(d, "CanPowerOff").unwrap_or(false),
             media_removable: get(d, "MediaRemovable").unwrap_or(false),
+            no_media: !get(d, "MediaAvailable").unwrap_or(true),
             optical: compat.iter().any(|c| c.starts_with("optical_")),
         };
         if core::is_listed(&props) {

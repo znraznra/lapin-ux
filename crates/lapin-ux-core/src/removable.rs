@@ -18,6 +18,9 @@ pub struct DriveProps {
     pub ejectable: bool,
     pub can_power_off: bool,
     pub media_removable: bool,
+    /// A removable-media reader (card slot) with no card in it: not listed.
+    /// UDisks `MediaAvailable` is false. Unformatted media still counts as media.
+    pub no_media: bool,
     /// CD/DVD drives (`MediaCompatibility` has an `optical_*` entry): not listed.
     /// Phones (MTP) and network shares never appear in UDisks2 drives at all.
     pub optical: bool,
@@ -66,7 +69,7 @@ pub enum Remove {
 /// are left out.
 pub fn is_listed(p: &DriveProps) -> bool {
     let bus_ok = matches!(p.bus.as_str(), "usb" | "sdio");
-    bus_ok && !p.optical && (p.removable || p.ejectable || p.can_power_off || p.media_removable)
+    bus_ok && !p.optical && !(p.media_removable && p.no_media) && (p.removable || p.ejectable || p.can_power_off || p.media_removable)
 }
 
 /// `PowerOff` for a USB drive that supports it, `Eject` for a reader whose
@@ -195,6 +198,14 @@ mod tests {
             can_power_off: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn empty_card_reader_is_not_listed() {
+        let empty = DriveProps { bus: "usb".into(), media_removable: true, ejectable: true, no_media: true, ..Default::default() };
+        assert!(!is_listed(&empty));
+        let loaded = DriveProps { no_media: false, ..empty };
+        assert!(is_listed(&loaded));
     }
 
     #[test]
