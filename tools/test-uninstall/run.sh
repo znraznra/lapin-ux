@@ -121,11 +121,12 @@ check "GTK icons: the newer GNOME choice comes back" "[ \"\$(rd icon-theme)\" = 
 check "GTK font back to Cantarell" "[ \"\$(rd font-name)\" = \"'Cantarell 11'\" ]"
 echo "   leave is skipped while Lapin's shell runs"
 bash $DS enter
-mkdir -p /tmp/ut-$$; cp /bin/sleep /tmp/ut-$$/lapin-ux-shell
-/tmp/ut-$$/lapin-ux-shell 30 & sp=$!
+# a script, not a copied sleep: its process name is the file's (what pgrep -x matches) and no multicall coreutils is involved
+d=$(mktemp -d); printf '#!/bin/sh\nsleep 30 &\ntrap "kill \$!" TERM\nwait\n' > "$d/lapin-ux-shell"; chmod +x "$d/lapin-ux-shell"
+"$d/lapin-ux-shell" & sp=$!
 sleep 0.3; bash $DS leave
 check "nothing changed under a running Lapin" "[ \"\$(rd font-name)\" = \"'Selawik 10'\" ]"
-kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -rf /tmp/ut-$$
+kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -rf "$d"
 echo "   tester picks Papirus inside Lapin; GNOME keeps Adwaita"
 dconf write /org/gnome/desktop/interface/icon-theme "'Papirus'"
 bash $DS leave
