@@ -9,16 +9,25 @@ set -e
 # Opened first, so a failure anywhere below is recorded (#100: under greetd the
 # script ended before the log existed and left no trace). The re-exec through the
 # login shell below appends to the same file instead of rotating it again.
+#
+# The log is a convenience, never a requirement (#174): on a full disk, a
+# read-only home or a broken state folder the session starts without one, and
+# a log line that can't be written never ends the script (set -e would).
+say() { echo "$@" || true; }
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
 if mkdir -p "$LOG_DIR" 2>/dev/null; then
     if [ "${1}" != "--in-login-shell" ] && [ -f "$LOG_DIR/session.log" ]; then
-        mv -f "$LOG_DIR/session.log" "$LOG_DIR/session.previous.log"
+        mv -f "$LOG_DIR/session.log" "$LOG_DIR/session.previous.log" 2>/dev/null || true
     fi
-    exec >>"$LOG_DIR/session.log" 2>&1
+    # Open it once as a test first (in a subshell): a failed redirection on exec,
+    # or on any special builtin, ends a POSIX shell.
+    if ( : >>"$LOG_DIR/session.log" ) 2>/dev/null; then
+        exec >>"$LOG_DIR/session.log" 2>&1
+    fi
 fi
 # shellcheck disable=SC2154
-trap 'rc=$?; [ "$rc" = 0 ] || echo "start-lapin-ux stopped (exit $rc), last step: ${STEP:-start}"' EXIT
-echo "=== Lapin UX session start $(date -Iseconds) (pid $$, shell ${SHELL:-none}, args: $*) ==="
+trap 'rc=$?; [ "$rc" = 0 ] || say "start-lapin-ux stopped (exit $rc), last step: ${STEP:-start}"' EXIT
+say "=== Lapin UX session start $(date -Iseconds) (pid $$, shell ${SHELL:-none}, args: $*) ==="
 
 # Right after sign-in (greetd, unlike GDM) the user's systemd manager can still
 # be coming up; wait a few seconds for it, and never let a missing one stop the
@@ -38,7 +47,7 @@ if command -v systemctl >/dev/null && [ "${1}" != "--in-login-shell" ]; then
     deadline=$(( $(date +%s) + 5 ))
     until probe; do
         if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "warning: the user's systemd manager did not answer after 5 s"
+            say "warning: the user's systemd manager did not answer after 5 s"
             break
         fi
         sleep 0.1
@@ -147,14 +156,14 @@ fi
 
 STEP="importing the environment"
 if command -v systemctl >/dev/null; then
-    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK || echo "warning: could not hand the environment to systemd"
+    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP SSH_AUTH_SOCK || say "warning: could not hand the environment to systemd"
     if [ -n "${FONTCONFIG_FILE:-}" ]; then systemctl --user import-environment FONTCONFIG_FILE || true; fi
     if [ -n "${XCURSOR_SIZE:-}" ]; then systemctl --user import-environment XCURSOR_SIZE || true; fi
     if [ -n "${WGPU_BACKEND:-}" ]; then systemctl --user import-environment WGPU_BACKEND || true; fi
 fi
 STEP="starting the session"
 
-echo "graphics: WGPU_BACKEND=${WGPU_BACKEND:-default}"
+say "graphics: WGPU_BACKEND=${WGPU_BACKEND:-default}"
 pacman -Q lapin-ux-desktop-git 2>/dev/null || true   # which build this is
 # Crash reports with a backtrace (each Lapin program also writes
 # crash-<program>.txt next to this log). Set here because the login shell
@@ -180,7 +189,7 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
 else
     lapin-ux-session || status=$?
 fi
-echo "=== Lapin UX session end $(date -Iseconds) (status $status) ==="
+say "=== Lapin UX session end $(date -Iseconds) (status $status) ==="
 rm -f "$MARK"
 LAPIN_UX_SESSION_END=1 lapin-ux-desktop-settings leave || true
 exit "$status"
