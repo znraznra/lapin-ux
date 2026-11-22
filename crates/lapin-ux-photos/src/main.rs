@@ -92,21 +92,42 @@ struct Photo {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Scanned(Vec<Photo>),
+    Scanned(Scan),
     Section(Section),
     Thumb(PathBuf, Option<Handle>),
     Open(PathBuf),
     Full(PathBuf, Option<Handle>),
+    /// A full-size decode that was skipped because the picture is no longer open.
+    Ignore,
+    Retry,
     Back,
     Prev,
     Next,
     ToggleFavorite(PathBuf),
 }
 
+/// Full-size decodes allowed at once, so paging quickly through a folder queues
+/// work instead of decoding every picture in parallel.
+static FULL_DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+/// The picture the viewer wants now; queued decodes of any other picture are dropped.
+static VIEWING: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+fn set_viewing(path: Option<PathBuf>) {
+    *VIEWING.lock().unwrap_or_else(|e| e.into_inner()) = path;
+}
+
+fn still_viewing(path: &Path) -> bool {
+    VIEWING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(path)
+}
+
 struct App {
     core: Core,
     photos: Vec<Photo>,
     scanning: bool,
+    /// What the last scan could not do, shown above the grid.
+    notice: Option<String>,
+    /// The picture whose full-size decode failed.
+    failed: Option<PathBuf>,
     section: Section,
     thumbs: HashMap<PathBuf, Handle>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
@@ -123,29 +144,58 @@ fn favorites_file() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join(APP_ID).join("favorites.json"))
 }
 
-fn load_favorites() -> HashSet<PathBuf> {
-    let Some(file) = favorites_file() else { return HashSet::new() };
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Vec<PathBuf>>(&s).ok())
-        .map(|v| v.into_iter().collect())
-        .unwrap_or_default()
+/// The saved favorites. A missing file is an empty list; a file that cannot be
+/// read or understood is an error, so it is never overwritten by accident.
+fn read_favorites(file: &Path) -> std::io::Result<HashSet<PathBuf>> {
+    match std::fs::read_to_string(file) {
+        Ok(s) => serde_json::from_str::<Vec<PathBuf>>(&s)
+            .map(|v| v.into_iter().collect())
+            .map_err(std::io::Error::other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashSet::new()),
+        Err(e) => Err(e),
+    }
 }
 
-fn save_favorites(set: &HashSet<PathBuf>) {
-    let Some(file) = favorites_file() else { return };
+fn load_favorites() -> HashSet<PathBuf> {
+    let Some(file) = favorites_file() else { return HashSet::new() };
+    read_favorites(&file).unwrap_or_else(|e| {
+        tracing::warn!("could not read favorites: {e}");
+        HashSet::new()
+    })
+}
+
+/// Writes the list next to the real file and renames it over it, so a full disk
+/// or a crash halfway leaves the previous list in place.
+fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
     let mut list: Vec<&PathBuf> = set.iter().collect();
     list.sort();
-    // A full disk or a read-only home must not end the program (#174).
-    let result = (|| -> std::io::Result<()> {
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(&file, serde_json::to_vec_pretty(&list).unwrap_or_default())
-    })();
-    if let Err(e) = result {
-        tracing::warn!("could not save favorites: {e}");
+    let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!("favorites.json.{}.tmp", std::process::id()));
+    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, file));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
+    result
+}
+
+/// Stars or unstars one photo and returns the list as saved. The list is read
+/// again under a lock first, so two Photos windows never undo each other's change.
+fn set_favorite(path: &Path, on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    let file = favorites_file().ok_or_else(|| std::io::Error::other("no config folder"))?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("favorites.lock"))?;
+    lock.lock()?; // released when `lock` is dropped
+    let mut set = read_favorites(&file)?;
+    if on {
+        set.insert(path.to_path_buf());
+    } else {
+        set.remove(path);
+    }
+    write_favorites(&file, &set)?;
+    Ok(set)
 }
 
 fn is_photo(path: &Path) -> bool {
@@ -154,20 +204,53 @@ fn is_photo(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-/// Every picture under the usual folders, newest first. Hidden folders are skipped,
-/// and the walk is bounded so a huge Documents tree cannot stall the app.
-fn scan() -> Vec<Photo> {
+/// What a scan found, and what it could not look at.
+#[derive(Debug, Clone, Default)]
+struct Scan {
+    photos: Vec<Photo>,
+    /// Folders or entries that could not be read (permissions, a vanished drive).
+    unreadable: usize,
+    /// The walk stopped at `MAX_PHOTOS`.
+    truncated: bool,
+}
+
+fn sort_photos(photos: &mut [Photo]) {
+    photos.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
+}
+
+/// Every picture under the usual folders, newest first, plus the starred pictures
+/// that live elsewhere. Hidden folders are skipped, and the walk is bounded so a
+/// huge Documents tree cannot stall the app.
+fn scan(favorites: HashSet<PathBuf>) -> Scan {
     let mut found: Vec<Photo> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    for section in [Section::Pictures, Section::Downloads, Section::Desktop, Section::Documents] {
+    let mut unreadable = 0usize;
+    let mut truncated = false;
+    'walk: for section in [Section::Pictures, Section::Downloads, Section::Desktop, Section::Documents] {
         let Some(root) = section.dir() else { continue };
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-            for entry in entries.flatten() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                // A folder that is not there is not a problem; one we may not open is.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    tracing::warn!("could not read {}: {e}", dir.display());
+                    unreadable += 1;
+                    continue;
+                }
+            };
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    unreadable += 1;
+                    continue;
+                };
                 let path = entry.path();
                 let hidden = entry.file_name().to_string_lossy().starts_with('.');
-                let Ok(kind) = entry.file_type() else { continue };
+                let Ok(kind) = entry.file_type() else {
+                    unreadable += 1;
+                    continue;
+                };
                 if kind.is_dir() {
                     if !hidden && depth < MAX_DEPTH {
                         stack.push((path, depth + 1));
@@ -177,13 +260,25 @@ fn scan() -> Vec<Photo> {
                     found.push(Photo { path, modified });
                 }
                 if found.len() >= MAX_PHOTOS {
-                    break;
+                    truncated = true;
+                    break 'walk;
                 }
             }
         }
     }
-    found.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
-    found
+    // Starred pictures outside the folders above still belong in Favorites.
+    for path in favorites {
+        if seen.contains(&path) || !is_photo(&path) {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.is_file() {
+                found.push(Photo { path, modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH) });
+            }
+        }
+    }
+    sort_photos(&mut found);
+    Scan { photos: found, unreadable, truncated }
 }
 
 /// Opens a picture upright, as the camera meant it (EXIF rotation).
@@ -272,7 +367,9 @@ impl App {
 
     fn open(&mut self, path: PathBuf) -> Task<Message> {
         self.viewing = Some(path.clone());
+        set_viewing(Some(path.clone()));
         self.full = None;
+        self.failed = None;
         let near = self.neighbours(&path, 6);
         let thumbs = self.want_thumbs(near);
         let name = file_name(&path);
@@ -282,6 +379,13 @@ impl App {
         };
         let full = Task::future(async move {
             let key = path.clone();
+            let Ok(_permit) = FULL_DECODES.acquire().await else {
+                return cosmic::Action::App(Message::Full(key, None));
+            };
+            // Paged past or closed while waiting for a turn: skip the decode.
+            if !still_viewing(&key) {
+                return cosmic::Action::App(Message::Ignore);
+            }
             let h = tokio::task::spawn_blocking(move || load_full(path)).await.ok().flatten();
             cosmic::Action::App(Message::Full(key, h))
         });
@@ -317,7 +421,9 @@ impl App {
 
     fn back(&mut self) -> Task<Message> {
         self.viewing = None;
+        set_viewing(None);
         self.full = None;
+        self.failed = None;
         match self.core.main_window_id() {
             Some(id) => self.set_window_title("Photos".into(), id),
             None => Task::none(),
@@ -344,6 +450,8 @@ impl cosmic::Application for App {
             core,
             photos: Vec::new(),
             scanning: true,
+            notice: None,
+            failed: None,
             section: Section::Gallery,
             thumbs: HashMap::new(),
             asked: HashSet::new(),
@@ -356,9 +464,10 @@ impl cosmic::Application for App {
             Some(id) => app.set_window_title("Photos".into(), id),
             None => Task::none(),
         };
-        let scan = Task::future(async {
-            let photos = tokio::task::spawn_blocking(scan).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(photos))
+        let starred = app.favorites.clone();
+        let scan = Task::future(async move {
+            let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
+            cosmic::Action::App(Message::Scanned(found))
         });
         (app, Task::batch([title, scan]))
     }
@@ -386,8 +495,16 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Scanned(photos) => {
-                self.photos = photos;
+            Message::Scanned(found) => {
+                self.notice = match (found.unreadable, found.truncated) {
+                    (0, false) => None,
+                    (0, true) => Some(format!("Showing the first {MAX_PHOTOS} pictures found.")),
+                    (n, false) => Some(format!("{n} folder(s) could not be read, so some pictures may be missing.")),
+                    (n, true) => Some(format!(
+                        "Showing the first {MAX_PHOTOS} pictures found, and {n} folder(s) could not be read."
+                    )),
+                };
+                self.photos = found.photos;
                 self.scanning = false;
                 let tiles = self.want_section_thumbs();
                 // A picture handed over by Files opens straight in the viewer.
@@ -416,7 +533,22 @@ impl cosmic::Application for App {
             Message::Open(path) => return self.open(path),
             Message::Full(path, handle) => {
                 if self.viewing.as_deref() == Some(path.as_path()) {
-                    self.full = handle.map(|h| (path, h));
+                    match handle {
+                        Some(h) => {
+                            self.failed = None;
+                            self.full = Some((path, h));
+                        }
+                        None => {
+                            self.full = None;
+                            self.failed = Some(path);
+                        }
+                    }
+                }
+            }
+            Message::Ignore => {}
+            Message::Retry => {
+                if let Some(path) = self.viewing.clone() {
+                    return self.open(path);
                 }
             }
             Message::Back => {
@@ -427,10 +559,20 @@ impl cosmic::Application for App {
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
-                if !self.favorites.remove(&path) {
-                    self.favorites.insert(path);
+                let on = !self.favorites.contains(&path);
+                // A full disk or a read-only home must not end the program (#174).
+                match set_favorite(&path, on) {
+                    // The saved list already holds changes made in other windows.
+                    Ok(saved) => self.favorites = saved,
+                    Err(e) => {
+                        tracing::warn!("could not save favorites: {e}");
+                        if on {
+                            self.favorites.insert(path);
+                        } else {
+                            self.favorites.remove(&path);
+                        }
+                    }
                 }
-                save_favorites(&self.favorites);
             }
         }
         Task::none()
@@ -474,16 +616,23 @@ impl App {
         let body: Element<'_, Message> = if self.scanning {
             container(text::body("Looking for your pictures...")).center(Length::Fill).into()
         } else if shown.is_empty() {
-            let msg = match self.section {
-                Section::Favorites => "No favorites yet. Open a photo and press the star.",
+            let msg = match (self.section, self.notice.is_some()) {
+                (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
+                (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };
             container(text::body(msg)).center(Length::Fill).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
+            if let Some(notice) = &self.notice {
+                col = col.push(text::caption(notice.as_str()));
+            }
+            if shown.len() > MAX_TILES {
+                col = col.push(text::caption(format!("Showing the newest {MAX_TILES} of {} pictures.", shown.len())));
+            }
             let mut last = String::new();
             let mut tiles: Vec<Element<'_, Message>> = Vec::new();
-            for photo in shown {
+            for photo in shown.into_iter().take(MAX_TILES) {
                 let heading = date_heading(photo.modified);
                 if heading != last {
                     if !tiles.is_empty() {
@@ -535,6 +684,15 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
+            _ if self.failed.as_deref() == Some(path) => container(
+                column::with_capacity(2)
+                    .spacing(12)
+                    .align_x(Alignment::Center)
+                    .push(text::body("This picture could not be opened."))
+                    .push(button::standard("Try again").on_press(Message::Retry)),
+            )
+            .center(Length::Fill)
+            .into(),
             _ => container(text::body("Opening...")).center(Length::Fill).into(),
         };
 
