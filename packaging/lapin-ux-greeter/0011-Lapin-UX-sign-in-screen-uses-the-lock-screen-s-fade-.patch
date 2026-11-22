@@ -1,0 +1,144 @@
+From 279bbd1c543a635a38665220d7aedb3b499573c0 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:44:57 +0800
+Subject: [PATCH] Lapin UX: sign-in screen uses the lock screen's fade and
+ corner spacing (#120)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/greeter.rs | 32 +++++++++++++++++++++++++-------
+ 1 file changed, 25 insertions(+), 7 deletions(-)
+
+diff --git a/src/greeter.rs b/src/greeter.rs
+index cfc69df..3053fe1 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -431,6 +431,8 @@ pub enum Message {
+     WaylandUpdate(WaylandUpdate),
+     /// Lapin UX: leave the clock face for the sign-in panel.
+     Reveal,
++    /// Lapin UX: a frame of the panel's appear/disappear fade (#120).
++    FadeFrame,
+ }
+ 
+ impl From<common::Message> for Message {
+@@ -462,6 +464,8 @@ pub struct App {
+     authenticating: bool,
+     /// Lapin UX: the sign-in panel is showing (else the clock face).
+     signing_in: bool,
++    /// Lapin UX: the same 200 ms fade the lock screen uses (#120).
++    fade: crate::lapin::Fade,
+ }
+ 
+ #[derive(Default)]
+@@ -975,8 +979,9 @@ impl App {
+         };
+         let _ = on_white;
+         let scale = crate::lapin::scale(self.common.window_size.get(&id).map_or(1080.0, |s| s.height));
++        let plain_face = matches!(selected, Some((d, _)) if !self.entering_name && d.lapin_lock.plain_signin);
+         let menu: Element<'_, Message> = if !self.signing_in {
+-            crate::lapin::lock_face(
++            let face = crate::lapin::lock_face(
+                 crate::lapin::short_time(&self.common.time.format_time(military_time), military_time),
+                 self.common.time.format_date(),
+                 widget::container(status_row)
+@@ -988,7 +993,8 @@ impl App {
+                     .into(),
+                 Message::Reveal,
+                 scale,
+-            )
++            );
++            crate::lapin::fading(face, self.fade.progress(), plain_face)
+         } else {
+             // Other people who can sign in, bottom left (Windows' user list).
+             let mut users = widget::column::with_capacity(self.flags.user_datas.len()).spacing(4.0);
+@@ -1025,9 +1031,9 @@ impl App {
+                 _ => (String::new(), crate::lapin::avatar(None, crate::lapin::PICTURE * scale)),
+             };
+             let corner = widget::row::with_capacity(2)
++                .spacing(8.0)
+                 .push(
+                     widget::container(status_row)
+-                        .padding([0, 12, 0, 0])
+                         .class(theme::Container::custom(|_| widget::container::Style {
+                             text_color: Some(iced::Color::WHITE),
+                             icon_color: Some(iced::Color::WHITE),
+@@ -1036,7 +1042,7 @@ impl App {
+                 )
+                 .push(button_row)
+                 .align_y(Alignment::Center);
+-            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale, plain, 1.0)
++            crate::lapin::sign_in(picture, name, right_element.into(), widget::space::vertical().height(Length::Fixed(0.0)).into(), users.into(), corner.into(), scale, plain, self.fade.progress())
+         };
+         let menu = if let Some(t) = self.common.rectangle_tracker.as_ref() {
+             Element::from(t.container((id, false), menu))
+@@ -1198,7 +1204,7 @@ impl App {
+                 power,
+             ));
+         }
+-        row.spacing(4.0).align_y(Alignment::Center)
++        row.spacing(8.0).align_y(Alignment::Center)
+     }
+ }
+ 
+@@ -1300,6 +1306,7 @@ impl cosmic::Application for App {
+             surface_id_pairs: Vec::new(),
+             authenticating: false,
+             signing_in: false,
++            fade: Default::default(),
+         };
+         (app, Task::batch(tasks))
+     }
+@@ -1307,8 +1314,12 @@ impl cosmic::Application for App {
+     /// Handle application events here.
+     fn update(&mut self, message: Self::Message) -> Task<Message> {
+         match message {
++            Message::FadeFrame => {
++                self.fade.running();
++            }
+             Message::Reveal => {
+                 self.signing_in = true;
++                self.fade.set(true);
+                 if let Some(surface_id) = self.common.active_surface_id_opt
+                     && let Some(id) = self.common.surface_names.get(&surface_id).and_then(|n| self.common.text_input_ids.get(n))
+                 {
+@@ -1317,11 +1328,13 @@ impl cosmic::Application for App {
+             }
+             Message::Common(common::Message::Key(_, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), _)) if self.signing_in => {
+                 self.signing_in = false;
++                self.fade.set(false);
+                 self.dropdown_opt = None;
+             }
+             Message::Common(common_message) => {
+                 if matches!(common_message, common::Message::Key(..)) && !self.signing_in {
+                     self.signing_in = true;
++                    self.fade.set(true);
+                 }
+                 if matches!(&common_message, common::Message::Prompt(_, _, Some(_)))
+                     && self.authenticating
+@@ -2055,7 +2068,7 @@ impl cosmic::Application for App {
+     }
+ 
+     fn subscription(&self) -> Subscription<Self::Message> {
+-        Subscription::batch([
++        let mut subscriptions = vec![
+             self.common.subscription().map(Message::from),
+             ipc::subscription(),
+             wayland::a11y_subscription().map(Message::WaylandUpdate),
+@@ -2066,7 +2079,12 @@ impl cosmic::Application for App {
+                 }
+                 _ => None,
+             }),
+-        ])
++        ];
++        // Lapin UX: frames while the sign-in panel appears or goes (#120).
++        if self.fade.is_running() {
++            subscriptions.push(cosmic::iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::FadeFrame));
++        }
++        Subscription::batch(subscriptions)
+     }
+ }
+ 
+-- 
+2.56.1
+

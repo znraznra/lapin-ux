@@ -218,3 +218,14 @@ GDM do:
 `restore` removes it (and marks the sign-in screen as given back, so `refresh` leaves it alone even when the record stays for the boot animation). It can't be checked in the sandbox (no KMS or
 Plymouth), so it needs Tako's hardware. Tests: scenarios L to O in
 `tools/test-login/run.sh`.
+
+**Sign-in screen matches the lock screen (#120).** Both screens come from the
+same greeter fork and share `src/lapin.rs`, but only the lock screen animated:
+the sign-in panel popped in at full strength. The sign-in screen now owns the
+same `Fade` (200 ms, eased): clicking or pressing a key lifts the panel in and
+darkens the clock face behind it, Esc fades back, and a 16 ms frame
+subscription runs only while it moves. The corner buttons use the same 8 px
+spacing as the lock screen. The session, accessibility, keyboard layout and
+power flyouts stay, since signing in needs them. Patch
+`packaging/lapin-ux-greeter/0011`. Needs Tako's hardware: compare the
+clock-to-panel move on sign-in and on lock.
