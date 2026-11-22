@@ -86,6 +86,8 @@ pub struct App {
     pub quiet: quiet::Quiet,
     /// Ids for notices the daemon itself shows (focus session over…).
     local_id: u32,
+    /// Drives already warned about (low disk space, #174).
+    disk: lapin_ux_core::disk::Watch,
     /// Replies being typed, by notification.
     pub replies: std::collections::HashMap<u32, String>,
     /// Monitors: (output, connector name, "make model", position), for the
@@ -167,11 +169,17 @@ impl App {
 
     /// A notification from the desktop itself.
     pub(crate) fn local_notice(&mut self, summary: &str, body: &str) -> Task<Message> {
+        self.local_notice_as("Clock", "alarm-symbolic", "alarm-clock-elapsed", summary, body)
+    }
+
+    /// A notification from the desktop itself, under the name, icon and
+    /// sound of the part that sent it.
+    pub(crate) fn local_notice_as(&mut self, app: &str, icon: &str, sound: &str, summary: &str, body: &str) -> Task<Message> {
         self.local_id += 1;
         let n = Notification {
             id: 0xF000_0000 + self.local_id,
-            app_name: "Clock".into(),
-            app_icon: "alarm-symbolic".into(),
+            app_name: app.into(),
+            app_icon: icon.into(),
             summary: summary.into(),
             body: body.into(),
             actions: Vec::new(),
@@ -183,7 +191,7 @@ impl App {
             image: None,
             progress: None,
             reply: None,
-            sound: Some("alarm-clock-elapsed".into()),
+            sound: Some(sound.into()),
         };
         if let Some(sound) = &n.sound {
             play_sound(sound);
@@ -322,6 +330,7 @@ impl Application for App {
                 settings,
                 quiet,
                 local_id: 0,
+                disk: Default::default(),
                 replies: Default::default(),
                 outputs: Vec::new(),
             },

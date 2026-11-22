@@ -107,6 +107,16 @@
   **Focus sessions**. Clicking a notification opens its app.
 - Notification settings (gear): Do not disturb on a **schedule**, and per-app
   *Notifications* / *Show banners* switches.
+- **Low disk space warning** (#174): every 30 s the daemon reads the free
+  space of the root drive and the one holding the home folder (`df`, ten
+  second limit). A drive is low under 5 percent free, never above 10 GB and
+  always under 1 GB (`lapin_ux_core::disk`). A "Disk space is running low"
+  notice appears once per drive when it crosses that line, and is armed again
+  only after the drive has a fifth more than the limit free, so it never
+  repeats while the space stays low. A switch in the notification settings
+  (gear) turns it off; it is saved as `low_disk_warning` in
+  `dev.lapinux.Notifications`, so it needs no entry in `items()`. The daemon
+  only runs inside a Lapin session.
 - The clock shows a bell with the unread count, or a muted bell during
   Do not disturb. `lapin-ux-notifyd center` toggles the centre from scripts;
   `dev.lapinux.Notifications` on the session bus exposes `Unread`,
