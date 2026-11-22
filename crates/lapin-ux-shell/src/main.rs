@@ -36,6 +36,7 @@ mod properties;
 mod quick;
 mod pointer_gate;
 mod redraw_debug;
+mod removable;
 mod screen_reader;
 mod single;
 mod snap;
