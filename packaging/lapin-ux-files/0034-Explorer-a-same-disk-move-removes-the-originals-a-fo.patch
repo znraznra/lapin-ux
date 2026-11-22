@@ -1,0 +1,90 @@
+From 5bcf731a9f4e509590ab0a5bc38c3e36d15b9146 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:36:50 +0800
+Subject: [PATCH] Explorer: a same-disk move removes the originals, a folder
+ left with skipped items is not an error, plain move errors (#172)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/operation/recursive.rs | 51 ++++++++++++++++++++++++++++++--------
+ 1 file changed, 41 insertions(+), 10 deletions(-)
+
+diff --git a/src/operation/recursive.rs b/src/operation/recursive.rs
+index b3d16cf..99fa018 100644
+--- a/src/operation/recursive.rs
++++ b/src/operation/recursive.rs
+@@ -208,13 +208,28 @@ impl Context {
+             (self.on_progress)(&op, &progress);
+             if op.run(self, progress).await.map_err(|err| {
+                 OperationError::from_err(
+-                    format!(
+-                        "failed to {:?} {} to {}: {}",
+-                        op.kind,
+-                        op.from.display(),
+-                        op.to.display(),
+-                        err
+-                    ),
++                    if crate::config::lapin_session() {
++                        let verb = match op.kind {
++                            OpKind::Copy => "copy",
++                            OpKind::Move { .. } => "move",
++                            OpKind::Mkdir => "create the folder for",
++                            OpKind::Remove | OpKind::Rmdir => "remove",
++                            OpKind::Symlink { .. } => "link",
++                        };
++                        format!(
++                            "Couldn't {verb} \"{}\" to \"{}\": {err}",
++                            op.from.display(),
++                            op.to.display()
++                        )
++                    } else {
++                        format!(
++                            "failed to {:?} {} to {}: {}",
++                            op.kind,
++                            op.from.display(),
++                            op.to.display(),
++                            err
++                        )
++                    },
+                     &self.controller,
+                 )
+             })? {
+@@ -358,8 +373,10 @@ impl Op {
+                 return result;
+             }
+             OpKind::Move { cross_device_copy } => {
+-                // Do not clean up if cross_device_copy is set
+-                if cross_device_copy {
++                // Do not clean up if cross_device_copy is set. In a Lapin session
++                // a same-disk move still removes the originals (#172): the
++                // flag is only honoured once a real cross-device copy happens.
++                if cross_device_copy && !crate::config::lapin_session() {
+                     self.skipped.cleanup.set(true);
+                 }
+ 
+@@ -410,7 +427,21 @@ impl Op {
+                 compio::fs::remove_file(&self.from).await?;
+             }
+             OpKind::Rmdir => {
+-                compio::fs::remove_dir(&self.from).await?;
++                match compio::fs::remove_dir(&self.from).await {
++                    Ok(()) => {}
++                    // Lapin (#172): a source folder that still holds skipped
++                    // items is left as it is, not reported as a failure.
++                    Err(err)
++                        if crate::config::lapin_session()
++                            && matches!(err.raw_os_error(), Some(39) | Some(17)) =>
++                    {
++                        log::info!(
++                            "{} kept: it still has items that were skipped",
++                            self.from.display()
++                        );
++                    }
++                    Err(err) => return Err(err.into()),
++                }
+             }
+             OpKind::Symlink { ref target } => {
+                 // Remove `to` if overwriting and it is an existing file
+-- 
+2.56.1
+
