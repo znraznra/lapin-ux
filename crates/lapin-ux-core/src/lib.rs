@@ -26,6 +26,7 @@ pub mod nightlight;
 pub mod props;
 pub mod quick;
 pub mod recent;
+pub mod removable;
 pub mod search;
 pub mod services;
 pub mod snap;
