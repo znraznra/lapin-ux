@@ -171,3 +171,11 @@ item too, and the same empty message shows only while nothing is selected, inste
 of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
 (`config::lapin_session()`); COSMIC's own session is stock. Resizable and sortable
 Recent columns are not part of this change.
+
+**Narrow windows** (#151): the file list keeps at least 420 px. Below that
+(window width under 700 px with the 280 px navigation pane) the navigation pane
+hides, and the docked details pane (360 px) gives way first, under 1060 px. Both
+return as soon as the window has room again, since the rule is worked out from
+the current width every time the window is drawn, not from a stored flag. Pages
+you opened yourself from the command bar (History, Options, About) stay. This is
+Lapin-only (`config::lapin_session()`); COSMIC's own session is stock.
