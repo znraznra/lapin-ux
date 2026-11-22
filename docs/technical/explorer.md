@@ -189,3 +189,17 @@ confirms, Esc cancels and the Tab order is unchanged. In COSMIC's own session th
 same dialogs are built from COSMIC's own parts and look as before
 (`config::lapin_session()`). Still to do in later stages: the Open and Save
 dialogs, notifications, and the progress window's error and cancel states.
+
+## Name and About (#173)
+
+In a Lapin session the app is called **Explorer** everywhere: the window title
+in `update_title`, and Start, search, the taskbar, Alt+Tab and Task Manager
+through `lapin_names()` in `crates/lapin-ux-shell/src/catalog.rs` (the shared
+`.desktop` file keeps "COSMIC Files", so COSMIC's own session is untouched).
+The menu item reads "About Lapin Explorer" and the About page names Lapin
+Explorer, its version (from `/usr/share/lapin-ux/version`), the Lapin UX and
+support links, and credits COSMIC Files by System76 (GPL-3.0-only). No
+developer contact is listed because the About widget turns those into mail
+links. The Explorer app icon is not part of this change. Patch
+`packaging/lapin-ux-files/0034-*`; outside a Lapin session both strings and the
+About page are stock.
