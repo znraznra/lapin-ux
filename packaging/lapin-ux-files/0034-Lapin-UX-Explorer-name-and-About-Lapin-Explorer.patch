@@ -1,0 +1,152 @@
+From fce4000cc3d89b36eb3f056cc9a48840767f98c9 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:13:03 +0800
+Subject: [PATCH] Lapin UX: Explorer name and About Lapin Explorer (Refs #173)
+
+In a Lapin UX session the window title says Explorer, the menu says About
+Lapin Explorer and the About page shows Lapin UX's version and links with the
+COSMIC Files credit and GPL-3.0-only licence kept. COSMIC's own session keeps
+COSMIC Files and its About page.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs    | 55 ++++++++++++++++++++++++++++++++++-----------------
+ src/config.rs | 29 +++++++++++++++++++++++++++
+ src/menu.rs   |  4 ++--
+ 3 files changed, 68 insertions(+), 20 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 469360d..6d7bd5d 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -3319,8 +3319,8 @@ impl App {
+ 
+     fn update_title(&mut self) -> Task<Message> {
+         let window_title = match self.tab_model.text(self.tab_model.active()) {
+-            Some(tab_title) => format!("{tab_title} — {}", fl!("cosmic-files")),
+-            None => fl!("cosmic-files"),
++            Some(tab_title) => format!("{tab_title} — {}", crate::config::app_name()),
++            None => crate::config::app_name(),
+         };
+         if let Some(window_id) = self.core.main_window_id() {
+             self.set_window_title(window_title, window_id)
+@@ -3843,22 +3843,41 @@ impl Application for App {
+                 });
+         });
+ 
+-        let about = About::default()
+-            .name(fl!("cosmic-files"))
+-            .icon(icon::from_name(Self::APP_ID))
+-            .version(env!("CARGO_PKG_VERSION"))
+-            .author("System76")
+-            .comments(fl!("comment"))
+-            .license("GPL-3.0-only")
+-            .license_url("https://spdx.org/licenses/GPL-3.0-only")
+-            .developers([("System76", "info@system76.com")])
+-            .links([
+-                (fl!("repository"), "https://github.com/pop-os/cosmic-files"),
+-                (
+-                    fl!("support"),
+-                    "https://github.com/pop-os/cosmic-files/issues",
+-                ),
+-            ]);
++        let about = if crate::config::lapin_session() {
++            // Lapin UX (#173): Lapin's own details, with the credit and the
++            // licence to COSMIC Files kept.
++            About::default()
++                .name("Lapin Explorer")
++                .icon(icon::from_name(Self::APP_ID))
++                .version(crate::config::lapin_version())
++                .author("Lapin UX")
++                .comments("The file explorer of Lapin UX, based on COSMIC Files by System76.")
++                .copyright("Based on COSMIC Files by System76, GPL-3.0-only")
++                .license("GPL-3.0-only")
++                .license_url("https://spdx.org/licenses/GPL-3.0-only")
++                .links([
++                    ("Lapin UX", "https://github.com/znraznra/lapin-ux"),
++                    ("Support", "https://github.com/znraznra/lapin-ux/issues"),
++                    ("COSMIC Files (upstream)", "https://github.com/pop-os/cosmic-files"),
++                ])
++        } else {
++            About::default()
++                .name(fl!("cosmic-files"))
++                .icon(icon::from_name(Self::APP_ID))
++                .version(env!("CARGO_PKG_VERSION"))
++                .author("System76")
++                .comments(fl!("comment"))
++                .license("GPL-3.0-only")
++                .license_url("https://spdx.org/licenses/GPL-3.0-only")
++                .developers([("System76", "info@system76.com")])
++                .links([
++                    (fl!("repository"), "https://github.com/pop-os/cosmic-files"),
++                    (
++                        fl!("support"),
++                        "https://github.com/pop-os/cosmic-files/issues",
++                    ),
++                ])
++        };
+ 
+         if matches!(flags.mode, Mode::Desktop) {
+             core.set_auto_blur(Auto::Window | Auto::Popup);
+diff --git a/src/config.rs b/src/config.rs
+index 3f01a77..88c0342 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -498,3 +498,32 @@ pub fn lapin_session() -> bool {
+             || std::env::var("LAPIN_UX_DIALOG").is_ok_and(|v| v == "1")
+     })
+ }
++
++/// Lapin UX (#173): the app's own name. Lapin's session calls it Explorer;
++/// COSMIC's own session keeps COSMIC Files.
++pub fn app_name() -> String {
++    if lapin_session() {
++        "Explorer".to_string()
++    } else {
++        crate::fl!("cosmic-files")
++    }
++}
++
++/// Lapin UX (#173): the menu entry that opens the About page.
++pub fn about_label() -> String {
++    if lapin_session() {
++        "About Lapin Explorer".to_string()
++    } else {
++        crate::fl!("menu-about")
++    }
++}
++
++/// Lapin UX (#173): the version Lapin UX installed (the package's own version
++/// file), or this crate's version when it isn't there.
++pub fn lapin_version() -> String {
++    std::fs::read_to_string("/usr/share/lapin-ux/version")
++        .ok()
++        .map(|v| v.trim().to_string())
++        .filter(|v| !v.is_empty())
++        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
++}
+diff --git a/src/menu.rs b/src/menu.rs
+index cba1a44..bd96947 100644
+--- a/src/menu.rs
++++ b/src/menu.rs
+@@ -709,7 +709,7 @@ pub fn menu_lists(
+                         menu::Item::Divider,
+                         menu::Item::Button(fl!("menu-settings"), None, Action::Settings),
+                         menu::Item::Divider,
+-                        menu::Item::Button(fl!("menu-about"), None, Action::About),
++                        menu::Item::Button(crate::config::about_label(), None, Action::About),
+                     ],
+                 ),
+                 (
+@@ -809,7 +809,7 @@ pub fn menu_lists(
+             menu::Item::Divider,
+             menu_button_optional(fl!("properties"), Action::LapinProperties, selected > 0),
+             menu::Item::Button(fl!("options"), None, Action::Settings),
+-            menu::Item::Button(fl!("menu-about"), None, Action::About),
++            menu::Item::Button(crate::config::about_label(), None, Action::About),
+         ];
+         let _ = (can_paste, selected_dir, selected_gallery, &sort_item);
+         return vec![(fl!("sort"), sort), (fl!("view"), view), (fl!("more"), more)];
+-- 
+2.56.1
+

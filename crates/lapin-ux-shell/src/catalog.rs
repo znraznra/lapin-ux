@@ -198,10 +198,14 @@ impl Catalog {
 /// Inside Lapin UX, apps Lapin UX turns into its own show Lapin's names,
 /// without touching their .desktop files (COSMIC's session still shows
 /// "COSMIC Settings"). The icon comes from Lapin UX's icon theme, which has
-/// the settings gear under the same id.
+/// the settings gear under the same id. Explorer is the file manager fork
+/// (#173): Start, search, the taskbar, Alt+Tab and Task Manager say Explorer,
+/// while the shared .desktop file keeps "COSMIC Files" for COSMIC's session.
 fn lapin_names(d: &mut DesktopEntryData) {
-    if d.id == "com.system76.CosmicSettings" {
-        d.name = "Settings".to_string();
+    match d.id.as_str() {
+        "com.system76.CosmicSettings" => d.name = "Settings".to_string(),
+        "com.system76.CosmicFiles" => d.name = "Explorer".to_string(),
+        _ => {}
     }
 }
 
