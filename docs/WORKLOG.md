@@ -31,6 +31,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
 | Sun 22 Nov | Explorer pop-ups (new item, rename, delete, replace, errors) in Lapin's design, stage 1 (#163). | Retest |
+| Sun 22 Nov | Sign-in screen matches the lock screen (#120): the same clock-to-panel fade and corner spacing. | Retest |
 | Sun 22 Nov | Explorer: moving a folder into one that already exists no longer acts like a copy or ends in a "Directory not empty" error, and move errors are in plain words (#172). The folder-level question is still to come. | Retest |
 | Sun 22 Nov | Explorer Properties window (#171): one fixed size, a tab bar like Explorer's, and only the page scrolls while OK, Cancel and Apply stay put. | Retest |
 | Sun 22 Nov | Light mode by default (#159): a new install, a first Lapin session and the welcome app start light instead of dark. A choice made in Settings is never overwritten. | Retest |
