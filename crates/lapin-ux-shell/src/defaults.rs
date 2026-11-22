@@ -536,16 +536,20 @@ fn cfg_path(id: &str) -> PathBuf {
 }
 
 /// Make sure a light/dark preference exists; without it every libcosmic
-/// app falls back to its built-in theme and ignores ours.
+/// app falls back to its built-in theme (dark) and ignores ours. Lapin UX
+/// starts light (#159). The key is only written when it is missing, so a
+/// choice made in Settings or the welcome app is never overwritten, and the
+/// session swap in tools/lapin-ux-uninstall keeps it apart from other
+/// desktops' own mode.
 fn ensure_mode() -> bool {
-    let Ok(cfg) = ThemeMode::config() else { return true };
+    let Ok(cfg) = ThemeMode::config() else { return false };
     match ThemeMode::is_dark(&cfg) {
         Ok(dark) => dark,
         Err(_) => {
-            if let Err(e) = cfg.set("is_dark", true) {
+            if let Err(e) = cfg.set("is_dark", false) {
                 tracing::warn!("could not set theme mode: {e}");
             }
-            true
+            false
         }
     }
 }

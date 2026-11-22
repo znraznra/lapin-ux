@@ -152,6 +152,12 @@ use it for one test.
   COSMIC's. Force on for checks with `LAPIN_UX_OSD=1`, `LAPIN_UX_OSK=1`,
   `LAPIN_UX_DIALOG=1`, `LAPIN_UX_SETTINGS=1`, `LAPIN_UX_TITLEBAR=1`.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
+- Light/dark mode: Lapin UX starts light (#159). The shell (`defaults::ensure_mode`)
+  and the welcome app write `is_dark = false` only when the key is missing, so a
+  choice made in Settings is never overwritten. The key is swapped per session
+  like the other shared settings, so another desktop keeps its own mode. An
+  existing Lapin copy of `is_dark` is kept as it is, since a chosen dark mode
+  can't be told from an old default.
   Apps, files, folders, shortcuts and desktop items use the full-colour
   Win11 icon theme; everything else (menus, tray, quick settings, buttons)
   uses Fluent UI System Icons. Only replaces COSMIC's default icon theme,

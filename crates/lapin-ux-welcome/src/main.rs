@@ -179,8 +179,8 @@ fn is_dark() -> bool {
     std::fs::read_to_string(format!(
         "{home}/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark"
     ))
-    .map(|s| s.trim() != "false")
-    .unwrap_or(true)
+    .map(|s| s.trim() == "true")
+    .unwrap_or(false)
 }
 
 /// A big choice card (light / dark).
