@@ -30,6 +30,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Sun 22 Nov | The taskbar can sit on the left or right edge as well as the bottom and top (#41): a narrow icon-only bar, Start, panels, pop-ups, auto-hide and the work area all follow the edge. Chosen in Settings or from the taskbar menu. | Retest |
+| Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 
 ## Phase dates
