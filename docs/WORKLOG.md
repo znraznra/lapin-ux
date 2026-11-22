@@ -24,6 +24,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Tue 10 Nov | Milestones, tracking issues and sub-issues created on GitHub. | Docs |
 | Thu 12 Nov | Work now goes through pull requests. CodeRabbit reviews them using `.coderabbit.yaml`, and `main` is protected against deletion, force pushes and direct pushes. | Docs |
 | Fri 13 Nov | The taskbar dead zone (#34): a hover preview closed too early was left behind as an invisible pop-up that swallowed clicks. The shell now notices pop-ups it no longer owns and destroys them. | Retest |
+| Sun 22 Nov | Explorer: Home and This PC are per tab, right-click menus on Home and This PC, a tidier Recent list, and a details pane that follows the page (#168, #169, #170, #175). | Retest |
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 

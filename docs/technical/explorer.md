@@ -156,3 +156,18 @@ The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
   Home page).
 - Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
+
+**Pages per tab and the details pane (#168, #169, #170, #175).** Home and This PC
+are properties of each tab (the tab's location), not flags on the window, so two
+tabs can show different pages and switching tabs no longer shows one tab's page in
+the other. On both pages a click picks an item (the pane follows it: a drive, a
+pinned folder or a file shows its details; nothing picked says "Select a file or
+folder to see its details."), a double-click opens it, and right-click opens a
+menu: Open, Open in new tab, Open item location, Copy path, Properties, and
+Unpin from Home, Remove from recents or Disconnect where they apply. The Recent
+rows keep to one line with fixed columns (name, last opened, folder) and show the
+full path in a tooltip. On Networks and Recycle Bin the pane follows the selected
+item too, and the same empty message shows only while nothing is selected, instead
+of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
+(`config::lapin_session()`); COSMIC's own session is stock. Resizable and sortable
+Recent columns are not part of this change.
