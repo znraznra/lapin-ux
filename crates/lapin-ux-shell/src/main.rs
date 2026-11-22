@@ -114,7 +114,9 @@ fn main() -> cosmic::iced::Result {
             }
         }
     }
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // A full disk or a closed log must never end the program (#174): the default
+    // builder prints write errors with eprintln!, which panics when stderr fails too.
+    tracing_subscriber::fmt().with_env_filter(filter).log_internal_errors(false).init();
     // Redraw only the surfaces that move during an animation (#51);
     // LAPIN_UX_REDRAW_ALL=1 turns that off, for comparing.
     if std::env::var("LAPIN_UX_REDRAW_ALL").is_err() {
