@@ -38,6 +38,7 @@ a change to one area only touches that file.
 - [Look and sound](technical/look-and-sound.md): Text rendering, sounds and pointers.
 - [Explorer and file dialogs](technical/explorer.md): The Explorer (`lapin-explorer`) and the Open/Save dialogs.
 - [Session and first-run defaults](technical/session.md): The session (`lapin-ux-session`) and the defaults written on first run.
+- Automated checks: `.github/workflows/ci.yml` runs on every pull request: `shellcheck` and the uninstall tests (`tools/test-uninstall/run.sh`, which guard coexistence and clean uninstall), and a Trivy scan of dependencies (`Cargo.lock`) and secrets. It only reports. The COSMIC forks are not built there (too heavy for a plain runner), so `cargo check --locked` stays a local check.
 
 ## Architecture
 
