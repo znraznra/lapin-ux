@@ -37,7 +37,8 @@ pub enum QuietMsg {
     EventsLoaded(Vec<Event>),
     /// Settings > the low disk space warning switch.
     LowDiskWarning(bool),
-    /// Free space on the home and root drives, as just read.
+    /// Free space on the home and root drives, as just read. Empty when the
+    /// read failed, which changes nothing.
     DiskChecked(Vec<lapin_ux_core::disk::Drive>),
 }
 
@@ -246,8 +247,13 @@ impl App {
                 save(cfg.as_ref(), "low_disk_warning", &on);
             }
             QuietMsg::DiskChecked(drives) => {
+                // A failed read (empty) or a switched-off warning leaves the
+                // record of what was already warned about untouched.
+                if drives.is_empty() || !self.quiet.low_disk_warning {
+                    return Task::none();
+                }
                 let low = self.disk.check(&drives);
-                if self.quiet.low_disk_warning && !low.is_empty() {
+                if !low.is_empty() {
                     let home = home_mount(&drives);
                     let (summary, body) = lapin_ux_core::disk::notice(&low, &home);
                     return self.local_notice_as("Storage", "drive-harddisk-symbolic", "dialog-warning", &summary, &body);

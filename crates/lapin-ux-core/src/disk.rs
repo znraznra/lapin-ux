@@ -55,11 +55,27 @@ pub fn parse_df(out: &str) -> Vec<Drive> {
             if f.len() < 6 {
                 return None;
             }
-            let (total, free) = (f[1].parse().ok()?, f[3].parse().ok()?);
+            let total: u64 = f[1].parse().ok()?;
+            // GNU df can report a negative Available on a full drive.
+            let free = f[3].parse::<i64>().ok()?.max(0) as u64;
             let mount = f[5..].join(" ");
             seen.insert(mount.clone()).then_some(Drive { mount, total, free })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod negative_tests {
+    use super::*;
+
+    #[test]
+    fn negative_available_space_counts_as_zero() {
+        let out = "Filesystem 1-blocks Used Available Capacity Mounted on\n/dev/a 100000000000 100004096 -4096 100% /\n";
+        let d = parse_df(out);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].free, 0);
+        assert!(d[0].is_low());
+    }
 }
 
 /// Remembers which drives were already warned about.

@@ -193,6 +193,15 @@ impl App {
             reply: None,
             sound: Some(sound.into()),
         };
+        // Follow the app's saved rule, as for notifications from other apps.
+        match lapin_ux_core::dnd::delivery(&self.quiet.rules, &n.app_name) {
+            lapin_ux_core::dnd::Delivery::Drop => return Task::none(),
+            lapin_ux_core::dnd::Delivery::Silent => {
+                self.queue.push_quiet(n);
+                return self.publish();
+            }
+            _ => {}
+        }
         if let Some(sound) = &n.sound {
             play_sound(sound);
         }
