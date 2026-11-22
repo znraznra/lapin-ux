@@ -1,0 +1,11 @@
+[Desktop Entry]
+SingleMainWindow=true
+Type=Application
+Name=Photos
+Comment=Browse and view your pictures, offline
+Exec=lapin-ux-photos %f
+Icon=folder-pictures
+Categories=Graphics;Viewer;
+MimeType=image/jpeg;image/png;image/webp;image/bmp;image/gif;
+StartupNotify=true
+StartupWMClass=dev.lapinux.Photos

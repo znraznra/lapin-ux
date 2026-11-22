@@ -1,0 +1,628 @@
+From 53f2671b14aa435d7c8662a3379cb5c892a82479 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:57:54 +0800
+Subject: [PATCH] Explorer dialogs in Lapin's design inside the Lapin session
+ (Refs #163)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs | 346 +++++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 286 insertions(+), 60 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index ba879e9..9d8f5fc 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -7192,7 +7192,7 @@ impl Application for App {
+                 archive_type,
+                 password,
+             } => {
+-                let mut dialog = widget::dialog().title(fl!("create-archive"));
++                let mut dialog = lapin_dialog().title(fl!("create-archive"));
+ 
+                 let complete_maybe = if name.is_empty() {
+                     None
+@@ -7225,11 +7225,11 @@ impl Application for App {
+                 let selected = archive_types.iter().position(|&x| x == *archive_type);
+                 dialog = dialog
+                     .primary_action(
+-                        widget::button::suggested(fl!("create"))
++                        lapin_dlg_button::suggested(fl!("create"))
+                             .on_press_maybe(complete_maybe.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(
+                         widget::column::with_children([
+@@ -7294,29 +7294,29 @@ impl Application for App {
+ 
+                 dialog
+             }
+-            DialogPage::EmptyTrash => widget::dialog()
++            DialogPage::EmptyTrash => lapin_dialog()
+                 .title(fl!("empty-trash-title"))
+                 .body(fl!("empty-trash-warning"))
+                 .primary_action(
+-                    widget::button::suggested(fl!("empty-trash"))
++                    lapin_dlg_button::suggested(fl!("empty-trash"))
+                         .on_press(Message::DialogComplete)
+                         .id(EMPTY_TRASH_BUTTON_ID.clone()),
+                 )
+                 .secondary_action(
+-                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                    lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                 ),
+             DialogPage::FailedOperation(id) => {
+                 //TODO: try next dialog page (making sure index is used by Dialog messages)?
+                 let (operation, _, err) = self.failed_operations.get(id)?;
+ 
+                 //TODO: nice description of error
+-                widget::dialog()
++                lapin_dialog()
+                     .title("Failed operation")
+                     .body(format!("{operation:#?}\n{err}"))
+-                    .icon(icon::from_name("dialog-error").size(64))
++                    .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                     //TODO: retry action
+                     .primary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+             }
+             DialogPage::FailedOperations(ids) => {
+@@ -7329,18 +7329,18 @@ impl Application for App {
+                     .collect();
+ 
+                 //TODO: nice description of error
+-                widget::dialog()
++                lapin_dialog()
+                     .title("Failed operations")
+                     .body(errors.join("\n\n"))
+-                    .icon(icon::from_name("dialog-error").size(64))
++                    .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                     //TODO: retry action
+                     .primary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+             }
+-            DialogPage::ExtractPassword { id, password } => widget::dialog()
++            DialogPage::ExtractPassword { id, password } => lapin_dialog()
+                 .title(fl!("extract-password-required"))
+-                .icon(icon::from_name("dialog-error").size(64))
++                .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                 .control(
+                     widget::text_input("", password)
+                         .password()
+@@ -7351,27 +7351,27 @@ impl Application for App {
+                         .id(self.dialog_text_input.clone()),
+                 )
+                 .primary_action(
+-                    widget::button::suggested(fl!("extract-here"))
++                    lapin_dlg_button::suggested(fl!("extract-here"))
+                         .on_press(Message::DialogComplete),
+                 )
+                 .secondary_action(
+-                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                    lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                 ),
+             DialogPage::MountError {
+                 mounter_key: _,
+                 item: _,
+                 error,
+-            } => widget::dialog()
++            } => lapin_dialog()
+                 .title(fl!("mount-error"))
+                 .body(error)
+-                .icon(icon::from_name("dialog-error").size(64))
++                .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                 .primary_action(
+-                    widget::button::standard(fl!("try-again"))
++                    lapin_dlg_button::standard(fl!("try-again"))
+                         .on_press(Message::DialogComplete)
+                         .id(MOUNT_ERROR_TRY_AGAIN_BUTTON_ID.clone()),
+                 )
+                 .secondary_action(
+-                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                    lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                 ),
+             DialogPage::NetworkAuth {
+                 mounter_key,
+@@ -7473,15 +7473,15 @@ impl Application for App {
+                 let title = parts.next().unwrap_or_default();
+                 let body = parts.next().unwrap_or_default();
+ 
+-                let mut widget = widget::dialog()
++                let mut widget = lapin_dialog()
+                     .title(title)
+                     .body(body)
+                     .control(controls.spacing(space_s))
+                     .primary_action(
+-                        widget::button::suggested(fl!("connect")).on_press(Message::DialogComplete),
++                        lapin_dlg_button::suggested(fl!("connect")).on_press(Message::DialogComplete),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     );
+ 
+                 if let Some(_anonymous) = &auth.anonymous_opt {
+@@ -7506,18 +7506,18 @@ impl Application for App {
+                 mounter_key: _,
+                 uri: _,
+                 error,
+-            } => widget::dialog()
++            } => lapin_dialog()
+                 .title(fl!("network-drive-error"))
+                 .body(error)
+-                .icon(icon::from_name("dialog-error").size(64))
++                .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                 .primary_action(
+-                    widget::button::standard(fl!("try-again")).on_press(Message::DialogComplete),
++                    lapin_dlg_button::standard(fl!("try-again")).on_press(Message::DialogComplete),
+                 )
+                 .secondary_action(
+-                    widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                    lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                 ),
+             DialogPage::NewItem { parent, name, dir } => {
+-                let mut dialog = widget::dialog().title(if *dir {
++                let mut dialog = lapin_dialog().title(if *dir {
+                     fl!("create-new-folder")
+                 } else {
+                     fl!("create-new-file")
+@@ -7555,11 +7555,11 @@ impl Application for App {
+ 
+                 dialog
+                     .primary_action(
+-                        widget::button::suggested(fl!("save"))
++                        lapin_dlg_button::suggested(fl!("save"))
+                             .on_press_maybe(complete_maybe.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(
+                         widget::column::with_children([
+@@ -7591,17 +7591,17 @@ impl Application for App {
+                     .get(*action)
+                     .map_or_else(|| fl!("context-action"), |preset| preset.name.clone());
+ 
+-                widget::dialog()
++                lapin_dialog()
+                     .title(fl!("context-action-confirm-title", name = name))
+                     .body(fl!("context-action-confirm-warning", items = paths.len()))
+-                    .icon(icon::from_name("dialog-error").size(64))
++                    .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                     .primary_action(
+-                        widget::button::suggested(fl!("run"))
++                        lapin_dlg_button::suggested(fl!("run"))
+                             .on_press(Message::DialogComplete)
+                             .id(CONFIRM_CONTEXT_ACTION_BUTTON_ID.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+             }
+             DialogPage::OpenWith {
+@@ -7678,15 +7678,15 @@ impl Application for App {
+                     );
+                 }
+ 
+-                let mut dialog = widget::dialog()
++                let mut dialog = lapin_dialog()
+                     .title(fl!("open-with-title", name = name))
+                     .primary_action(
+-                        widget::button::suggested(fl!("open"))
++                        lapin_dlg_button::suggested(fl!("open"))
+                             .on_press(Message::DialogComplete)
+                             .id(CONFIRM_OPEN_WITH_BUTTON_ID.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(
+                         widget::text_input::search_input(
+@@ -7743,15 +7743,15 @@ impl Application for App {
+                     fl!("selected-items", items = paths.len())
+                 };
+ 
+-                widget::dialog()
++                lapin_dialog()
+                     .title(fl!("permanently-delete-question"))
+                     .primary_action(
+-                        widget::button::destructive(fl!("delete"))
++                        lapin_dlg_button::destructive(fl!("delete"))
+                             .on_press(Message::DialogComplete)
+                             .id(PERMANENT_DELETE_BUTTON_ID.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(widget::text(fl!(
+                         "permanently-delete-warning",
+@@ -7765,15 +7765,15 @@ impl Application for App {
+                     fl!("selected-items", items = items.len())
+                 };
+ 
+-                widget::dialog()
++                lapin_dialog()
+                     .title(fl!("permanently-delete-question"))
+                     .primary_action(
+-                        widget::button::destructive(fl!("delete"))
++                        lapin_dlg_button::destructive(fl!("delete"))
+                             .on_press(Message::DialogComplete)
+                             .id(DELETE_TRASH_BUTTON_ID.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(widget::text(fl!(
+                         "permanently-delete-warning",
+@@ -7788,14 +7788,14 @@ impl Application for App {
+                     Some(Message::DialogComplete)
+                 };
+ 
+-                widget::dialog()
++                lapin_dialog()
+                     .title(fl!("change-sidebar-label"))
+                     .primary_action(
+-                        widget::button::suggested(fl!("save"))
++                        lapin_dlg_button::suggested(fl!("save"))
+                             .on_press_maybe(complete_maybe.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(
+                         widget::column::with_children([
+@@ -7821,7 +7821,7 @@ impl Application for App {
+                 dir,
+             } => {
+                 //TODO: combine logic with NewItem
+-                let mut dialog = widget::dialog().title(if *dir {
++                let mut dialog = lapin_dialog().title(if *dir {
+                     fl!("rename-folder")
+                 } else {
+                     fl!("rename-file")
+@@ -7859,11 +7859,11 @@ impl Application for App {
+ 
+                 dialog
+                     .primary_action(
+-                        widget::button::suggested(fl!("rename-confirm"))
++                        lapin_dlg_button::suggested(fl!("rename-confirm"))
+                             .on_press_maybe(complete_maybe.clone()),
+                     )
+                     .secondary_action(
+-                        widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
++                        lapin_dlg_button::standard(fl!("cancel")).on_press(Message::DialogCancel),
+                     )
+                     .control(
+                         widget::column::with_children([
+@@ -7899,7 +7899,7 @@ impl Application for App {
+                 tx,
+             } => {
+                 let military_time = self.config.tab.military_time;
+-                let dialog = widget::dialog()
++                let dialog = lapin_dialog()
+                     .title(fl!("replace-title", filename = to.name.as_str()))
+                     .body(fl!("replace-warning-operation"))
+                     .control(
+@@ -7911,7 +7911,7 @@ impl Application for App {
+                             .map(|x| Message::TabMessage(None, x)),
+                     )
+                     .primary_action(
+-                        widget::button::suggested(fl!("replace"))
++                        lapin_dlg_button::suggested(fl!("replace"))
+                             .on_press(Message::ReplaceResult(ReplaceResult::Replace(
+                                 *apply_to_all,
+                             )))
+@@ -7941,10 +7941,10 @@ impl Application for App {
+                         .secondary_action(
+                             widget::row::with_capacity(2)
+                                 .spacing(space_xxs)
+-                                .push(widget::button::standard(fl!("skip")).on_press(Message::ReplaceResult(
++                                .push(lapin_dlg_button::standard(fl!("skip")).on_press(Message::ReplaceResult(
+                                     ReplaceResult::Skip(*apply_to_all),
+                                 )))
+-                                .push(widget::button::standard(fl!("keep-both")).on_press(Message::ReplaceResult(
++                                .push(lapin_dlg_button::standard(fl!("keep-both")).on_press(Message::ReplaceResult(
+                                     ReplaceResult::KeepBoth(*apply_to_all),
+                                 ))),
+                         )
+@@ -7969,7 +7969,7 @@ impl Application for App {
+                                 }),
+                         )
+                         .secondary_action(
+-                            widget::button::standard(fl!("skip")).on_press(Message::ReplaceResult(
++                            lapin_dlg_button::standard(fl!("skip")).on_press(Message::ReplaceResult(
+                                 ReplaceResult::Skip(*apply_to_all),
+                             )),
+                         )
+@@ -7980,7 +7980,7 @@ impl Application for App {
+                 } else {
+                     dialog
+                         .secondary_action(
+-                            widget::button::standard(fl!("cancel"))
++                            lapin_dlg_button::standard(fl!("cancel"))
+                                 .on_press(Message::ReplaceResult(ReplaceResult::Cancel)),
+                         )
+                         .tertiary_action(
+@@ -7994,7 +7994,7 @@ impl Application for App {
+                     Some(file_name) => file_name.to_str(),
+                     None => path.as_os_str().to_str(),
+                 };
+-                widget::dialog()
++                lapin_dialog()
+                     .title(fl!("set-executable-and-launch"))
+                     .primary_action(
+                         widget::button::text(fl!("set-and-launch"))
+@@ -8012,20 +8012,20 @@ impl Application for App {
+                         name = name
+                     )))
+             }
+-            DialogPage::FavoritePathError { path, .. } => widget::dialog()
++            DialogPage::FavoritePathError { path, .. } => lapin_dialog()
+                 .title(fl!("favorite-path-error"))
+                 .body(fl!(
+                     "favorite-path-error-description",
+                     path = path.as_os_str().to_str()
+                 ))
+-                .icon(icon::from_name("dialog-error").size(64))
++                .icon(icon::from_name("dialog-error").size(lapin_dlg_icon_size()))
+                 .primary_action(
+-                    widget::button::destructive(fl!("remove"))
++                    lapin_dlg_button::destructive(fl!("remove"))
+                         .on_press(Message::DialogComplete)
+                         .id(FAVORITE_PATH_ERROR_REMOVE_BUTTON_ID.clone()),
+                 )
+                 .secondary_action(
+-                    widget::button::standard(fl!("keep")).on_press(Message::DialogCancel),
++                    lapin_dlg_button::standard(fl!("keep")).on_press(Message::DialogCancel),
+                 ),
+         };
+         Some(dialog.into())
+@@ -9291,6 +9291,232 @@ pub(crate) mod test_utils {
+ #[derive(Clone, Copy, Debug)]
+ struct LapinMappedRow;
+ 
++/// Lapin UX (#163): the size of the icon beside a dialog's message.
++fn lapin_dlg_icon_size() -> u16 {
++    if crate::config::lapin_session() { 32 } else { 64 }
++}
++
++/// Lapin UX (#163): dialog buttons. Outside a Lapin session these are
++/// COSMIC's own buttons, untouched.
++mod lapin_dlg_button {
++    use super::*;
++    use cosmic::widget::button::Catalog;
++
++    fn square(kind: fn() -> theme::Button) -> theme::Button {
++        fn sq(mut s: cosmic::widget::button::Style) -> cosmic::widget::button::Style {
++            s.border_radius = 4.0.into();
++            s
++        }
++        theme::Button::Custom {
++            active: Box::new(move |f, t| sq(t.active(f, false, &kind()))),
++            disabled: Box::new(move |t| sq(t.disabled(&kind()))),
++            hovered: Box::new(move |f, t| sq(t.hovered(f, false, &kind()))),
++            pressed: Box::new(move |f, t| sq(t.pressed(f, false, &kind()))),
++        }
++    }
++
++    fn build<'a>(
++        label: impl Into<std::borrow::Cow<'a, str>>,
++        cosmic: fn(std::borrow::Cow<'a, str>) -> widget::button::TextButton<'a, Message>,
++        kind: fn() -> theme::Button,
++    ) -> widget::button::TextButton<'a, Message> {
++        let label = label.into();
++        if crate::config::lapin_session() {
++            widget::button::text(label).class(square(kind))
++        } else {
++            cosmic(label)
++        }
++    }
++
++    pub fn suggested<'a>(label: impl Into<std::borrow::Cow<'a, str>>) -> widget::button::TextButton<'a, Message> {
++        build(label, |l| widget::button::suggested(l), || theme::Button::Suggested)
++    }
++    pub fn standard<'a>(label: impl Into<std::borrow::Cow<'a, str>>) -> widget::button::TextButton<'a, Message> {
++        build(label, |l| widget::button::standard(l), || theme::Button::Standard)
++    }
++    pub fn destructive<'a>(label: impl Into<std::borrow::Cow<'a, str>>) -> widget::button::TextButton<'a, Message> {
++        build(label, |l| widget::button::destructive(l), || theme::Button::Destructive)
++    }
++}
++
++/// Lapin UX (#163): Explorer's dialogs in Lapin's design: a plain light
++/// panel with the message, and a grey band with the buttons, right-aligned
++/// with the main action first. Outside a Lapin session this builds COSMIC's
++/// own dialog, with the same parts in the same order.
++struct LapinDialog<'a> {
++    title: Option<std::borrow::Cow<'a, str>>,
++    icon: Option<Element<'a, Message>>,
++    body: Option<std::borrow::Cow<'a, str>>,
++    controls: Vec<Element<'a, Message>>,
++    primary: Option<Element<'a, Message>>,
++    secondary: Option<Element<'a, Message>>,
++    tertiary: Option<Element<'a, Message>>,
++    width: Option<Length>,
++    height: Option<Length>,
++    max_width: Option<f32>,
++    max_height: Option<f32>,
++}
++
++fn lapin_dialog<'a>() -> LapinDialog<'a> {
++    LapinDialog {
++        title: None,
++        icon: None,
++        body: None,
++        controls: Vec::new(),
++        primary: None,
++        secondary: None,
++        tertiary: None,
++        width: None,
++        height: None,
++        max_width: None,
++        max_height: None,
++    }
++}
++
++impl<'a> LapinDialog<'a> {
++    fn title(mut self, v: impl Into<std::borrow::Cow<'a, str>>) -> Self {
++        self.title = Some(v.into());
++        self
++    }
++    fn icon(mut self, v: impl Into<Element<'a, Message>>) -> Self {
++        self.icon = Some(v.into());
++        self
++    }
++    fn body(mut self, v: impl Into<std::borrow::Cow<'a, str>>) -> Self {
++        self.body = Some(v.into());
++        self
++    }
++    fn control(mut self, v: impl Into<Element<'a, Message>>) -> Self {
++        self.controls.push(v.into());
++        self
++    }
++    fn primary_action(mut self, v: impl Into<Element<'a, Message>>) -> Self {
++        self.primary = Some(v.into());
++        self
++    }
++    fn secondary_action(mut self, v: impl Into<Element<'a, Message>>) -> Self {
++        self.secondary = Some(v.into());
++        self
++    }
++    fn tertiary_action(mut self, v: impl Into<Element<'a, Message>>) -> Self {
++        self.tertiary = Some(v.into());
++        self
++    }
++    #[allow(dead_code)]
++    fn width(mut self, v: impl Into<Length>) -> Self {
++        self.width = Some(v.into());
++        self
++    }
++    #[allow(dead_code)]
++    fn height(mut self, v: impl Into<Length>) -> Self {
++        self.height = Some(v.into());
++        self
++    }
++    #[allow(dead_code)]
++    fn max_width(mut self, v: impl Into<cosmic::iced::Pixels>) -> Self {
++        self.max_width = Some(v.into().0);
++        self
++    }
++    #[allow(dead_code)]
++    fn max_height(mut self, v: impl Into<cosmic::iced::Pixels>) -> Self {
++        self.max_height = Some(v.into().0);
++        self
++    }
++}
++
++impl<'a> From<LapinDialog<'a>> for Element<'a, Message> {
++    fn from(d: LapinDialog<'a>) -> Self {
++        if !crate::config::lapin_session() {
++            let mut c = widget::dialog();
++            if let Some(v) = d.title {
++                c = c.title(v);
++            }
++            if let Some(v) = d.icon {
++                c = c.icon(v);
++            }
++            if let Some(v) = d.body {
++                c = c.body(v);
++            }
++            for v in d.controls {
++                c = c.control(v);
++            }
++            if let Some(v) = d.primary {
++                c = c.primary_action(v);
++            }
++            if let Some(v) = d.secondary {
++                c = c.secondary_action(v);
++            }
++            if let Some(v) = d.tertiary {
++                c = c.tertiary_action(v);
++            }
++            if let Some(v) = d.width {
++                c = c.width(v);
++            }
++            if let Some(v) = d.height {
++                c = c.height(v);
++            }
++            if let Some(v) = d.max_width {
++                c = c.max_width(v);
++            }
++            if let Some(v) = d.max_height {
++                c = c.max_height(v);
++            }
++            return c.into();
++        }
++        let cosmic_theme::Spacing { space_xxs, space_xs, space_s, space_m, .. } = theme::spacing();
++        let mut text = widget::column::with_capacity(2 + d.controls.len()).spacing(space_xs);
++        if let Some(title) = d.title {
++            text = text.push(widget::text::heading(title));
++        }
++        if let Some(body) = d.body {
++            text = text.push(widget::container(widget::scrollable(widget::text::body(body))).max_height(300.0));
++        }
++        for control in d.controls {
++            text = text.push(control);
++        }
++        let mut message = widget::row::with_capacity(2).spacing(space_m);
++        if let Some(icon) = d.icon {
++            message = message.push(icon);
++        }
++        message = message.push(text.width(Length::Fill));
++
++        // Windows-style order: the main action first, then the others.
++        let mut buttons = widget::row::with_capacity(4).spacing(space_xxs).align_y(Alignment::Center);
++        if let Some(v) = d.tertiary {
++            buttons = buttons.push(v);
++        }
++        buttons = buttons.push(widget::space::horizontal());
++        if let Some(v) = d.primary {
++            buttons = buttons.push(v);
++        }
++        if let Some(v) = d.secondary {
++            buttons = buttons.push(v);
++        }
++
++        let panel = widget::container(message)
++            .padding([space_m, space_m + space_s])
++            .width(Length::Fill)
++            .class(lapin_layer_style());
++        let band = widget::container(buttons)
++            .padding([space_xs + 2, space_m + space_s])
++            .width(Length::Fill)
++            .class(tab::lapin_band_style());
++        let mut column = widget::container(widget::column::with_children([panel.into(), band.into()]))
++            .width(d.width.unwrap_or(Length::Fixed(480.0)));
++        if let Some(h) = d.height {
++            column = column.height(h);
++        }
++        if let Some(m) = d.max_width {
++            column = column.max_width(m);
++        }
++        if let Some(m) = d.max_height {
++            column = column.max_height(m);
++        }
++        column.into()
++    }
++}
++
++
+ /// Lapin UX: the layer under the address row: plain white in light mode,
+ /// the usual window colour in dark mode.
+ fn lapin_layer_style() -> theme::Container<'static> {
+-- 
+2.56.1
+

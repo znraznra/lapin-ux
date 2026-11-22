@@ -180,6 +180,16 @@ the current width every time the window is drawn, not from a stored flag. Pages
 you opened yourself from the command bar (History, Options, About) stay. This is
 Lapin-only (`config::lapin_session()`); COSMIC's own session is stock.
 
+**Dialogs in Lapin's design** (#163, stage 1): Explorer's own pop-ups (New folder
+or file, Rename, Delete, Move to Recycle Bin, Empty Recycle Bin, Replace or skip,
+error and network messages) now share one layout: a plain light panel with the
+message and a grey band underneath holding the buttons, the main action first and
+the others after it, with 4 px corners and a smaller 32 px icon. Enter still
+confirms, Esc cancels and the Tab order is unchanged. In COSMIC's own session the
+same dialogs are built from COSMIC's own parts and look as before
+(`config::lapin_session()`). Still to do in later stages: the Open and Save
+dialogs, notifications, and the progress window's error and cancel states.
+
 ## Moving a folder into one that already exists (#172)
 
 In a Lapin session a move that ends up as per-file moves now removes the
