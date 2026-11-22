@@ -171,3 +171,15 @@ item too, and the same empty message shows only while nothing is selected, inste
 of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
 (`config::lapin_session()`); COSMIC's own session is stock. Resizable and sortable
 Recent columns are not part of this change.
+
+## Properties window size and tabs (#171)
+
+In a Lapin session the Properties window opens at one fixed size (590 by 820,
+minimum and maximum the same, not resizable), the usual way. The General and
+Security tabs use the same tab bar as Explorer's own tabs (`lapin_props_tabs`,
+a `segmented_button` model; `Message::LapinPropertiesTab` carries the entity).
+Only the page scrolls: the tab bar and OK, Cancel and Apply stay in place,
+because the Lapin arm of `view_window` returns early without the outer
+scrollable that wraps every other window. COSMIC's own session keeps its
+resizable window (`config::lapin_session()`). Patch:
+`packaging/lapin-ux-files/0034`.

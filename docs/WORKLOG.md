@@ -29,6 +29,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Explorer: Home and This PC are per tab, right-click menus on Home and This PC, a tidier Recent list, and a details pane that follows the page (#168, #169, #170, #175). | Retest |
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
+| Sun 22 Nov | Explorer Properties window (#171): one fixed size, a tab bar like Explorer's, and only the page scrolls while OK, Cancel and Apply stay put. | Retest |
 
 ## Phase dates
 
