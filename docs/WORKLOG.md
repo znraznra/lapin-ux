@@ -30,6 +30,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Sun 22 Nov | Explorer Properties window (#171): one fixed size, a tab bar like Explorer's, and only the page scrolls while OK, Cancel and Apply stay put. | Retest |
+| Sun 22 Nov | The file explorer is called Explorer everywhere in the Lapin session, and its About page says Lapin Explorer with credit to COSMIC Files (#173). | Retest |
 | Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 
