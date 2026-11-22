@@ -107,6 +107,16 @@
   **Focus sessions**. Clicking a notification opens its app.
 - Notification settings (gear): Do not disturb on a **schedule**, and per-app
   *Notifications* / *Show banners* switches.
+- **Low disk space warning** (#174): every 30 s the daemon reads the free
+  space of the root drive and the one holding the home folder (`df`, ten
+  second limit). A drive is low under 5 percent free, never above 10 GB and
+  always under 1 GB (`lapin_ux_core::disk`). A "Disk space is running low"
+  notice appears once per drive when it crosses that line, and is armed again
+  only after the drive has a fifth more than the limit free, so it never
+  repeats while the space stays low. A switch in the notification settings
+  (gear) turns it off; it is saved as `low_disk_warning` in
+  `dev.lapinux.Notifications`, so it needs no entry in `items()`. The daemon
+  only runs inside a Lapin session.
 - The clock shows a bell with the unread count, or a muted bell during
   Do not disturb. `lapin-ux-notifyd center` toggles the centre from scripts;
   `dev.lapinux.Notifications` on the session bus exposes `Unread`,
@@ -198,3 +208,15 @@ windows coming back from minimize and positions apps ask for are left alone.
 - **Touchpad**: three fingers up for Task view, down to show the desktop,
   sideways to switch apps; four fingers sideways to switch desktops.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
+- **Safely Remove Hardware** (#102): a tray icon left of the other tray icons,
+  shown only while a USB stick, SD card or similar removable drive is attached
+  (phones, network shares and internal disks are left out). Click it for one
+  "Eject <drive>" row per drive with its volumes underneath, right-click it for
+  Settings > Bluetooth & devices. Eject unmounts every volume (locking an
+  encrypted one), then powers the drive off, or ejects it for card readers and
+  discs, and says "Safe To Remove Hardware". If something is still using it,
+  "Problem Ejecting" names the programs (found by scanning `/proc`). Unplugging
+  without ejecting just hides the icon. It talks to UDisks2 on the system bus
+  (`lapin-ux-shell/src/removable.rs`); the pure logic is in
+  `lapin_ux_core::removable`. It reads and writes no shared COSMIC or GTK
+  setting, and only exists in the Lapin session.
