@@ -743,6 +743,7 @@ fn main() -> cosmic::iced::Result {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,lapin_ux_notifyd=info".into()),
         )
+        .log_internal_errors(false) // #174: a full disk must not end the program
         .init();
     match std::env::args().nth(1).as_deref() {
         Some("center" | "centre") => toggle_center_and_exit(),
