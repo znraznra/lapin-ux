@@ -545,10 +545,16 @@ fn ensure_mode() -> bool {
     let Ok(cfg) = ThemeMode::config() else { return false };
     match ThemeMode::is_dark(&cfg) {
         Ok(dark) => dark,
-        Err(_) => {
+        // Only a missing key gets the default. A file that exists but can't
+        // be read or parsed keeps whatever the person had saved.
+        Err(cosmic_config::Error::NotFound) => {
             if let Err(e) = cfg.set("is_dark", false) {
                 tracing::warn!("could not set theme mode: {e}");
             }
+            false
+        }
+        Err(e) => {
+            tracing::warn!("could not read theme mode, leaving it alone: {e}");
             false
         }
     }

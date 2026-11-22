@@ -4,7 +4,7 @@
 //! optionally get the extra mouse pointers. Every step can be skipped.
 
 use cosmic::app::{Settings, Task};
-use cosmic::cosmic_config::{self, ConfigSet};
+use cosmic::cosmic_config::{self, ConfigGet, ConfigSet};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Size};
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
 use cosmic::{ApplicationExt, Core, Element, theme};
@@ -174,13 +174,12 @@ fn set_dark(dark: bool) {
 }
 
 fn is_dark() -> bool {
-    let home = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    std::fs::read_to_string(format!(
-        "{home}/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark"
-    ))
-    .map(|s| s.trim() == "true")
-    .unwrap_or(false)
+    // Same typed reader as the shell, so RON comments and spacing in the saved
+    // value read the same way. A missing or unreadable value means light.
+    cosmic_config::Config::new("com.system76.CosmicTheme.Mode", 1)
+        .ok()
+        .and_then(|cfg| cfg.get::<bool>("is_dark").ok())
+        .unwrap_or(false)
 }
 
 /// A big choice card (light / dark).

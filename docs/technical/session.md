@@ -153,8 +153,10 @@ use it for one test.
   `LAPIN_UX_DIALOG=1`, `LAPIN_UX_SETTINGS=1`, `LAPIN_UX_TITLEBAR=1`.
 - Icons: the `Lapin-UX` / `Lapin-UX-dark` theme (follows light/dark mode).
 - Light/dark mode: Lapin UX starts light (#159). The shell (`defaults::ensure_mode`)
-  and the welcome app write `is_dark = false` only when the key is missing, so a
-  choice made in Settings is never overwritten. The key is swapped per session
+  writes `is_dark = false` only when the key is missing (a file it can't read
+  or parse is left alone), so a choice made in Settings is never overwritten.
+  The welcome app only reads the key and selects Light when it is missing; it
+  writes the mode when the person picks one. The key is swapped per session
   like the other shared settings, so another desktop keeps its own mode. An
   existing Lapin copy of `is_dark` is kept as it is, since a chosen dark mode
   can't be told from an old default.
