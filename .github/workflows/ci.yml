@@ -1,0 +1,42 @@
+name: CI
+
+# Reports only: nothing here pushes or changes the repository.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  uninstall-tests:
+    name: Uninstall tests and shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dconf-cli dbus dbus-x11 shellcheck
+      - name: shellcheck
+        run: shellcheck -S warning tools/lapin-ux-uninstall
+      - name: Uninstall and coexistence tests
+        run: bash tools/test-uninstall/run.sh "$PWD/tools/lapin-ux-uninstall"
+
+  trivy:
+    name: Dependency and secret scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          skip-dirs: third_party
+          exit-code: "1"
