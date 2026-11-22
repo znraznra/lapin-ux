@@ -122,7 +122,8 @@ check "GTK font back to Cantarell" "[ \"\$(rd font-name)\" = \"'Cantarell 11'\" 
 echo "   leave is skipped while Lapin's shell runs"
 bash $DS enter
 mkdir -p /tmp/ut-$$; cp /bin/sleep /tmp/ut-$$/lapin-ux-shell
-/tmp/ut-$$/lapin-ux-shell 30 & sp=$!
+# argv0 stays "sleep" so a multicall coreutils (Ubuntu 26.04) still runs it; the process name is the file's
+( exec -a sleep /tmp/ut-$$/lapin-ux-shell 30 ) & sp=$!
 sleep 0.3; bash $DS leave
 check "nothing changed under a running Lapin" "[ \"\$(rd font-name)\" = \"'Selawik 10'\" ]"
 kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -rf /tmp/ut-$$
