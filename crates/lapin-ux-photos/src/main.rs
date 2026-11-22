@@ -626,7 +626,11 @@ impl App {
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };
-            container(text::body(msg)).center(Length::Fill).into()
+            let mut col = column::with_capacity(2).spacing(8).align_x(Alignment::Center);
+            if self.favorites_unsaved {
+                col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            container(col.push(text::body(msg))).center(Length::Fill).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
