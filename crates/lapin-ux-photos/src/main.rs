@@ -128,6 +128,8 @@ struct App {
     scanning: bool,
     /// What the last scan could not do, shown above the grid.
     notice: Option<String>,
+    /// Some folders could not be read (apart from a scan that only stopped early).
+    read_errors: bool,
     /// The picture whose full-size decode failed.
     failed: Option<PathBuf>,
     section: Section,
@@ -214,7 +216,8 @@ struct Scan {
     photos: Vec<Photo>,
     /// Folders or entries that could not be read (permissions, a vanished drive).
     unreadable: usize,
-    /// The walk stopped at `MAX_PHOTOS`.
+    /// The folder walk stopped at `MAX_PHOTOS`. Starred pictures elsewhere are
+    /// still added on top: they are the person's own choice and a short list.
     truncated: bool,
 }
 
@@ -455,6 +458,7 @@ impl cosmic::Application for App {
             photos: Vec::new(),
             scanning: true,
             notice: None,
+            read_errors: false,
             favorites_unsaved: false,
             failed: None,
             section: Section::Gallery,
@@ -501,12 +505,13 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Scanned(found) => {
+                self.read_errors = found.unreadable > 0;
                 self.notice = match (found.unreadable, found.truncated) {
                     (0, false) => None,
-                    (0, true) => Some(format!("Showing the first {MAX_PHOTOS} pictures found.")),
+                    (0, true) => Some(format!("Showing the first {MAX_PHOTOS} pictures found in your folders.")),
                     (n, false) => Some(format!("{n} folder(s) could not be read, so some pictures may be missing.")),
                     (n, true) => Some(format!(
-                        "Showing the first {MAX_PHOTOS} pictures found, and {n} folder(s) could not be read."
+                        "Showing the first {MAX_PHOTOS} pictures found in your folders, and {n} folder(s) could not be read."
                     )),
                 };
                 self.photos = found.photos;
@@ -621,14 +626,17 @@ impl App {
         let body: Element<'_, Message> = if self.scanning {
             container(text::body("Looking for your pictures...")).center(Length::Fill).into()
         } else if shown.is_empty() {
-            let msg = match (self.section, self.notice.is_some()) {
+            let msg = match (self.section, self.read_errors) {
                 (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };
-            let mut col = column::with_capacity(2).spacing(8).align_x(Alignment::Center);
+            let mut col = column::with_capacity(3).spacing(8).align_x(Alignment::Center);
             if self.favorites_unsaved {
                 col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            if let Some(notice) = &self.notice {
+                col = col.push(text::caption(notice.as_str()));
             }
             container(col.push(text::body(msg))).center(Length::Fill).into()
         } else {

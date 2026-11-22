@@ -13,7 +13,7 @@ Each view sets its own theme on its content (`iced::widget::themer`). The title 
 
 ## How it works
 
-- The scan walks the four folders in the background, up to 5 levels deep, skipping hidden folders, and stops at 20,000 pictures. Formats: JPEG, PNG, WebP, BMP, GIF.
+- The scan walks the four folders in the background, up to 5 levels deep, skipping hidden folders, and stops at 20,000 pictures. Starred pictures outside those folders are added on top of that limit, since they are the person's own choice. An empty section still shows the read-error, stopped-early and could-not-save notes, and says "could not be read" only when a folder really failed. Formats: JPEG, PNG, WebP, BMP, GIF.
 - Tiles are 170 px squares, decoded four at a time off the UI thread, upright by their EXIF rotation. At most 400 tiles are loaded per section (about 46 MB). The grid is not virtualised yet.
 - The full picture is decoded when opened and scaled down once if it is larger than 3840 px on either side.
 - Favorites are saved in `~/.config/dev.lapinux.Photos/favorites.json`. A failed save is logged and never ends the program (#174).
