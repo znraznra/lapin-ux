@@ -58,13 +58,13 @@ index 469360d..ba879e9 100644
                          )
 @@ -9322,6 +9332,11 @@ fn lapin_box_input() -> theme::TextInput {
  
- /// Lapin UX: the open place in the navigation pane: a soft grey box (the
- /// hover colour of the rows), not a pill.
 +/// Lapin UX (#151): widths the narrow-window rules work from.
 +const LAPIN_PANE_WIDTH: f32 = 280.0;
 +const LAPIN_DETAILS_WIDTH: f32 = 360.0;
 +const LAPIN_MIN_FILES_WIDTH: f32 = 420.0;
 +
+ /// Lapin UX: the open place in the navigation pane: a soft grey box (the
+ /// hover colour of the rows), not a pill.
  fn lapin_pane_selected() -> theme::Button {
      use cosmic::widget::button::Catalog;
      theme::Button::Custom {
