@@ -244,6 +244,9 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
             .on_press(Message::TrayOverflow(bar.id));
         tray.push(track(shell, rect_key(bar.id, "tray-overflow"), btn));
     }
+    if main_bar && !shell.removable.is_empty() {
+        tray.push(removable_button(shell, bar));
+    }
     if main_bar {
         tray.extend(shell.tray.iter().filter(|t| shell.tray_inline(t)).map(|t| tray_button(shell, bar, t)));
     }
@@ -450,6 +453,40 @@ fn task_button<'a>(shell: &'a Shell, bar: &'a Bar, b: Button<Handle>, label: Opt
         _ => rect_key(bar.id, &b.app),
     };
     track(shell, key, area)
+}
+
+/// Safely Remove Hardware: shown only while a removable drive is attached (#102).
+fn removable_button<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
+    let open = matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Removable));
+    let btn = button::custom(container(icon::from_name("drive-removable-media-symbolic").size(16)).center(Length::Fill))
+        .width(32)
+        .height(style::task_button())
+        .padding(0)
+        .class(style::flat_button(open))
+        .name(lapin_ux_core::removable::tooltip(&shell.removable))
+        .on_press(Message::RemovableClick(bar.id));
+    let area = mouse_area(btn).on_right_press(Message::RemovableSettings);
+    track(shell, rect_key(bar.id, "removable"), area)
+}
+
+/// One "Eject <drive>" row per drive, its volumes dimmed underneath.
+fn removable_menu(shell: &Shell) -> Element<'_, Message> {
+    use lapin_ux_core::removable as rm;
+    let mut items: Vec<Element<'_, Message>> = Vec::new();
+    for (i, d) in shell.removable.iter().enumerate() {
+        if i > 0 {
+            items.push(menu_divider());
+        }
+        items.push(menu_item("drive-removable-media-symbolic", rm::eject_label(d), Message::RemovableEject(d.path.clone())));
+        for v in rm::shown_volumes(d) {
+            items.push(
+                container(text::body(rm::volume_name(v)).class(style::dim_text()))
+                    .padding([2, 44])
+                    .into(),
+            );
+        }
+    }
+    panel(column::with_children(items).spacing(2), 260.0)
 }
 
 fn tray_button<'a>(shell: &'a Shell, bar: &'a Bar, t: &'a crate::app::TrayEntry) -> Element<'a, Message> {
@@ -951,6 +988,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
         PopupKind::TaskbarSmall => taskbar_small(shell),
         PopupKind::DesktopMenu(on, page) => crate::desktop::menu(shell, on, page),
         PopupKind::TrayOverflow => tray_overflow(shell, popup.parent),
+        PopupKind::Removable => removable_menu(shell),
         PopupKind::Power => panel(
             column::with_children(vec![
                 menu_item("system-lock-screen-symbolic", "Lock", Message::Power(PowerAction::Lock)),

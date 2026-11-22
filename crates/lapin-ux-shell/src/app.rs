@@ -96,6 +96,7 @@ pub enum PopupKind {
     TrayMenu(String),
     /// Hidden tray icons behind the ^ button.
     TrayOverflow,
+    Removable,
     /// The account button's menu in Start.
     Account,
     /// Task view: move a window to another desktop.
@@ -131,6 +132,7 @@ fn popup_a11y_name(kind: &PopupKind) -> &'static str {
         PopupKind::Calendar => "Calendar",
         PopupKind::Power => "Power",
         PopupKind::TrayOverflow => "Hidden icons",
+        PopupKind::Removable => "Removable drives",
         PopupKind::Account => "Account",
         PopupKind::InputMenu => "Input methods",
         PopupKind::ConfirmEmptyTrash | PopupKind::ConfirmUninstall(_) => "Confirm",
@@ -205,6 +207,12 @@ pub enum Message {
     TaskbarOption(crate::taskbar_extras::TaskbarOption),
     BarPointer(window::Id, crate::taskbar_extras::Pointer),
     TrayOverflow(window::Id),
+    Removable(crate::removable::Event),
+    RemovableClick(window::Id),
+    RemovableSettings,
+    /// The drive's UDisks object path, so a list update between render and click can't eject another drive.
+    RemovableEject(String),
+    RemovableDone(String, Result<(), String>),
     /// Stable tray id, show inline on the taskbar.
     TrayPin(String, bool),
     StartQuery(String),
@@ -405,6 +413,8 @@ pub struct Shell {
     /// Start was requested before any taskbar existed (Super pressed at login).
     pub(crate) start_pending: bool,
     pub tray: Vec<TrayEntry>,
+    /// Removable drives for the "Safely Remove Hardware" icon (#102).
+    pub removable: Vec<lapin_ux_core::removable::Drive>,
     /// Submenu path inside the open tray menu.
     pub tray_menu_path: Vec<i32>,
     /// Win+X menu / Run dialog.
@@ -1188,6 +1198,7 @@ impl Application for Shell {
             desktop_shown: Vec::new(),
             start_pending: false,
             tray: Vec::new(),
+            removable: Vec::new(),
             tray_menu_path: Vec::new(),
             panel: None,
             run_seq: 0,
@@ -1306,6 +1317,7 @@ impl Application for Shell {
         Subscription::batch(tray_subs.chain([
             frames,
             crate::tray::subscription().map(Message::Tray),
+            crate::removable::subscription().map(Message::Removable),
             crate::notify_client::subscription().map(Message::NotifyState),
             crate::launcher_entry::subscription().map(Message::Badge),
             crate::clipboard::subscription().map(Message::Clip),
@@ -1759,6 +1771,42 @@ impl Shell {
                 return self.bar_pointer(id, ev);
             }
             Message::TrayOverflow(bar) => return self.tray_overflow(bar),
+            Message::Removable(crate::removable::Event::Drives(drives)) => {
+                self.removable = drives;
+                // Unplugged without ejecting: the icon goes quietly, and so does its menu.
+                if self.removable.is_empty() && matches!(&self.popup, Some(Popup { kind: PopupKind::Removable, .. })) {
+                    return self.close_popup();
+                }
+            }
+            Message::RemovableClick(bar) => {
+                let key = rect_key(bar, "removable");
+                return self.open_popup(bar, &key, PopupKind::Removable);
+            }
+            Message::RemovableSettings => {
+                let close = self.close_popup();
+                return Task::batch([close, self.open_settings("bluetooth")]);
+            }
+            Message::RemovableEject(path) => {
+                let Some(drive) = self.removable.iter().find(|d| d.path == path).cloned() else { return self.close_popup() };
+                let name = lapin_ux_core::removable::drive_name(&drive.props);
+                let close = self.close_popup();
+                return Task::batch([
+                    close,
+                    Task::future(async move {
+                        let res = crate::removable::eject(drive).await;
+                        cosmic::Action::App(Message::RemovableDone(name, res))
+                    }),
+                ]);
+            }
+            Message::RemovableDone(name, res) => {
+                return Task::future(async move {
+                    match res {
+                        Ok(()) => crate::removable::toast("Safe To Remove Hardware", &format!("{name} can now be removed.")).await,
+                        Err(e) => crate::removable::toast("Problem Ejecting", &e).await,
+                    }
+                    cosmic::Action::App(Message::Noop)
+                });
+            }
             Message::TrayPin(id, inline) => return self.tray_pin(id, inline),
             Message::CloseStart => {
                 if self.popup.is_some() {

@@ -198,3 +198,15 @@ windows coming back from minimize and positions apps ask for are left alone.
 - **Touchpad**: three fingers up for Task view, down to show the desktop,
   sideways to switch apps; four fingers sideways to switch desktops.
 - New windows fade in as they open; minimize and restore animate to the taskbar.
+- **Safely Remove Hardware** (#102): a tray icon left of the other tray icons,
+  shown only while a USB stick, SD card or similar removable drive is attached
+  (phones, network shares and internal disks are left out). Click it for one
+  "Eject <drive>" row per drive with its volumes underneath, right-click it for
+  Settings > Bluetooth & devices. Eject unmounts every volume (locking an
+  encrypted one), then powers the drive off, or ejects it for card readers and
+  discs, and says "Safe To Remove Hardware". If something is still using it,
+  "Problem Ejecting" names the programs (found by scanning `/proc`). Unplugging
+  without ejecting just hides the icon. It talks to UDisks2 on the system bus
+  (`lapin-ux-shell/src/removable.rs`); the pure logic is in
+  `lapin_ux_core::removable`. It reads and writes no shared COSMIC or GTK
+  setting, and only exists in the Lapin session.
