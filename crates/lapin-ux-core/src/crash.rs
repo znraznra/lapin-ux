@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::sync::Mutex;
 
 /// How many recent events a report lists.
@@ -97,7 +98,9 @@ pub fn install(program: &'static str) {
         let bt = std::backtrace::Backtrace::force_capture().to_string();
         let recent: Vec<String> = RECENT.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default();
         let text = report(program, &info.to_string(), &bt, &recent);
-        eprintln!("{text}");
+        // Not eprintln!: it panics when stderr can't be written (full disk, closed
+        // log), and a panic inside this hook aborts the process (#174).
+        let _ = writeln!(std::io::stderr(), "{text}");
         if first
             && let Some(dir) = state_dir()
             && std::fs::create_dir_all(&dir).is_ok()

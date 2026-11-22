@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        .log_internal_errors(false) // #174: a full disk must not end the program
         .init();
 
     // Prefer Lapin UX's build of the compositor (snap layouts, attention)
