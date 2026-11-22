@@ -23,6 +23,15 @@ pub enum TaskbarPosition {
     #[default]
     Bottom,
     Top,
+    Left,
+    Right,
+}
+
+impl TaskbarPosition {
+    /// The bar runs up and down the screen (#41).
+    pub fn vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, CosmicConfigEntry)]

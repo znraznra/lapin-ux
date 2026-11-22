@@ -529,9 +529,11 @@ impl Shell {
             hovered: false,
             hide_pending: false,
         });
-        let zone = if self.config.auto_hide { 0 } else { style::taskbar_height() as i32 };
+        let zone = if self.config.auto_hide { 0 } else { self.bar_thickness() as i32 };
         let hidden_input = self.config.auto_hide.then(|| vec![self.hidden_strip()]);
-        let bar_anchor = self.edge() | Anchor::LEFT | Anchor::RIGHT;
+        let bar_anchor = self.bar_anchor();
+        let thickness = self.bar_thickness();
+        let vertical = self.vertical();
         let task = cosmic::surface::surface_task(app_layer_shell(
             // Opaque by default (#55): blur only with transparency effects on.
             move |shell: &Shell| LiveSettings { blur: Some(shell.bar_visible(id) && shell.config.transparency_effects), ..Default::default() },
@@ -542,10 +544,14 @@ impl Shell {
                 anchor: bar_anchor,
                 output: IcedOutput::Output(output.clone()),
                 namespace: "lapin-ux-taskbar".into(),
-                size: Some((None, Some(style::taskbar_height()))),
+                size: if vertical { Some((Some(thickness), None)) } else { Some((None, Some(thickness))) },
                 exclusive_zone: zone,
                 input_zone: hidden_input.clone(),
-                size_limits: Limits::NONE.min_height(40.0).max_height(48.0),
+                size_limits: if vertical {
+                    Limits::NONE.min_width(48.0).max_width(56.0)
+                } else {
+                    Limits::NONE.min_height(40.0).max_height(48.0)
+                },
                 ..Default::default()
             },
             None,
@@ -558,12 +564,13 @@ impl Shell {
 
     pub(crate) fn open_start(&mut self) -> Task<Message> {
         let id = window::Id::unique();
+        let vertical = self.vertical();
         let height = self
             .bars
             .iter()
             .filter_map(|b| b.output_height)
             .min()
-            .map(|h| h.saturating_sub(style::taskbar_height() + 24).min(style::START_HEIGHT))
+            .map(|h| h.saturating_sub(if vertical { 24 } else { style::taskbar_height() + 24 }).min(style::START_HEIGHT))
             .unwrap_or(style::START_HEIGHT)
             .max(360);
         let t0 = Instant::now();
@@ -585,7 +592,7 @@ impl Shell {
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
         let start_edge = self.edge();
-        let start_margin = self.edge_margin(above - 8, if left { 12 } else { 0 }, 0);
+        let start_margin = self.edge_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
         self.anim_start_opened(id);
         Task::batch([
@@ -601,7 +608,7 @@ impl Shell {
                     id,
                     layer: Layer::Overlay,
                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                    anchor: if left { start_edge | Anchor::LEFT } else { start_edge },
+                    anchor: if left && !vertical { start_edge | Anchor::LEFT } else { start_edge },
                     output: IcedOutput::Active,
                     namespace: "lapin-ux-start".into(),
                     // Opens a little close to the bar and slides into place (anim.rs).
@@ -754,9 +761,12 @@ impl Shell {
             crate::redraw_debug::surface("pop-up opened", (&kind, parent, key, r, self.rects.contains_key(key)));
         }
         // Menus over the taskbar, or the Task view's desktop row, open upwards.
-        let above = (self.bars.iter().any(|b| b.id == parent) && !self.top_bar())
+        let above = (self.bars.iter().any(|b| b.id == parent) && !self.top_bar() && !self.vertical())
             || matches!(kind, PopupKind::DesktopTile(_) | PopupKind::DesktopBackground(_));
         let top_bar = self.top_bar();
+        // On a side bar (#41) pop-ups open beside the bar: Some(true) = bar on the right.
+        let side = (self.vertical() && self.bars.iter().any(|b| b.id == parent))
+            .then(|| self.config.position == crate::config::TaskbarPosition::Right);
         let at_pointer = matches!(kind, PopupKind::TaskbarMenu | PopupKind::DesktopMenu(..));
         // Hover previews must not take the pointer or keyboard.
         let grab = !matches!(kind, PopupKind::Preview(_));
@@ -783,6 +793,8 @@ impl Shell {
                 // Menus opened at the pointer grow up and to the right of
                 // it; the rest are centred over the button they belong to.
                 anchor: match (at_pointer, above) {
+                    _ if side.is_some() && at_pointer => if side == Some(true) { PAnchor::TopRight } else { PAnchor::TopLeft },
+                    _ if side.is_some() => if side == Some(true) { PAnchor::Left } else { PAnchor::Right },
                     // The account menu rises from the account button, left-aligned.
                     _ if kind == PopupKind::Account => if top_bar { PAnchor::BottomLeft } else { PAnchor::TopLeft },
                     (true, _) => PAnchor::TopLeft,
@@ -790,6 +802,8 @@ impl Shell {
                     (false, false) => PAnchor::Bottom,
                 },
                 gravity: match (at_pointer, above) {
+                    _ if side.is_some() && at_pointer => if side == Some(true) { Gravity::BottomLeft } else { Gravity::BottomRight },
+                    _ if side.is_some() => if side == Some(true) { Gravity::Left } else { Gravity::Right },
                     _ if kind == PopupKind::Account => if top_bar { Gravity::BottomRight } else { Gravity::TopRight },
                     (true, true) => Gravity::TopRight,
                     (true, false) => Gravity::BottomRight,
@@ -798,7 +812,11 @@ impl Shell {
                 },
                 // slide_x | flip_y | resize_x | resize_y
                 constraint_adjustment: 1 | 8 | 16 | 32,
-                offset: (0, if above { -8 } else { 4 }),
+                offset: match side {
+                    Some(true) => (-8, 0),
+                    Some(false) => (8, 0),
+                    None => (0, if above { -8 } else { 4 }),
+                },
                 reactive: true,
             },
             parent_size: None,

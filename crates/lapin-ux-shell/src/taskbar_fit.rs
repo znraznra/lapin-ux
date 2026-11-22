@@ -18,6 +18,14 @@ const RIGHT_SIDE: f32 = 330.0;
 impl Shell {
     /// Room left for app buttons on the main taskbar.
     fn button_space(&self) -> f32 {
+        if self.vertical() {
+            // A side bar stacks everything: Start, search, Task view, the
+            // buttons, then the tray and clock at the bottom.
+            let height = self.main_bar().and_then(|b| b.output_height).unwrap_or(800) as f32;
+            let fixed = 16.0 + 44.0 * 3.0 + 200.0;
+            let sides = if self.config.alignment == TaskbarAlignment::Center { 2.0 * 200.0 } else { 200.0 };
+            return (height - sides - fixed).max(0.0);
+        }
         let width = self.main_bar().and_then(|b| b.output_width).unwrap_or(1280) as f32;
         let mut fixed = 16.0 + 44.0 + 44.0; // padding, Start, Task view
         if self.config.show_search {
@@ -42,11 +50,12 @@ impl Shell {
             return Task::none();
         }
         style::set_small_taskbar(f.small);
-        let h = style::taskbar_height();
+        let h = self.bar_thickness();
+        let vertical = self.vertical();
         let mut tasks = Vec::new();
         let bars: Vec<_> = self.bars.iter().map(|b| (b.id, b.revealed)).collect();
         for (id, revealed) in bars {
-            tasks.push(set_size(id, None, Some(h)));
+            tasks.push(if vertical { set_size(id, Some(h), None) } else { set_size(id, None, Some(h)) });
             tasks.push(self.resize_bar_pub(id, revealed));
         }
         // The desktop's free area changes with the bar.

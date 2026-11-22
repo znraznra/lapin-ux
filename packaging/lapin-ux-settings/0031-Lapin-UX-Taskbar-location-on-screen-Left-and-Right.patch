@@ -1,0 +1,54 @@
+From 48ac9f8977a3176c3a31afb98c4432b59b06c9d4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 22 Nov 2026 17:25:30 +0800
+Subject: [PATCH] Lapin UX: Taskbar location on screen (Left and Right)
+
+The setting now offers all four edges. The shell's 'position' key in
+dev.lapinux.Shell is Lapin's own, nothing for the per-session swap. Refs #41.
+---
+ cosmic-settings/src/lapin/settings.rs | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 4682a3b..7a5851a 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -33,6 +33,8 @@ pub enum Position {
+     #[default]
+     Bottom,
+     Top,
++    Left,
++    Right,
+ }
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+ pub enum Combine {
+@@ -728,7 +730,7 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+             save(SHELL, "alignment", &p.alignment);
+         }
+         Msg::Position(i) => {
+-            p.position = if i == 1 { Position::Top } else { Position::Bottom };
++            p.position = [Position::Bottom, Position::Top, Position::Left, Position::Right][i.min(3)];
+             save(SHELL, "position", &p.position);
+         }
+         Msg::AutoHide(v) => (p.auto_hide = v, save(SHELL, "auto_hide", &v)).1,
+@@ -891,7 +893,7 @@ fn section_view<P: page::Page<PMsg>>(title: &'static str, f: Rows) -> Section<PM
+ // --- Personalization > Taskbar -------------------------------------------
+ 
+ const ALIGN: [&str; 2] = ["Center", "Left"];
+-const POSITION: [&str; 2] = ["Bottom", "Top"];
++const POSITION: [&str; 4] = ["Bottom", "Top", "Left", "Right"];
+ const WHEN: [&str; 3] = ["Always", "When taskbar is full", "Never"];
+ const MULTI: [&str; 3] = ["All taskbars", "Main taskbar and taskbar where window is open", "Taskbar where window is open"];
+ 
+@@ -910,7 +912,7 @@ fn taskbar_behaviors<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     };
+     vec![
+         choice("Taskbar alignment", None, &ALIGN, usize::from(p.alignment == Alignment::Left), Msg::Alignment),
+-        choice("Taskbar location on screen", None, &POSITION, usize::from(p.position == Position::Top), Msg::Position),
++        choice("Taskbar location on screen", None, &POSITION, p.position as usize, Msg::Position),
+         toggle("Automatically hide the taskbar", None, p.auto_hide, Msg::AutoHide),
+         choice("Combine taskbar buttons and hide labels", None, &WHEN, p.combine as usize, Msg::Combine),
+         choice("Show smaller taskbar buttons", None, &WHEN, p.small as usize, Msg::Small),
+-- 
+2.56.1
+

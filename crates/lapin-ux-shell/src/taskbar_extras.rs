@@ -23,6 +23,7 @@ pub enum Pointer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarOption {
     Align(TaskbarAlignment),
+    Position(crate::config::TaskbarPosition),
     ToggleSearch,
     ToggleDesktopButton,
     ToggleTouchKeyboard,
@@ -196,6 +197,11 @@ impl Shell {
     pub(crate) fn taskbar_option(&mut self, opt: TaskbarOption) -> Task<Message> {
         match opt {
             TaskbarOption::Align(a) => self.config.alignment = a,
+            TaskbarOption::Position(p) => {
+                self.config.position = p;
+                self.persist_config();
+                return self.position_changed();
+            }
             TaskbarOption::ToggleSearch => self.config.show_search = !self.config.show_search,
             TaskbarOption::ToggleDesktopButton => self.config.show_desktop_corner = !self.config.show_desktop_corner,
             TaskbarOption::ToggleTouchKeyboard => self.config.touch_keyboard_button = !self.config.touch_keyboard_button,
