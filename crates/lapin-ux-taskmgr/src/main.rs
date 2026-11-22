@@ -1239,6 +1239,7 @@ fn main() -> cosmic::iced::Result {
     lapin_ux_core::crash::install("lapin-ux-taskmgr");
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
+        .log_internal_errors(false) // #174: a full disk must not end the program
         .init();
     cosmic::app::run_single_instance::<App>(Settings::default().size(Size::new(1000.0, 700.0)).size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)), lapin_ux_ui::SingleInstance)
 }

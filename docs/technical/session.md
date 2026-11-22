@@ -8,7 +8,12 @@
   supervises every component with exponential back-off restarts.
 - `dev.lapinux.Session.Exit` on the session bus for Sign out.
 - `start-lapin-ux` opens `session.log` on its first lines, so a failure while
-  starting is recorded with the last step it reached (#100). It waits up to 5 s
+  starting is recorded with the last step it reached (#100). The log is a
+  convenience, never a requirement (#174): on a full disk, a read-only home or
+  a broken state folder the session starts without it (the file is test-opened
+  in a subshell first, since a failed redirection ends a POSIX shell), and
+  every log line goes through `say`, which ignores a write error that `set -e`
+  would turn into the end of the script. It waits up to 5 s
   for the user's systemd manager (greetd starts the session before it is
   ready, GDM later) and treats the `systemctl --user` calls as best effort. It
   also turns a `;`-separated `DesktopNames` that cosmic-greeter passes into
@@ -27,7 +32,11 @@
   `~/.local/state/lapin-ux/crash-<program>.txt`. Release builds keep line
   tables (`debug = "line-tables-only"`, PKGBUILD `!strip`) so backtraces
   name files and lines; `start-lapin-ux` sets `RUST_BACKTRACE=1` and logs
-  the installed build.
+  the installed build. Writing the report never panics (#174): the crash hook
+  writes to stderr with `writeln!` and ignores the result, and every program's
+  `tracing_subscriber` is built with `log_internal_errors(false)`, because the
+  default prints a failed log write with `eprintln!`, which panics when stderr
+  is broken too, and a panic inside the hook aborts the process.
 - Redraw diagnostics (#32, #34, #51): `touch ~/.local/state/lapin-ux/debug-redraw`
   (or `LAPIN_UX_DEBUG_REDRAW=1`) before signing in makes the shell log to
   `session.log` its message count every 5 s (with the busiest message kinds,

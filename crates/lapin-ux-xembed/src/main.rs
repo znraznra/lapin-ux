@@ -49,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
     lapin_ux_core::crash::install("lapin-ux-xembed");
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .log_internal_errors(false) // #174: a full disk must not end the program
         .init();
 
     if std::env::var_os("DISPLAY").is_none() {
