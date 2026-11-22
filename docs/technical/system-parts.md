@@ -71,6 +71,14 @@
   grows the blur behind it over the same 200 ms and back
   (`lapin-ux-comp` 0011, `LapinBlurFade`, lock surfaces in the Lapin
   session only).
+- A full disk is named plainly (#174, greeter patch 0010): when greetd
+  reports a failure whose text says "No space left on device", or the home
+  (`/home`) or state (`/var`) disk has under 1 MiB free, the sign-in screen
+  shows "The disk is full, so signing in can't finish. Free up some space and
+  try again." instead of "Incorrect password" or a generic failure. A failed
+  write of the last user or session (ENOSPC) shows it too. A failed free-space
+  check never blames the disk. The greeter package replaces COSMIC's greeter
+  as a whole, so stock COSMIC gets its own greeter back on uninstall.
 
 **Typing**
 - With several keyboard layouts or fcitx5 input methods, the taskbar shows
