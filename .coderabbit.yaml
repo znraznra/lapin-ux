@@ -20,6 +20,12 @@ reviews:
     base_branches:
       - "^main$"
 
+  # CodeRabbit only reviews. Fixes are made by hand on the PR branch, so the
+  # "Fix comments" autofix stays off.
+  finishing_touches:
+    autofix:
+      enabled: false
+
   # Patch files are a diff of a diff with no upstream context, and the rest is
   # generated or binary-ish, so none of it is worth a review.
   path_filters:
