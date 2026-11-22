@@ -180,6 +180,18 @@ the current width every time the window is drawn, not from a stored flag. Pages
 you opened yourself from the command bar (History, Options, About) stay. This is
 Lapin-only (`config::lapin_session()`); COSMIC's own session is stock.
 
+## Properties window size and tabs (#171)
+
+In a Lapin session the Properties window opens at one fixed size (590 by 820,
+minimum and maximum the same, not resizable), the usual way. The General and
+Security tabs use the same tab bar as Explorer's own tabs (`lapin_props_tabs`,
+a `segmented_button` model; `Message::LapinPropertiesTab` carries the entity).
+Only the page scrolls: the tab bar and OK, Cancel and Apply stay in place,
+because the Lapin arm of `view_window` returns early without the outer
+scrollable that wraps every other window. COSMIC's own session keeps its
+resizable window (`config::lapin_session()`). Patch:
+`packaging/lapin-ux-files/0034`.
+
 ## Name and About (#173)
 
 In a Lapin session the app is called **Explorer** everywhere: the window title
