@@ -120,6 +120,8 @@ fn still_viewing(path: &Path) -> bool {
     VIEWING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(path)
 }
 
+const FAVORITES_UNSAVED: &str = "Your favorites could not be saved, so the change was not kept.";
+
 struct App {
     core: Core,
     photos: Vec<Photo>,
@@ -133,6 +135,8 @@ struct App {
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
+    /// The last favorites change could not be saved, so the stars show what is on disk.
+    favorites_unsaved: bool,
     /// The photo shown in the viewer, as a path (the list can change under it).
     viewing: Option<PathBuf>,
     full: Option<(PathBuf, Handle)>,
@@ -451,6 +455,7 @@ impl cosmic::Application for App {
             photos: Vec::new(),
             scanning: true,
             notice: None,
+            favorites_unsaved: false,
             failed: None,
             section: Section::Gallery,
             thumbs: HashMap::new(),
@@ -563,14 +568,14 @@ impl cosmic::Application for App {
                 // A full disk or a read-only home must not end the program (#174).
                 match set_favorite(&path, on) {
                     // The saved list already holds changes made in other windows.
-                    Ok(saved) => self.favorites = saved,
+                    Ok(saved) => {
+                        self.favorites = saved;
+                        self.favorites_unsaved = false;
+                    }
+                    // Keep the saved state: a star that only exists until the next restart would mislead.
                     Err(e) => {
                         tracing::warn!("could not save favorites: {e}");
-                        if on {
-                            self.favorites.insert(path);
-                        } else {
-                            self.favorites.remove(&path);
-                        }
+                        self.favorites_unsaved = true;
                     }
                 }
             }
@@ -624,6 +629,9 @@ impl App {
             container(text::body(msg)).center(Length::Fill).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
+            if self.favorites_unsaved {
+                col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));
             }
@@ -700,12 +708,16 @@ impl App {
         let index = list.iter().position(|p| p.path == path);
         let favorite = self.favorites.contains(path);
 
-        let bar = row::with_capacity(6)
+        let mut bar = row::with_capacity(7)
             .spacing(4)
             .align_y(Alignment::Center)
             .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back to the gallery").on_press(Message::Back))
             .push(container(text::body(file_name(path))).padding([0, 8]))
-            .push(widget::Space::new().width(Length::Fill))
+            .push(widget::Space::new().width(Length::Fill));
+        if self.favorites_unsaved {
+            bar = bar.push(text::caption(FAVORITES_UNSAVED));
+        }
+        let bar = bar
             .push(
                 button::icon(icon::from_name("go-previous-symbolic"))
                     .name("Previous photo")
