@@ -37,6 +37,7 @@ a change to one area only touches that file.
 - [System parts](technical/system-parts.md): Pop-ups and admin prompt, title bars of COSMIC apps, snipping, system tools, lock screen and sign-in, typing, accessibility.
 - [Look and sound](technical/look-and-sound.md): Text rendering, sounds and pointers.
 - [Explorer and file dialogs](technical/explorer.md): The Explorer (`lapin-explorer`) and the Open/Save dialogs.
+- [Photos](technical/photos.md): The offline Photos app (`lapin-ux-photos`): dark gallery, light viewer, favorites.
 - [Session and first-run defaults](technical/session.md): The session (`lapin-ux-session`) and the defaults written on first run.
 
 ## Architecture

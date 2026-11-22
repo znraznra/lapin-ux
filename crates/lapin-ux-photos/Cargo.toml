@@ -1,0 +1,21 @@
+[package]
+name = "lapin-ux-photos"
+description = "Lapin UX Photos: an offline gallery and image viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libcosmic.workspace = true
+lapin-ux-core.workspace = true
+lapin-ux-ui.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Already in the tree through libcosmic; reads the photo's rotation (EXIF).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
