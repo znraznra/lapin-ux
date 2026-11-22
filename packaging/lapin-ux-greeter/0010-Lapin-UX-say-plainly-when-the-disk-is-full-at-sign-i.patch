@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 22 Nov 2026 11:58:11 +0800
+Subject: [PATCH] Lapin UX: say plainly when the disk is full at sign-in
+
+Refs #174. A full home or state disk made sign-in fail with a wrong-password
+or generic message (or none). The sign-in screen now says the disk is full
+when greetd's error text says ENOSPC, when /home or /var has under 1 MiB
+free, or when saving the last user or session fails with ENOSPC.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock                 |  1 +
+ Cargo.toml                 |  1 +
+ i18n/en/cosmic_greeter.ftl |  1 +
+ src/greeter.rs             | 19 +++++++++++++++++--
+ src/greeter/ipc.rs         |  6 ++++++
+ src/lapin.rs               | 32 ++++++++++++++++++++++++++++++++
+ 6 files changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index b32909b..bfd111e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1353,6 +1353,7 @@ dependencies = [
+  "jiff-icu",
+  "jxl-oxide",
+  "kdl",
++ "libc",
+  "libcosmic",
+  "logind-zbus",
+  "pam-client",
+diff --git a/Cargo.toml b/Cargo.toml
+index 780fc03..0826725 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,6 +7,7 @@ edition = "2024"
+ vergen = { version = "8", features = ["git", "gitcl"] }
+ 
+ [dependencies]
++libc = "0.2"
+ anyhow = "1"
+ async-fn-stream = "0.3"
+ icu = { version = "2.2.0", features = ["compiled_data"] }
+diff --git a/i18n/en/cosmic_greeter.ftl b/i18n/en/cosmic_greeter.ftl
+index fa77b09..6e15511 100644
+--- a/i18n/en/cosmic_greeter.ftl
++++ b/i18n/en/cosmic_greeter.ftl
+@@ -36,3 +36,4 @@ auth-error-credentials = Incorrect password. Please check your keyboard layout a
+ auth-error-denied = Access denied.
+ auth-error-maxtries = Too many failed authentication attempts.
+ auth-error-account = Account is unavailable or disabled.
++disk-full = The disk is full, so signing in can't finish. Free up some space and try again.
+diff --git a/src/greeter.rs b/src/greeter.rs
+index 079c554..cfc69df 100644
+--- a/src/greeter.rs
++++ b/src/greeter.rs
+@@ -1601,6 +1601,9 @@ impl cosmic::Application for App {
+                         self.flags.greeter_config.last_user,
+                         err
+                     );
++                    if crate::lapin::says_disk_full(&format!("{err:?}")) {
++                        self.common.error_opt = Some(fl!("disk-full"));
++                    }
+                 }
+                 match user_entry {
+                     hash_map::Entry::Vacant(entry) => {
+@@ -1640,6 +1643,9 @@ impl cosmic::Application for App {
+                         uid,
+                         err
+                     );
++                    if crate::lapin::says_disk_full(&format!("{err:?}")) {
++                        self.common.error_opt = Some(fl!("disk-full"));
++                    }
+                 }
+             }
+             Message::Auth(response) => {
+@@ -1651,7 +1657,12 @@ impl cosmic::Application for App {
+                 self.send_request(Request::PostAuthMessageResponse { response });
+             }
+             Message::AuthError(error) => {
+-                self.common.error_opt = Some(error);
++                // Lapin UX: say plainly when the disk is full.
++                self.common.error_opt = Some(if crate::lapin::sign_in_blocked_by_full_disk(&error) {
++                    fl!("disk-full")
++                } else {
++                    error
++                });
+                 if self.authenticating {
+                     // Cancel failed password session so pam_faillock records the attempt.
+                     self.authenticating = false;
+@@ -1676,7 +1687,11 @@ impl cosmic::Application for App {
+                 }
+             }
+             Message::Error(error) => {
+-                self.common.error_opt = Some(error);
++                self.common.error_opt = Some(if crate::lapin::sign_in_blocked_by_full_disk(&error) {
++                    fl!("disk-full")
++                } else {
++                    error
++                });
+                 self.authenticating = false;
+ 
+                 self.send_request(Request::CancelSession);
+diff --git a/src/greeter/ipc.rs b/src/greeter/ipc.rs
+index 4e92afe..220d90b 100644
+--- a/src/greeter/ipc.rs
++++ b/src/greeter/ipc.rs
+@@ -16,6 +16,12 @@ use crate::{common, fl};
+ fn greetd_error_to_message(error_type: greetd_ipc::ErrorType, description: &str) -> String {
+     use greetd_ipc::ErrorType;
+ 
++    // Lapin UX: a full disk breaks sign-in in ways PAM reports as a wrong
++    // password or a generic failure, so say it plainly instead.
++    if crate::lapin::sign_in_blocked_by_full_disk(description) {
++        return fl!("disk-full");
++    }
++
+     match error_type {
+         ErrorType::AuthError => {
+             // For authentication errors, check description for specific error types
+diff --git a/src/lapin.rs b/src/lapin.rs
+index 61310f5..4a9b6f1 100644
+--- a/src/lapin.rs
++++ b/src/lapin.rs
+@@ -378,3 +378,35 @@ pub fn ensure_osk() {
+         }
+     }
+ }
++
++/// Free space below which sign-in is likely to fail (a session needs to write
++/// its logs, config and crash reports): 1 MiB.
++const LOW_SPACE_BYTES: u64 = 1024 * 1024;
++
++/// True when an error text from greetd, PAM or a config write says the disk
++/// is full (ENOSPC).
++pub fn says_disk_full(text: &str) -> bool {
++    let t = text.to_ascii_lowercase();
++    t.contains("no space left") || t.contains("enospc") || t.contains("os error 28")
++}
++
++/// True when the folder's disk has almost no free space left for normal users.
++/// Returns false when the check itself fails, so a sign-in error is never
++/// blamed on the disk by mistake.
++pub fn disk_nearly_full(path: &str) -> bool {
++    let Ok(c_path) = std::ffi::CString::new(path) else {
++        return false;
++    };
++    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
++    // SAFETY: c_path is a valid NUL-terminated string and stat is a valid out pointer.
++    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
++        return false;
++    }
++    (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) < LOW_SPACE_BYTES
++}
++
++/// True when signing in is failing because the disk is full: the error text
++/// says so, or the home or state disk is out of space.
++pub fn sign_in_blocked_by_full_disk(text: &str) -> bool {
++    says_disk_full(text) || disk_nearly_full("/home") || disk_nearly_full("/var")
++}
