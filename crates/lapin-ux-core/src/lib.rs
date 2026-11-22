@@ -13,6 +13,7 @@ pub mod clock;
 pub mod crash;
 pub mod desktop;
 pub mod desktops;
+pub mod disk;
 pub mod display;
 pub mod dnd;
 pub mod files;

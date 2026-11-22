@@ -35,6 +35,11 @@ pub enum QuietMsg {
     AddCalendar,
     RemoveCalendar(String),
     EventsLoaded(Vec<Event>),
+    /// Settings > the low disk space warning switch.
+    LowDiskWarning(bool),
+    /// Free space on the home and root drives, as just read. Empty when the
+    /// read failed, which changes nothing.
+    DiskChecked(Vec<lapin_ux_core::disk::Drive>),
 }
 
 #[derive(Default)]
@@ -49,6 +54,8 @@ pub struct Quiet {
     pub calendar_input: String,
     /// Apps seen this session (for the settings list).
     pub seen_apps: Vec<String>,
+    /// Warn when a drive is nearly full (#174).
+    pub low_disk_warning: bool,
 }
 
 fn minute_now() -> u32 {
@@ -58,7 +65,7 @@ fn minute_now() -> u32 {
 
 impl Quiet {
     pub fn load(cfg: Option<&cosmic::cosmic_config::Config>) -> Quiet {
-        let mut q = Quiet { focus_minutes: 30, ..Default::default() };
+        let mut q = Quiet { focus_minutes: 30, low_disk_warning: true, ..Default::default() };
         if let Some(c) = cfg {
             q.dnd.manual = c.get::<bool>("do_not_disturb").unwrap_or(false);
             q.dnd.schedule = c.get::<Schedule>("dnd_schedule").unwrap_or_default();
@@ -66,6 +73,7 @@ impl Quiet {
             q.calendars = c.get::<Vec<String>>("calendar_sources").unwrap_or_default();
             q.focus_minutes = c.get::<u32>("focus_minutes").unwrap_or(30).clamp(5, 240);
             q.seen_apps = c.get::<Vec<String>>("seen_apps").unwrap_or_default();
+            q.low_disk_warning = c.get::<bool>("low_disk_warning").unwrap_or(true);
         }
         q
     }
@@ -166,6 +174,38 @@ pub fn load_events(sources: Vec<String>) -> Task<Message> {
     })
 }
 
+/// The drive holding the home folder: the longest mount point that is a
+/// parent of `$HOME`.
+fn home_mount(drives: &[lapin_ux_core::disk::Drive]) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    drives
+        .iter()
+        .filter(|d| std::path::Path::new(&home).starts_with(&d.mount))
+        .max_by_key(|d| d.mount.len())
+        .map(|d| d.mount.clone())
+        .unwrap_or_else(|| "/".into())
+}
+
+/// Read the free space of the root drive and the one holding the home
+/// folder (`df`, so a stuck network drive can't hold the daemon up: it is
+/// given ten seconds).
+fn read_drives() -> Task<Message> {
+    Task::future(async move {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        let df = tokio::process::Command::new("df")
+            .env("LC_ALL", "C")
+            .args(["-P", "-B1", "/"])
+            .arg(home)
+            .kill_on_drop(true)
+            .output();
+        let drives = match tokio::time::timeout(Duration::from_secs(10), df).await {
+            Ok(Ok(o)) if o.status.success() => lapin_ux_core::disk::parse_df(&String::from_utf8_lossy(&o.stdout)),
+            _ => Vec::new(),
+        };
+        cosmic::Action::App(Message::Quiet(QuietMsg::DiskChecked(drives)))
+    })
+}
+
 impl App {
     /// Recompute Do not disturb; tell the taskbar if it changed.
     pub(crate) fn refresh_dnd(&mut self) -> Task<Message> {
@@ -195,7 +235,30 @@ impl App {
     pub(crate) fn update_quiet(&mut self, msg: QuietMsg) -> Task<Message> {
         let cfg = self.settings.clone();
         match msg {
-            QuietMsg::Minute => return self.refresh_dnd(),
+            QuietMsg::Minute => {
+                let mut tasks = vec![self.refresh_dnd()];
+                if self.quiet.low_disk_warning {
+                    tasks.push(read_drives());
+                }
+                return Task::batch(tasks);
+            }
+            QuietMsg::LowDiskWarning(on) => {
+                self.quiet.low_disk_warning = on;
+                save(cfg.as_ref(), "low_disk_warning", &on);
+            }
+            QuietMsg::DiskChecked(drives) => {
+                // A failed read (empty) or a switched-off warning leaves the
+                // record of what was already warned about untouched.
+                if drives.is_empty() || !self.quiet.low_disk_warning {
+                    return Task::none();
+                }
+                let low = self.disk.check(&drives);
+                if !low.is_empty() {
+                    let home = home_mount(&drives);
+                    let (summary, body) = lapin_ux_core::disk::notice(&low, &home);
+                    return self.local_notice_as("Storage", "drive-harddisk-symbolic", "dialog-warning", &summary, &body);
+                }
+            }
             QuietMsg::OpenSettings(on) => self.quiet.settings_open = on,
             QuietMsg::OpenSystemSettings => {
                 let argv = lapin_ux_core::system::settings_command("lapin-notifications", lapin_ux_core::system::lapin_settings_installed());
@@ -469,9 +532,15 @@ pub fn settings(app: &App) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     );
 
+    let disk = row::with_children(vec![
+        text::body("Warn me when disk space is running low").width(Length::Fill).into(),
+        toggler(q.low_disk_warning).on_toggle(|on| Message::Quiet(QuietMsg::LowDiskWarning(on))).into(),
+    ])
+    .align_y(Alignment::Center);
+
     column::with_children(vec![
         header.into(),
-        scrollable(column::with_children(vec![sched.into(), list.into(), cals.into()]).spacing(20).padding([0, 8, 0, 0])).height(Length::Fill).into(),
+        scrollable(column::with_children(vec![sched.into(), disk.into(), list.into(), cals.into()]).spacing(20).padding([0, 8, 0, 0])).height(Length::Fill).into(),
         lapin_ux_ui::button::text("More notification settings").on_press(Message::Quiet(QuietMsg::OpenSystemSettings)).into(),
     ])
     .spacing(12)
