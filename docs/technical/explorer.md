@@ -180,6 +180,19 @@ the current width every time the window is drawn, not from a stored flag. Pages
 you opened yourself from the command bar (History, Options, About) stay. This is
 Lapin-only (`config::lapin_session()`); COSMIC's own session is stock.
 
+## Moving a folder into one that already exists (#172)
+
+In a Lapin session a move that ends up as per-file moves now removes the
+originals after a same-disk move. Before, drag and drop set `cross_device_copy`
+for every move, so the originals stayed and the move acted like a copy. The flag
+is now only honoured when a file really has to be copied across disks. A source
+folder that still holds skipped items (a skipped clash, a hidden file) is left
+as it is and logged, and the final folder cleanup no longer reports
+"Directory not empty" as a failure. Errors from copy and move read as
+`Couldn't move "from" to "to": reason` instead of a Rust debug dump. All of it is
+Lapin-only (`config::lapin_session()`). Still open under #172: a folder-level
+merge / keep both / skip question, and one shared conflict dialog with the desktop.
+
 ## Properties window size and tabs (#171)
 
 In a Lapin session the Properties window opens at one fixed size (590 by 820,
