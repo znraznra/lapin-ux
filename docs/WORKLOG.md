@@ -30,6 +30,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Sun 22 Nov | Sign-in screen matches the lock screen (#120): the same clock-to-panel fade and corner spacing. | Retest |
+| Sun 22 Nov | Explorer: moving a folder into one that already exists no longer acts like a copy or ends in a "Directory not empty" error, and move errors are in plain words (#172). The folder-level question is still to come. | Retest |
 | Sun 22 Nov | Explorer Properties window (#171): one fixed size, a tab bar like Explorer's, and only the page scrolls while OK, Cancel and Apply stay put. | Retest |
 | Sun 22 Nov | Light mode by default (#159): a new install, a first Lapin session and the welcome app start light instead of dark. A choice made in Settings is never overwritten. | Retest |
 | Sun 22 Nov | The file explorer is called Explorer everywhere in the Lapin session, and its About page says Lapin Explorer with credit to COSMIC Files (#173). | Retest |
