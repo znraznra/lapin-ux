@@ -166,7 +166,8 @@ folder to see its details."), a double-click opens it, and right-click opens a
 menu: Open, Open in new tab, Open item location, Copy path, Properties, and
 Unpin from Home, Remove from recents or Disconnect where they apply. The Recent
 rows keep to one line with fixed columns (name, last opened, folder) and show the
-full path in a tooltip. Networks, Recycle Bin and any tab with nothing selected
-show the same empty message instead of a stale or blank pane. This is Lapin-only
+full path in a tooltip. On Networks and Recycle Bin the pane follows the selected
+item too, and the same empty message shows only while nothing is selected, instead
+of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
 (`config::lapin_session()`); COSMIC's own session is stock. Resizable and sortable
 Recent columns are not part of this change.
