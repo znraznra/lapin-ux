@@ -228,6 +228,7 @@ fn sample() -> Sample {
 fn load_desktop_apps() -> Vec<DesktopApp> {
     use cosmic::desktop::fde;
     let locales = fde::get_languages_from_env();
+    let lapin = desktops().iter().any(|d| d == lapin_ux_core::ids::DESKTOP_NAME);
     fde::Iter::new(fde::default_paths())
         .filter_map(|p| fde::DesktopEntry::from_path(p, Some(&locales)).ok())
         .filter_map(|de| {
@@ -241,7 +242,12 @@ fn load_desktop_apps() -> Vec<DesktopApp> {
             Some(DesktopApp {
                 program,
                 wm_class: de.startup_wm_class().map(|s| s.to_lowercase()),
-                name: de.name(&locales).map(|n| n.to_string()).unwrap_or_default(),
+                name: lapin
+                    .then(|| lapin_ux_core::desktops::lapin_name(de.appid.as_ref()))
+                    .flatten()
+                    .map(str::to_string)
+                    .or_else(|| de.name(&locales).map(|n| n.to_string()))
+                    .unwrap_or_default(),
                 icon: de.icon().unwrap_or("application-x-executable").to_string(),
             })
         })

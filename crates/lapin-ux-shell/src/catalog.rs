@@ -202,10 +202,8 @@ impl Catalog {
 /// (#173): Start, search, the taskbar, Alt+Tab and Task Manager say Explorer,
 /// while the shared .desktop file keeps "COSMIC Files" for COSMIC's session.
 fn lapin_names(d: &mut DesktopEntryData) {
-    match d.id.as_str() {
-        "com.system76.CosmicSettings" => d.name = "Settings".to_string(),
-        "com.system76.CosmicFiles" => d.name = "Explorer".to_string(),
-        _ => {}
+    if let Some(n) = lapin_ux_core::desktops::lapin_name(&d.id) {
+        d.name = n.to_string();
     }
 }
 
