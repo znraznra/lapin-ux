@@ -194,6 +194,19 @@ pub fn autostart_in_session(e: &Entry, desktop_name: &str) -> bool {
     !belongs_to_other_desktop(e, desktop_name)
 }
 
+/// The name Lapin UX shows for an app it turns into its own, or `None` to keep
+/// the .desktop file's name. Shared by the shell (Start, search, taskbar,
+/// Alt+Tab) and Task Manager so one app never has two names. Callers use it
+/// only inside a Lapin session, and no .desktop file is touched: COSMIC's own
+/// session still says "COSMIC Settings" and "COSMIC Files" (#173).
+pub fn lapin_name(id: &str) -> Option<&'static str> {
+    match id {
+        "com.system76.CosmicSettings" => Some("Settings"),
+        "com.system76.CosmicFiles" => Some("Explorer"),
+        _ => None,
+    }
+}
+
 /// Split a `;`-separated desktop-entry list.
 pub fn list(v: &str) -> Vec<&str> {
     v.split(';').map(str::trim).filter(|s| !s.is_empty()).collect()
@@ -233,6 +246,13 @@ mod tests {
     fn e(id: &str, text: &str) -> bool {
         let text = format!("[Desktop Entry]\n{text}");
         show_in_start(&parse(id, &text), D, false)
+    }
+
+    #[test]
+    fn lapin_names_for_its_own_apps() {
+        assert_eq!(lapin_name("com.system76.CosmicFiles"), Some("Explorer"));
+        assert_eq!(lapin_name("com.system76.CosmicSettings"), Some("Settings"));
+        assert_eq!(lapin_name("org.gnome.Nautilus"), None);
     }
 
     #[test]
