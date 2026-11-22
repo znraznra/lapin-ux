@@ -1,0 +1,129 @@
+From 6b89e01204cc3120eeb7c5bfaf18315e11cb11b5 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Sun, 22 Nov 2026 16:33:33 +0800
+Subject: [PATCH] Explorer: Properties window has one fixed size, tab bar like
+ Explorer's, only the page scrolls
+
+Refs #171
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs | 52 ++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 36 insertions(+), 16 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 469360d..287fe2b 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -496,7 +496,7 @@ pub enum Message {
+     LapinOpenMapped(String),
+     LapinDisconnect,
+     /// Lapin UX's Properties window: pick a tab, close it.
+-    LapinPropertiesTab(u8),
++    LapinPropertiesTab(Entity),
+     LapinCloseWindow(window::Id),
+     /// Lapin UX: open out or fold a folder in the navigation pane's tree.
+     LapinTreeToggle(PathBuf),
+@@ -862,6 +862,8 @@ pub struct App {
+     lapin_open_after_mount: Option<String>,
+     /// Lapin UX: the tab shown in Properties windows (0 General, 1 Security).
+     lapin_properties_tab: u8,
++    /// Lapin UX: the tab bar of Properties windows (General, Security).
++    lapin_props_tabs: segmented_button::SingleSelectModel,
+     /// Lapin UX: the folders opened out in the navigation pane's tree.
+     lapin_expanded: BTreeSet<PathBuf>,
+     /// Lapin UX's progress window (#101): its id, whether it shows the
+@@ -2370,6 +2372,14 @@ impl App {
+                 transparent: true,
+                 ..Default::default()
+             };
++            // Lapin UX (#171): Properties has one fixed size, as usual.
++            if crate::config::lapin_session() {
++                let fixed = Size::new(590.0, 820.0);
++                settings.size = fixed;
++                settings.min_size = Some(fixed);
++                settings.max_size = Some(fixed);
++                settings.resizable = false;
++            }
+ 
+             #[cfg(target_os = "linux")]
+             {
+@@ -3879,6 +3889,10 @@ impl Application for App {
+             lapin_map_name: String::new(),
+             lapin_open_after_mount: None,
+             lapin_properties_tab: 0,
++            lapin_props_tabs: segmented_button::ModelBuilder::default()
++                .insert(|b| b.text(fl!("general")).activate())
++                .insert(|b| b.text(fl!("security")))
++                .build(),
+             lapin_expanded: BTreeSet::new(),
+             lapin_progress_window: None,
+             lapin_progress_details: false,
+@@ -4287,8 +4301,10 @@ impl Application for App {
+                 }
+                 self.update_nav_model();
+             }
+-            Message::LapinPropertiesTab(tab) => {
+-                self.lapin_properties_tab = tab;
++            Message::LapinPropertiesTab(entity) => {
++                self.lapin_props_tabs.activate(entity);
++                self.lapin_properties_tab =
++                    self.lapin_props_tabs.position(entity).unwrap_or(0).min(1) as u8;
+             }
+             Message::LapinCloseWindow(id) => {
+                 self.remove_window(&id);
+@@ -8446,12 +8462,6 @@ impl Application for App {
+                     // Lapin UX (#143): tabs on top, the tab's page, OK at the bottom.
+                     let space_s = theme::spacing().space_s;
+                     let tab = self.lapin_properties_tab.min(1);
+-                    let tab_button = |label: String, i: u8| {
+-                        widget::button::custom(widget::text::body(label))
+-                            .padding([6, 14])
+-                            .class(if tab == i { theme::Button::Standard } else { theme::Button::MenuRoot })
+-                            .on_press(Message::LapinPropertiesTab(i))
+-                    };
+                     let entity_opt = *entity_opt;
+                     let general = (tab == 0).then(|| self.lapin_window_item(id)).flatten().map(|item| {
+                         let initial = item.lapin_props_initial();
+@@ -8482,13 +8492,16 @@ impl Application for App {
+                             (page, false)
+                         }
+                     };
+-                    widget::column::with_capacity(4)
++                    let content: Element<'_, Message> = widget::column::with_capacity(4)
+                         .push(
+-                            widget::row::with_capacity(2)
+-                                .spacing(4)
+-                                .padding([0, space_s])
+-                                .push(tab_button(fl!("general"), 0))
+-                                .push(tab_button(fl!("security"), 1)),
++                            widget::container(
++                                widget::tab_bar::horizontal(&self.lapin_props_tabs)
++                                    .button_height(32)
++                                    .button_spacing(theme::spacing().space_xxs)
++                                    .minimum_button_width(120)
++                                    .on_activate(Message::LapinPropertiesTab),
++                            )
++                            .padding([0, space_s]),
+                         )
+                         .push(widget::divider::horizontal::default())
+                         .push(
+@@ -8519,7 +8532,14 @@ impl Application for App {
+                                         .on_press_maybe(changed.then_some(Message::LapinPropsApply(id, false))),
+                                 ),
+                         )
+-                        .into()
++                        .into();
++                    // Lapin UX (#171): only the page scrolls, the tabs and
++                    // OK / Cancel / Apply stay put.
++                    return widget::container(content)
++                        .width(Length::Fill)
++                        .height(Length::Fill)
++                        .class(theme::Container::WindowBackground)
++                        .into();
+                 }
+                 WindowKind::Preview(entity_opt, kind) => self
+                     .preview(entity_opt, kind, false)
+-- 
+2.56.1
+
