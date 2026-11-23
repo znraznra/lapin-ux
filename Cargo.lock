@@ -3090,6 +3090,7 @@ dependencies = [
  "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",
+ "serde",
  "tokio",
 ]
 

@@ -582,7 +582,7 @@ impl Shell {
         self.start = Some(StartMenu {
             id,
             query: String::new(),
-            page: StartPage::Home,
+            page: self.config.start_layout.first_page(),
             selected: None,
             recent_files: if self.config.no_recent_items { Vec::new() } else { lapin_ux_core::recent::load(6) },
             folder: None,
@@ -594,6 +594,7 @@ impl Shell {
         let start_edge = self.edge();
         let start_margin = self.edge_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
+        let start_w = self.config.start_layout.width();
         self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
@@ -613,11 +614,11 @@ impl Shell {
                     namespace: "lapin-ux-start".into(),
                     // Opens a little close to the bar and slides into place (anim.rs).
                     margin: start_margin,
-                    size: Some((Some(style::START_WIDTH), Some(height))),
+                    size: Some((Some(start_w), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
-                        .min_width(style::START_WIDTH as f32)
-                        .max_width(style::START_WIDTH as f32)
+                        .min_width(start_w as f32)
+                        .max_width(start_w as f32)
                         .min_height(height as f32)
                         .max_height(height as f32),
                     ..Default::default()

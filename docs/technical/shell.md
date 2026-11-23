@@ -99,6 +99,17 @@
   first; pacman packages through an admin prompt, Flatpaks directly; core
   desktop packages are refused). Newly installed or removed apps appear the
   next time Start opens.
+- **Start layout** (#198): Settings > Personalization > Start > Layout, or the
+  welcome app's "Start layout" step (after Pointers). Setting `start_layout`
+  in `dev.lapinux.Shell`: `Current` (default), `Classic` (narrow single
+  column, accent strip on the left), `ClassicTwoColumns` and `ProgramsList`
+  (600 px wide, user picture and places on the right). Code in
+  `start_layouts.rs`; search, pins, all apps, other-desktop filtering and the
+  power menu are shared with the Current layout. There are no flyout
+  submenus: Programs switches the panel to the apps list (with a Back row),
+  Shut Down's arrow opens the usual power menu. Applies the next time Start
+  opens, only inside the Lapin session. Lapin's own setting, so nothing in
+  `items()` of `lapin-ux-uninstall`.
 - Account button: Change account settings, **Change account picture**, Lock,
   Sign out, **Switch user** (LightDM, SDDM, GDM). Power menu: Lock, Sign out,
   Sleep, Restart, Shut down.
