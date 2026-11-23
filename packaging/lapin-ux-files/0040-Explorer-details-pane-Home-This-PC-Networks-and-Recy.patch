@@ -1,0 +1,247 @@
+From 0145a0a5d4b9cf18f91473f9b4e8dcf3c2f1aacb Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 14:24:05 +0800
+Subject: [PATCH] Explorer details pane: Home, This PC, Networks and Recycle
+ Bin show real details (Refs #170)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ i18n/en/cosmic_files.ftl |   5 ++
+ src/app.rs               |  23 ++++++--
+ src/tab.rs               | 116 +++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 136 insertions(+), 8 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 81b70b7..a919997 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -452,6 +452,11 @@ network-locations = Network locations
+ bytes = {$bytes} bytes
+ contains = Contains
+ file-location = File location
++file-system = File system
++address = Address
++original-location = Original location
++date-deleted = Date deleted
++type-network = Network location
+ date-created = Date created
+ date-accessed = Date accessed
+ dimensions = Dimensions
+diff --git a/src/app.rs b/src/app.rs
+index 60445ed..d4a632f 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -1249,15 +1249,28 @@ impl App {
+     /// Lapin UX (#169, #170): pick an item on Home or This PC, so it shows
+     /// highlighted and the details pane describes it.
+     fn lapin_page_pick(&mut self, key: String) {
+-        self.lapin_page_preview = self.lapin_page_path(&key).and_then(|path| {
+-            match tab::item_from_path(&path, IconSizes::default()) {
++        self.lapin_page_preview = match self.lapin_page_path(&key) {
++            Some(path) => match tab::item_from_path(&path, IconSizes::default()) {
+                 Ok(item) => Some(PreviewKind::Custom(PreviewItem(Box::new(item)))),
+                 Err(err) => {
+                     log::warn!("failed to get item from path {}: {}", path.display(), err);
+                     None
+                 }
+-            }
+-        });
++            },
++            // A share on This PC with no folder yet: describe it by address.
++            None => key
++                .strip_prefix("pc:")
++                .and_then(|name| self.lapin_pc_drives().into_iter().find(|d| d.0 == name))
++                .and_then(|d| match d.2 {
++                    Location::Network(uri, name, None) => {
++                        let name = if name.is_empty() { d.0.clone() } else { name };
++                        Some(PreviewKind::Custom(PreviewItem(Box::new(
++                            tab::item_for_network_location(uri, name, IconSizes::default()),
++                        ))))
++                    }
++                    _ => None,
++                }),
++        };
+         self.lapin_page_selected = Some(key);
+     }
+ 
+@@ -3689,7 +3702,9 @@ impl App {
+                         children.push(preview);
+                     }
+ 
++                    // Lapin UX (#170): nothing picked says so, not the folder's details.
+                     if children.is_empty()
++                        && !crate::config::lapin_session()
+                         && let Some(item) = &tab.parent_item_opt
+                     {
+                         children.push(item.preview_view(Some(&self.mime_app_cache), military_time));
+diff --git a/src/tab.rs b/src/tab.rs
+index c5d58d2..ad9cea7 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1333,6 +1333,35 @@ pub fn scan_network(uri: &str, sizes: IconSizes) -> Vec<Item> {
+     Vec::new()
+ }
+ 
++/// Lapin UX (#170): a stand-in item for a server or share that has no folder
++/// on this computer yet, so the details pane can describe it.
++pub fn item_for_network_location(uri: String, name: String, sizes: IconSizes) -> Item {
++    let icon = |size| widget::icon::from_name("network-workgroup").size(size).handle();
++    Item {
++        display_name: Item::display_name(&name),
++        name,
++        is_mount_point: false,
++        metadata: ItemMetadata::SimpleDir { entries: 0 },
++        hidden: false,
++        location_opt: Some(Location::Network(uri, String::new(), None)),
++        image_dimensions: None,
++        mime: "inode/directory".parse().unwrap(),
++        icon_handle_grid: icon(sizes.grid()),
++        icon_handle_list: icon(sizes.list()),
++        icon_handle_list_condensed: icon(sizes.list_condensed()),
++        thumbnail_opt: Some(ItemThumbnail::NotImage),
++        button_id: widget::Id::unique(),
++        pos_opt: Cell::new(None),
++        rect_opt: Cell::new(None),
++        selected: false,
++        highlighted: false,
++        overlaps_drag_rect: false,
++        dir_size: DirSize::NotDirectory,
++        cut: false,
++        checksums: ChecksumState::default(),
++    }
++}
++
+ //TODO: organize desktop items based on display
+ pub fn scan_desktop(
+     tab_path: &PathBuf,
+@@ -2469,6 +2498,19 @@ impl Item {
+         row.into()
+     }
+ 
++    /// Lapin UX: the file system type and the source (device or share address)
++    /// of the mount that holds `path`, read from the mount table.
++    #[cfg(target_os = "linux")]
++    fn lapin_mount_info(path: &Path) -> Option<(String, String)> {
++        let path = fs::canonicalize(path).ok()?;
++        let mounts = procfs::process::Process::myself().ok()?.mountinfo().ok()?;
++        mounts
++            .iter()
++            .filter(|m| path.starts_with(&m.mount_point))
++            .max_by_key(|m| m.mount_point.as_os_str().len())
++            .map(|m| (m.fs_type.clone(), m.mount_source.clone().unwrap_or_default()))
++    }
++
+     /// Lapin UX: the details as people know them: the name, a "Details"
+     /// heading, then Type, Size, File location and the dates, with the values
+     /// at the right.
+@@ -2489,6 +2531,47 @@ impl Item {
+         column = column.push(widget::space::vertical().height(Length::Fixed(f32::from(space_xxs))));
+         column = column.push(widget::text::heading(fl!("details")));
+         let Some(metadata) = self.file_metadata() else {
++            // Recycle Bin items: what they were, how big, where they came
++            // from and when they were deleted.
++            if let ItemMetadata::Trash { metadata, entry } = &self.metadata {
++                let kind = if self.metadata.is_dir() {
++                    fl!("type-folder")
++                } else {
++                    match Path::new(&self.name).extension().and_then(|e| e.to_str()) {
++                        Some(ext) if !ext.is_empty() && ext.len() <= 8 => {
++                            fl!("type-file", ext = ext.to_uppercase())
++                        }
++                        _ => fl!("type-plain"),
++                    }
++                };
++                column = column.push(pair(fl!("type-column"), kind));
++                match metadata.size {
++                    trash::TrashItemSize::Bytes(size) => {
++                        column = column.push(pair(
++                            fl!("size"),
++                            format!("{} ({})", format_size(size), fl!("bytes", bytes = size)),
++                        ));
++                    }
++                    trash::TrashItemSize::Entries(count) => {
++                        column = column.push(pair(fl!("contains"), fl!("status-items", items = count)));
++                    }
++                }
++                column = column.push(pair(
++                    fl!("original-location"),
++                    entry.original_parent.display().to_string(),
++                ));
++                let date_time_formatter = date_time_formatter(military_time);
++                let time_formatter = time_formatter(military_time);
++                if let Some(time) = FormatTime::from_secs(entry.time_deleted, &date_time_formatter, &time_formatter) {
++                    column = column.push(pair(fl!("date-deleted"), time.to_string()));
++                }
++                return column;
++            }
++            // A server or share that has no folder on this computer yet.
++            if let Some(Location::Network(uri, ..)) = &self.location_opt {
++                column = column.push(pair(fl!("type-column"), fl!("type-network")));
++                return column.push(pair(fl!("address"), uri.clone()));
++            }
+             return column.push(pair(fl!("type-column"), self.mime.to_string()));
+         };
+         let kind = if metadata.is_dir() {
+@@ -2535,12 +2618,26 @@ impl Item {
+                 .push(pair(fl!("used-space"), format!("{} ({})", format_size(used), fl!("bytes", bytes = used))))
+                 .push(pair(fl!("free-space"), format!("{} ({})", format_size(free), fl!("bytes", bytes = free))))
+                 .push(pair(fl!("capacity"), format!("{} ({})", format_size(total), fl!("bytes", bytes = total))))
++                ;
++            #[cfg(target_os = "linux")]
++            if let Some((fs_type, source)) = Self::lapin_mount_info(path) {
++                if !fs_type.is_empty() {
++                    column = column.push(pair(fl!("file-system"), fs_type));
++                }
++                if !source.is_empty() && source != "none" {
++                    column = column.push(pair(fl!("address"), source));
++                }
++            }
++            column = column
+                 .push(
+                     widget::progress_bar::determinate_linear(used as f32 / total as f32)
+                         .width(Length::Fill)
+                         .girth(Length::Fixed(14.0)),
+                 );
+         }
++        if let Some(Location::Network(uri, ..)) = &self.location_opt {
++            column = column.push(pair(fl!("address"), uri.clone()));
++        }
+         if let Some(parent) = self.path_opt().and_then(|p| p.parent()) {
+             column = column.push(pair(fl!("file-location"), parent.display().to_string()));
+         }
+@@ -7167,10 +7264,14 @@ impl Tab {
+                 .iter()
+                 .filter(|item| {
+                     if item.selected {
+-                        item.location_opt
+-                            .as_ref()
+-                            .and_then(Location::path_opt)
+-                            .is_some()
++                        // Lapin UX: servers and shares have no folder here
++                        // but still count as selected.
++                        crate::config::lapin_session()
++                            || item
++                                .location_opt
++                                .as_ref()
++                                .and_then(Location::path_opt)
++                                .is_some()
+                     } else {
+                         false
+                     }
+@@ -7197,6 +7298,13 @@ impl Tab {
+         for item in selected_items.iter() {
+             *mime_type_counts.entry(item.mime.to_string()).or_insert(0) += 1;
+ 
++            // Lapin UX: Recycle Bin files count with their stored size.
++            if crate::config::lapin_session()
++                && let ItemMetadata::Trash { metadata, .. } = &item.metadata
++                && let trash::TrashItemSize::Bytes(size) = metadata.size
++            {
++                total_size = total_size.saturating_add(size);
++            }
+             if let Some(metadata) = item.file_metadata() {
+                 if metadata.is_dir() {
+                     match &item.dir_size {
+-- 
+2.56.1
+
