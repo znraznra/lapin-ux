@@ -94,7 +94,7 @@ struct Photo {
 enum Message {
     Scanned(Scan),
     Section(Section),
-    Thumb(PathBuf, Option<Handle>),
+    Thumb(PathBuf, u64, Option<Handle>),
     Open(PathBuf),
     Full(PathBuf, Option<Handle>),
     /// A full-size decode that was skipped because the picture is no longer open.
@@ -116,7 +116,7 @@ enum Message {
     ConfirmDelete,
     OpenLocation,
     /// Opening the folder failed to start.
-    LocationFailed(String),
+    LocationFailed(u64, String),
     /// A rename or delete finished: the old path and what came of it.
     Renamed(PathBuf, Result<PathBuf, String>),
     Deleted(PathBuf, Result<(), String>),
@@ -160,6 +160,15 @@ struct App {
     thumbs: HashMap<PathBuf, Handle>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
+    /// Which request each tile is waiting for. A result for a name that was
+    /// renamed, deleted or asked again since is stale and dropped.
+    thumb_epoch: HashMap<PathBuf, u64>,
+    next_epoch: u64,
+    /// Counts viewer visits, so a late "could not open the folder" from an
+    /// earlier photo never shows on the current one.
+    visit: u64,
+    /// A rename is running; another waits until it has finished.
+    renaming: bool,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
@@ -216,17 +225,33 @@ fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
 /// Stars or unstars one photo and returns the list as saved. The list is read
 /// again under a lock first, so two Photos windows never undo each other's change.
 fn set_favorite(path: &Path, on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    edit_favorites(|set| {
+        if on {
+            set.insert(path.to_path_buf());
+        } else {
+            set.remove(path);
+        }
+    })
+}
+
+/// Moves a star to a new name in one locked read-modify-write, so a failure
+/// never leaves both names starred or neither.
+fn move_favorite(old: &Path, new: &Path) -> std::io::Result<HashSet<PathBuf>> {
+    edit_favorites(|set| {
+        if set.remove(old) {
+            set.insert(new.to_path_buf());
+        }
+    })
+}
+
+fn edit_favorites(change: impl FnOnce(&mut HashSet<PathBuf>)) -> std::io::Result<HashSet<PathBuf>> {
     let file = favorites_file().ok_or_else(|| std::io::Error::other("no config folder"))?;
     let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
     std::fs::create_dir_all(dir)?;
     let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("favorites.lock"))?;
     lock.lock()?; // released when `lock` is dropped
     let mut set = read_favorites(&file)?;
-    if on {
-        set.insert(path.to_path_buf());
-    } else {
-        set.remove(path);
-    }
+    change(&mut set);
     write_favorites(&file, &set)?;
     Ok(set)
 }
@@ -240,9 +265,14 @@ fn rename_no_replace(old: &Path, new: &Path) -> Result<(), String> {
     const TAKEN: &str = "A file with that name already exists.";
     match std::fs::hard_link(old, new) {
         Ok(()) => std::fs::remove_file(old).map_err(|e| {
-            // Undo, so there aren't two names for one photo.
-            let _ = std::fs::remove_file(new);
-            format!("Could not rename: {e}")
+            // Undo, so there aren't two names for one photo. If even the undo
+            // fails, say so, so the user knows to remove one of the two.
+            match std::fs::remove_file(new) {
+                Ok(()) => format!("Could not rename: {e}"),
+                Err(u) => format!(
+                    "Could not finish renaming: {e}. The photo now exists under both names and the copy could not be removed ({u})."
+                ),
+            }
         }),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(TAKEN.to_string()),
         Err(_) => {
@@ -403,15 +433,23 @@ impl App {
     /// Loads the tiles of `paths` that were not asked for yet, four at a time.
     fn want_thumbs(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
         let todo: Vec<PathBuf> = paths.into_iter().filter(|p| self.asked.insert(p.clone())).collect();
+        let todo: Vec<(PathBuf, u64)> = todo
+            .into_iter()
+            .map(|p| {
+                self.next_epoch += 1;
+                self.thumb_epoch.insert(p.clone(), self.next_epoch);
+                (p, self.next_epoch)
+            })
+            .collect();
         if todo.is_empty() {
             return Task::none();
         }
         Task::stream(
             futures::stream::iter(todo)
-                .map(|p| async move {
+                .map(|(p, epoch)| async move {
                     let key = p.clone();
                     let h = tokio::task::spawn_blocking(move || load_thumb(p)).await.ok().flatten();
-                    cosmic::Action::App(Message::Thumb(key, h))
+                    cosmic::Action::App(Message::Thumb(key, epoch, h))
                 })
                 .buffer_unordered(4),
         )
@@ -423,6 +461,7 @@ impl App {
     }
 
     fn open(&mut self, path: PathBuf) -> Task<Message> {
+        self.visit += 1;
         self.viewing = Some(path.clone());
         set_viewing(Some(path.clone()));
         self.overlay = None;
@@ -489,6 +528,7 @@ impl App {
         // If the old decode is still pending, its result is filed under the old
         // name, so the new name must ask for its own.
         let asked_before = self.asked.remove(&old);
+        self.thumb_epoch.remove(&old);
         let mut refetch = Task::none();
         match self.thumbs.remove(&old) {
             Some(h) => {
@@ -501,7 +541,7 @@ impl App {
             None => {}
         }
         if self.favorites.contains(&old) {
-            let moved = set_favorite(&new, true).and_then(|_| set_favorite(&old, false));
+            let moved = move_favorite(&old, &new);
             match moved {
                 Ok(saved) => {
                     self.favorites = saved;
@@ -531,23 +571,28 @@ impl App {
             })
         };
         self.photos.retain(|p| p.path != path);
+        // The list shifted, so a photo that now falls inside the tile limit needs its thumbnail.
+        let more = self.want_section_thumbs();
         self.thumbs.remove(&path);
         self.asked.remove(&path);
+        self.thumb_epoch.remove(&path);
         if self.favorites.remove(&path) {
             if let Err(e) = set_favorite(&path, false) {
                 tracing::warn!("could not drop the favorite: {e}");
             }
         }
         if self.viewing.as_deref() == Some(path.as_path()) {
-            return match next {
+            let moved = match next {
                 Some(n) => self.open(n),
                 None => self.back(),
             };
+            return Task::batch([moved, more]);
         }
-        Task::none()
+        more
     }
 
     fn back(&mut self) -> Task<Message> {
+        self.visit += 1;
         self.overlay = None;
         self.action_error = None;
         self.viewing = None;
@@ -587,6 +632,10 @@ impl cosmic::Application for App {
             section: Section::Gallery,
             thumbs: HashMap::new(),
             asked: HashSet::new(),
+            thumb_epoch: HashMap::new(),
+            next_epoch: 0,
+            visit: 0,
+            renaming: false,
             favorites: load_favorites(),
             viewing: None,
             full: None,
@@ -660,7 +709,10 @@ impl cosmic::Application for App {
                 self.section = s;
                 return self.want_section_thumbs();
             }
-            Message::Thumb(path, handle) => {
+            Message::Thumb(path, epoch, handle) => {
+                if self.thumb_epoch.get(&path) != Some(&epoch) {
+                    return Task::none();
+                }
                 if let Some(h) = handle {
                     self.thumbs.insert(path, h);
                 }
@@ -736,6 +788,10 @@ impl cosmic::Application for App {
                     self.overlay = None;
                     return Task::none();
                 }
+                if self.renaming {
+                    return Task::none();
+                }
+                self.renaming = true;
                 self.action_error = None;
                 return Task::future(async move {
                     let key = old.clone();
@@ -748,11 +804,15 @@ impl cosmic::Application for App {
                 });
             }
             Message::Renamed(old, Err(e)) => {
+                self.renaming = false;
                 if self.viewing.as_deref() == Some(old.as_path()) {
                     self.action_error = Some(e);
                 }
             }
-            Message::Renamed(old, Ok(new)) => return self.after_rename(old, new),
+            Message::Renamed(old, Ok(new)) => {
+                self.renaming = false;
+                return self.after_rename(old, new);
+            }
             Message::AskDelete => self.overlay = Some(Overlay::ConfirmDelete),
             Message::CancelOverlay => self.overlay = None,
             Message::ConfirmDelete => {
@@ -781,17 +841,18 @@ impl cosmic::Application for App {
                 if let Some(dir) = self.viewing.as_deref().and_then(Path::parent).map(Path::to_path_buf) {
                     // Waited for in a task, so the finished helper is reaped and
                     // never lingers as a zombie while Photos stays open.
+                    let visit = self.visit;
                     return Task::future(async move {
                         match tokio::process::Command::new("xdg-open").arg(&dir).status().await {
-                            Ok(status) if status.success() => cosmic::Action::App(Message::LocationFailed(String::new())),
-                            Ok(status) => cosmic::Action::App(Message::LocationFailed(format!("Could not open the folder ({status})."))),
-                            Err(e) => cosmic::Action::App(Message::LocationFailed(format!("Could not open the folder: {e}"))),
+                            Ok(status) if status.success() => cosmic::Action::App(Message::LocationFailed(visit, String::new())),
+                            Ok(status) => cosmic::Action::App(Message::LocationFailed(visit, format!("Could not open the folder ({status})."))),
+                            Err(e) => cosmic::Action::App(Message::LocationFailed(visit, format!("Could not open the folder: {e}"))),
                         }
                     });
                 }
             }
-            Message::LocationFailed(e) => {
-                if !e.is_empty() {
+            Message::LocationFailed(visit, e) => {
+                if visit == self.visit && !e.is_empty() {
                     self.action_error = Some(e);
                 }
             }
