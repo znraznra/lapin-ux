@@ -1530,6 +1530,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::FavoriteTargets => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
                 if paths.is_empty() {
                     return Task::none();
@@ -1555,6 +1556,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AddToAlbum(name) => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 self.menu = None;
                 if paths.is_empty() {
@@ -1580,6 +1582,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::RemoveFromAlbum => {
+                self.sync_lock();
                 let (Some(name), false) = (self.album.clone(), self.selected.is_empty()) else { return Task::none() };
                 let gone: HashSet<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 match edit_albums(|a| {
