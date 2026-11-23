@@ -1,29 +1,39 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Photos (#74): an offline picture app. The front end is a dark Gallery (all
-//! photos by date, Favorites, and your picture folders); opening a photo, or
-//! clicking an image in Files, shows it in a light single-image viewer with a
-//! floating toolbar and a filmstrip. Nothing leaves the computer: no cloud, no
-//! accounts, no network.
+//! Photos (#74): an offline picture app. The front end is a Gallery (all photos
+//! grouped by date, Favorites, Recents) with a toolbar for the source folder,
+//! grid style, grouping, preview size and selection (#203); opening a photo, or
+//! clicking an image in Files, shows it in a single-image viewer with a floating
+//! toolbar and a filmstrip. Both follow the system theme. Nothing leaves the
+//! computer: no cloud, no accounts, no network.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use cosmic::app::{Settings, Task};
-use cosmic::iced::keyboard::{Event as KeyEvent, Key, key::Named};
-use cosmic::iced::widget::{stack, themer};
+use cosmic::iced::keyboard::{Event as KeyEvent, Key, Modifiers, key::Named};
+use cosmic::iced::widget::stack;
 use cosmic::iced::{Alignment, Length, Size, Subscription};
+use cosmic::iced::mouse::{Event as MouseEvent, ScrollDelta};
 use cosmic::widget::image::Handle;
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text};
 use cosmic::{ApplicationExt, Core, Element, theme};
 use futures::StreamExt;
 
 const APP_ID: &str = "dev.lapinux.Photos";
-/// Side of a square tile in the grid and of a filmstrip picture.
-const TILE: u32 = 170;
+/// Longest side of a loaded thumbnail. One size serves every slider step (it is
+/// scaled on screen, never decoded again), and the picture keeps its proportions.
+const THUMB: u32 = 240;
+/// Preview sizes of the slider: the height of a tile in pixels. One step beyond
+/// the last is the reel (one large photo with the strip below it).
+const SIZES: [u32; 6] = [100, 130, 160, 190, 220, 250];
+const REEL: u8 = SIZES.len() as u8;
+const DEFAULT_SIZE: u8 = 2;
 /// How many tiles are loaded in one go. The grid is not virtualised yet, so this
-/// keeps the memory use (about 115 KB per tile) predictable.
+/// keeps the memory use (about 170 KB per tile) predictable.
 const MAX_TILES: usize = 400;
+/// Recents shows what was saved or changed within this long.
+const RECENT_SECS: u64 = 72 * 3600;
 /// Pictures are shown at most this wide or tall. Bigger ones are scaled down once.
 const MAX_SIDE: u32 = 3840;
 const MAX_PHOTOS: usize = 20_000;
@@ -34,30 +44,17 @@ const EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "webp", "bmp", "gif", "jpe"
 enum Section {
     Gallery,
     Favorites,
-    Pictures,
-    Downloads,
-    Desktop,
-    Documents,
+    Recents,
 }
 
 impl Section {
-    const ALL: [Section; 6] = [
-        Section::Gallery,
-        Section::Favorites,
-        Section::Pictures,
-        Section::Downloads,
-        Section::Desktop,
-        Section::Documents,
-    ];
+    const ALL: [Section; 3] = [Section::Gallery, Section::Favorites, Section::Recents];
 
     fn label(self) -> &'static str {
         match self {
             Section::Gallery => "Gallery",
             Section::Favorites => "Favorites",
-            Section::Pictures => "Pictures",
-            Section::Downloads => "Downloads",
-            Section::Desktop => "Desktop",
-            Section::Documents => "Documents",
+            Section::Recents => "Recents",
         }
     }
 
@@ -65,23 +62,102 @@ impl Section {
         match self {
             Section::Gallery => "folder-pictures-symbolic",
             Section::Favorites => "starred-symbolic",
-            Section::Pictures => "folder-pictures-symbolic",
-            Section::Downloads => "folder-download-symbolic",
-            Section::Desktop => "user-desktop-symbolic",
-            Section::Documents => "folder-documents-symbolic",
+            Section::Recents => "document-open-recent-symbolic",
+        }
+    }
+}
+
+/// The picture folders Photos looks in. The source drop-down picks one of them,
+/// or all (`None`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Folder {
+    Pictures,
+    Downloads,
+    Desktop,
+    Documents,
+}
+
+impl Folder {
+    const ALL: [Folder; 4] = [Folder::Pictures, Folder::Downloads, Folder::Desktop, Folder::Documents];
+
+    fn label(self) -> &'static str {
+        match self {
+            Folder::Pictures => "Pictures",
+            Folder::Downloads => "Downloads",
+            Folder::Desktop => "Desktop",
+            Folder::Documents => "Documents",
         }
     }
 
-    /// The folder this section shows, if it is one.
-    fn dir(self) -> Option<PathBuf> {
+    fn key(self) -> &'static str {
         match self {
-            Section::Pictures => dirs::picture_dir(),
-            Section::Downloads => dirs::download_dir(),
-            Section::Desktop => dirs::desktop_dir(),
-            Section::Documents => dirs::document_dir(),
-            Section::Gallery | Section::Favorites => None,
+            Folder::Pictures => "pictures",
+            Folder::Downloads => "downloads",
+            Folder::Desktop => "desktop",
+            Folder::Documents => "documents",
         }
     }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Folder::Pictures => "folder-pictures-symbolic",
+            Folder::Downloads => "folder-download-symbolic",
+            Folder::Desktop => "user-desktop-symbolic",
+            Folder::Documents => "folder-documents-symbolic",
+        }
+    }
+
+    fn dir(self) -> Option<PathBuf> {
+        match self {
+            Folder::Pictures => dirs::picture_dir(),
+            Folder::Downloads => dirs::download_dir(),
+            Folder::Desktop => dirs::desktop_dir(),
+            Folder::Documents => dirs::document_dir(),
+        }
+    }
+}
+
+/// How the grid is divided by headings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Years,
+    Months,
+    Days,
+    All,
+}
+
+impl Group {
+    const ALL: [Group; 4] = [Group::Years, Group::Months, Group::Days, Group::All];
+
+    fn label(self) -> &'static str {
+        match self {
+            Group::Years => "Years",
+            Group::Months => "Months",
+            Group::Days => "Days",
+            Group::All => "All photos",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Group::Years => "years",
+            Group::Months => "months",
+            Group::Days => "days",
+            Group::All => "all",
+        }
+    }
+
+    fn from_key(k: &str) -> Option<Group> {
+        Group::ALL.into_iter().find(|g| g.key() == k)
+    }
+}
+
+/// Which toolbar pop-up menu is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Menu {
+    Source,
+    Group,
+    More,
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +170,31 @@ struct Photo {
 enum Message {
     Scanned(Scan),
     Section(Section),
-    Thumb(PathBuf, Option<Handle>),
+    Source(Option<Folder>),
+    ToggleSidebar,
+    ToggleSquare,
+    SetGroup(Group),
+    Menu(Option<Menu>),
+    /// The preview size slider (0 up to `REEL`).
+    Size(u8),
+    /// Ctrl and the mouse wheel change the size.
+    Wheel(f32),
+    Modifiers(Modifiers),
+    /// A tile was pressed: opens it, or selects it in select mode or with Ctrl or Shift.
+    Tile(PathBuf),
+    SelectMode(bool),
+    SelectAll,
+    FavoriteTargets,
+    AskDelete,
+    CancelDelete,
+    ConfirmDelete,
+    /// The photos that reached the Recycle Bin, and how many could not.
+    Trashed(Vec<PathBuf>, usize),
+    /// A photo picked in the reel's filmstrip.
+    Reel(PathBuf),
+    Refresh,
+    /// A thumbnail with its size, so tiles can keep the picture's proportions.
+    Thumb(PathBuf, Option<(Handle, (u32, u32))>),
     Open(PathBuf),
     Full(PathBuf, Option<Handle>),
     /// A full-size decode that was skipped because the picture is no longer open.
@@ -133,14 +233,35 @@ struct App {
     /// The picture whose full-size decode failed.
     failed: Option<PathBuf>,
     section: Section,
+    /// The folder the lists are limited to (`None`: all of them).
+    source: Option<Folder>,
+    /// Preview size: an index into `SIZES`, or `REEL`.
+    size: u8,
+    /// Square tiles, or tiles that keep the picture's proportions.
+    square: bool,
+    group: Group,
+    sidebar: bool,
+    /// The toolbar pop-up that is open.
+    menu: Option<Menu>,
     thumbs: HashMap<PathBuf, Handle>,
+    /// Width and height of each loaded thumbnail.
+    dims: HashMap<PathBuf, (u32, u32)>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
+    selected: HashSet<PathBuf>,
+    select_mode: bool,
+    /// The photo a Shift-click range starts from.
+    anchor: Option<PathBuf>,
+    modifiers: Modifiers,
+    confirm_delete: bool,
+    /// The big photo of the reel (the last slider step).
+    reel: Option<PathBuf>,
     /// The photo shown in the viewer, as a path (the list can change under it).
     viewing: Option<PathBuf>,
+    /// The full-size picture of the viewer or the reel.
     full: Option<(PathBuf, Handle)>,
     /// The picture to open at start, from the command line or Files.
     start: Option<PathBuf>,
@@ -186,22 +307,105 @@ fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
     result
 }
 
-/// Stars or unstars one photo and returns the list as saved. The list is read
-/// again under a lock first, so two Photos windows never undo each other's change.
+/// Stars or unstars one photo and returns the list as saved.
 fn set_favorite(path: &Path, on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    set_favorites(std::slice::from_ref(&path.to_path_buf()), on)
+}
+
+/// Stars or unstars photos and returns the list as saved. The list is read
+/// again under a lock first, so two Photos windows never undo each other's change.
+fn set_favorites(paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf>> {
     let file = favorites_file().ok_or_else(|| std::io::Error::other("no config folder"))?;
     let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
     std::fs::create_dir_all(dir)?;
     let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("favorites.lock"))?;
     lock.lock()?; // released when `lock` is dropped
     let mut set = read_favorites(&file)?;
-    if on {
-        set.insert(path.to_path_buf());
-    } else {
-        set.remove(path);
+    for path in paths {
+        if on {
+            set.insert(path.clone());
+        } else {
+            set.remove(path);
+        }
     }
     write_favorites(&file, &set)?;
     Ok(set)
+}
+
+/// Sends photos to the Recycle Bin one by one (`gio trash`), so one that cannot
+/// be moved does not hold back the rest. Returns what moved and how many did not.
+fn move_to_recycle_bin(paths: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
+    let mut done = Vec::new();
+    let mut failed = 0;
+    for path in paths {
+        match std::process::Command::new("gio").arg("trash").arg("--").arg(&path).status() {
+            Ok(status) if status.success() => done.push(path),
+            _ => failed += 1,
+        }
+    }
+    (done, failed)
+}
+
+/// What the toolbar remembers between runs (`settings.json` next to the favorites).
+struct Prefs {
+    size: u8,
+    square: bool,
+    group: Group,
+    sidebar: bool,
+    source: Option<Folder>,
+}
+
+fn prefs_file() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join(APP_ID).join("settings.json"))
+}
+
+fn load_prefs() -> Prefs {
+    let mut prefs = Prefs { size: DEFAULT_SIZE, square: true, group: Group::Days, sidebar: true, source: None };
+    let Some(file) = prefs_file() else { return prefs };
+    let Ok(text) = std::fs::read_to_string(&file) else { return prefs };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        tracing::warn!("could not understand {}", file.display());
+        return prefs;
+    };
+    if let Some(n) = v.get("size").and_then(|x| x.as_u64()) {
+        prefs.size = n.min(u64::from(REEL)) as u8;
+    }
+    if let Some(b) = v.get("square").and_then(|x| x.as_bool()) {
+        prefs.square = b;
+    }
+    if let Some(g) = v.get("group").and_then(|x| x.as_str()).and_then(Group::from_key) {
+        prefs.group = g;
+    }
+    if let Some(b) = v.get("sidebar").and_then(|x| x.as_bool()) {
+        prefs.sidebar = b;
+    }
+    prefs.source = v.get("source").and_then(|x| x.as_str()).and_then(|s| Folder::ALL.into_iter().find(|f| f.key() == s));
+    prefs
+}
+
+fn save_prefs(prefs: &Prefs) {
+    let Some(file) = prefs_file() else { return };
+    let v = serde_json::json!({
+        "size": prefs.size,
+        "square": prefs.square,
+        "group": prefs.group.key(),
+        "sidebar": prefs.sidebar,
+        "source": prefs.source.map(|f| f.key()),
+    });
+    let result = (|| {
+        let dir = file.parent().ok_or_else(|| std::io::Error::other("settings file has no folder"))?;
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!("settings.json.{}.tmp", std::process::id()));
+        let written = std::fs::write(&tmp, serde_json::to_vec_pretty(&v).map_err(std::io::Error::other)?)
+            .and_then(|()| std::fs::rename(&tmp, &file));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        written
+    })();
+    if let Err(e) = result {
+        tracing::warn!("could not save Photos settings: {e}");
+    }
 }
 
 fn is_photo(path: &Path) -> bool {
@@ -233,8 +437,8 @@ fn scan(favorites: HashSet<PathBuf>) -> Scan {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut unreadable = 0usize;
     let mut truncated = false;
-    'walk: for section in [Section::Pictures, Section::Downloads, Section::Desktop, Section::Documents] {
-        let Some(root) = section.dir() else { continue };
+    'walk: for folder in Folder::ALL {
+        let Some(root) = folder.dir() else { continue };
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
@@ -306,9 +510,11 @@ fn handle(img: image::DynamicImage) -> Handle {
     Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
 }
 
-fn load_thumb(path: PathBuf) -> Option<Handle> {
-    let img = decode(&path)?;
-    Some(handle(img.resize_to_fill(TILE, TILE, image::imageops::FilterType::Triangle)))
+/// A small copy that keeps the picture's proportions, and its size.
+fn load_thumb(path: PathBuf) -> Option<(Handle, (u32, u32))> {
+    let img = decode(&path)?.thumbnail(THUMB, THUMB);
+    let dims = (img.width(), img.height());
+    Some((handle(img), dims))
 }
 
 fn load_full(path: PathBuf) -> Option<Handle> {
@@ -332,20 +538,44 @@ fn date_heading(t: SystemTime) -> String {
     }
 }
 
+fn group_heading(t: SystemTime, group: Group) -> String {
+    use chrono::{DateTime, Local};
+    let when = DateTime::<Local>::from(t);
+    match group {
+        Group::Years => when.format("%Y").to_string(),
+        Group::Months => when.format("%B %Y").to_string(),
+        Group::Days => date_heading(t),
+        Group::All => String::new(),
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 impl App {
-    /// The photos the current section shows, newest first.
+    fn prefs(&self) -> Prefs {
+        Prefs { size: self.size, square: self.square, group: self.group, sidebar: self.sidebar, source: self.source }
+    }
+
+    fn save(&self) {
+        save_prefs(&self.prefs());
+    }
+
+    /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
-        let root = self.section.dir();
+        let root = self.source.and_then(Folder::dir);
+        let now = SystemTime::now();
         self.photos
             .iter()
-            .filter(|p| match self.section {
-                Section::Gallery => true,
-                Section::Favorites => self.favorites.contains(&p.path),
-                _ => root.as_ref().is_some_and(|r| p.path.starts_with(r)),
+            .filter(|p| {
+                let in_section = match self.section {
+                    Section::Gallery => true,
+                    Section::Favorites => self.favorites.contains(&p.path),
+                    // A date in the future (a wrong camera clock) still counts as recent.
+                    Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
+                };
+                in_section && root.as_ref().map_or(true, |r| p.path.starts_with(r))
             })
             .collect()
     }
@@ -372,19 +602,19 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn open(&mut self, path: PathBuf) -> Task<Message> {
-        self.viewing = Some(path.clone());
+    fn scan_task(&self) -> Task<Message> {
+        let starred = self.favorites.clone();
+        Task::future(async move {
+            let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
+            cosmic::Action::App(Message::Scanned(found))
+        })
+    }
+
+    /// Decodes `path` at full size for the viewer or the reel, and drops any
+    /// queued decode of another picture.
+    fn want_full(&mut self, path: PathBuf) -> Task<Message> {
         set_viewing(Some(path.clone()));
-        self.full = None;
-        self.failed = None;
-        let near = self.neighbours(&path, 6);
-        let thumbs = self.want_thumbs(near);
-        let name = file_name(&path);
-        let title = match self.core.main_window_id() {
-            Some(id) => self.set_window_title(format!("{name} - Photos"), id),
-            None => Task::none(),
-        };
-        let full = Task::future(async move {
+        Task::future(async move {
             let key = path.clone();
             let Ok(_permit) = FULL_DECODES.acquire().await else {
                 return cosmic::Action::App(Message::Full(key, None));
@@ -395,8 +625,73 @@ impl App {
             }
             let h = tokio::task::spawn_blocking(move || load_full(path)).await.ok().flatten();
             cosmic::Action::App(Message::Full(key, h))
-        });
+        })
+    }
+
+    fn open(&mut self, path: PathBuf) -> Task<Message> {
+        self.viewing = Some(path.clone());
+        self.full = None;
+        self.failed = None;
+        let near = self.neighbours(&path, 6);
+        let thumbs = self.want_thumbs(near);
+        let name = file_name(&path);
+        let title = match self.core.main_window_id() {
+            Some(id) => self.set_window_title(format!("{name} - Photos"), id),
+            None => Task::none(),
+        };
+        let full = self.want_full(path);
         Task::batch([thumbs, full, title])
+    }
+
+    /// Keeps the reel's big photo valid: it follows the section, the source and
+    /// deletions, and it only exists at the last slider step.
+    fn sync_reel(&mut self) -> Task<Message> {
+        if self.size != REEL {
+            if self.reel.take().is_some() && self.viewing.is_none() {
+                set_viewing(None);
+                self.full = None;
+                self.failed = None;
+            }
+            return Task::none();
+        }
+        let list: Vec<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+        let target = self.reel.clone().filter(|r| list.contains(r)).or_else(|| list.first().cloned());
+        let Some(target) = target else {
+            self.reel = None;
+            if self.viewing.is_none() {
+                self.full = None;
+            }
+            return Task::none();
+        };
+        if self.viewing.is_some() {
+            self.reel = Some(target);
+            return Task::none();
+        }
+        if self.reel.as_ref() == Some(&target) && self.full.as_ref().is_some_and(|(p, _)| *p == target) {
+            return Task::none();
+        }
+        self.pick_reel(target)
+    }
+
+    fn pick_reel(&mut self, path: PathBuf) -> Task<Message> {
+        self.reel = Some(path.clone());
+        self.full = None;
+        self.failed = None;
+        self.want_full(path)
+    }
+
+    /// The thumbnails of the current list, and the reel after a change of list.
+    fn refresh_view(&mut self) -> Task<Message> {
+        let tiles = self.want_section_thumbs();
+        let reel = self.sync_reel();
+        Task::batch([tiles, reel])
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.select_mode = false;
+        self.anchor = None;
+        self.confirm_delete = false;
     }
 
     /// Up to `n` photos on each side of `path` in the current list, `path` included.
@@ -414,8 +709,9 @@ impl App {
         self.shown()
     }
 
+    /// Left and Right: the viewer's photo, or the reel's big photo in the gallery.
     fn step(&mut self, delta: isize) -> Task<Message> {
-        let Some(current) = self.viewing.clone() else { return Task::none() };
+        let Some(current) = self.viewing.clone().or_else(|| self.reel.clone()) else { return Task::none() };
         let list = self.viewer_list();
         let Some(i) = list.iter().position(|p| p.path == current) else { return Task::none() };
         let j = i as isize + delta;
@@ -423,18 +719,25 @@ impl App {
             return Task::none();
         }
         let next = list[j as usize].path.clone();
-        self.open(next)
+        if self.viewing.is_some() { self.open(next) } else { self.pick_reel(next) }
     }
 
     fn back(&mut self) -> Task<Message> {
         self.viewing = None;
-        set_viewing(None);
         self.full = None;
         self.failed = None;
-        match self.core.main_window_id() {
+        let reel = match self.reel.clone() {
+            Some(p) if self.size == REEL => self.want_full(p),
+            _ => {
+                set_viewing(None);
+                Task::none()
+            }
+        };
+        let title = match self.core.main_window_id() {
             Some(id) => self.set_window_title("Photos".into(), id),
             None => Task::none(),
-        }
+        };
+        Task::batch([title, reel])
     }
 }
 
@@ -453,6 +756,7 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, start: Option<PathBuf>) -> (Self, Task<Message>) {
+        let prefs = load_prefs();
         let mut app = App {
             core,
             photos: Vec::new(),
@@ -462,9 +766,22 @@ impl cosmic::Application for App {
             favorites_unsaved: false,
             failed: None,
             section: Section::Gallery,
+            source: prefs.source,
+            size: prefs.size,
+            square: prefs.square,
+            group: prefs.group,
+            sidebar: prefs.sidebar,
+            menu: None,
             thumbs: HashMap::new(),
+            dims: HashMap::new(),
             asked: HashSet::new(),
             favorites: load_favorites(),
+            selected: HashSet::new(),
+            select_mode: false,
+            anchor: None,
+            modifiers: Modifiers::empty(),
+            confirm_delete: false,
+            reel: None,
             viewing: None,
             full: None,
             start,
@@ -473,11 +790,7 @@ impl cosmic::Application for App {
             Some(id) => app.set_window_title("Photos".into(), id),
             None => Task::none(),
         };
-        let starred = app.favorites.clone();
-        let scan = Task::future(async move {
-            let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
-        });
+        let scan = app.scan_task();
         (app, Task::batch([title, scan]))
     }
 
@@ -486,19 +799,29 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        cosmic::iced::event::listen_with(|event, status, _| {
-            if status != cosmic::iced::event::Status::Ignored {
-                return None;
+        cosmic::iced::event::listen_with(|event, status, _| match event {
+            cosmic::iced::Event::Keyboard(KeyEvent::ModifiersChanged(m)) => Some(Message::Modifiers(m)),
+            cosmic::iced::Event::Mouse(MouseEvent::WheelScrolled { delta }) => {
+                let y = match delta {
+                    ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
+                };
+                Some(Message::Wheel(y))
             }
-            match event {
-                cosmic::iced::Event::Keyboard(KeyEvent::KeyPressed { key: Key::Named(named), .. }) => match named {
-                    Named::ArrowLeft => Some(Message::Prev),
-                    Named::ArrowRight => Some(Message::Next),
-                    Named::Escape => Some(Message::Back),
+            cosmic::iced::Event::Keyboard(KeyEvent::KeyPressed { key, modifiers, .. })
+                if status == cosmic::iced::event::Status::Ignored =>
+            {
+                match key {
+                    Key::Named(Named::ArrowLeft) => Some(Message::Prev),
+                    Key::Named(Named::ArrowRight) => Some(Message::Next),
+                    Key::Named(Named::Escape) => Some(Message::Back),
+                    Key::Named(Named::Delete) => Some(Message::AskDelete),
+                    Key::Character(c) if modifiers.control() && c.as_str().eq_ignore_ascii_case("a") => {
+                        Some(Message::SelectAll)
+                    }
                     _ => None,
-                },
-                _ => None,
+                }
             }
+            _ => None,
         })
     }
 
@@ -516,7 +839,8 @@ impl cosmic::Application for App {
                 };
                 self.photos = found.photos;
                 self.scanning = false;
-                let tiles = self.want_section_thumbs();
+                let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
+                self.selected.retain(|p| live.contains(p));
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
                     Some(p) if is_photo(&p) => {
@@ -529,20 +853,167 @@ impl cosmic::Application for App {
                     }
                     _ => Task::none(),
                 };
-                return Task::batch([tiles, open]);
+                let view = self.refresh_view();
+                return Task::batch([view, open]);
             }
             Message::Section(s) => {
                 self.section = s;
-                return self.want_section_thumbs();
+                self.menu = None;
+                self.clear_selection();
+                return self.refresh_view();
             }
-            Message::Thumb(path, handle) => {
-                if let Some(h) = handle {
+            Message::Source(folder) => {
+                self.source = folder;
+                self.menu = None;
+                self.clear_selection();
+                self.save();
+                return self.refresh_view();
+            }
+            Message::ToggleSidebar => {
+                self.sidebar = !self.sidebar;
+                self.save();
+            }
+            Message::ToggleSquare => {
+                self.square = !self.square;
+                self.save();
+            }
+            Message::SetGroup(g) => {
+                self.group = g;
+                self.menu = None;
+                self.save();
+            }
+            Message::Menu(menu) => self.menu = menu,
+            Message::Size(n) => {
+                self.size = n.min(REEL);
+                self.save();
+                return self.sync_reel();
+            }
+            Message::Wheel(y) => {
+                if self.modifiers.control() && self.viewing.is_none() && y != 0.0 {
+                    let next = if y > 0.0 { self.size.saturating_add(1).min(REEL) } else { self.size.saturating_sub(1) };
+                    if next != self.size {
+                        return self.update(Message::Size(next));
+                    }
+                }
+            }
+            Message::Modifiers(m) => self.modifiers = m,
+            Message::Tile(path) => {
+                if self.modifiers.shift() {
+                    let list: Vec<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                    let from = self.anchor.as_ref().and_then(|a| list.iter().position(|p| p == a));
+                    let to = list.iter().position(|p| *p == path);
+                    if let (Some(from), Some(to)) = (from, to) {
+                        let (lo, hi) = (from.min(to), from.max(to));
+                        self.selected.extend(list[lo..=hi].iter().cloned());
+                    } else {
+                        self.selected.insert(path.clone());
+                        self.anchor = Some(path);
+                    }
+                    self.select_mode = true;
+                } else if self.modifiers.control() || self.select_mode {
+                    if !self.selected.remove(&path) {
+                        self.selected.insert(path.clone());
+                    }
+                    self.anchor = Some(path);
+                    self.select_mode = true;
+                    if self.selected.is_empty() && !self.modifiers.control() {
+                        self.select_mode = true;
+                    }
+                } else {
+                    return self.open(path);
+                }
+                self.confirm_delete = false;
+            }
+            Message::SelectMode(on) => {
+                if on {
+                    self.select_mode = true;
+                } else {
+                    self.clear_selection();
+                }
+            }
+            Message::SelectAll => {
+                if self.viewing.is_none() {
+                    self.selected = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                    self.select_mode = true;
+                    self.confirm_delete = false;
+                }
+            }
+            Message::FavoriteTargets => {
+                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let on = !paths.iter().all(|p| self.favorites.contains(p));
+                match set_favorites(&paths, on) {
+                    Ok(saved) => {
+                        self.favorites = saved;
+                        self.favorites_unsaved = false;
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save favorites: {e}");
+                        self.favorites_unsaved = true;
+                    }
+                }
+                return self.refresh_view();
+            }
+            Message::AskDelete => {
+                if self.viewing.is_none() && !self.selected.is_empty() {
+                    self.confirm_delete = true;
+                }
+            }
+            Message::CancelDelete => self.confirm_delete = false,
+            Message::ConfirmDelete => {
+                self.confirm_delete = false;
+                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                return Task::future(async move {
+                    let (done, failed) = tokio::task::spawn_blocking(move || move_to_recycle_bin(paths))
+                        .await
+                        .unwrap_or_default();
+                    cosmic::Action::App(Message::Trashed(done, failed))
+                });
+            }
+            Message::Trashed(done, failed) => {
+                let gone: HashSet<PathBuf> = done.into_iter().collect();
+                self.photos.retain(|p| !gone.contains(&p.path));
+                self.selected.retain(|p| !gone.contains(p));
+                for p in &gone {
+                    self.thumbs.remove(p);
+                    self.dims.remove(p);
+                    self.asked.remove(p);
+                }
+                if self.selected.is_empty() {
+                    self.select_mode = false;
+                    self.anchor = None;
+                }
+                self.notice = (failed > 0).then(|| format!("{failed} photo(s) could not be moved to the Recycle Bin."));
+                return self.refresh_view();
+            }
+            Message::Reel(path) => {
+                if self.size == REEL {
+                    return self.pick_reel(path);
+                }
+            }
+            Message::Refresh => {
+                self.menu = None;
+                self.scanning = true;
+                return self.scan_task();
+            }
+            Message::Thumb(path, loaded) => {
+                if let Some((h, dims)) = loaded {
+                    self.dims.insert(path.clone(), dims);
                     self.thumbs.insert(path, h);
                 }
             }
             Message::Open(path) => return self.open(path),
             Message::Full(path, handle) => {
-                if self.viewing.as_deref() == Some(path.as_path()) {
+                let wanted = match &self.viewing {
+                    Some(v) => *v == path,
+                    None => self.reel.as_ref() == Some(&path),
+                };
+                if wanted {
                     match handle {
                         Some(h) => {
                             self.failed = None;
@@ -560,10 +1031,20 @@ impl cosmic::Application for App {
                 if let Some(path) = self.viewing.clone() {
                     return self.open(path);
                 }
+                if let Some(path) = self.reel.clone() {
+                    return self.pick_reel(path);
+                }
             }
             Message::Back => {
                 if self.viewing.is_some() {
                     return self.back();
+                }
+                if self.menu.is_some() {
+                    self.menu = None;
+                } else if self.confirm_delete {
+                    self.confirm_delete = false;
+                } else if self.select_mode || !self.selected.is_empty() {
+                    self.clear_selection();
                 }
             }
             Message::Prev => return self.step(-1),
@@ -589,24 +1070,165 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        match &self.viewing {
-            Some(path) => themer(Some(cosmic::Theme::light()), container(self.viewer(path)).class(theme::Container::Background).width(Length::Fill).height(Length::Fill)).into(),
-            None => themer(Some(cosmic::Theme::dark()), container(self.gallery()).class(theme::Container::Background).width(Length::Fill).height(Length::Fill)).into(),
-        }
+        let body: Element<'_, Message> = match &self.viewing {
+            Some(path) => self.viewer(path),
+            None => self.gallery(),
+        };
+        container(body).class(theme::Container::Background).width(Length::Fill).height(Length::Fill).into()
     }
 }
 
 impl App {
+    /// One entry of a toolbar drop-down.
+    fn menu_item(label: &str, icon_name: Option<&str>, selected: bool, msg: Message) -> Element<'static, Message> {
+        let mut content = row::with_capacity(2).spacing(12).align_y(Alignment::Center);
+        if let Some(name) = icon_name {
+            content = content.push(icon::from_name(name).size(16));
+        }
+        content = content.push(text::body(label.to_string()));
+        button::custom(content)
+            .width(Length::Fill)
+            .padding([6, 12])
+            .class(lapin_ux_ui::nav_item(selected))
+            .on_press(msg)
+            .into()
+    }
+
+    /// A drop-down button that opens `items` below itself.
+    fn dropdown(
+        &self,
+        which: Menu,
+        icon_name: &str,
+        label: String,
+        items: Vec<Element<'static, Message>>,
+    ) -> Element<'_, Message> {
+        let open = self.menu == Some(which);
+        let content = row::with_capacity(3)
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(icon::from_name(icon_name).size(16))
+            .push(text::body(label))
+            .push(icon::from_name("pan-down-symbolic").size(12));
+        let trigger = button::custom(content)
+            .padding([6, 10])
+            .class(lapin_ux_ui::nav_item(open))
+            .on_press(Message::Menu(if open { None } else { Some(which) }));
+        if !open {
+            return trigger.into();
+        }
+        let list = container(column::with_children(items).spacing(2).width(Length::Fixed(200.0)))
+            .padding(4)
+            .class(theme::Container::Card);
+        widget::popover(trigger)
+            .popup(list)
+            .position(widget::popover::Position::Bottom)
+            .on_close(Message::Menu(None))
+            .into()
+    }
+
+    fn toolbar(&self) -> Element<'_, Message> {
+        let mut bar = row::with_capacity(10).spacing(8).align_y(Alignment::Center).padding([8, 12]);
+        bar = bar.push(
+            button::icon(icon::from_name("sidebar-show-symbolic"))
+                .name(if self.sidebar { "Hide the side bar" } else { "Show the side bar" })
+                .selected(self.sidebar)
+                .on_press(Message::ToggleSidebar),
+        );
+
+        let mut sources = vec![Self::menu_item("All folders", Some("folder-symbolic"), self.source.is_none(), Message::Source(None))];
+        for f in Folder::ALL {
+            if f.dir().is_some_and(|d| d.is_dir()) {
+                sources.push(Self::menu_item(f.label(), Some(f.icon()), self.source == Some(f), Message::Source(Some(f))));
+            }
+        }
+        bar = bar.push(self.dropdown(
+            Menu::Source,
+            "folder-symbolic",
+            self.source.map_or("All folders", Folder::label).to_string(),
+            sources,
+        ));
+
+        let groups = Group::ALL.into_iter().map(|g| Self::menu_item(g.label(), None, self.group == g, Message::SetGroup(g))).collect();
+        bar = bar.push(self.dropdown(Menu::Group, "view-list-symbolic", self.group.label().to_string(), groups));
+
+        bar = bar.push(
+            button::icon(icon::from_name(if self.square { "view-grid-symbolic" } else { "view-continuous-symbolic" }))
+                .name(if self.square { "Show photos in their own proportions" } else { "Show photos as squares" })
+                .on_press(Message::ToggleSquare),
+        );
+        bar = bar.push(
+            row::with_capacity(3)
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(icon::from_name("image-x-generic-symbolic").size(12))
+                .push(widget::slider(0..=REEL, self.size, Message::Size).width(Length::Fixed(140.0)))
+                .push(icon::from_name("image-x-generic-symbolic").size(20)),
+        );
+        bar = bar.push(widget::Space::new().width(Length::Fill));
+
+        if self.select_mode || !self.selected.is_empty() {
+            let n = self.selected.len();
+            bar = bar.push(text::body(match n {
+                0 => "Select photos".to_string(),
+                1 => "1 selected".to_string(),
+                n => format!("{n} selected"),
+            }));
+            bar = bar.push(button::standard("Select all").on_press(Message::SelectAll));
+            let all_starred = n > 0 && self.selected.iter().all(|p| self.favorites.contains(p));
+            let mut star = button::icon(icon::from_name(if all_starred { "starred-symbolic" } else { "non-starred-symbolic" }))
+                .name(if all_starred { "Remove from favorites" } else { "Add to favorites" });
+            let mut bin = button::icon(icon::from_name("user-trash-symbolic")).name("Move to the Recycle Bin");
+            if n > 0 {
+                star = star.on_press(Message::FavoriteTargets);
+                bin = bin.on_press(Message::AskDelete);
+            }
+            bar = bar.push(star).push(bin);
+            bar = bar.push(button::standard("Done").on_press(Message::SelectMode(false)));
+        } else {
+            bar = bar.push(button::standard("Select").on_press(Message::SelectMode(true)));
+        }
+
+        let more = vec![Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        let more_open = self.menu == Some(Menu::More);
+        let more_btn = button::icon(icon::from_name("view-more-symbolic"))
+            .name("More")
+            .selected(more_open)
+            .on_press(Message::Menu(if more_open { None } else { Some(Menu::More) }));
+        bar = bar.push(if more_open {
+            let list = container(column::with_children(more).width(Length::Fixed(220.0))).padding(4).class(theme::Container::Card);
+            Element::from(
+                widget::popover(more_btn)
+                    .popup(list)
+                    .position(widget::popover::Position::Bottom)
+                    .on_close(Message::Menu(None)),
+            )
+        } else {
+            more_btn.into()
+        });
+        bar.into()
+    }
+
+    fn delete_bar(&self) -> Element<'_, Message> {
+        let n = self.selected.len();
+        let what = if n == 1 { "1 photo".to_string() } else { format!("{n} photos") };
+        container(
+            row::with_capacity(4)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(text::body(format!("Move {what} to the Recycle Bin?")))
+                .push(widget::Space::new().width(Length::Fill))
+                .push(button::standard("Cancel").on_press(Message::CancelDelete))
+                .push(button::destructive("Move").on_press(Message::ConfirmDelete)),
+        )
+        .padding([8, 16])
+        .class(theme::Container::Card)
+        .width(Length::Fill)
+        .into()
+    }
+
     fn gallery(&self) -> Element<'_, Message> {
-        let mut nav = column::with_capacity(Section::ALL.len() + 2).spacing(2);
+        let mut nav = column::with_capacity(Section::ALL.len()).spacing(2);
         for s in Section::ALL {
-            // The folders only appear when they exist.
-            if s.dir().is_some_and(|d| !d.is_dir()) {
-                continue;
-            }
-            if s == Section::Pictures {
-                nav = nav.push(widget::divider::horizontal::default());
-            }
             let content = row::with_capacity(2)
                 .spacing(12)
                 .align_y(Alignment::Center)
@@ -628,6 +1250,7 @@ impl App {
         } else if shown.is_empty() {
             let msg = match (self.section, self.read_errors) {
                 (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
+                (Section::Recents, _) => "Nothing new in the last three days.",
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };
@@ -639,6 +1262,8 @@ impl App {
                 col = col.push(text::caption(notice.as_str()));
             }
             container(col.push(text::body(msg))).center(Length::Fill).into()
+        } else if self.size == REEL {
+            self.reel_view(&shown)
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
@@ -650,18 +1275,20 @@ impl App {
             if shown.len() > MAX_TILES {
                 col = col.push(text::caption(format!("Showing the newest {MAX_TILES} of {} pictures.", shown.len())));
             }
-            let mut last = String::new();
+            let mut last: Option<String> = None;
             let mut tiles: Vec<Element<'_, Message>> = Vec::new();
             for photo in shown.into_iter().take(MAX_TILES) {
-                let heading = date_heading(photo.modified);
-                if heading != last {
+                let heading = group_heading(photo.modified, self.group);
+                if last.as_ref() != Some(&heading) {
                     if !tiles.is_empty() {
                         col = col.push(widget::flex_row(std::mem::take(&mut tiles)).column_spacing(4).row_spacing(4));
                     }
-                    col = col.push(container(text::heading(heading.clone())).padding([12, 0, 4, 0]));
-                    last = heading;
+                    if !heading.is_empty() {
+                        col = col.push(container(text::heading(heading.clone())).padding([12, 0, 4, 0]));
+                    }
+                    last = Some(heading);
                 }
-                tiles.push(self.tile(&photo.path));
+                tiles.push(self.tile(&photo.path, false));
             }
             if !tiles.is_empty() {
                 col = col.push(widget::flex_row(tiles).column_spacing(4).row_spacing(4));
@@ -669,14 +1296,67 @@ impl App {
             scrollable(col).width(Length::Fill).height(Length::Fill).into()
         };
 
-        lapin_ux_ui::a11y::group("Gallery", row::with_capacity(2).push(sidebar).push(body).height(Length::Fill))
+        let mut page = column::with_capacity(3).push(self.toolbar());
+        if self.confirm_delete && !self.selected.is_empty() {
+            page = page.push(self.delete_bar());
+        }
+        let mut main = row::with_capacity(2).height(Length::Fill);
+        if self.sidebar {
+            main = main.push(sidebar);
+        }
+        page = page.push(main.push(body));
+        lapin_ux_ui::a11y::group("Gallery", page.height(Length::Fill))
     }
 
-    fn tile(&self, path: &Path) -> Element<'_, Message> {
-        let side = Length::Fixed(TILE as f32);
+    /// The last slider step: one large photo, with the strip of the others below.
+    fn reel_view(&self, shown: &[&Photo]) -> Element<'_, Message> {
+        let big: Element<'_, Message> = match (&self.full, &self.reel) {
+            (Some((p, h)), Some(r)) if p == r => button::custom(
+                container(widget::image(h.clone()).content_fit(cosmic::iced::ContentFit::Contain))
+                    .center(Length::Fill),
+            )
+            .padding(0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Button::Image)
+            .name(file_name(r))
+            .on_press(Message::Open(r.clone()))
+            .into(),
+            _ if self.failed.is_some() && self.failed == self.reel => container(
+                column::with_capacity(2)
+                    .spacing(8)
+                    .align_x(Alignment::Center)
+                    .push(text::body("This picture could not be opened."))
+                    .push(button::standard("Try again").on_press(Message::Retry)),
+            )
+            .center(Length::Fill)
+            .into(),
+            _ => container(text::body("Opening...")).center(Length::Fill).into(),
+        };
+        let mut strip = row::with_capacity(shown.len().min(MAX_TILES)).spacing(4);
+        for photo in shown.iter().take(MAX_TILES) {
+            strip = strip.push(self.tile(&photo.path, true));
+        }
+        column::with_capacity(2)
+            .spacing(8)
+            .padding([8, 16, 16, 8])
+            .push(big)
+            .push(scrollable::horizontal(strip).width(Length::Fill))
+            .into()
+    }
+
+    fn tile(&self, path: &Path, strip: bool) -> Element<'_, Message> {
+        let h = if strip { 80.0 } else { SIZES[usize::from(self.size).min(SIZES.len() - 1)] as f32 };
+        let w = if self.square || strip && !self.dims.contains_key(path) {
+            h
+        } else {
+            let (dw, dh) = self.dims.get(path).copied().unwrap_or((4, 3));
+            (h * dw as f32 / dh.max(1) as f32).clamp(h * 0.6, h * 2.0)
+        };
+        let (w, h) = (Length::Fixed(w), Length::Fixed(h));
         let picture: Element<'_, Message> = match self.thumbs.get(path) {
-            Some(h) => widget::image(h.clone()).content_fit(cosmic::iced::ContentFit::Cover).width(side).height(side).into(),
-            None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(side).height(side).into(),
+            Some(handle) => widget::image(handle.clone()).content_fit(cosmic::iced::ContentFit::Cover).width(w).height(h).into(),
+            None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(w).height(h).into(),
         };
         let mut tile = stack![picture];
         if self.favorites.contains(path) {
@@ -685,16 +1365,27 @@ impl App {
                     .padding(6)
                     .align_x(Alignment::End)
                     .align_y(Alignment::End)
-                    .width(side)
-                    .height(side),
+                    .width(w)
+                    .height(h),
             );
         }
-        button::custom(tile)
-            .padding(0)
-            .class(theme::Button::Image)
-            .name(file_name(path))
-            .on_press(Message::Open(path.to_path_buf()))
-            .into()
+        let selected = self.selected.contains(path);
+        if selected {
+            tile = tile.push(
+                container(icon::from_name("object-select-symbolic").size(20))
+                    .padding(6)
+                    .align_x(Alignment::Start)
+                    .align_y(Alignment::Start)
+                    .width(w)
+                    .height(h),
+            );
+        }
+        let msg = if strip && !self.select_mode && !self.modifiers.shift() && !self.modifiers.control() {
+            Message::Reel(path.to_path_buf())
+        } else {
+            Message::Tile(path.to_path_buf())
+        };
+        button::custom(tile).padding(0).selected(selected).class(theme::Button::Image).name(file_name(path)).on_press(msg).into()
     }
 
     fn viewer(&self, path: &Path) -> Element<'_, Message> {
