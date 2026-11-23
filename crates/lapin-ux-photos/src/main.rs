@@ -210,6 +210,9 @@ enum Message {
     /// Starts the slideshow, or stops it when it is running.
     Slideshow,
     SlideshowTick,
+    /// Turns the open picture a quarter turn (true: clockwise) and saves it.
+    Rotate(bool),
+    Rotated(PathBuf, Result<(), String>),
     /// The grid was scrolled; near the bottom it shows more tiles.
     GridScrolled(f32),
     /// Steps the slideshow speed to the next choice.
@@ -613,6 +616,31 @@ fn decode(path: &Path) -> Option<image::DynamicImage> {
         img.apply_orientation(o);
     }
     Some(img)
+}
+
+/// Turns the picture a quarter turn and writes it back. The file is saved
+/// upright (the camera's rotation tag is baked in and dropped), through a
+/// temporary file so a failure leaves the original alone. JPEG is saved again,
+/// so it is compressed once more.
+fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
+        return Err("This kind of picture cannot be turned.".into());
+    }
+    let img = decode(path).ok_or("The picture could not be read.")?;
+    let turned = if clockwise { img.rotate90() } else { img.rotate270() };
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or("The picture has no name.")?;
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp.{ext}", std::process::id()));
+    let result = turned.save(&tmp).map_err(|e| e.to_string()).and_then(|()| {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+        }
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(|_| "The picture could not be saved. Is the folder read-only?".to_string())
 }
 
 fn handle(img: image::DynamicImage) -> Handle {
@@ -1781,6 +1809,30 @@ impl cosmic::Application for App {
                     return self.want_section_thumbs();
                 }
             }
+            Message::Rotate(clockwise) => {
+                let Some(path) = self.viewing.clone() else { return Task::none() };
+                self.slideshow = false;
+                return Task::future(async move {
+                    let p = path.clone();
+                    let done = tokio::task::spawn_blocking(move || rotate_file(&p, clockwise))
+                        .await
+                        .unwrap_or_else(|_| Err("The picture could not be turned.".into()));
+                    cosmic::Action::App(Message::Rotated(path, done))
+                });
+            }
+            Message::Rotated(path, done) => match done {
+                Ok(()) => {
+                    self.notice = None;
+                    self.asked.remove(&path);
+                    self.thumbs.remove(&path);
+                    self.dims.remove(&path);
+                    if self.viewing.as_ref() == Some(&path) {
+                        return self.open(path);
+                    }
+                    return self.want_section_thumbs();
+                }
+                Err(e) => self.notice = Some(e),
+            },
             Message::SlideshowTick => {
                 if !self.slideshow || self.viewing.is_none() {
                     return Task::none();
@@ -2369,6 +2421,16 @@ impl App {
                     .on_press(Message::Slideshow),
             )
             .push(
+                button::icon(icon::from_name("object-rotate-left-symbolic"))
+                    .name("Turn left")
+                    .on_press(Message::Rotate(false)),
+            )
+            .push(
+                button::icon(icon::from_name("object-rotate-right-symbolic"))
+                    .name("Turn right")
+                    .on_press(Message::Rotate(true)),
+            )
+            .push(
                 button::icon(icon::from_name(if self.fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" }))
                     .name(if self.fullscreen { "Leave full screen" } else { "Full screen" })
                     .on_press(Message::Fullscreen),
@@ -2378,7 +2440,11 @@ impl App {
                     .name(if favorite { "Remove from favorites" } else { "Add to favorites" })
                     .on_press(Message::ToggleFavorite(path.to_path_buf())),
             );
-        let toolbar = container(container(bar).padding([4, 8]).class(theme::Container::Card))
+        let mut top = column::with_capacity(2).push(container(bar).padding([4, 8]).class(theme::Container::Card));
+        if let Some(n) = &self.notice {
+            top = top.push(container(text::caption(n.as_str())).padding([4, 8]).class(theme::Container::Card));
+        }
+        let toolbar = container(top)
             .padding(12)
             .width(Length::Fill)
             .align_y(Alignment::Start);
