@@ -42,7 +42,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 
-| Mon 23 Nov | Explorer details view (#212): column headings and cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
+| Mon 23 Nov | Explorer details view (#212): column headings and the Date modified, Type and Size cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
 ## Phase dates
 
 | Phase | Started | Finished |
