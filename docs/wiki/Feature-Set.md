@@ -37,7 +37,7 @@ Familiar frame (sidebar, Find a setting in the title bar, Home), cards for every
 - **Control Panel**: category view and Large icons with full-colour icons.
 - **Update**: pacman, Flatpak, fwupd firmware; history; restart prompt; background check.
 - **Get Started**: Wi-Fi, light/dark, optional pointers.
-- Snipping (Super+Shift+S): rectangle, window, full screen (no markup editor yet).
+- Snipping (Super+Shift+S): rectangle, window, full screen. The notification's Edit button opens the snip editor (pen, highlighter, crop, undo, copy, save).
 - Clipboard history and emoji (Super+V, Super+.).
 
 ## Sign-in

@@ -104,6 +104,8 @@ enum Message {
     Prev,
     Next,
     ToggleFavorite(PathBuf),
+    /// Open the picture in the snip editor (#78).
+    Edit(PathBuf),
 }
 
 /// Full-size decodes allowed at once, so paging quickly through a folder queues
@@ -568,6 +570,12 @@ impl cosmic::Application for App {
             }
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
+            Message::Edit(path) => {
+                // The editor is its own app, so Photos never holds the picture open for it.
+                if std::process::Command::new("lapin-ux-snip-editor").arg(&path).spawn().is_err() {
+                    self.notice = Some("The editor could not be opened.".into());
+                }
+            }
             Message::ToggleFavorite(path) => {
                 let on = !self.favorites.contains(&path);
                 // A full disk or a read-only home must not end the program (#174).
@@ -720,7 +728,7 @@ impl App {
         let index = list.iter().position(|p| p.path == path);
         let favorite = self.favorites.contains(path);
 
-        let mut bar = row::with_capacity(7)
+        let mut bar = row::with_capacity(8)
             .spacing(4)
             .align_y(Alignment::Center)
             .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back to the gallery").on_press(Message::Back))
@@ -739,6 +747,11 @@ impl App {
                 button::icon(icon::from_name("go-next-symbolic"))
                     .name("Next photo")
                     .on_press_maybe(index.filter(|i| i + 1 < list.len()).map(|_| Message::Next)),
+            )
+            .push(
+                button::icon(icon::from_name("document-edit-symbolic"))
+                    .name("Edit")
+                    .on_press(Message::Edit(path.to_path_buf())),
             )
             .push(
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))

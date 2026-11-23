@@ -67,7 +67,7 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 - A one-step installer and clean uninstaller.
 - Since 28 October: main display choice, a Fonts page with sharper text, older X11 and Wine tray icons, a Mouse pointer page, an opaque taskbar by default, the rabbit as the default Start icon, and fixes for every issue filed up to #58.
 
-**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 15 of 19 (2 partial; Narrator paused).
+**Phase progress:** Core desktop 12/12; Settings and multitasking 9/9; System apps 4 of 6 (1 partial); Zero learning curve 16 of 19 (2 partial; Narrator paused).
 
 **Confirmed on real hardware:** install, pop-ups, Open/Save dialogs, touch keyboard in the session, firmware updates; 58 hardware issues have been filed. Every bug has a fix, and most are labelled "fixed: needs retest" until the owner confirms them on real hardware (23 issues are still open). A few need more details from testers (#32, #34, #50), the screen reader (#18, #44) is paused, and four requests are not started (#41, #54, #57, #58).
 
@@ -84,7 +84,7 @@ The first real Arch test showed that sharing a machine with COSMIC is the hardes
 
 1. **File Explorer**: fork COSMIC Files with a familiar command bar, breadcrumb bar, Home, Gallery and details pane; add the Open/Save navigation pane.
 2. **Store**: fork COSMIC Store into a Microsoft Store-style Home, sections and Library, sharing update code with Update.
-3. **Snip markup editor** (pen, highlighter, crop).
+3. **Snip editor follow-ups**: an Edit entry in File Explorer's right-click menu (the editor itself is built: pen, highlighter, crop).
 4. **Snap-group shared-edge resize** in the compositor.
 5. Requests from testing: taskbar position, lock screen blur fade, your own mouse pointers and customisable system sounds (#41, #54, #57, #58).
 6. Real contrast themes; possibly live captions and voice typing (parked).

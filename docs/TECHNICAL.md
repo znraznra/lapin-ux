@@ -37,6 +37,7 @@ a change to one area only touches that file.
 - [System parts](technical/system-parts.md): Pop-ups and admin prompt, title bars of COSMIC apps, snipping, system tools, lock screen and sign-in, typing, accessibility.
 - [Look and sound](technical/look-and-sound.md): Text rendering, sounds and pointers.
 - [Explorer and file dialogs](technical/explorer.md): The Explorer (`lapin-explorer`) and the Open/Save dialogs.
+- [Snip editor](technical/snip-editor.md): The snip editor (`lapin-ux-snip-editor`): pen, highlighter, crop, copy and save; opened from the snip notification and Photos.
 - [Photos](technical/photos.md): The offline Photos app (`lapin-ux-photos`): dark gallery, light viewer, favorites.
 - [Session and first-run defaults](technical/session.md): The session (`lapin-ux-session`) and the defaults written on first run.
 - Static analysis: CodeQL runs through the repository's default setup (actions, Python and Rust), not a workflow, because GitHub rejects advanced-workflow uploads while the default setup is on. `.github/workflows/semgrep.yml` (Semgrep `p/default` and `p/secrets`) uploads findings to the Security tab. Both only report and are not blocking until the first findings are triaged.

@@ -31,9 +31,9 @@ Repository: https://github.com/znraznra/lapin-ux (branch `main`)
 | 1 Core desktop | Taskbar, Start, notifications, tray, wallpaper, theme | 12 | 0 | 0 |
 | 2 Settings and multitasking | Settings app, quick settings, Alt+Tab/Task view, snapping | 9 | 0 | 0 |
 | 3 System apps | File manager, Update, Control Panel | 4 | 1 | 1 |
-| 4 Zero learning curve | Everything else | 15 | 2 | 2 |
+| 4 Zero learning curve | Everything else | 16 | 2 | 1 |
 
-Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), snip markup editor, file dialog navigation pane, snap-group shared-edge resize. Every reported bug has a fix waiting for a hardware retest, except a few that need details from testers. Narrator is paused.
+Open: File Explorer (fork of COSMIC Files), Store (fork of COSMIC Store), file dialog navigation pane, snap-group shared-edge resize. Every reported bug has a fix waiting for a hardware retest, except a few that need details from testers. Narrator is paused.
 
 ## Ground rules for contributors
 
