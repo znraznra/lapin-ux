@@ -2334,10 +2334,11 @@ impl Shell {
                 };
                 if submenu {
                     self.tray_menu_path.push(id);
-                    return Task::future(async move {
+                    let prepare = Task::future(async move {
                         let _ = menu.about_to_show(id).await;
                         cosmic::Action::App(Message::Noop)
                     });
+                    return Task::batch([prepare, tray_menu_to_top()]);
                 }
                 let close = self.close_popup();
                 return Task::batch([
@@ -2353,6 +2354,7 @@ impl Shell {
             }
             Message::TrayMenuBack => {
                 self.tray_menu_path.pop();
+                return tray_menu_to_top();
             }
             Message::Noop => {}
         }
@@ -2434,4 +2436,12 @@ fn view_surface(shell: &Shell, id: window::Id) -> Element<'_, Message> {
         tracing::debug!(?id, "view asked for a surface the shell doesn't track");
     }
     cosmic::widget::Space::new().into()
+}
+
+/// Scroll the tray menu back to the top (after a submenu or Back).
+fn tray_menu_to_top() -> Task<Message> {
+    cosmic::iced::widget::scrollable::snap_to(
+        crate::taskbar_view::tray_menu_scroll_id(),
+        cosmic::iced::widget::scrollable::RelativeOffset { x: None, y: Some(0.0) },
+    )
 }

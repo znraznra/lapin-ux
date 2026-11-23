@@ -793,9 +793,9 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str, parent: cosmic::iced::window::
         .or_else(|| shell.main_bar())
         .and_then(|b| b.output_height)
         .unwrap_or(720) as f32;
-    // An id per menu path, so a submenu (or Back) starts at the top.
-    let scroll_id = widget::Id::new(format!("tray-menu-{:?}", shell.tray_menu_path));
-    let body = widget::scrollable(column::with_children(items).spacing(2)).id(scroll_id).height(Length::Shrink);
+    // A fixed id: the shell snaps the offset to the top when the menu path
+    // changes (a new id would not reset the offset in this iced version).
+    let body = widget::scrollable(column::with_children(items).spacing(2)).id(tray_menu_scroll_id()).height(Length::Shrink);
     panel(container(body).max_height((output_h - 32.0).max(160.0)), 260.0)
 }
 
@@ -1209,4 +1209,10 @@ mod logo_tests {
     fn start_icon_is_the_official_logo() {
         assert_eq!(super::START_LOGO, include_bytes!("../../../docs/assets/lapin-ux-logo.svg"));
     }
+}
+
+/// Id of the tray menu's scrollable, shared with the shell so a submenu or
+/// Back can reset the scroll offset.
+pub fn tray_menu_scroll_id() -> widget::Id {
+    widget::Id::new("lapin-tray-menu-scroll")
 }
