@@ -54,3 +54,4 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Hardware retest | 22 Oct | In progress: 54 of 58 issues closed on 10 Nov |
 
 Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real-hardware test on 22 October, the work is mostly fixes and retests.
+| Mon 23 Nov | Explorer Networks finds file servers and shows mapped and connected shares on its own, without mapping a drive first (#153). | Retest |
