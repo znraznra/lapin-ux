@@ -29,9 +29,10 @@ const THUMB: u32 = 240;
 const SIZES: [u32; 6] = [100, 130, 160, 190, 220, 250];
 const REEL: u8 = SIZES.len() as u8;
 const DEFAULT_SIZE: u8 = 2;
-/// How many tiles are loaded in one go. The grid is not virtualised yet, so this
-/// keeps the memory use (about 170 KB per tile) predictable.
-const MAX_TILES: usize = 400;
+/// How many tiles the grid starts with. Scrolling near the end adds `TILE_STEP`
+/// more, so memory (about 170 KB per tile) grows only as far as you look.
+const MAX_TILES: usize = 200;
+const TILE_STEP: usize = 200;
 /// Recents shows what was saved or changed within this long.
 const RECENT_SECS: u64 = 72 * 3600;
 /// Pictures are shown at most this wide or tall. Bigger ones are scaled down once.
@@ -209,6 +210,8 @@ enum Message {
     /// Starts the slideshow, or stops it when it is running.
     Slideshow,
     SlideshowTick,
+    /// The grid was scrolled; near the bottom it shows more tiles.
+    GridScrolled(f32),
     /// Steps the slideshow speed to the next choice.
     SlideSpeed,
     /// Fills the screen with the window, or goes back.
@@ -334,6 +337,8 @@ struct App {
     source_extra: Option<PathBuf>,
     /// The slideshow is running: the viewer moves on by itself.
     slideshow: bool,
+    /// How many tiles the grid shows right now (grows as you scroll down).
+    tile_limit: usize,
     /// Seconds each photo stays in the slideshow (saved).
     slide_secs: u8,
     /// The window fills the screen.
@@ -954,7 +959,7 @@ impl App {
     }
 
     fn want_section_thumbs(&mut self) -> Task<Message> {
-        let paths: Vec<PathBuf> = self.shown().into_iter().take(MAX_TILES).map(|p| p.path.clone()).collect();
+        let paths: Vec<PathBuf> = self.shown().into_iter().take(self.tile_limit).map(|p| p.path.clone()).collect();
         self.want_thumbs(paths)
     }
 
@@ -1169,6 +1174,7 @@ impl cosmic::Application for App {
             extra: load_folders(),
             source_extra: None,
             slideshow: false,
+            tile_limit: MAX_TILES,
             full: None,
             start,
         };
@@ -1248,6 +1254,7 @@ impl cosmic::Application for App {
                 return Task::batch([view, open]);
             }
             Message::Section(s) => {
+                self.tile_limit = MAX_TILES;
                 self.section = s;
                 self.hidden_open = false;
                 self.setting_lock = false;
@@ -1768,6 +1775,12 @@ impl cosmic::Application for App {
                 let Some(id) = self.core.main_window_id() else { return Task::none() };
                 return cosmic::iced::window::set_mode(id, mode);
             }
+            Message::GridScrolled(y) => {
+                if y > 0.8 && self.tile_limit < self.shown().len() {
+                    self.tile_limit += TILE_STEP;
+                    return self.want_section_thumbs();
+                }
+            }
             Message::SlideshowTick => {
                 if !self.slideshow || self.viewing.is_none() {
                     return Task::none();
@@ -2188,12 +2201,9 @@ impl App {
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));
             }
-            if shown.len() > MAX_TILES {
-                col = col.push(text::caption(format!("Showing the newest {MAX_TILES} of {} pictures.", shown.len())));
-            }
             let mut last: Option<String> = None;
             let mut tiles: Vec<Element<'_, Message>> = Vec::new();
-            for photo in shown.into_iter().take(MAX_TILES) {
+            for photo in shown.into_iter().take(self.tile_limit) {
                 let heading = group_heading(photo.modified, self.group);
                 if last.as_ref() != Some(&heading) {
                     if !tiles.is_empty() {
@@ -2209,7 +2219,7 @@ impl App {
             if !tiles.is_empty() {
                 col = col.push(widget::flex_row(tiles).column_spacing(4).row_spacing(4));
             }
-            scrollable(col).width(Length::Fill).height(Length::Fill).into()
+            scrollable(col).width(Length::Fill).height(Length::Fill).on_scroll(|v| Message::GridScrolled(v.relative_offset().y)).into()
         };
 
         let mut page = column::with_capacity(3).push(self.toolbar());
@@ -2255,8 +2265,8 @@ impl App {
             .into(),
             _ => container(text::body("Opening...")).center(Length::Fill).into(),
         };
-        let mut strip = row::with_capacity(shown.len().min(MAX_TILES)).spacing(4);
-        for photo in shown.iter().take(MAX_TILES) {
+        let mut strip = row::with_capacity(shown.len().min(self.tile_limit)).spacing(4);
+        for photo in shown.iter().take(self.tile_limit) {
             strip = strip.push(self.tile(&photo.path, true));
         }
         column::with_capacity(2)

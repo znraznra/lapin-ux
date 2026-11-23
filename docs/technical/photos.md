@@ -34,7 +34,8 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 
 Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package.
 - Slideshow speed: More > "Slideshow speed" steps 2, 4, 8, 15 seconds, saved as `slide_secs` in `settings.json`. The viewer toolbar has a Full screen button; leaving the viewer leaves full screen.
+- Tiles load as you scroll: the grid starts with 200 and adds 200 more each time you scroll near the bottom, so the old "Showing the newest 400" line is gone. Changing section starts again at 200.
 
 ## Not yet
 
-Lazy tile loading on scroll, rotate and edit.
+Rotate and edit.
