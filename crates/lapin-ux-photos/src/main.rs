@@ -217,6 +217,11 @@ enum Message {
     /// Turns the open picture a quarter turn (true: clockwise) and saves it.
     Rotate(bool),
     Rotated(PathBuf, Result<(), String>),
+    /// Shows or hides the edit buttons in the viewer.
+    EditToggle,
+    /// Applies an edit to the open picture and saves it as a copy.
+    Edit(Edit),
+    Edited(Result<PathBuf, String>),
     /// The grid was scrolled; near the bottom it shows more tiles.
     GridScrolled(f32),
     /// Steps the slideshow speed to the next choice.
@@ -286,6 +291,8 @@ struct App {
     scanning: bool,
     /// What the last scan could not do, shown above the grid.
     notice: Option<String>,
+    /// The viewer's edit buttons are showing.
+    edit_open: bool,
     /// Some folders could not be read (apart from a scan that only stopped early).
     read_errors: bool,
     /// The picture whose full-size decode failed.
@@ -647,6 +654,90 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
     }
     result.map_err(|_| "The picture could not be saved. Is the folder read-only?".to_string())
+}
+
+/// What the viewer's edit buttons can do. Every edit is saved as a copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Brighter,
+    Darker,
+    MoreContrast,
+    LessContrast,
+    BlackWhite,
+    CropSquare,
+    Crop169,
+    Crop43,
+}
+
+/// Applies one edit. Crops keep the middle of the picture.
+fn edit_image(img: image::DynamicImage, edit: Edit) -> image::DynamicImage {
+    let crop = |img: image::DynamicImage, rw: u32, rh: u32| {
+        let (w, h) = (img.width(), img.height());
+        // Largest rectangle of the wanted shape that fits.
+        let (nw, nh) = if u64::from(w) * u64::from(rh) > u64::from(h) * u64::from(rw) {
+            ((u64::from(h) * u64::from(rw) / u64::from(rh)) as u32, h)
+        } else {
+            (w, (u64::from(w) * u64::from(rh) / u64::from(rw)) as u32)
+        };
+        let (nw, nh) = (nw.max(1), nh.max(1));
+        img.crop_imm((w - nw) / 2, (h - nh) / 2, nw, nh)
+    };
+    match edit {
+        Edit::Brighter => img.brighten(20),
+        Edit::Darker => img.brighten(-20),
+        Edit::MoreContrast => img.adjust_contrast(15.0),
+        Edit::LessContrast => img.adjust_contrast(-15.0),
+        Edit::BlackWhite => image::DynamicImage::ImageRgb8(img.grayscale().to_rgb8()),
+        Edit::CropSquare => crop(img, 1, 1),
+        Edit::Crop169 => crop(img, 16, 9),
+        Edit::Crop43 => crop(img, 4, 3),
+    }
+}
+
+/// Where an edit is saved. A copy made earlier by an edit (its name ends in
+/// "(edited)" or "(edited 2)") is edited in place; any other picture gets a
+/// new "name (edited).ext" beside it, never over an existing file.
+fn edit_target(path: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("picture");
+    let is_copy = stem.ends_with(" (edited)")
+        || stem.rsplit_once(" (edited ").is_some_and(|(_, n)| n.strip_suffix(')').is_some_and(|n| n.parse::<u32>().is_ok()));
+    if is_copy {
+        return path.to_path_buf();
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+    let mut n = 1;
+    loop {
+        let name = if n == 1 { format!("{stem} (edited).{ext}") } else { format!("{stem} (edited {n}).{ext}") };
+        let candidate = path.with_file_name(name);
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Edits the picture and saves the result as a copy (see `edit_target`),
+/// through a temporary file. The original is never changed.
+fn edit_file(path: &Path, edit: Edit) -> Result<PathBuf, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
+        return Err("This kind of picture cannot be edited.".into());
+    }
+    let img = decode(path).ok_or("The picture could not be read.")?;
+    let edited = edit_image(img, edit);
+    let target = edit_target(path, |p| p.exists());
+    let name = target.file_name().and_then(|n| n.to_str()).ok_or("The picture has no name.")?;
+    let tmp = target.with_file_name(format!(".{name}.{}.tmp.{ext}", std::process::id()));
+    let result = edited.save(&tmp).map_err(|e| e.to_string()).and_then(|()| {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+        }
+        std::fs::rename(&tmp, &target).map_err(|e| e.to_string())
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map(|()| target).map_err(|_| "The copy could not be saved. Is the folder read-only?".to_string())
 }
 
 fn handle(img: image::DynamicImage) -> Handle {
@@ -1125,6 +1216,7 @@ impl App {
 
     fn back(&mut self) -> Task<Message> {
         self.slideshow = false;
+        self.edit_open = false;
         self.viewing = None;
         self.full = None;
         self.failed = None;
@@ -1171,6 +1263,7 @@ impl cosmic::Application for App {
             photos: Vec::new(),
             scanning: true,
             notice: None,
+            edit_open: false,
             read_errors: false,
             favorites_unsaved: false,
             failed: None,
@@ -1853,6 +1946,38 @@ impl cosmic::Application for App {
                     cosmic::Action::App(Message::Rotated(path, done))
                 });
             }
+            Message::EditToggle => {
+                self.edit_open = !self.edit_open;
+                self.slideshow = false;
+            }
+            Message::Edit(edit) => {
+                let Some(path) = self.viewing.clone() else { return Task::none() };
+                self.slideshow = false;
+                self.notice = None;
+                return Task::future(async move {
+                    let done = tokio::task::spawn_blocking(move || edit_file(&path, edit))
+                        .await
+                        .unwrap_or_else(|_| Err("The picture could not be edited.".into()));
+                    cosmic::Action::App(Message::Edited(done))
+                });
+            }
+            Message::Edited(done) => match done {
+                Ok(target) => {
+                    self.notice = None;
+                    // A copy that is already listed was edited in place.
+                    self.asked.remove(&target);
+                    self.thumbs.remove(&target);
+                    self.dims.remove(&target);
+                    if !self.photos.iter().any(|p| p.path == target) {
+                        let modified = std::fs::metadata(&target).and_then(|m| m.modified()).unwrap_or_else(|_| SystemTime::now());
+                        self.photos.insert(0, Photo { path: target.clone(), modified });
+                    }
+                    let view = self.refresh_view();
+                    let open = self.open(target);
+                    return Task::batch([view, open]);
+                }
+                Err(e) => self.notice = Some(e),
+            },
             Message::Rotated(path, done) => match done {
                 Ok(()) => {
                     self.notice = None;
@@ -2464,6 +2589,11 @@ impl App {
                     .on_press(Message::Rotate(true)),
             )
             .push(
+                button::icon(icon::from_name("document-edit-symbolic"))
+                    .name(if self.edit_open { "Close the edit buttons" } else { "Edit" })
+                    .on_press(Message::EditToggle),
+            )
+            .push(
                 button::icon(icon::from_name(if self.fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" }))
                     .name(if self.fullscreen { "Leave full screen" } else { "Full screen" })
                     .on_press(Message::Fullscreen),
@@ -2476,6 +2606,21 @@ impl App {
         let mut top = column::with_capacity(2).push(container(bar).padding([4, 8]).class(theme::Container::Card));
         if let Some(n) = &self.notice {
             top = top.push(container(text::caption(n.as_str())).padding([4, 8]).class(theme::Container::Card));
+        }
+        if self.edit_open {
+            let panel = row::with_capacity(9)
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(button::standard("Brighter").on_press(Message::Edit(Edit::Brighter)))
+                .push(button::standard("Darker").on_press(Message::Edit(Edit::Darker)))
+                .push(button::standard("More contrast").on_press(Message::Edit(Edit::MoreContrast)))
+                .push(button::standard("Less contrast").on_press(Message::Edit(Edit::LessContrast)))
+                .push(button::standard("Black and white").on_press(Message::Edit(Edit::BlackWhite)))
+                .push(button::standard("Crop square").on_press(Message::Edit(Edit::CropSquare)))
+                .push(button::standard("Crop 16:9").on_press(Message::Edit(Edit::Crop169)))
+                .push(button::standard("Crop 4:3").on_press(Message::Edit(Edit::Crop43)))
+                .push(text::caption("Saved as a copy. The original stays as it is."));
+            top = top.push(container(panel).padding([4, 8]).class(theme::Container::Card));
         }
         let toolbar = container(top)
             .padding(12)
@@ -2523,6 +2668,50 @@ fn main() -> cosmic::iced::Result {
             .size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)),
         start,
     )
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    fn grey(w: u32, h: u32, v: u8) -> image::DynamicImage {
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([v, v, v])))
+    }
+
+    #[test]
+    fn crops_keep_the_middle_and_the_shape() {
+        let sq = edit_image(grey(400, 200, 100), Edit::CropSquare);
+        assert_eq!((sq.width(), sq.height()), (200, 200));
+        let wide = edit_image(grey(300, 300, 100), Edit::Crop169);
+        assert_eq!((wide.width(), wide.height()), (300, 168));
+        let tall = edit_image(grey(100, 400, 100), Edit::Crop43);
+        assert_eq!((tall.width(), tall.height()), (100, 75));
+        let tiny = edit_image(grey(1, 1, 100), Edit::Crop169);
+        assert!(tiny.width() >= 1 && tiny.height() >= 1);
+    }
+
+    #[test]
+    fn brightness_moves_the_right_way() {
+        let up = edit_image(grey(2, 2, 100), Edit::Brighter).to_rgb8();
+        let down = edit_image(grey(2, 2, 100), Edit::Darker).to_rgb8();
+        assert!(up.get_pixel(0, 0)[0] > 100 && down.get_pixel(0, 0)[0] < 100);
+    }
+
+    #[test]
+    fn copies_never_replace_other_files() {
+        let p = Path::new("/a/b/cat.jpg");
+        assert_eq!(edit_target(p, |_| false), Path::new("/a/b/cat (edited).jpg"));
+        let taken = |c: &Path| c == Path::new("/a/b/cat (edited).jpg");
+        assert_eq!(edit_target(p, taken), Path::new("/a/b/cat (edited 2).jpg"));
+        // An earlier copy is edited in place.
+        let copy = Path::new("/a/b/cat (edited).jpg");
+        assert_eq!(edit_target(copy, |_| true), copy);
+        let copy2 = Path::new("/a/b/cat (edited 2).jpg");
+        assert_eq!(edit_target(copy2, |_| true), copy2);
+        // A name that only looks similar is a normal picture.
+        let odd = Path::new("/a/b/cat (edited x).jpg");
+        assert_eq!(edit_target(odd, |_| false), Path::new("/a/b/cat (edited x) (edited).jpg"));
+    }
 }
 
 #[cfg(test)]

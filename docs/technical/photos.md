@@ -36,7 +36,8 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 - Slideshow speed: More > "Slideshow speed" steps 2, 4, 8, 15 seconds, saved as `slide_secs` in `settings.json`. The viewer toolbar has a Full screen button; leaving the viewer leaves full screen.
 - Tiles load as you scroll: the grid starts with 200 and adds 200 more each time you scroll near the bottom, so the old "Showing the newest 400" line is gone. Changing section starts again at 200. Only the tiles near what you are looking at (about 150 either side) keep their thumbnail in memory; the others are dropped and decoded again when you scroll back, so a very long scroll no longer grows memory. Changing the source folder also starts the grid again at 200.
 - Turn left / Turn right in the viewer toolbar rewrite the file turned a quarter (a failed turn shows a note under the toolbar, cleared on the next try) (JPEG, PNG, WebP, BMP; not GIF). The camera's rotation tag is baked in and dropped, the write goes through a temporary file, and JPEG is compressed once more.
+- Edit in the viewer: the pencil button shows Brighter, Darker, More contrast, Less contrast, Black and white, and Crop square, 16:9 or 4:3 (the middle of the picture is kept). Every edit is saved as a copy, "name (edited).ext" beside the original (or "(edited 2)" and so on, never over an existing file), and the copy opens. Editing a copy edits it in place, so repeated tweaks do not pile up files. JPEG, PNG, WebP and BMP; not GIF. The write goes through a temporary file.
 
 ## Not yet
 
-Editing beyond turning (crop, brightness).
+Free-hand crop (dragging a box), undo for edits, and a brightness slider.
