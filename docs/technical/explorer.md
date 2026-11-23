@@ -235,3 +235,13 @@ developer contact is listed because the About widget turns those into mail
 links. The Explorer app icon is not part of this change. Patch
 `packaging/lapin-ux-files/0034-*`; outside a Lapin session both strings and the
 About page are stock.
+
+## Details view columns on one line (#212)
+
+In the details view the headings and the Date modified, Type and Size cells are
+single-line, clipped to their column, and end in "…" when the text is wider than
+the column (the heading keeps room for its sort arrow). The header row keeps its
+fixed height, so narrowing a column to its minimum never wraps a heading over
+the rows. Text widths are an estimate (`lapin_ellipsize`, shared with Home), so
+each cell also clips as a safety net. Patch `packaging/lapin-ux-files/0041-*`;
+outside a Lapin session the columns are stock.
