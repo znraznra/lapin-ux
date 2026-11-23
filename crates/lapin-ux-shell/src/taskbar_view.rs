@@ -793,7 +793,9 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str, parent: cosmic::iced::window::
         .or_else(|| shell.main_bar())
         .and_then(|b| b.output_height)
         .unwrap_or(720) as f32;
-    let body = widget::scrollable(column::with_children(items).spacing(2)).height(Length::Shrink);
+    // An id per menu path, so a submenu (or Back) starts at the top.
+    let scroll_id = widget::Id::new(format!("tray-menu-{:?}", shell.tray_menu_path));
+    let body = widget::scrollable(column::with_children(items).spacing(2)).id(scroll_id).height(Length::Shrink);
     panel(container(body).max_height((output_h - 32.0).max(160.0)), 260.0)
 }
 
