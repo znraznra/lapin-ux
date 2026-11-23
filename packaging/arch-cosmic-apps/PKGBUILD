@@ -95,6 +95,6 @@ package_lapin-ux-cosmic-edit() {
 }
 package_lapin-ux-cosmic-store() {
     pkgdesc="COSMIC Store with familiar title bars (Lapin UX)"
-    provides=('cosmic-store'); conflicts=('cosmic-store')
+    provides=('cosmic-store'); conflicts=('cosmic-store' 'lapin-store')
     _install cosmic-store
 }

@@ -1,0 +1,8 @@
+Store (#77): patches on top of COSMIC Store (pin 16b1667, epoch-1.11.0):
+
+  git -C ~/src/cosmic-store checkout -B lapin-ux 16b1667
+  git -C ~/src/cosmic-store am ~/lapin-ux/packaging/lapin-ux-store/*.patch
+
+Every Lapin look here is gated on `lapin::enabled()` (src/lapin.rs: XDG_CURRENT_DESKTOP
+contains LapinUX, or LAPIN_UX_STORE=1). In COSMIC's own session the app is stock.
+Packaged as lapin-store (replaces cosmic-store; see packaging/arch/PKGBUILD).

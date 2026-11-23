@@ -42,6 +42,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
+| Mon 23 Nov | Store, first stage (#77): COSMIC Store forked as `lapin-store` (patches in `packaging/lapin-ux-store/`). In a Lapin session the sidebar says Home and Library, the Applets page is hidden and the window is called Store. Wired into the uninstaller and its tests. | Retest |
 
 ## Phase dates
 

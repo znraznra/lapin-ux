@@ -33,7 +33,7 @@ Last updated 2026-11-08, build `41a45cf`.
 ## Phase 4: Zero learning curve (15 done, 2 partial, 2 not started)
 - Done: Night light and desktop peek, touchpad gestures, open/minimize/restore animations, Super+X/Run/Super+P/Ctrl+Alt+Del/Alt+F4, lock and sign-in screens, first-run setup, desktop icons/properties, Task Manager (incl. Users and Services), snipping tool, input indicator, touch keyboard, Magnifier and colour filters, sounds and pointers, admin prompt, search preview pane
 - Partial: title bars (GTK, Electron, Qt apps keep theirs by choice); accessibility (Narrator paused since 2 Nov and hidden everywhere, contrast themes off)
-- Not started: **Store** (fork of COSMIC Store), **snip markup editor**
+- In progress: **Store** (fork of COSMIC Store, first stage built). Not started: **snip markup editor**
 
 ## What's left (suggested order)
 1. Hardware retest of every fixed issue (see [Real-Hardware Issues](Real-Hardware-Issues)); #32/#34 and #50 also need logs or details from testers

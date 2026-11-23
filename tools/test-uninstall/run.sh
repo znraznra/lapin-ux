@@ -511,8 +511,13 @@ chmod u+w "$D/sounds"
 check "a '.x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/.ocean/stereo/bell.oga\" ]"
 check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" ]"
 }
+scenU() {
+echo "U: the Lapin Store is part of the uninstall lists (#77)"
+check "lapin-store is in LAPIN_PKGS" "sed -n '/^LAPIN_PKGS=/,/)/p' \"$U\" | grep -qw lapin-store"
+check "lapin-store maps to cosmic-store in STOCK" "grep -q '\[lapin-store\]=cosmic-store' \"$U\""
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T; do
+for x in A B C D E F G H I J K L M N O P Q R S T U; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

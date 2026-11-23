@@ -1,0 +1,82 @@
+From f789ce46c2abd692ce2437e8e673f69606709103 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 11:07:59 +0800
+Subject: [PATCH 1/2] Lapin UX: lapin module with session gating and page names
+ (#77)
+
+Only active in a Lapin UX session (LapinUX in XDG_CURRENT_DESKTOP, or LAPIN_UX_STORE=1).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ i18n/en/cosmic_store.ftl |  5 +++++
+ src/lapin.rs             | 45 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+)
+ create mode 100644 src/lapin.rs
+
+diff --git a/i18n/en/cosmic_store.ftl b/i18n/en/cosmic_store.ftl
+index bf7f822..5ddc49a 100644
+--- a/i18n/en/cosmic_store.ftl
++++ b/i18n/en/cosmic_store.ftl
+@@ -156,3 +156,8 @@ theme = Theme
+ match-desktop = Match desktop
+ dark = Dark
+ light = Light
++
++# Lapin UX (#77)
++lapin-home = Home
++lapin-library = Library
++lapin-store = Store
+diff --git a/src/lapin.rs b/src/lapin.rs
+new file mode 100644
+index 0000000..5551edd
+--- /dev/null
++++ b/src/lapin.rs
+@@ -0,0 +1,45 @@
++// Lapin UX (#77): the Store's own look and behaviour, only in a Lapin UX session
++// (XDG_CURRENT_DESKTOP has LapinUX, or LAPIN_UX_STORE=1). COSMIC keeps its own
++// code path everywhere this is called.
++
++use crate::{fl, nav::NavPage};
++
++/// True in a Lapin UX session.
++pub fn enabled() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "LapinUX"))
++            || std::env::var("LAPIN_UX_STORE").is_ok_and(|v| v == "1")
++    })
++}
++
++/// The pages in the navigation bar: Home, the sections, then Library and
++/// Updates. COSMIC applets are left out, since Lapin's shell does not use them.
++pub fn nav_pages() -> Vec<NavPage> {
++    NavPage::all()
++        .iter()
++        .copied()
++        .filter(|page| !(enabled() && *page == NavPage::Applets))
++        .collect()
++}
++
++/// Lapin's names for the pages that are called something else in COSMIC.
++pub fn page_title(page: NavPage) -> Option<String> {
++    if !enabled() {
++        return None;
++    }
++    match page {
++        NavPage::Explore => Some(fl!("lapin-home")),
++        NavPage::Installed => Some(fl!("lapin-library")),
++        _ => None,
++    }
++}
++
++/// The window title.
++pub fn app_title() -> String {
++    if enabled() {
++        fl!("lapin-store")
++    } else {
++        fl!("app-name")
++    }
++}
+-- 
+2.56.1
+

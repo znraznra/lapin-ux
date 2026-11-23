@@ -101,7 +101,7 @@ In this order:
 - [x] Touch keyboard
 - [~] Magnifier and colour filters; Narrator — *paused for now (it didn't work reliably); contrast themes off for now: none of our own yet*
 - [x] System sounds and pointers (style, busy colour and size in Settings)
-- [ ] **Store**
+- [ ] **Store** (first stage built: fork, session gating, Home and Library names, packaging; the rest is tracked on #77)
 - [x] A clear admin prompt
 - [x] Richer file preview in search
 
