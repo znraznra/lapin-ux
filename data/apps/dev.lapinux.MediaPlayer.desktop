@@ -1,0 +1,11 @@
+[Desktop Entry]
+SingleMainWindow=true
+Type=Application
+Name=Media Player
+Comment=Play music, radio and video, offline
+Exec=lapin-ux-media-player %U
+Icon=multimedia-player
+Categories=AudioVideo;Audio;Video;Player;
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/x-wav;audio/mp4;audio/aac;audio/opus;audio/x-vorbis+ogg;video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;audio/x-mpegurl;audio/x-scpls;
+StartupNotify=true
+StartupWMClass=dev.lapinux.MediaPlayer

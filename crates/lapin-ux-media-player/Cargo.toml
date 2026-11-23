@@ -1,0 +1,19 @@
+[package]
+name = "lapin-ux-media-player"
+description = "Lapin Media Player: a music library and video player on the mpv engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libcosmic.workspace = true
+lapin-ux-core.workspace = true
+lapin-ux-ui.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
