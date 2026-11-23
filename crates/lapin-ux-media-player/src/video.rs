@@ -174,6 +174,32 @@ pub fn speed_label(speed: f64) -> String {
 /// Subtitle colours offered in the Adjust panel: name and `sub-color` value.
 pub const SUB_COLORS: [(&str, &str); 4] = [("White", "#FFFFFF"), ("Yellow", "#FFFF00"), ("Cyan", "#00FFFF"), ("Green", "#00FF00")];
 
+/// Picture shapes offered in the Adjust panel: name and `video-aspect-override` value (-1 keeps the file's own).
+pub const ASPECTS: [(&str, &str); 5] = [("Original", "-1"), ("16:9", "16:9"), ("4:3", "4:3"), ("21:9", "21:9"), ("1:1", "1:1")];
+
+/// Text encodings for subtitle files: name and `sub-codepage` value. Auto lets mpv detect it.
+pub const ENCODINGS: [(&str, &str); 9] = [
+    ("Auto", "auto"),
+    ("Unicode (UTF-8)", "utf-8"),
+    ("Western European", "cp1252"),
+    ("Central European", "cp1250"),
+    ("Cyrillic", "cp1251"),
+    ("Greek", "cp1253"),
+    ("Turkish", "cp1254"),
+    ("Japanese", "shift_jis"),
+    ("Chinese", "gbk"),
+];
+
+/// The next entry in a list of choices, wrapping around.
+pub fn next_index(current: usize, len: usize) -> usize {
+    if len == 0 { 0 } else { (current + 1) % len }
+}
+
+/// Picture rotation after one more turn of 90 degrees clockwise.
+pub fn rotate_next(degrees: u16) -> u16 {
+    (degrees % 360 + 90) % 360
+}
+
 /// The audio, subtitle and video tracks in libmpv's `track-list` (JSON text).
 /// Cover pictures in a music file are not video tracks. Anything unreadable is left out.
 pub fn parse_tracks(json_text: &str) -> Vec<engine::Track> {
@@ -800,5 +826,15 @@ mod tests {
         assert_eq!(Tune::AudioDelay.label(0.0), "0 s");
         assert_eq!(Tune::SubScale.label(1.1), "110%");
         assert_eq!(Tune::SubScale.property(), "sub-scale");
+    }
+
+    #[test]
+    fn cycling_helpers_wrap() {
+        assert_eq!(next_index(ENCODINGS.len() - 1, ENCODINGS.len()), 0);
+        assert_eq!(next_index(0, 0), 0);
+        assert_eq!(rotate_next(270), 0);
+        assert_eq!(rotate_next(0), 90);
+        assert_eq!(ASPECTS[0].1, "-1");
+        assert_eq!(ENCODINGS[0].1, "auto");
     }
 }

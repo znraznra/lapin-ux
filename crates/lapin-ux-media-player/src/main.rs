@@ -322,6 +322,11 @@ enum Message {
     /// Sets the start of the A-B loop, then its end, then clears it.
     AbLoop,
     SubColor(usize),
+    CycleAspect,
+    CycleEncoding,
+    Rotate,
+    /// One frame forward (true) or back; pauses the video.
+    FrameStep(bool),
     /// Redraws the picture page so the control bar can hide by itself.
     Tick,
     Mpris(mpris::Cmd),
@@ -457,6 +462,10 @@ struct App {
     /// Playback speed, the chosen subtitle colour (index into `video::SUB_COLORS`), and the Adjust panel values.
     speed: f64,
     sub_color: usize,
+    /// Picture shape, subtitle text encoding (indexes into `video::ASPECTS` and `video::ENCODINGS`) and rotation in degrees.
+    aspect: usize,
+    encoding: usize,
+    rotation: u16,
     tune: [f64; 4],
 }
 
@@ -977,6 +986,20 @@ impl App {
     }
 
     fn reset_tune(&mut self) {
+        if let Some(e) = self.video.clone() {
+            if self.aspect != 0 {
+                e.set("video-aspect-override", json!(video::ASPECTS[0].1));
+            }
+            if self.encoding != 0 {
+                e.set("sub-codepage", json!(video::ENCODINGS[0].1));
+            }
+            if self.rotation != 0 {
+                e.set("video-rotate", json!(0));
+            }
+        }
+        self.aspect = 0;
+        self.encoding = 0;
+        self.rotation = 0;
         if self.sub_color != 0 {
             self.sub_color = 0;
             if let Some(e) = &self.video {
@@ -1467,7 +1490,7 @@ impl App {
             let item = |label: String, selected: bool, msg: Message| button::custom(text::body(label)).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(selected)).on_press(msg);
             match self.bar_menu {
                 Some(BarMenu::Adjust) => {
-                    let mut menu = column::with_capacity(8).spacing(4).push(text::heading("Adjust"));
+                    let mut menu = column::with_capacity(12).spacing(4).push(text::heading("Adjust"));
                     menu = menu.push(button::standard("Add subtitle file...").width(Length::Fill).on_press(Message::Do(Action::Pick(pick::Job::Subtitles))));
                     for (i, t) in TUNES.iter().enumerate() {
                         let (name, minus, plus) = match t {
@@ -1493,8 +1516,23 @@ impl App {
                         colors = colors.push(button::custom(text::body(*name)).padding([4, 8]).class(lapin_ux_ui::nav_item(self.sub_color == n)).on_press(Message::SubColor(n)));
                     }
                     menu = menu.push(colors);
+                    let cycle = |label: &str, value: String, msg: Message| {
+                        row::with_capacity(2).spacing(4).align_y(Alignment::Center).push(text::body(label.to_string()).width(Length::Fill)).push(button::text(value).on_press(msg))
+                    };
+                    menu = menu
+                        .push(cycle("Picture shape", video::ASPECTS[self.aspect].0.to_string(), Message::CycleAspect))
+                        .push(cycle("Rotate", format!("{} degrees", self.rotation), Message::Rotate))
+                        .push(cycle("Subtitle text", video::ENCODINGS[self.encoding].0.to_string(), Message::CycleEncoding))
+                        .push(
+                            row::with_capacity(3)
+                                .spacing(4)
+                                .align_y(Alignment::Center)
+                                .push(text::body("Frame by frame").width(Length::Fill))
+                                .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back one frame").on_press(Message::FrameStep(false)))
+                                .push(button::icon(icon::from_name("go-next-symbolic")).name("Forward one frame").on_press(Message::FrameStep(true))),
+                        );
                     menu = menu.push(text::caption("Press a value to reset it."));
-                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(440.0)).class(theme::Container::Background).into()));
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(460.0)).class(theme::Container::Background).into()));
                 }
                 Some(BarMenu::Speed) => {
                     let mut menu = column::with_capacity(video::SPEEDS.len() + 1).spacing(2).push(text::heading("Speed"));
@@ -1655,6 +1693,35 @@ impl App {
             Message::AbLoop => {
                 if let Some(e) = &self.video {
                     e.command(vec![json!("ab-loop")]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::CycleAspect => {
+                self.aspect = video::next_index(self.aspect, video::ASPECTS.len());
+                if let Some(e) = &self.video {
+                    e.set("video-aspect-override", json!(video::ASPECTS[self.aspect].1));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::CycleEncoding => {
+                self.encoding = video::next_index(self.encoding, video::ENCODINGS.len());
+                if let Some(e) = &self.video {
+                    e.set("sub-codepage", json!(video::ENCODINGS[self.encoding].1));
+                    // the new encoding only applies to files read afterwards
+                    e.command(vec![json!("sub-reload")]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::Rotate => {
+                self.rotation = video::rotate_next(self.rotation);
+                if let Some(e) = &self.video {
+                    e.set("video-rotate", json!(self.rotation));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::FrameStep(forward) => {
+                if let Some(e) = &self.video {
+                    e.command(vec![json!(if forward { "frame-step" } else { "frame-back-step" })]);
                 }
                 self.last_activity = std::time::Instant::now();
             }
@@ -1928,6 +1995,9 @@ impl cosmic::Application for App {
             loop_b: false,
             speed: 1.0,
             sub_color: 0,
+            aspect: 0,
+            encoding: 0,
+            rotation: 0,
             tune: TUNES.map(video::Tune::default_value),
         };
         match library::load_stations() {
