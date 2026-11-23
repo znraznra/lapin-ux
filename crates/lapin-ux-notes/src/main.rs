@@ -311,6 +311,7 @@ enum Cmd {
     Goto,
     Files,
     Outline,
+    Complete,
     FindNext,
     FindPrev,
     Wrap,
@@ -400,6 +401,7 @@ enum Message {
     FilesHits(Vec<search::FileHit>),
     OpenHit(usize),
     OutlineJump(usize),
+    CompletePick(String),
     ClosePanel,
     PromptSave,
     PromptDiscard,
@@ -416,6 +418,7 @@ enum Panel {
     Goto,
     Files,
     Outline,
+    Complete,
     Print,
 }
 
@@ -457,6 +460,18 @@ struct App {
     find_id: widget::Id,
     goto_id: widget::Id,
     files_id: widget::Id,
+}
+
+/// Start of the word before the caret, and that word.
+fn complete_prefix(t: &Tab) -> (Pos, String) {
+    let c = t.buf.caret;
+    let line: Vec<char> = t.buf.line(c.line).chars().collect();
+    let end = c.col.min(line.len());
+    let mut a = end;
+    while a > 0 && (line[a - 1].is_alphanumeric() || line[a - 1] == '_') {
+        a -= 1;
+    }
+    (Pos::new(c.line, a), line[a..end].iter().collect())
 }
 
 fn line_h(font: f32) -> f32 {
@@ -1137,7 +1152,7 @@ impl App {
             Panel::Find | Panel::Replace => self.find_id.clone(),
             Panel::Goto => self.goto_id.clone(),
             Panel::Files => self.files_id.clone(),
-            Panel::Print | Panel::None | Panel::Outline => return Task::none(),
+            Panel::Print | Panel::None | Panel::Outline | Panel::Complete => return Task::none(),
         };
         let sel = self.tabs[self.active].buf.selected_text();
         if matches!(p, Panel::Find | Panel::Replace) && !sel.is_empty() && !sel.contains('\n') {
@@ -1289,6 +1304,7 @@ impl App {
             Cmd::Goto => tasks.push(self.open_panel(Panel::Goto)),
             Cmd::Files => tasks.push(self.open_panel(Panel::Files)),
             Cmd::Outline => tasks.push(self.open_panel(Panel::Outline)),
+            Cmd::Complete => tasks.push(self.open_panel(Panel::Complete)),
             Cmd::FindNext => self.find(true, false),
             Cmd::FindPrev => self.find(false, false),
             Cmd::Wrap => self.settings.wrap = !self.settings.wrap,
@@ -1411,6 +1427,7 @@ impl App {
                     ("f", false) => Some(Cmd::Find),
                     ("f", true) => Some(Cmd::Files),
                     ("l", _) if alt => Some(Cmd::Outline),
+                    (" ", _) => Some(Cmd::Complete),
                     ("h", _) => Some(Cmd::Replace),
                     ("g", _) => Some(Cmd::Goto),
                     ("d", _) if alt => Some(Cmd::AddNext),
@@ -1982,6 +1999,14 @@ impl cosmic::Application for App {
                 self.status = format!("{} results", h.len());
                 self.hits = h;
             }
+            Message::CompletePick(w) => {
+                let t = &mut self.tabs[self.active];
+                let (a, _) = complete_prefix(t);
+                let c = t.buf.caret;
+                t.buf.replace_range(a, c, &w);
+                self.panel = Panel::None;
+                follow = true;
+            }
             Message::OutlineJump(line) => {
                 let t = &mut self.tabs[self.active];
                 let p = t.buf.clamp(Pos::new(line, 0));
@@ -2203,6 +2228,7 @@ impl App {
             it("Find in files...", "Ctrl+Shift+F", Files),
             it("Go to line...", "Ctrl+G", Goto),
             it("Function list...", "Ctrl+Alt+L", Outline),
+            it("Complete word", "Ctrl+Space", Complete),
             sep(),
             it("Toggle bookmark", "Ctrl+F2", BmToggle),
             it("Next bookmark", "F2", BmNext),
@@ -2424,6 +2450,21 @@ impl App {
                     }
                     c = c.push(widget::scrollable(list).height(Length::Fixed(160.0)));
                 }
+            }
+            Panel::Complete => {
+                let t = &self.tabs[self.active];
+                let (_, prefix) = complete_prefix(t);
+                let words = outline::completions(&t.buf.text(), &prefix, &t.lang, 12);
+                let mut r = row::with_capacity(words.len() + 2).spacing(4).align_y(Alignment::Center);
+                if words.is_empty() {
+                    r = r.push(text::body("No suggestions. Type a few letters first."));
+                }
+                for w in words {
+                    r = r.push(button::standard(w.clone()).on_press(Message::CompletePick(w)));
+                }
+                r = r.push(widget::Space::new().width(Length::Fill));
+                r = r.push(button::icon(widget::icon::from_name("window-close-symbolic").size(14)).name("Close").on_press(Message::ClosePanel));
+                c = c.push(r);
             }
             Panel::Outline => {
                 let t = &self.tabs[self.active];
