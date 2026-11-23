@@ -6,7 +6,7 @@
 //! toolbar and a filmstrip. Both follow the system theme. Nothing leaves the
 //! computer: no cloud, no accounts, no network.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -48,6 +48,8 @@ enum Section {
     Screenshots,
     Gifs,
     Hidden,
+    /// One album; which one is `App::album`.
+    Album,
 }
 
 impl Section {
@@ -62,6 +64,7 @@ impl Section {
             Section::Screenshots => "Screenshots",
             Section::Gifs => "Animated GIFs",
             Section::Hidden => "Hidden",
+            Section::Album => "Album",
         }
     }
 
@@ -73,6 +76,7 @@ impl Section {
             Section::Screenshots => "applets-screenshooter-symbolic",
             Section::Gifs => "image-x-generic-symbolic",
             Section::Hidden => "view-conceal-symbolic",
+            Section::Album => "folder-symbolic",
         }
     }
 }
@@ -168,6 +172,7 @@ enum Menu {
     Source,
     Group,
     More,
+    AddToAlbum,
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +201,16 @@ enum Message {
     SelectAll,
     FavoriteTargets,
     HideTargets,
+    /// Opens an album.
+    Album(String),
+    AddToAlbum(String),
+    RemoveFromAlbum,
+    DeleteAlbum,
+    /// Shows the box for naming a new album.
+    NewAlbum,
+    NewAlbumName(String),
+    CreateAlbum,
+    CancelNewAlbum,
     AskDelete,
     CancelDelete,
     ConfirmDelete,
@@ -231,6 +246,8 @@ fn still_viewing(path: &Path) -> bool {
     VIEWING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(path)
 }
 
+const ALBUMS_UNSAVED: &str = "Your albums could not be saved, so the change was not kept.";
+static NEW_ALBUM_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-new-album"));
 const FAVORITES_UNSAVED: &str = "Your favorites could not be saved, so the change was not kept.";
 
 struct App {
@@ -264,6 +281,13 @@ struct App {
     favorites_unsaved: bool,
     /// Photos the person hid. They show only in the Hidden section.
     hidden: HashSet<PathBuf>,
+    /// The albums: name to the photos in it. Saved in `albums.json`.
+    albums: Albums,
+    /// The album shown when the section is Album.
+    album: Option<String>,
+    /// The name being typed for a new album, while the box is open.
+    new_album: Option<String>,
+    albums_unsaved: bool,
     selected: HashSet<PathBuf>,
     select_mode: bool,
     /// The photo a Shift-click range starts from.
@@ -585,6 +609,44 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// Album name to the photos in it, in the order they were added.
+type Albums = BTreeMap<String, Vec<PathBuf>>;
+
+fn read_albums(file: &Path) -> std::io::Result<Albums> {
+    match std::fs::read_to_string(file) {
+        Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Albums::new()),
+        Err(e) => Err(e),
+    }
+}
+
+fn load_albums() -> Albums {
+    let Some(file) = store_file("albums") else { return Albums::new() };
+    read_albums(&file).unwrap_or_else(|e| {
+        tracing::warn!("could not read albums: {e}");
+        Albums::new()
+    })
+}
+
+/// Changes the albums and returns them as saved. The file is read again under a
+/// lock first and replaced atomically, like the favorites.
+fn edit_albums(change: impl FnOnce(&mut Albums)) -> std::io::Result<Albums> {
+    let file = store_file("albums").ok_or_else(|| std::io::Error::other("no config folder"))?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("albums file has no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("albums.lock"))?;
+    lock.lock()?;
+    let mut albums = read_albums(&file)?;
+    change(&mut albums);
+    let bytes = serde_json::to_vec_pretty(&albums).map_err(std::io::Error::other)?;
+    let tmp = dir.join(format!("albums.json.{}.tmp", std::process::id()));
+    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &file));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map(|()| albums)
+}
+
 /// Screen captures, by their folder or file name ("Screenshots", "Screenshot from ...").
 fn is_screenshot(path: &Path) -> bool {
     let in_folder = path
@@ -631,6 +693,11 @@ impl App {
                     Section::Screenshots => is_screenshot(&p.path),
                     Section::Gifs => is_gif(&p.path),
                     Section::Favorites => self.favorites.contains(&p.path),
+                    Section::Album => self
+                        .album
+                        .as_ref()
+                        .and_then(|a| self.albums.get(a))
+                        .is_some_and(|list| list.contains(&p.path)),
                     // A date in the future (a wrong camera clock) still counts as recent.
                     Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
                 };
@@ -836,6 +903,10 @@ impl cosmic::Application for App {
             asked: HashSet::new(),
             favorites: load_favorites(),
             hidden: load_set("hidden"),
+            albums: load_albums(),
+            album: None,
+            new_album: None,
+            albums_unsaved: false,
             selected: HashSet::new(),
             select_mode: false,
             anchor: None,
@@ -918,6 +989,7 @@ impl cosmic::Application for App {
             }
             Message::Section(s) => {
                 self.section = s;
+                self.album = None;
                 self.menu = None;
                 self.clear_selection();
                 return self.refresh_view();
@@ -1015,6 +1087,118 @@ impl cosmic::Application for App {
                     }
                 }
                 return self.refresh_view();
+            }
+            Message::Album(name) => {
+                self.section = Section::Album;
+                self.album = Some(name);
+                self.menu = None;
+                self.clear_selection();
+                return self.refresh_view();
+            }
+            Message::AddToAlbum(name) => {
+                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                self.menu = None;
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                match edit_albums(|a| {
+                    let list = a.entry(name).or_default();
+                    for p in paths {
+                        if !list.contains(&p) {
+                            list.push(p);
+                        }
+                    }
+                }) {
+                    Ok(saved) => {
+                        self.albums = saved;
+                        self.albums_unsaved = false;
+                        self.clear_selection();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save albums: {e}");
+                        self.albums_unsaved = true;
+                    }
+                }
+            }
+            Message::RemoveFromAlbum => {
+                let (Some(name), false) = (self.album.clone(), self.selected.is_empty()) else { return Task::none() };
+                let gone = self.selected.clone();
+                match edit_albums(|a| {
+                    if let Some(list) = a.get_mut(&name) {
+                        list.retain(|p| !gone.contains(p));
+                    }
+                }) {
+                    Ok(saved) => {
+                        self.albums = saved;
+                        self.albums_unsaved = false;
+                        self.clear_selection();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save albums: {e}");
+                        self.albums_unsaved = true;
+                    }
+                }
+                return self.refresh_view();
+            }
+            Message::DeleteAlbum => {
+                let Some(name) = self.album.clone() else { return Task::none() };
+                self.menu = None;
+                match edit_albums(|a| {
+                    a.remove(&name);
+                }) {
+                    Ok(saved) => {
+                        self.albums = saved;
+                        self.albums_unsaved = false;
+                        self.section = Section::Gallery;
+                        self.album = None;
+                        self.clear_selection();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save albums: {e}");
+                        self.albums_unsaved = true;
+                    }
+                }
+                return self.refresh_view();
+            }
+            Message::NewAlbum => {
+                self.menu = None;
+                self.new_album = Some(String::new());
+                return widget::text_input::focus(NEW_ALBUM_ID.clone());
+            }
+            Message::NewAlbumName(s) => self.new_album = Some(s),
+            Message::CancelNewAlbum => self.new_album = None,
+            Message::CreateAlbum => {
+                let name = self.new_album.as_deref().map(|s| s.trim().to_string()).unwrap_or_default();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let had = !paths.is_empty();
+                let open = name.clone();
+                match edit_albums(|a| {
+                    let list = a.entry(name).or_default();
+                    for p in paths {
+                        if !list.contains(&p) {
+                            list.push(p);
+                        }
+                    }
+                }) {
+                    Ok(saved) => {
+                        self.albums = saved;
+                        self.albums_unsaved = false;
+                        self.new_album = None;
+                        if had {
+                            self.clear_selection();
+                        }
+                        self.section = Section::Album;
+                        self.album = Some(open);
+                        return self.refresh_view();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save albums: {e}");
+                        self.albums_unsaved = true;
+                    }
+                }
             }
             Message::HideTargets => {
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
@@ -1120,6 +1304,8 @@ impl cosmic::Application for App {
                 }
                 if self.menu.is_some() {
                     self.menu = None;
+                } else if self.new_album.is_some() {
+                    self.new_album = None;
                 } else if self.confirm_delete {
                     self.confirm_delete = false;
                 } else if self.select_mode || !self.selected.is_empty() {
@@ -1267,13 +1453,30 @@ impl App {
             if n > 0 {
                 hide = hide.on_press(Message::HideTargets);
             }
-            bar = bar.push(star).push(hide).push(bin);
+            let mut album_items: Vec<Element<'static, Message>> = self
+                .albums
+                .keys()
+                .map(|n| Self::menu_item(n, Some("folder-symbolic"), false, Message::AddToAlbum(n.clone())))
+                .collect();
+            album_items.push(Self::menu_item("New album...", Some("list-add-symbolic"), false, Message::NewAlbum));
+            let add = self.dropdown(Menu::AddToAlbum, "folder-new-symbolic", "Add to album".to_string(), album_items);
+            bar = bar.push(star).push(hide);
+            if n > 0 {
+                bar = bar.push(add);
+            }
+            if self.section == Section::Album && n > 0 {
+                bar = bar.push(button::icon(icon::from_name("list-remove-symbolic")).name("Remove from this album").on_press(Message::RemoveFromAlbum));
+            }
+            bar = bar.push(bin);
             bar = bar.push(button::standard("Done").on_press(Message::SelectMode(false)));
         } else {
             bar = bar.push(button::standard("Select").on_press(Message::SelectMode(true)));
         }
 
-        let more = vec![Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        let mut more = vec![Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        if self.section == Section::Album {
+            more.push(Self::menu_item("Delete this album", Some("user-trash-symbolic"), false, Message::DeleteAlbum));
+        }
         let more_open = self.menu == Some(Menu::More);
         let more_btn = button::icon(icon::from_name("view-more-symbolic"))
             .name("More")
@@ -1291,6 +1494,45 @@ impl App {
             more_btn.into()
         });
         bar.into()
+    }
+
+    /// The box for naming a new album. The selected photos, if any, go into it.
+    fn new_album_bar(&self) -> Element<'_, Message> {
+        let name = self.new_album.as_deref().unwrap_or_default();
+        let n = self.selected.len();
+        let exists = self.albums.contains_key(name.trim());
+        let prompt = match n {
+            0 => "Name the new album".to_string(),
+            1 => "Name the new album for 1 photo".to_string(),
+            n => format!("Name the new album for {n} photos"),
+        };
+        let mut create = button::suggested("Create");
+        if !name.trim().is_empty() {
+            create = create.on_press(Message::CreateAlbum);
+        }
+        let mut col = column::with_capacity(2).spacing(4).push(
+            row::with_capacity(5)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(text::body(prompt))
+                .push(
+                    widget::text_input("Album name", name)
+                        .id(NEW_ALBUM_ID.clone())
+                        .on_input(Message::NewAlbumName)
+                        .on_submit(|_| Message::CreateAlbum)
+                        .width(Length::Fixed(260.0)),
+                )
+                .push(widget::Space::new().width(Length::Fill))
+                .push(button::standard("Cancel").on_press(Message::CancelNewAlbum))
+                .push(create),
+        );
+        if exists {
+            col = col.push(text::caption("An album with this name exists. The photos will be added to it."));
+        }
+        if self.albums_unsaved {
+            col = col.push(text::caption(ALBUMS_UNSAVED));
+        }
+        container(col).padding([8, 16]).class(theme::Container::Card).width(Length::Fill).into()
     }
 
     fn delete_bar(&self) -> Element<'_, Message> {
@@ -1330,7 +1572,36 @@ impl App {
                     .on_press(Message::Section(s)),
             );
         }
-        let sidebar = container(nav).width(Length::Fixed(220.0)).padding(8);
+        nav = nav.push(container(text::caption("Albums")).padding([8, 12, 2, 12]));
+        for name in self.albums.keys() {
+            let selected = self.section == Section::Album && self.album.as_deref() == Some(name.as_str());
+            let content = row::with_capacity(2)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(icon::from_name("folder-symbolic").size(16))
+                .push(text::body(name.clone()));
+            nav = nav.push(
+                button::custom(content)
+                    .width(Length::Fill)
+                    .padding([8, 12])
+                    .class(lapin_ux_ui::nav_item(selected))
+                    .on_press(Message::Album(name.clone())),
+            );
+        }
+        nav = nav.push(
+            button::custom(
+                row::with_capacity(2)
+                    .spacing(12)
+                    .align_y(Alignment::Center)
+                    .push(icon::from_name("list-add-symbolic").size(16))
+                    .push(text::body("New album")),
+            )
+            .width(Length::Fill)
+            .padding([8, 12])
+            .class(lapin_ux_ui::nav_item(false))
+            .on_press(Message::NewAlbum),
+        );
+        let sidebar = container(scrollable(nav)).width(Length::Fixed(220.0)).padding(8);
 
         let shown = self.shown();
         let body: Element<'_, Message> = if self.scanning {
@@ -1341,6 +1612,7 @@ impl App {
                 (Section::Recents, _) => "Nothing new in the last three days.",
                 (Section::Screenshots, _) => "No screenshots found.",
                 (Section::Gifs, _) => "No animated GIFs found.",
+                (Section::Album, _) => "This album is empty. Select photos in the gallery and choose Add to album.",
                 (Section::Hidden, _) => "No hidden photos. Select photos and choose Hide to keep them out of sight.",
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
@@ -1390,6 +1662,9 @@ impl App {
         let mut page = column::with_capacity(3).push(self.toolbar());
         if self.confirm_delete && !self.selected.is_empty() {
             page = page.push(self.delete_bar());
+        }
+        if self.new_album.is_some() {
+            page = page.push(self.new_album_bar());
         }
         let mut main = row::with_capacity(2).height(Length::Fill);
         if self.sidebar {
