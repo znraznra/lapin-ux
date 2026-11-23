@@ -124,6 +124,8 @@ pub struct DesktopView {
     rename: Option<(PathBuf, String)>,
     drag: Option<Drag>,
     pointer: Point,
+    /// The open menu came from an extra display, so `pointer` is not where it was opened.
+    menu_on_extra: bool,
     /// Box selection: where the drag started.
     band: Option<Point>,
     /// Shift-click selects from here.
@@ -299,6 +301,7 @@ impl Shell {
             rename: None,
             drag: None,
             pointer: Point::ORIGIN,
+            menu_on_extra: false,
             band: None,
             anchor: None,
             press_keep: None,
@@ -391,6 +394,7 @@ impl Shell {
         let Some(p) = self.extra_desktops.iter().find(|e| e.id == id).map(|e| e.pointer) else { return Task::none() };
         if let Some(d) = &mut self.desktop {
             d.selected.clear();
+            d.menu_on_extra = true;
         }
         let key = rect_key(id, "pointer");
         self.rects.insert(key.clone(), Rectangle { x: p.x, y: p.y, width: 1.0, height: 1.0 });
@@ -413,9 +417,7 @@ impl Shell {
         // With auto arrange off and nothing saved yet, icons sit in sort order:
         // pin them first so the new file takes the next free cell instead of
         // pushing the others along.
-        if !self.config.desktop_auto_arrange && self.state.desktop_cells.is_empty() {
-            self.pin_cells();
-        }
+        self.pin_before_free_placement();
         self.paste_into_desktop(outside, action == DndAction::Move, None)
     }
 
@@ -639,6 +641,28 @@ impl Shell {
             self.placed().into_iter().filter_map(|(p, (c, r))| Some(DesktopSlot { name: names.get(&p)?.clone(), col: c, row: r })).collect();
     }
 
+    /// Before something lands in the next free spot: pin the icons where they
+    /// are (and save that), so the newcomer doesn't push the others along.
+    fn pin_before_free_placement(&mut self) {
+        if !self.config.desktop_auto_arrange && self.state.desktop_cells.is_empty() {
+            self.pin_cells();
+            self.persist_state();
+        }
+    }
+
+    /// Where a menu action on the desktop puts its result: the clicked cell on
+    /// the main display, the next free spot (None) when the menu came from an
+    /// extra display, whose pointer is not tracked on the main surface.
+    fn menu_cell(&mut self) -> Option<Cell> {
+        let d = self.desktop.as_ref()?;
+        if d.menu_on_extra {
+            self.pin_before_free_placement();
+            None
+        } else {
+            Some(self.cell_at(d.pointer))
+        }
+    }
+
     /// Paste files into the desktop (copy, or move when cut), starting at `cell`.
     fn paste_into_desktop(&mut self, paths: Vec<PathBuf>, cut: bool, cell: Option<Cell>) -> Task<Message> {
         let Some(dir) = self.desktop.as_ref().map(|d| d.dir.clone()) else { return Task::none() };
@@ -742,8 +766,9 @@ impl Shell {
             return close;
         }
         // Put it where the user right-clicked, like the benchmark.
-        let cell = self.cell_at(self.desktop.as_ref().map_or(Point::ORIGIN, |d| d.pointer));
-        self.remember_cell(&name, cell);
+        if let Some(cell) = self.menu_cell() {
+            self.remember_cell(&name, cell);
+        }
         self.reload_desktop();
         Task::batch([close, self.start_rename(path, true)])
     }
@@ -1031,6 +1056,7 @@ impl Shell {
                 if on.is_none() {
                     d.selected.clear();
                 }
+                d.menu_on_extra = false;
                 let key = rect_key(id, "pointer");
                 self.rects.insert(key.clone(), Rectangle { x: d.pointer.x, y: d.pointer.y, width: 1.0, height: 1.0 });
                 return self.open_popup(id, &key, PopupKind::DesktopMenu(on, MenuPage::Main));
@@ -1757,7 +1783,7 @@ impl Shell {
     pub(crate) fn paste_files(&mut self) -> Task<Message> {
         let close = self.close_popup();
         let Some(clip) = self.clip.files.clone() else { return close };
-        let cell = self.desktop.as_ref().map(|d| d.pointer).map(|p| self.cell_at(p));
+        let cell = self.menu_cell();
         // A cut is used up by pasting it.
         if clip.cut {
             self.clip.files = None;
