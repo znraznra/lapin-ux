@@ -526,6 +526,14 @@ fn is_photo(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+/// True when the first bytes of the file are one of the supported picture
+/// formats, whatever the file is called.
+fn sniffs_as_photo(path: &Path) -> bool {
+    use image::ImageFormat as F;
+    let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else { return false };
+    matches!(reader.format(), Some(F::Jpeg | F::Png | F::WebP | F::Bmp | F::Gif))
+}
+
 /// What a scan found, and what it could not look at.
 #[derive(Debug, Clone, Default)]
 struct Scan {
@@ -594,7 +602,10 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     }
     // Starred pictures outside the folders above still belong in Favorites.
     for path in favorites {
-        if !is_photo(&path) {
+        // Saved favorites are canonical names, so a starred symlink such as
+        // `a.jpg -> raw-file` arrives as its target. The extension is then no
+        // evidence either way: the content decides.
+        if !is_photo(&path) && !sniffs_as_photo(&path) {
             continue;
         }
         let key = photo_key(&path);
@@ -2569,6 +2580,25 @@ mod lock_tests {
         let albums = dir.join("albums.json");
         std::fs::write(&albums, serde_json::to_string(&BTreeMap::from([("x", vec![&aliased, &direct])])).unwrap()).unwrap();
         assert_eq!(read_albums(&albums).unwrap()["x"], vec![photo_key(&direct)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn starred_symlink_to_extensionless_picture_is_kept() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("lapin-photos-sniff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        std::fs::write(dir.join("raw-file"), png).unwrap();
+        std::fs::write(dir.join("notes"), b"just text").unwrap();
+        symlink(dir.join("raw-file"), dir.join("a.jpg")).unwrap();
+        // The saved list holds the canonical name, which has no extension.
+        let key = photo_key(&dir.join("a.jpg"));
+        assert!(!is_photo(&key));
+        assert!(sniffs_as_photo(&key));
+        assert!(!sniffs_as_photo(&dir.join("notes")));
+        assert!(!sniffs_as_photo(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
