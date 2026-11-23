@@ -310,6 +310,7 @@ enum Cmd {
     Replace,
     Goto,
     Files,
+    Outline,
     FindNext,
     FindPrev,
     Wrap,
@@ -398,6 +399,7 @@ enum Message {
     FilesRun,
     FilesHits(Vec<search::FileHit>),
     OpenHit(usize),
+    OutlineJump(usize),
     ClosePanel,
     PromptSave,
     PromptDiscard,
@@ -413,6 +415,7 @@ enum Panel {
     Replace,
     Goto,
     Files,
+    Outline,
     Print,
 }
 
@@ -1134,7 +1137,7 @@ impl App {
             Panel::Find | Panel::Replace => self.find_id.clone(),
             Panel::Goto => self.goto_id.clone(),
             Panel::Files => self.files_id.clone(),
-            Panel::Print | Panel::None => return Task::none(),
+            Panel::Print | Panel::None | Panel::Outline => return Task::none(),
         };
         let sel = self.tabs[self.active].buf.selected_text();
         if matches!(p, Panel::Find | Panel::Replace) && !sel.is_empty() && !sel.contains('\n') {
@@ -1285,6 +1288,7 @@ impl App {
             Cmd::Replace => tasks.push(self.open_panel(Panel::Replace)),
             Cmd::Goto => tasks.push(self.open_panel(Panel::Goto)),
             Cmd::Files => tasks.push(self.open_panel(Panel::Files)),
+            Cmd::Outline => tasks.push(self.open_panel(Panel::Outline)),
             Cmd::FindNext => self.find(true, false),
             Cmd::FindPrev => self.find(false, false),
             Cmd::Wrap => self.settings.wrap = !self.settings.wrap,
@@ -1406,6 +1410,7 @@ impl App {
                     ("a", _) => Some(Cmd::SelectAll),
                     ("f", false) => Some(Cmd::Find),
                     ("f", true) => Some(Cmd::Files),
+                    ("l", _) if alt => Some(Cmd::Outline),
                     ("h", _) => Some(Cmd::Replace),
                     ("g", _) => Some(Cmd::Goto),
                     ("d", _) if alt => Some(Cmd::AddNext),
@@ -1977,6 +1982,12 @@ impl cosmic::Application for App {
                 self.status = format!("{} results", h.len());
                 self.hits = h;
             }
+            Message::OutlineJump(line) => {
+                let t = &mut self.tabs[self.active];
+                let p = t.buf.clamp(Pos::new(line, 0));
+                t.buf.set_caret(p, false);
+                follow = true;
+            }
             Message::OpenHit(i) => {
                 if let Some(h) = self.hits.get(i) {
                     tasks.push(self.open_paths(vec![h.path.clone()], Some(h.line + 1)));
@@ -2191,6 +2202,7 @@ impl App {
             it("Replace...", "Ctrl+H", Replace),
             it("Find in files...", "Ctrl+Shift+F", Files),
             it("Go to line...", "Ctrl+G", Goto),
+            it("Function list...", "Ctrl+Alt+L", Outline),
             sep(),
             it("Toggle bookmark", "Ctrl+F2", BmToggle),
             it("Next bookmark", "F2", BmNext),
@@ -2411,6 +2423,33 @@ impl App {
                         );
                     }
                     c = c.push(widget::scrollable(list).height(Length::Fixed(160.0)));
+                }
+            }
+            Panel::Outline => {
+                let t = &self.tabs[self.active];
+                let syms = outline::symbols(&t.buf.text(), &t.lang);
+                c = c.push(
+                    row::with_capacity(2)
+                        .spacing(4)
+                        .align_y(Alignment::Center)
+                        .push(text::heading(format!("Function list ({})", syms.len())).width(Length::Fill))
+                        .push(button::icon(widget::icon::from_name("window-close-symbolic").size(14)).name("Close").on_press(Message::ClosePanel)),
+                );
+                if syms.is_empty() {
+                    c = c.push(text::body("Nothing to list in this file."));
+                } else {
+                    let mut list = column::with_capacity(syms.len()).spacing(1);
+                    for s in syms.iter().take(2000) {
+                        let pad = "    ".repeat(s.depth.min(8));
+                        list = list.push(
+                            button::custom(text::body(format!("{pad}{}  {}   :{}", s.kind, s.name, s.line + 1)))
+                                .width(Length::Fill)
+                                .padding([2, 8])
+                                .class(lapin_ux_ui::nav_item(false))
+                                .on_press(Message::OutlineJump(s.line)),
+                        );
+                    }
+                    c = c.push(widget::scrollable(list).height(Length::Fixed(200.0)));
                 }
             }
         }
