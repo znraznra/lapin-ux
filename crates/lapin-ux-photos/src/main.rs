@@ -549,6 +549,14 @@ fn is_photo(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+/// True when the first bytes of the file are one of the supported picture
+/// formats, whatever the file is called.
+fn sniffs_as_photo(path: &Path) -> bool {
+    use image::ImageFormat as F;
+    let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else { return false };
+    matches!(reader.format(), Some(F::Jpeg | F::Png | F::WebP | F::Bmp | F::Gif))
+}
+
 /// What a scan found, and what it could not look at.
 #[derive(Debug, Clone, Default)]
 struct Scan {
@@ -617,7 +625,10 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     }
     // Starred pictures outside the folders above still belong in Favorites.
     for path in favorites {
-        if !is_photo(&path) {
+        // Saved favorites are canonical names, so a starred symlink such as
+        // `a.jpg -> raw-file` arrives as its target. The extension is then no
+        // evidence either way: the content decides.
+        if !is_photo(&path) && !sniffs_as_photo(&path) {
             continue;
         }
         let key = photo_key(&path);
@@ -1220,7 +1231,7 @@ impl App {
     /// Reads the saved password again, because another Photos window may have
     /// set, changed or removed it since this one started. A change closes
     /// Hidden, so a window that was unlocked with the old password does not
-    /// stay open under the new one.
+    /// stay open under the new one. The Hidden list is re-read too.
     fn sync_lock(&mut self) {
         let saved = load_lock();
         let (lock, unreadable) = match &saved {
@@ -1238,6 +1249,22 @@ impl App {
             // Nothing picked in Hidden, and no half-asked delete, survives the
             // lock changing under it.
             self.clear_selection();
+        }
+        // The Hidden list is read again with the password: another window may
+        // have hidden or unhidden pictures, or left the file unreadable, and a
+        // decision about what may open must not rest on the list read at start.
+        match try_load_set("hidden") {
+            Ok(set) => {
+                self.hidden = set;
+                self.hidden_unreadable = false;
+            }
+            Err(e) => {
+                tracing::warn!("could not read the hidden photos: {e}");
+                if !self.hidden_unreadable {
+                    self.clear_selection();
+                }
+                self.hidden_unreadable = true;
+            }
         }
     }
 
@@ -1574,6 +1601,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::FavoriteTargets => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
                 if paths.is_empty() {
                     return Task::none();
@@ -1599,6 +1627,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AddToAlbum(name) => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 self.menu = None;
                 if paths.is_empty() {
@@ -1624,6 +1653,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::RemoveFromAlbum => {
+                self.sync_lock();
                 let (Some(name), false) = (self.album.clone(), self.selected.is_empty()) else { return Task::none() };
                 let gone: HashSet<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 match edit_albums(|a| {
@@ -1903,6 +1933,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::HideTargets => {
+                // The password may have changed in another window: read it again
+                // (which clears the selection if so) before acting on the selection.
+                self.sync_lock();
                 // A locked Hidden section shows nothing, so nothing in it can be picked.
                 if self.selected.is_empty() || self.hidden_locked() {
                     return Task::none();
@@ -1931,6 +1964,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AskDelete => {
+                self.sync_lock();
                 if self.viewing.is_none() && !self.selected.is_empty() && !self.hidden_locked() {
                     self.confirm_delete = true;
                 }
@@ -1938,6 +1972,7 @@ impl cosmic::Application for App {
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
+                self.sync_lock();
                 if self.hidden_locked() {
                     return Task::none();
                 }
@@ -2844,6 +2879,25 @@ mod lock_tests {
         let albums = dir.join("albums.json");
         std::fs::write(&albums, serde_json::to_string(&BTreeMap::from([("x", vec![&aliased, &direct])])).unwrap()).unwrap();
         assert_eq!(read_albums(&albums).unwrap()["x"], vec![photo_key(&direct)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn starred_symlink_to_extensionless_picture_is_kept() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("lapin-photos-sniff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        std::fs::write(dir.join("raw-file"), png).unwrap();
+        std::fs::write(dir.join("notes"), b"just text").unwrap();
+        symlink(dir.join("raw-file"), dir.join("a.jpg")).unwrap();
+        // The saved list holds the canonical name, which has no extension.
+        let key = photo_key(&dir.join("a.jpg"));
+        assert!(!is_photo(&key));
+        assert!(sniffs_as_photo(&key));
+        assert!(!sniffs_as_photo(&dir.join("notes")));
+        assert!(!sniffs_as_photo(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
