@@ -2281,9 +2281,12 @@ impl cosmic::Application for App {
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
-                let on = !self.is_favorite(&path);
+                // The key is read fresh, not from the scan: a link retargeted since
+                // then must star (and unstar) the file it points to now.
+                let key = photo_key(&path);
+                let on = !self.favorites.contains(&key);
                 // A full disk or a read-only home must not end the program (#174).
-                match set_favorite(&path, on) {
+                match set_favorite(&key, on) {
                     // The saved list already holds changes made in other windows.
                     Ok(saved) => {
                         self.favorites = saved;
@@ -3036,6 +3039,25 @@ mod lock_tests {
         std::fs::set_permissions(&pic, std::fs::Permissions::from_mode(0o640)).unwrap();
         rotate_file(&pic, true).unwrap();
         assert_eq!(std::fs::metadata(&pic).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    #[test]
+    fn favorite_direction_uses_the_fresh_key_not_the_scan_one() {
+        let guard = TestDir::new("fav-key");
+        let dir = guard.0.clone();
+        std::fs::write(dir.join("a.png"), b"x").unwrap();
+        std::fs::write(dir.join("b.png"), b"y").unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(dir.join("a.png"), &link).unwrap();
+        let stale = photo_key(&link);
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(dir.join("b.png"), &link).unwrap();
+        let fresh = photo_key(&link);
+        assert_ne!(stale, fresh);
+        // Only b.png is starred: the toggle must read the link as b.png.
+        let favorites: HashSet<PathBuf> = HashSet::from([fresh.clone()]);
+        assert!(favorites.contains(&photo_key(&link)));
+        assert!(!favorites.contains(&stale));
     }
 
     #[test]
