@@ -410,6 +410,12 @@ impl Shell {
         if outside.is_empty() {
             return Task::none();
         }
+        // With auto arrange off and nothing saved yet, icons sit in sort order:
+        // pin them first so the new file takes the next free cell instead of
+        // pushing the others along.
+        if !self.config.desktop_auto_arrange && self.state.desktop_cells.is_empty() {
+            self.pin_cells();
+        }
         self.paste_into_desktop(outside, action == DndAction::Move, None)
     }
 

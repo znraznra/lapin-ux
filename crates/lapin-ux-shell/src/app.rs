@@ -335,7 +335,7 @@ pub struct Shell {
     /// A menu a press outside just closed, and when (#36): the press that
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
-    pub popup_dismissed: Option<(PopupKind, Instant)>,
+    pub popup_dismissed: Option<(PopupKind, window::Id, Instant)>,
     /// The last window the taskbar asked to minimize and when (#85): if the
     /// window reports it is shown again a moment later, the app undid it.
     pub(crate) minimize_asked: Option<(Handle, Instant)>,
@@ -759,11 +759,12 @@ impl Shell {
 
     /// Open a popup anchored above the tracked rectangle `key` on surface `parent`.
     pub(crate) fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
-        // The press that closed this very menu was the click on its button.
-        if self.popup_dismissed.take().is_some_and(|(k, at)| k == kind && at.elapsed() < Duration::from_millis(400)) {
+        // The press that closed this very menu was the click on its button. A
+        // request from another surface (another display) is its own click.
+        if self.popup_dismissed.take().is_some_and(|(k, from, at)| k == kind && from == parent && at.elapsed() < Duration::from_millis(400)) {
             return Task::none();
         }
-        let same = self.popup.as_ref().is_some_and(|p| p.kind == kind);
+        let same = self.popup.as_ref().is_some_and(|p| p.kind == kind && p.parent == parent);
         let close = self.close_popup();
         if same {
             return close; // second click on the same thing closes it
@@ -1623,7 +1624,7 @@ impl Shell {
                     && self.sub.as_ref().is_none_or(|s| s.id != id);
                 if outside {
                     tracing::debug!("press outside the menu: closing it");
-                    self.popup_dismissed = self.popup.as_ref().map(|p| (p.kind.clone(), Instant::now()));
+                    self.popup_dismissed = self.popup.as_ref().map(|p| (p.kind.clone(), id, Instant::now()));
                     self.hover = None;
                     return self.close_popup();
                 }
