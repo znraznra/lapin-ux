@@ -731,7 +731,7 @@ fn load_png(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
     Some((img.width(), img.height(), img.into_raw()))
 }
 
-fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
+fn tray_menu<'a>(shell: &'a Shell, name: &'a str, parent: cosmic::iced::window::Id) -> Element<'a, Message> {
     let Some(entry) = shell.tray.iter().find(|t| t.item.name() == name) else {
         return panel(text::body("Not available"), 200.0);
     };
@@ -784,7 +784,17 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
             items.push(menu_item("view-pin-symbolic", "Show on taskbar", Message::TrayPin(id, true)));
         }
     }
-    panel(column::with_children(items).spacing(2), 260.0)
+    // Beside a side bar the pop-up only slides (#195, #196), so a long menu
+    // scrolls inside the output's height instead of running off its edge.
+    let output_h = shell
+        .bars
+        .iter()
+        .find(|b| b.id == parent)
+        .or_else(|| shell.main_bar())
+        .and_then(|b| b.output_height)
+        .unwrap_or(720) as f32;
+    let body = widget::scrollable(column::with_children(items).spacing(2)).height(Length::Shrink);
+    panel(container(body).max_height((output_h - 32.0).max(160.0)), 260.0)
 }
 
 /// A menu row with a check mark when `on`.
@@ -1089,7 +1099,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
                 300.0,
             )
         }
-        PopupKind::TrayMenu(name) => tray_menu(shell, name),
+        PopupKind::TrayMenu(name) => tray_menu(shell, name, popup.parent),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
         PopupKind::Account => crate::account::menu(shell),
         PopupKind::MoveToDesktop(w) => crate::taskview::move_menu(shell, *w),
