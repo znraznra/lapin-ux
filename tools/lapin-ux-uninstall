@@ -206,7 +206,8 @@ item_save() {   # kind name dest
     f=$(item_path "$1" "$2")
     # An empty file is an unset setting (COSMIC reads it as its default): save
     # it as absent, never as an empty copy that would later wipe the value (#46).
-    if has_value "$f"; then cp -a "$f" "$3"; else : > "$3.absent"; fi
+    # mimeapps.list is often a relative symlink: keep its contents, not the link.
+    if has_value "$f"; then if [ "$1" = mimeapps ]; then cp -aL "$f" "$3"; else cp -a "$f" "$3"; fi; else : > "$3.absent"; fi
 }
 # A saved or live value that holds something: a non-empty file, or a folder
 # with something in it.
