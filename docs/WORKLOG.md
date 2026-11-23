@@ -43,6 +43,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
 | Mon 23 Nov | Lapin Media Player (#222), first stage: music library (Listen Now, Artists, Albums, Songs, Made for You), radio with your own stations, a video list, a transport bar and queue, on an mpv engine run as its own program. Follows the light or dark system theme. | Retest |
+| Mon 23 Nov | Media Player (#222), second stage: media keys and the desktop's media controls (MPRIS), no sleep or lock while playing, favourite songs, a choice of sound output, a mini player, and Media Player as the default for music and video in a Lapin session only. | Retest |
 
 ## Phase dates
 

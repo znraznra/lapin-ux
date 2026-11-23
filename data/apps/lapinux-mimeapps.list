@@ -1,0 +1,19 @@
+# Default apps inside a Lapin UX session only (the desktop-specific file
+# for XDG_CURRENT_DESKTOP=LapinUX). Other desktops never read it, and the
+# user's own ~/.config/mimeapps.list still wins over it.
+[Default Applications]
+audio/mpeg=dev.lapinux.MediaPlayer.desktop
+audio/flac=dev.lapinux.MediaPlayer.desktop
+audio/ogg=dev.lapinux.MediaPlayer.desktop
+audio/x-wav=dev.lapinux.MediaPlayer.desktop
+audio/mp4=dev.lapinux.MediaPlayer.desktop
+audio/aac=dev.lapinux.MediaPlayer.desktop
+audio/opus=dev.lapinux.MediaPlayer.desktop
+audio/x-vorbis+ogg=dev.lapinux.MediaPlayer.desktop
+video/mp4=dev.lapinux.MediaPlayer.desktop
+video/x-matroska=dev.lapinux.MediaPlayer.desktop
+video/webm=dev.lapinux.MediaPlayer.desktop
+video/quicktime=dev.lapinux.MediaPlayer.desktop
+video/x-msvideo=dev.lapinux.MediaPlayer.desktop
+audio/x-mpegurl=dev.lapinux.MediaPlayer.desktop
+audio/x-scpls=dev.lapinux.MediaPlayer.desktop

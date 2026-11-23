@@ -346,6 +346,8 @@ package_lapin-ux-desktop-git() {
     install -Dm755 tools/lapin-ux-howdy             "$pkgdir/usr/bin/lapin-ux-howdy"
     install -Dm644 data/polkit/dev.lapinux.howdy.policy "$pkgdir/usr/share/polkit-1/actions/dev.lapinux.howdy.policy"
     install -Dm644 -t "$pkgdir/usr/share/applications" data/apps/*.desktop
+    # Media Player is the default for music and video in a Lapin session only.
+    install -Dm644 data/apps/lapinux-mimeapps.list "$pkgdir/usr/share/applications/lapinux-mimeapps.list"
 
     # System sounds: Borealis by Ivica Ico Bukvic (Artistic; see its COPYING).
     mkdir -p "$pkgdir/usr/share/sounds"

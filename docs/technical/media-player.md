@@ -15,18 +15,32 @@ Embedding libmpv's render output inside the window is a later stage, after a spi
 
 ## Two views
 
-- **Music library**: a sidebar with Listen Now, Artists, Albums, Songs, Videos, Radio and Made for You, a search box, and a transport bar (previous, play/pause, next, shuffle, repeat, seek, volume, queue). Cards show covers as coloured tiles.
+- **Music library**: a sidebar with Listen Now, Artists, Albums, Songs, Favourite Songs, Videos, Radio and Made for You, a search box, and a transport bar (previous, play/pause, next, shuffle, repeat, seek, volume, output device, queue). Cards show covers as coloured tiles.
 - **Video mode**: Videos lists the video files found; playing one hands it to mpv's window while the transport bar keeps control of it.
 
 The menu bar has File, Edit, Media, View, Controls, Playlist, Window and Help. The window follows the system light or dark theme and does not set a theme of its own.
 
 ## How it works
 
-- The scan walks Music and Videos in the background and builds the library from file names and folders (artist and album from the folder layout). Tags and cover art are not read yet.
+- The scan walks Music and Videos in the background and builds the library from file names and folders (artist and album from the folder layout). The library keeps the folder-derived names. Real tags (title, artist, album) are read from mpv while a file plays and shown in the transport bar and the desktop's media controls; reading tags for the whole library, and cover art, are not done yet.
 - Open and import/export ask for a path or address in a strip above the transport bar. `.m3u` and `.pls` playlists load; the queue exports as `.m3u`.
 - Radio has no built-in stations. You add a name and a stream address, import `.m3u` or `.json`, and export both. No network call happens until you play a station.
 - Play counts are kept in `~/.config/dev.lapinux.MediaPlayer/plays.json` and drive Listen Now and Made for You. Stations are saved in the same folder, written atomically.
 - Icon-only buttons have accessible names and the surfaces are grouped with `lapin_ux_ui::a11y::group`.
+
+## Media keys, MPRIS and sleep
+
+`mpris.rs` serves `org.mpris.MediaPlayer2` and `.Player` on the session bus as `org.mpris.MediaPlayer2.dev.lapinux.MediaPlayer`. Media keys, the desktop's media controls and `playerctl` can play, pause, skip, stop, seek and raise the window. App state is published through a `watch` channel and commands return as messages, so the window stays the only owner of playback. While something plays the player holds a logind `idle:sleep` inhibitor (dropped on pause or stop), so the screen does not lock or sleep mid-song. With no session bus the player works as before and only logs a warning.
+
+## Favourites, output device, mini player
+
+- Favourite Songs: a star on every song row and on the transport card. The list is kept in `~/.config/dev.lapinux.MediaPlayer/favourites.json`.
+- Output device: the speaker button (or View, Output device) lists the outputs mpv finds (`audio-device-list`) and switches with `audio-device`. The choice is saved in `output-device` in the player's own folder and applied when mpv starts. It never touches the desktop's sound settings.
+- Mini player: View, Mini player shrinks the window to the transport bar with a "Full player" button to come back.
+
+## Default player
+
+The package ships `/usr/share/applications/lapinux-mimeapps.list`, the desktop-specific defaults file for `XDG_CURRENT_DESKTOP=LapinUX`. Only a Lapin session reads it, other desktops never do, and `~/.config/mimeapps.list` still wins over it. Nothing is written into the user's own `mimeapps.list`, so no `items()` entry is needed, and it is removed with the package.
 
 ## Coexistence
 
@@ -34,4 +48,4 @@ The player writes only its own `dev.lapinux.MediaPlayer` folder, so nothing is a
 
 ## Not yet
 
-Video inside the window with an auto-hiding bar and playlist panel, media keys and MPRIS with a playback inhibit, tag and cover-art reading, favourite tracks, mini player, native file dialogs, output device choice, the full Settings pages, and setting it as the default player (a `mimeapps.list` write in the Lapin session only, with an `items()` entry and a `key_is_lapins` test).
+Video inside the window with an auto-hiding bar and playlist panel, tag reading for the whole library and cover art, native file dialogs, and the full Settings pages.
