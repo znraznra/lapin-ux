@@ -45,16 +45,23 @@ enum Section {
     Gallery,
     Favorites,
     Recents,
+    Screenshots,
+    Gifs,
+    Hidden,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::Gallery, Section::Favorites, Section::Recents];
+    const ALL: [Section; 6] =
+        [Section::Gallery, Section::Favorites, Section::Recents, Section::Screenshots, Section::Gifs, Section::Hidden];
 
     fn label(self) -> &'static str {
         match self {
             Section::Gallery => "Gallery",
             Section::Favorites => "Favorites",
             Section::Recents => "Recents",
+            Section::Screenshots => "Screenshots",
+            Section::Gifs => "Animated GIFs",
+            Section::Hidden => "Hidden",
         }
     }
 
@@ -63,6 +70,9 @@ impl Section {
             Section::Gallery => "folder-pictures-symbolic",
             Section::Favorites => "starred-symbolic",
             Section::Recents => "document-open-recent-symbolic",
+            Section::Screenshots => "applets-screenshooter-symbolic",
+            Section::Gifs => "image-x-generic-symbolic",
+            Section::Hidden => "view-conceal-symbolic",
         }
     }
 }
@@ -185,6 +195,7 @@ enum Message {
     SelectMode(bool),
     SelectAll,
     FavoriteTargets,
+    HideTargets,
     AskDelete,
     CancelDelete,
     ConfirmDelete,
@@ -251,6 +262,8 @@ struct App {
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
+    /// Photos the person hid. They show only in the Hidden section.
+    hidden: HashSet<PathBuf>,
     selected: HashSet<PathBuf>,
     select_mode: bool,
     /// The photo a Shift-click range starts from.
@@ -268,7 +281,20 @@ struct App {
 }
 
 fn favorites_file() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join(APP_ID).join("favorites.json"))
+    store_file("favorites")
+}
+
+/// A saved list of photo paths (`<name>.json` in Photos' own config folder).
+fn store_file(name: &str) -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join(APP_ID).join(format!("{name}.json")))
+}
+
+fn load_set(name: &str) -> HashSet<PathBuf> {
+    let Some(file) = store_file(name) else { return HashSet::new() };
+    read_favorites(&file).unwrap_or_else(|e| {
+        tracing::warn!("could not read {name}: {e}");
+        HashSet::new()
+    })
 }
 
 /// The saved favorites. A missing file is an empty list; a file that cannot be
@@ -299,7 +325,8 @@ fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
     let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
     let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!("favorites.json.{}.tmp", std::process::id()));
+    let stem = file.file_name().and_then(|n| n.to_str()).unwrap_or("list.json");
+    let tmp = dir.join(format!("{stem}.{}.tmp", std::process::id()));
     let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, file));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -315,10 +342,15 @@ fn set_favorite(path: &Path, on: bool) -> std::io::Result<HashSet<PathBuf>> {
 /// Stars or unstars photos and returns the list as saved. The list is read
 /// again under a lock first, so two Photos windows never undo each other's change.
 fn set_favorites(paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf>> {
-    let file = favorites_file().ok_or_else(|| std::io::Error::other("no config folder"))?;
-    let dir = file.parent().ok_or_else(|| std::io::Error::other("favorites file has no folder"))?;
+    set_in("favorites", paths, on)
+}
+
+/// Adds photos to, or removes them from, the saved list `name`, under a lock.
+fn set_in(name: &str, paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    let file = store_file(name).ok_or_else(|| std::io::Error::other("no config folder"))?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("list file has no folder"))?;
     std::fs::create_dir_all(dir)?;
-    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("favorites.lock"))?;
+    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join(format!("{name}.lock")))?;
     lock.lock()?; // released when `lock` is dropped
     let mut set = read_favorites(&file)?;
     for path in paths {
@@ -553,6 +585,27 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// Screen captures, by their folder or file name ("Screenshots", "Screenshot from ...").
+fn is_screenshot(path: &Path) -> bool {
+    let in_folder = path
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_lowercase().starts_with("screenshot"));
+    let named = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| {
+            let n = n.to_lowercase();
+            n.starts_with("screenshot") || n.starts_with("screen shot") || n.starts_with("screen_shot")
+        });
+    in_folder || named
+}
+
+fn is_gif(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("gif"))
+}
+
 impl App {
     fn prefs(&self) -> Prefs {
         Prefs { size: self.size, square: self.square, group: self.group, sidebar: self.sidebar, source: self.source }
@@ -569,8 +622,14 @@ impl App {
         self.photos
             .iter()
             .filter(|p| {
+                let is_hidden = self.hidden.contains(&p.path);
+                if is_hidden != (self.section == Section::Hidden) {
+                    return false;
+                }
                 let in_section = match self.section {
-                    Section::Gallery => true,
+                    Section::Gallery | Section::Hidden => true,
+                    Section::Screenshots => is_screenshot(&p.path),
+                    Section::Gifs => is_gif(&p.path),
                     Section::Favorites => self.favorites.contains(&p.path),
                     // A date in the future (a wrong camera clock) still counts as recent.
                     Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
@@ -776,6 +835,7 @@ impl cosmic::Application for App {
             dims: HashMap::new(),
             asked: HashSet::new(),
             favorites: load_favorites(),
+            hidden: load_set("hidden"),
             selected: HashSet::new(),
             select_mode: false,
             anchor: None,
@@ -952,6 +1012,25 @@ impl cosmic::Application for App {
                     Err(e) => {
                         tracing::warn!("could not save favorites: {e}");
                         self.favorites_unsaved = true;
+                    }
+                }
+                return self.refresh_view();
+            }
+            Message::HideTargets => {
+                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let hide = self.section != Section::Hidden;
+                match set_in("hidden", &paths, hide) {
+                    Ok(saved) => {
+                        self.hidden = saved;
+                        self.notice = None;
+                        self.clear_selection();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save hidden photos: {e}");
+                        self.notice = Some("Your hidden photos could not be saved, so the change was not kept.".into());
                     }
                 }
                 return self.refresh_view();
@@ -1182,7 +1261,13 @@ impl App {
                 star = star.on_press(Message::FavoriteTargets);
                 bin = bin.on_press(Message::AskDelete);
             }
-            bar = bar.push(star).push(bin);
+            let hiding = self.section != Section::Hidden;
+            let mut hide = button::icon(icon::from_name(if hiding { "view-conceal-symbolic" } else { "view-reveal-symbolic" }))
+                .name(if hiding { "Hide" } else { "Unhide" });
+            if n > 0 {
+                hide = hide.on_press(Message::HideTargets);
+            }
+            bar = bar.push(star).push(hide).push(bin);
             bar = bar.push(button::standard("Done").on_press(Message::SelectMode(false)));
         } else {
             bar = bar.push(button::standard("Select").on_press(Message::SelectMode(true)));
@@ -1229,6 +1314,9 @@ impl App {
     fn gallery(&self) -> Element<'_, Message> {
         let mut nav = column::with_capacity(Section::ALL.len()).spacing(2);
         for s in Section::ALL {
+            if s == Section::Screenshots {
+                nav = nav.push(container(text::caption("Media types")).padding([8, 12, 2, 12]));
+            }
             let content = row::with_capacity(2)
                 .spacing(12)
                 .align_y(Alignment::Center)
@@ -1251,6 +1339,9 @@ impl App {
             let msg = match (self.section, self.read_errors) {
                 (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
                 (Section::Recents, _) => "Nothing new in the last three days.",
+                (Section::Screenshots, _) => "No screenshots found.",
+                (Section::Gifs, _) => "No animated GIFs found.",
+                (Section::Hidden, _) => "No hidden photos. Select photos and choose Hide to keep them out of sight.",
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };

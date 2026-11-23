@@ -55,3 +55,4 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 
 Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real-hardware test on 22 October, the work is mostly fixes and retests.
 | Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | 4 |
+| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
