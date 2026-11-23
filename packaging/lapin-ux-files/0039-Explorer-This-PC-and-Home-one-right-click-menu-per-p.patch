@@ -1,0 +1,223 @@
+From 079c50b4d29079517a922200a85e728409ed00b0 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 09:31:33 +0800
+Subject: [PATCH] Explorer This PC and Home: one right-click menu per page
+ (#169)
+
+---
+ i18n/en/cosmic_files.ftl |   5 ++
+ src/app.rs               | 133 ++++++++++++++++++++++++++++-----------
+ 2 files changed, 100 insertions(+), 38 deletions(-)
+
+diff --git a/i18n/en/cosmic_files.ftl b/i18n/en/cosmic_files.ftl
+index 6d6c2b8..81b70b7 100644
+--- a/i18n/en/cosmic_files.ftl
++++ b/i18n/en/cosmic_files.ftl
+@@ -496,3 +496,8 @@ map-folder = Folder (for example smb://server/share)
+ map-name = Name (optional)
+ map-name-hint = Shown under This PC
+ finish = Finish
++lapin-refresh = Refresh
++lapin-pc-summary = { $count ->
++    [one] 1 drive or network location
++   *[other] { $count } drives and network locations
++}
+diff --git a/src/app.rs b/src/app.rs
+index 6cee4c9..60445ed 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -354,6 +354,10 @@ pub enum LapinPageAction {
+     Unpin,
+     RemoveFromRecent,
+     Disconnect,
++    PinToHome,
++    /// Empty space on Home or This PC (#169).
++    Refresh,
++    MapDrive,
+ }
+ 
+ impl MenuAction for LapinPageAction {
+@@ -1161,7 +1165,7 @@ impl App {
+             }
+             page = page.push(list);
+         }
+-        widget::scrollable(page).height(Length::Fill).into()
++        self.lapin_page_scroll(widget::scrollable(page).height(Length::Fill).into())
+     }
+ 
+     /// Lapin UX: the file a Properties window shows.
+@@ -1265,48 +1269,67 @@ impl App {
+             .position(|f| f.path_opt().as_deref() == Some(path))
+     }
+ 
+-    /// Lapin UX (#169): right-click on an item of Home or This PC picks it and
+-    /// opens a menu for it, the way the file list's items have one.
++    /// Lapin UX (#169): right-click on an item of Home or This PC picks it, so
++    /// the one menu around the page (`lapin_page_scroll`) is for that item.
+     fn lapin_page_menu<'a>(&'a self, key: String, content: Element<'a, Message>) -> Element<'a, Message> {
+-        let path = self.lapin_page_path(&key);
++        crate::mouse_area::MouseArea::new(content)
++            .on_right_press(move |_| Message::LapinPageSelect(key.clone()))
++            .into()
++    }
++
++    /// Lapin UX (#169): the page's scrollable with its right-click menu: the
++    /// picked item's, or the page's own on empty space. The menu wraps the
++    /// scrollable, not each item, so its popup anchors in window coordinates
++    /// (inside a scrollable it lands below the item).
++    fn lapin_page_scroll<'a>(&'a self, content: Element<'a, Message>) -> Element<'a, Message> {
+         let button = |label: String, action: LapinPageAction| {
+             widget::menu::Item::Button(label, None, action)
+         };
+         let mut items: Vec<widget::menu::Item<LapinPageAction, String>> = Vec::with_capacity(6);
+-        items.push(button(fl!("open"), LapinPageAction::Open));
+-        let is_dir = path.as_deref().is_some_and(Path::is_dir);
+-        if key.starts_with("p:") || key.starts_with("r:") {
+-            if path.as_deref().and_then(Path::parent).is_some() {
+-                items.push(button(fl!("open-item-location"), LapinPageAction::OpenFolder));
++        if let Some(key) = self.lapin_page_selected.clone() {
++            let path = self.lapin_page_path(&key);
++            items.push(button(fl!("open"), LapinPageAction::Open));
++            let is_dir = path.as_deref().is_some_and(Path::is_dir);
++            if key.starts_with("p:") || key.starts_with("r:") {
++                if path.as_deref().and_then(Path::parent).is_some() {
++                    items.push(button(fl!("open-item-location"), LapinPageAction::OpenFolder));
++                }
++            } else if is_dir {
++                items.push(button(fl!("open-in-new-tab"), LapinPageAction::OpenInNewTab));
++            }
++            if let Some(p) = path.as_deref() {
++                if !key.starts_with("r:") {
++                    if self.lapin_favorite_index(p).is_some() {
++                        if !key.starts_with("pc:") {
++                            items.push(button(fl!("unpin-from-home"), LapinPageAction::Unpin));
++                        }
++                    } else if key.starts_with("pc:") {
++                        items.push(button(fl!("pin-to-home"), LapinPageAction::PinToHome));
++                    }
++                }
++                items.push(button(fl!("copy-path"), LapinPageAction::CopyPath));
++                items.push(button(fl!("properties"), LapinPageAction::Properties));
+             }
+-        } else if is_dir {
+-            items.push(button(fl!("open-in-new-tab"), LapinPageAction::OpenInNewTab));
+-        }
+-        if path.is_some() {
+-            items.push(button(fl!("copy-path"), LapinPageAction::CopyPath));
+-            items.push(button(fl!("properties"), LapinPageAction::Properties));
+-        }
+-        if let Some(p) = path.as_deref() {
+-            if !key.starts_with("pc:") && !key.starts_with("r:") && self.lapin_favorite_index(p).is_some() {
+-                items.push(button(fl!("unpin-from-home"), LapinPageAction::Unpin));
++            if key.starts_with("r:") {
++                items.push(button(fl!("remove-from-recents"), LapinPageAction::RemoveFromRecent));
++            }
++            if let Some(name) = key.strip_prefix("pc:")
++                && self.lapin_pc_drives().iter().any(|d| {
++                    d.0 == name && matches!(&d.2, Location::Network(uri, ..) if self.lapin_mapped.iter().any(|m| uri.starts_with(m.uri.trim_end_matches('/'))))
++                })
++            {
++                items.push(button(fl!("disconnect-network-drive"), LapinPageAction::Disconnect));
++            }
++        } else {
++            items.push(button(fl!("lapin-refresh"), LapinPageAction::Refresh));
++            if self.lapin_pc {
++                items.push(button(fl!("map-network-drive-menu"), LapinPageAction::MapDrive));
+             }
+         }
+-        if key.starts_with("r:") {
+-            items.push(button(fl!("remove-from-recents"), LapinPageAction::RemoveFromRecent));
+-        }
+-        if let Some(name) = key.strip_prefix("pc:")
+-            && self.lapin_pc_drives().iter().any(|d| {
+-                d.0 == name && matches!(&d.2, Location::Network(uri, ..) if self.lapin_mapped.iter().any(|m| uri.starts_with(m.uri.trim_end_matches('/'))))
+-            })
+-        {
+-            items.push(button(fl!("disconnect-network-drive"), LapinPageAction::Disconnect));
+-        }
+-        let mut menu = widget::context_menu(
+-            content,
+-            Some(widget::menu::items(&HashMap::new(), items)),
+-        )
+-        .on_open(Message::LapinPageSelect(key))
+-        .on_surface_action(Message::Surface);
++        let area = crate::mouse_area::MouseArea::new(content)
++            .on_right_press(|_| Message::LapinPageSelect(String::new()));
++        let mut menu = widget::context_menu(area, Some(widget::menu::items(&HashMap::new(), items)))
++            .on_surface_action(Message::Surface);
+         if let Some(id) = self.core().main_window_id() {
+             menu = menu.window_id(id);
+         }
+@@ -1405,7 +1428,7 @@ impl App {
+                 )
+                 .push(widget::flex_row(tiles).row_spacing(space_xxs).column_spacing(space_xs));
+         }
+-        widget::scrollable(list).height(Length::Fill).into()
++        self.lapin_page_scroll(widget::scrollable(list).height(Length::Fill).into())
+     }
+ 
+     fn open_file(&mut self, paths: &[impl AsRef<Path>]) -> Task<Message> {
+@@ -3101,7 +3124,16 @@ impl App {
+     /// Lapin UX (#170): what the details pane says when there is nothing to describe.
+     fn lapin_details_empty(&self) -> Element<'_, Message> {
+         let cosmic_theme::Spacing { space_s, .. } = theme::spacing();
+-        widget::container(widget::text::body(fl!("select-to-see-details")))
++        let mut col = widget::column::with_capacity(3).spacing(space_s);
++        if self.lapin_pc {
++            // This PC: a summary while nothing is picked (#169).
++            let count = self.lapin_pc_drives().len();
++            col = col
++                .push(widget::text::title4(fl!("this-pc")))
++                .push(widget::text::body(fl!("lapin-pc-summary", count = count)));
++        }
++        col = col.push(widget::text::body(fl!("select-to-see-details")));
++        widget::container(col)
+             .padding(space_s)
+             .width(Length::Fixed(360.0))
+             .height(Length::Fill)
+@@ -4443,9 +4475,23 @@ impl Application for App {
+             Message::LapinPageSelect(key) => {
+                 // Lapin UX (#169, #170): right-click picks the item too, and the
+                 // details pane follows it.
+-                self.lapin_page_pick(key);
++                if key.is_empty() {
++                    self.lapin_page_selected = None;
++                    self.lapin_page_preview = None;
++                } else {
++                    self.lapin_page_pick(key);
++                }
+                 self.lapin_page_click = None;
+             }
++            Message::LapinPageAction(LapinPageAction::Refresh) => {
++                self.update_nav_model();
++                return self.rescan_recents();
++            }
++            Message::LapinPageAction(LapinPageAction::MapDrive) => {
++                return Task::done(cosmic::Action::App(Message::ToggleContextPage(
++                    ContextPage::NetworkDrive,
++                )));
++            }
+             Message::LapinPageAction(action) => {
+                 let Some(key) = self.lapin_page_selected.clone() else {
+                     return Task::none();
+@@ -4521,6 +4567,17 @@ impl Application for App {
+                             });
+                         }
+                     }
++                    LapinPageAction::Refresh | LapinPageAction::MapDrive => {}
++                    LapinPageAction::PinToHome => {
++                        if let Some(path) = path
++                            && self.lapin_favorite_index(&path).is_none()
++                        {
++                            let mut favorites = self.config.favorites.clone();
++                            favorites.push(Favorite::from_path(path));
++                            config_set!(favorites, favorites);
++                            return self.update_config();
++                        }
++                    }
+                     LapinPageAction::Disconnect => {
+                         let uri = key.strip_prefix("pc:").and_then(|name| {
+                             self.lapin_pc_drives().into_iter().find(|d| d.0 == name).and_then(
+-- 
+2.56.1
+
