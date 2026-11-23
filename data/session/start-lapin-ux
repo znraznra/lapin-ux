@@ -183,6 +183,15 @@ lapin-ux-uninstall --snapshot || true
 # /etc/xdg/autostart/lapin-ux-other-desktops.desktop).
 lapin-ux-desktop-settings enter || true
 
+# Lapin Terminal (optional package) becomes the default terminal, only in this session and only
+# when no default is set. It lands in mimeapps.list, which lapin-ux-desktop-settings hands back
+# to the other desktops' own copy when the session ends. Explorer's "Open in Terminal" and
+# anything else that asks for x-scheme-handler/terminal use it.
+if [ -f /usr/share/applications/dev.lapinux.Terminal.desktop ] && command -v xdg-mime >/dev/null 2>&1 \
+   && [ -z "$(xdg-mime query default x-scheme-handler/terminal 2>/dev/null)" ]; then
+    xdg-mime default dev.lapinux.Terminal.desktop x-scheme-handler/terminal || true
+fi
+
 status=0
 if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
     dbus-run-session -- lapin-ux-session || status=$?

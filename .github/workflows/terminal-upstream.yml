@@ -1,0 +1,37 @@
+name: Terminal upstream watch
+
+# Checks that Lapin Terminal's patches still apply to the newest Alacritty release.
+# Reports only: it opens an issue when they do not, and never pushes or changes the repository.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  patches-apply:
+    name: Patches on the latest Alacritty release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find the latest release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh api repos/alacritty/alacritty/releases/latest --jq .tag_name)" >> "$GITHUB_OUTPUT"
+      - name: Apply the patches
+        id: apply
+        run: |
+          git clone --quiet --depth 1 --branch "${{ steps.rel.outputs.tag }}" https://github.com/alacritty/alacritty.git "$RUNNER_TEMP/alacritty"
+          cd "$RUNNER_TEMP/alacritty"
+          for p in "$GITHUB_WORKSPACE"/packaging/lapin-ux-terminal/*.patch; do git apply --check "$p" && git apply "$p"; done
+      - name: Open an issue when they do not apply
+        if: failure() && steps.apply.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "Terminal: patches no longer apply to Alacritty ${{ steps.rel.outputs.tag }}" \
+            --body "The weekly check could not apply packaging/lapin-ux-terminal to ${{ steps.rel.outputs.tag }}. Rebase the patches on that release and update the pin in packaging/arch-terminal/PKGBUILD. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
