@@ -205,7 +205,12 @@ pub fn menu_bar<'a, M: Clone + 'static>(
                     }
                 }
             }
-            let panel = container(col).class(cosmic::theme::Container::Dialog(false)).width(cosmic::iced::Length::Shrink);
+            // Long lists (every language, every encoding) scroll instead of
+            // running off the screen.
+            let panel = container(widget::scrollable(col))
+                .class(cosmic::theme::Container::Dialog(false))
+                .width(cosmic::iced::Length::Shrink)
+                .max_height(480.0);
             popover(head).popup(panel).position(widget::popover::Position::Bottom).on_close(on_open(None)).into()
         } else {
             head.into()

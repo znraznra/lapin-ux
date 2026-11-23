@@ -30,6 +30,18 @@ patches are reused or added.
 - Syntax colours by extension (Language menu), auto-close, auto-indent,
   tab or space settings, comment toggle, line operations (duplicate, delete,
   move, join, split, sort, remove duplicates, trim, case).
+- Every encoding Notes knows is in the Encoding menu (convert, and "Reopen
+  with" for a file that was read wrongly) and every syntax in the Language
+  menu. Long menus scroll.
+- Dropping files from the file manager onto the window opens them
+  (`text/uri-list` through libcosmic's `dnd_destination`). Tabs can be dragged
+  along the strip to reorder them.
+- Print (Ctrl+P) and Save as PDF, both from File. The text becomes an A4 PDF
+  written by `print.rs` (fixed-width font, tabs expanded, long lines wrapped,
+  file name and page number in the footer). Print sends it to the chosen
+  printer with `lp` (printers from `lpstat`, copies 1 to 99); with no print
+  system the panel still offers Save as PDF. The built-in PDF font only has
+  Western European letters, so other scripts print as `?`.
 - Read-only files, reload on external change, "Save as administrator"
   (`pkexec`, through a private temporary file).
 
@@ -54,8 +66,7 @@ custom widget and is not exposed to screen readers yet.
 
 ## Not in this release
 
-Print and print to PDF, dropping files into the window, tab drag reorder, the
-full "Reopen with encoding" and Language lists, column selection and
-multi-caret, bookmarks, minimap, function list, split view, macros, run
-commands, a results panel for Find in Files beyond the basic list, diff, hex
-view, auto-completion, a style configurator.
+Column selection and multi-caret, bookmarks, minimap, function list, split view,
+macros, run commands, a results panel for Find in Files beyond the basic list,
+diff, hex view, auto-completion, a style configurator. Printing other scripts
+than Western European ones needs an embedded font.

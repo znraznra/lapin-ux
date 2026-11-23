@@ -6,6 +6,7 @@ mod editor;
 mod encoding;
 mod lang;
 mod lineops;
+mod print;
 mod search;
 mod settings;
 mod view;
@@ -43,6 +44,57 @@ struct Loaded {
     eol: Eol,
     readonly: bool,
     mtime: Option<SystemTime>,
+}
+
+/// Local file paths in a `text/uri-list` body (one `file://` URI per line,
+/// `#` lines are comments, `%XX` escapes decoded). Other schemes and folders
+/// are left out.
+fn uri_list_paths(list: &str) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    list.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.strip_prefix("file://"))
+        .map(|rest| {
+            // Skip an optional host ("file://localhost/...").
+            let path = &rest[rest.find('/').unwrap_or(rest.len())..];
+            let b = path.as_bytes();
+            let mut out = Vec::with_capacity(b.len());
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == b'%' && i + 2 < b.len() {
+                    let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+                    if let Some(v) = hex {
+                        out.push(v);
+                        i += 3;
+                        continue;
+                    }
+                }
+                out.push(b[i]);
+                i += 1;
+            }
+            PathBuf::from(std::ffi::OsString::from_vec(out))
+        })
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_list_decodes_paths_and_skips_the_rest() {
+        let dir = std::env::temp_dir().join(format!("lapin-notes-uri-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a b%c.txt");
+        std::fs::write(&f, "x").unwrap();
+        let enc = f.to_str().unwrap().replace('%', "%25").replace(' ', "%20");
+        let list = format!("# comment\r\nfile://{enc}\r\nhttps://example.org/x\r\nfile://localhost{enc}\r\nfile://{}\r\n", dir.display());
+        let got = uri_list_paths(&list);
+        assert_eq!(got, vec![f.clone(), f.clone()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 fn read_file(path: &Path, force: Option<Enc>) -> Result<Loaded, String> {
@@ -216,6 +268,8 @@ enum Cmd {
     Open,
     Save,
     SaveAs,
+    Print,
+    SavePdf,
     CloseTab,
     Exit,
     Undo,
@@ -257,8 +311,7 @@ enum Cmd {
     FoldAll,
     UnfoldAll,
     SetEnc(Enc),
-    ReopenUtf8,
-    ReopenWestern,
+    ReopenEnc(Enc),
     ConvertEol(Eol),
     SetLang(String),
     UseSpaces(bool),
@@ -286,9 +339,23 @@ enum Message {
     SelectTab(usize),
     CloseTab(usize),
     Picked(Vec<PathBuf>),
+    /// Files dropped on the window (a `text/uri-list` body).
+    Dropped(Vec<u8>),
+    /// The pointer moved onto tab `i` while a tab is being dragged.
+    DragOver(usize),
+    /// The mouse button went up: the tab drag is over.
+    DragEnd,
     Opened(Vec<Result<Loaded, String>>, Option<usize>),
     Reloaded(u64, Result<Loaded, String>),
     SavePicked(u64, Option<PathBuf>, bool),
+    /// Printers from `lpstat`, and the default one.
+    Printers(Vec<String>, Option<String>),
+    PickPrinter(String),
+    Copies(i32),
+    PrintRun,
+    PdfPicked(Option<PathBuf>),
+    /// Result of printing or writing a PDF; the string says what happened.
+    PrintDone(Result<String, String>),
     Saved { id: u64, path: PathBuf, close: bool, lossy: bool, result: Result<Option<SystemTime>, SaveFail> },
     Pasted(Option<String>),
     Tick,
@@ -323,6 +390,7 @@ enum Panel {
     Replace,
     Goto,
     Files,
+    Print,
 }
 
 enum Prompt {
@@ -338,6 +406,8 @@ struct App {
     settings: Settings,
     tabs: Vec<Tab>,
     active: usize,
+    /// Index of the tab being dragged along the strip, if any.
+    drag_tab: Option<usize>,
     next_id: u64,
     next_untitled: usize,
     menu: Option<usize>,
@@ -345,6 +415,9 @@ struct App {
     q: Query,
     repl: String,
     goto: String,
+    printers: Vec<String>,
+    printer: Option<String>,
+    copies: u32,
     files_text: String,
     files_filter: String,
     hits: Vec<search::FileHit>,
@@ -622,6 +695,21 @@ impl App {
         })
     }
 
+    fn pdf_dialog(&self) -> Task<Message> {
+        let stem = Path::new(&self.tabs[self.active].name()).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into());
+        Task::future(async move {
+            let r = cosmic::dialog::file_chooser::save::Dialog::new().title("Save as PDF".to_string()).file_name(format!("{stem}.pdf")).save_file().await;
+            let p = r.ok().and_then(|r| r.url().and_then(|u| u.to_file_path().ok()));
+            cosmic::Action::App(Message::PdfPicked(p))
+        })
+    }
+
+    /// The current tab as PDF bytes plus its title, made off the UI thread.
+    fn pdf_job(&self) -> (String, String, usize) {
+        let t = &self.tabs[self.active];
+        (t.buf.text(), t.name().to_string(), self.settings.tab_width)
+    }
+
     fn save_tab(&self, id: u64, close: bool) -> Task<Message> {
         let Some(i) = self.tab_index(id) else { return Task::none() };
         match &self.tabs[i].path {
@@ -807,7 +895,7 @@ impl App {
             Panel::Find | Panel::Replace => self.find_id.clone(),
             Panel::Goto => self.goto_id.clone(),
             Panel::Files => self.files_id.clone(),
-            Panel::None => return Task::none(),
+            Panel::Print | Panel::None => return Task::none(),
         };
         let sel = self.tabs[self.active].buf.selected_text();
         if matches!(p, Panel::Find | Panel::Replace) && !sel.is_empty() && !sel.contains('\n') {
@@ -833,6 +921,14 @@ impl App {
             Cmd::Open => tasks.push(self.open_dialog()),
             Cmd::Save => tasks.push(self.save_tab(self.tabs[self.active].id, false)),
             Cmd::SaveAs => tasks.push(self.save_as_dialog(self.tabs[self.active].id, false)),
+            Cmd::Print => {
+                self.panel = Panel::Print;
+                tasks.push(Task::future(async {
+                    let (l, d) = tokio::task::spawn_blocking(print::printers).await.unwrap_or_default();
+                    cosmic::Action::App(Message::Printers(l, d))
+                }));
+            }
+            Cmd::SavePdf => tasks.push(self.pdf_dialog()),
             Cmd::CloseTab => self.request_close(self.active),
             Cmd::Exit => tasks.push(Task::done(cosmic::Action::App(Message::CloseWindow))),
             Cmd::Undo => self.edit_all(|t, _| t.buf.undo()),
@@ -915,10 +1011,9 @@ impl App {
             }
             Cmd::UnfoldAll => self.tabs[self.active].folds.clear(),
             Cmd::SetEnc(e) => self.tabs[self.active].enc = e,
-            Cmd::ReopenUtf8 | Cmd::ReopenWestern => {
+            Cmd::ReopenEnc(enc) => {
                 let t = &self.tabs[self.active];
                 if let Some(p) = t.path.clone() {
-                    let enc = if c == Cmd::ReopenUtf8 { Enc::Utf8 } else { Enc::Legacy(encoding_rs::WINDOWS_1252) };
                     let id = t.id;
                     tasks.push(Task::future(async move {
                         let r = tokio::task::spawn_blocking(move || read_file(&p, Some(enc)))
@@ -1008,6 +1103,7 @@ impl App {
                 let cmd = match (c.as_str(), shift) {
                     ("s", false) => Some(Cmd::Save),
                     ("s", true) => Some(Cmd::SaveAs),
+                    ("p", _) => Some(Cmd::Print),
                     ("o", _) => Some(Cmd::Open),
                     ("n", false) => Some(Cmd::New),
                     ("n", true) => Some(Cmd::NewWindow),
@@ -1121,10 +1217,14 @@ impl cosmic::Application for App {
             next_id: 0,
             next_untitled: 0,
             menu: None,
+            drag_tab: None,
             panel: Panel::None,
             q: Query::default(),
             repl: String::new(),
             goto: String::new(),
+            printers: Vec::new(),
+            printer: None,
+            copies: 1,
             files_text: String::new(),
             files_filter: String::new(),
             hits: Vec::new(),
@@ -1177,6 +1277,10 @@ impl cosmic::Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let keys = cosmic::iced::event::listen_with(|event, status, _| {
+            // The end of a tab drag counts even when a widget took the event.
+            if let cosmic::iced::Event::Mouse(cosmic::iced::mouse::Event::ButtonReleased(cosmic::iced::mouse::Button::Left)) = event {
+                return Some(Message::DragEnd);
+            }
             if status != cosmic::iced::event::Status::Ignored {
                 return None;
             }
@@ -1246,14 +1350,32 @@ impl cosmic::Application for App {
             Message::SelectTab(i) => {
                 if i < self.tabs.len() {
                     self.active = i;
+                    self.drag_tab = Some(i);
                 }
             }
+            Message::DragOver(j) => {
+                if let Some(i) = self.drag_tab {
+                    if i != j && j < self.tabs.len() && i < self.tabs.len() {
+                        let t = self.tabs.remove(i);
+                        self.tabs.insert(j, t);
+                        self.active = j;
+                        self.drag_tab = Some(j);
+                    }
+                }
+            }
+            Message::DragEnd => self.drag_tab = None,
             Message::CloseTab(i) => {
                 if i < self.tabs.len() {
                     self.request_close(i);
                 }
             }
             Message::Picked(v) => {
+                if !v.is_empty() {
+                    tasks.push(self.open_paths(v, None));
+                }
+            }
+            Message::Dropped(data) => {
+                let v = uri_list_paths(&String::from_utf8_lossy(&data));
                 if !v.is_empty() {
                     tasks.push(self.open_paths(v, None));
                 }
@@ -1311,6 +1433,53 @@ impl cosmic::Application for App {
                     }
                 }
             }
+            Message::Printers(l, d) => {
+                if self.printer.as_ref().is_none_or(|p| !l.contains(p)) {
+                    self.printer = d.or_else(|| l.first().cloned());
+                }
+                self.printers = l;
+            }
+            Message::PickPrinter(p) => self.printer = Some(p),
+            Message::Copies(d) => self.copies = (self.copies as i32 + d).clamp(1, 99) as u32,
+            Message::PrintRun => {
+                if let Some(printer) = self.printer.clone() {
+                    let (text, title, tab) = self.pdf_job();
+                    let copies = self.copies;
+                    self.panel = Panel::None;
+                    self.status = format!("Printing {title}...");
+                    tasks.push(Task::future(async move {
+                        let r = tokio::task::spawn_blocking(move || {
+                            print::send(&print::pdf(&text, &title, tab), &printer, copies, &title).map(|_| format!("Sent {title} to {printer}"))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        cosmic::Action::App(Message::PrintDone(r))
+                    }));
+                }
+            }
+            Message::PdfPicked(p) => {
+                if let Some(path) = p {
+                    let (text, title, tab) = self.pdf_job();
+                    self.panel = Panel::None;
+                    tasks.push(Task::future(async move {
+                        let r = tokio::task::spawn_blocking(move || {
+                            std::fs::write(&path, print::pdf(&text, &title, tab))
+                                .map(|_| format!("Saved {}", path.display()))
+                                .map_err(|e| format!("{}: {e}", path.display()))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        cosmic::Action::App(Message::PrintDone(r))
+                    }));
+                }
+            }
+            Message::PrintDone(r) => match r {
+                Ok(s) => self.status = s,
+                Err(e) => {
+                    self.status.clear();
+                    self.prompt = Some(Prompt::Info("Could not print".into(), e));
+                }
+            },
             Message::SavePicked(id, p, close) => {
                 if let Some(p) = p {
                     tasks.push(self.write_task(id, p, close));
@@ -1578,7 +1747,11 @@ impl cosmic::Application for App {
         }
         col = col.push(lapin_ux_ui::a11y::group("Text editor", ed));
         col = col.push(self.status_bar());
-        container(col).width(Length::Fill).height(Length::Fill).into()
+        let body = container(col).width(Length::Fill).height(Length::Fill);
+        // Files dragged in from the file manager open in new tabs.
+        widget::dnd_destination(body, vec!["text/uri-list".into()])
+            .on_finish(|_mime, data, _action, _x, _y| Message::Dropped(data))
+            .into()
     }
 }
 
@@ -1599,6 +1772,10 @@ impl App {
             it("Open...", "Ctrl+O", Open),
             it("Save", "Ctrl+S", Save),
             it("Save as...", "Ctrl+Shift+S", SaveAs),
+            sep(),
+            it("Print...", "Ctrl+P", Print),
+            it("Save as PDF...", "", SavePdf),
+            sep(),
             it("Reload from disk", "", Reload),
             MenuItem::check("Read-only", t.readonly, Message::Cmd(ToggleReadonly)),
             it("Close tab", "Ctrl+W", CloseTab),
@@ -1664,7 +1841,7 @@ impl App {
             ck("UTF-16 LE", t.enc == Enc::Utf16Le, SetEnc(Enc::Utf16Le)),
             ck("UTF-16 BE", t.enc == Enc::Utf16Be, SetEnc(Enc::Utf16Be)),
         ];
-        for (name, e) in encoding::legacy_choices().into_iter().take(8) {
+        for (name, e) in encoding::legacy_choices() {
             enc.push(ck(name, t.enc == Enc::Legacy(e), SetEnc(Enc::Legacy(e))));
         }
         enc.push(sep());
@@ -1672,18 +1849,25 @@ impl App {
         enc.push(ck("Unix (LF)", t.eol == Eol::Lf, ConvertEol(Eol::Lf)));
         enc.push(ck("Old Mac (CR)", t.eol == Eol::Cr, ConvertEol(Eol::Cr)));
         enc.push(sep());
-        enc.push(it("Reopen as UTF-8", "", ReopenUtf8));
-        enc.push(it("Reopen as Western (Windows-1252)", "", ReopenWestern));
+        // Reopen the file from disk, reading it with another encoding (for a
+        // file that shows the wrong letters).
+        for (name, e) in [
+            ("UTF-8", Enc::Utf8),
+            ("UTF-16 LE", Enc::Utf16Le),
+            ("UTF-16 BE", Enc::Utf16Be),
+        ] {
+            enc.push(it(&format!("Reopen with {name}"), "", ReopenEnc(e)));
+        }
+        for (name, e) in encoding::legacy_choices() {
+            enc.push(it(&format!("Reopen with {name}"), "", ReopenEnc(Enc::Legacy(e))));
+        }
 
-        let popular = [
-            "Plain Text", "C", "C++", "C#", "CSS", "Go", "HTML", "Java", "JavaScript", "JSON", "Markdown", "Python", "Rust",
-            "Shell Script (Bash)", "SQL", "TOML", "XML", "YAML", "PHP", "Ruby", "Lua", "Diff", "Makefile", "Batch File",
-        ];
-        let names = lang::names();
-        let langs: Vec<MenuItem<Message>> = popular
-            .iter()
-            .filter(|p| **p == lang::PLAIN || names.iter().any(|n| n == **p))
-            .map(|p| ck(p, t.lang == *p, SetLang((*p).to_string())))
+        let langs: Vec<MenuItem<Message>> = lang::names()
+            .into_iter()
+            .map(|n| {
+                let on = t.lang == n;
+                ck(&n, on, SetLang(n.clone()))
+            })
             .collect();
 
         let settings_menu = vec![
@@ -1755,7 +1939,11 @@ impl App {
                         .on_press(Message::CloseTab(i)),
                 );
             let b = button::custom(label).padding([4, 8]).class(lapin_ux_ui::nav_item(i == self.active)).on_press(Message::SelectTab(i));
-            r = r.push(widget::mouse_area(b).on_middle_press(Message::CloseTab(i)));
+            let mut area = widget::mouse_area(b).on_middle_press(Message::CloseTab(i));
+            if self.drag_tab.is_some() {
+                area = area.on_enter(Message::DragOver(i));
+            }
+            r = r.push(area);
         }
         lapin_ux_ui::a11y::group("Open files", r)
     }
@@ -1768,6 +1956,7 @@ impl App {
         let mut c = column::with_capacity(3).spacing(4).padding([4, 8]);
         match self.panel {
             Panel::None => return None,
+            Panel::Print => {}
             Panel::Find | Panel::Replace => {
                 let find = widget::text_input("Find", &self.q.text)
                     .id(self.find_id.clone())
@@ -1845,6 +2034,31 @@ impl App {
                     c = c.push(widget::scrollable(list).height(Length::Fixed(160.0)));
                 }
             }
+        }
+        if self.panel == Panel::Print {
+            let mut r = row::with_capacity(self.printers.len() + 6).spacing(4).align_y(Alignment::Center);
+            if self.printers.is_empty() {
+                r = r.push(text::body("No printer found. You can still save a PDF."));
+            } else {
+                r = r.push(text::body("Printer"));
+                for p in &self.printers {
+                    let on = self.printer.as_deref() == Some(p.as_str());
+                    r = r.push(
+                        button::custom(text::body(p.clone())).padding([4, 8]).class(lapin_ux_ui::nav_item(on)).on_press(Message::PickPrinter(p.clone())),
+                    );
+                }
+                r = r
+                    .push(text::body("Copies"))
+                    .push(button::standard("-").name("Fewer copies").on_press(Message::Copies(-1)))
+                    .push(text::body(self.copies.to_string()))
+                    .push(button::standard("+").name("More copies").on_press(Message::Copies(1)))
+                    .push(button::suggested("Print").on_press(Message::PrintRun));
+            }
+            r = r
+                .push(widget::Space::new().width(Length::Fill))
+                .push(button::standard("Save as PDF...").on_press(Message::Cmd(Cmd::SavePdf)))
+                .push(button::icon(widget::icon::from_name("window-close-symbolic").size(14)).name("Close").on_press(Message::ClosePanel));
+            c = c.push(r);
         }
         Some(lapin_ux_ui::a11y::group("Search", c))
     }
