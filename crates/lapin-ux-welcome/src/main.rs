@@ -79,6 +79,7 @@ struct App {
     net_error: Option<String>,
     dark: bool,
     layout: Layout,
+    layout_error: Option<String>,
     pointers: Option<Result<(), String>>,
     installing_pointers: bool,
     login: Option<Result<(), String>>,
@@ -197,10 +198,9 @@ enum Layout {
     ProgramsList,
 }
 
-fn set_layout(l: Layout) {
-    if let Ok(cfg) = cosmic_config::Config::new("dev.lapinux.Shell", 1) {
-        let _ = cfg.set("start_layout", l);
-    }
+fn set_layout(l: Layout) -> Result<(), String> {
+    let cfg = cosmic_config::Config::new("dev.lapinux.Shell", 1).map_err(|e| e.to_string())?;
+    cfg.set("start_layout", l).map_err(|e| e.to_string())
 }
 
 fn current_layout() -> Layout {
@@ -371,6 +371,7 @@ impl cosmic::Application for App {
             net_error: None,
             dark: is_dark(),
             layout: current_layout(),
+            layout_error: None,
             pointers: None,
             installing_pointers: false,
             login: None,
@@ -443,10 +444,16 @@ impl cosmic::Application for App {
                 self.dark = d;
                 set_dark(d);
             }
-            Message::Layout(l) => {
-                self.layout = l;
-                set_layout(l);
-            }
+            Message::Layout(l) => match set_layout(l) {
+                Ok(()) => {
+                    self.layout = l;
+                    self.layout_error = None;
+                }
+                Err(e) => {
+                    eprintln!("lapin-ux-welcome: start layout: {e}");
+                    self.layout_error = Some(e);
+                }
+            },
             Message::Pointers => {
                 self.installing_pointers = true;
                 self.pointers = None;
@@ -513,7 +520,9 @@ impl cosmic::Application for App {
                     eprintln!("lapin-ux-welcome: pointers: {e}");
                 }
                 self.pointers = Some(res);
-                if ok {
+                // Only move on if the user is still on the pointers step, so a
+                // late result can't skip a page they already went past.
+                if ok && self.step == Step::Pointers {
                     self.step = self.step.next();
                 }
             }
@@ -622,13 +631,22 @@ impl cosmic::Application for App {
             Step::StartLayout => (
                 "Choose your Start layout".into(),
                 "Pick how the Start menu looks. You can change it later in Settings, under Personalization, Start.".into(),
-                row::with_children(vec![
-                    layout_choice("Current", self.layout == Layout::Current, Layout::Current),
-                    layout_choice("Classic", self.layout == Layout::Classic, Layout::Classic),
-                    layout_choice("Classic, two columns", self.layout == Layout::ClassicTwoColumns, Layout::ClassicTwoColumns),
-                    layout_choice("Programs list", self.layout == Layout::ProgramsList, Layout::ProgramsList),
+                column::with_children(vec![
+                    row::with_children(vec![
+                        layout_choice("Current", self.layout == Layout::Current, Layout::Current),
+                        layout_choice("Classic", self.layout == Layout::Classic, Layout::Classic),
+                        layout_choice("Classic, two columns", self.layout == Layout::ClassicTwoColumns, Layout::ClassicTwoColumns),
+                        layout_choice("Programs list", self.layout == Layout::ProgramsList, Layout::ProgramsList),
+                    ])
+                    .spacing(12)
+                    .into(),
+                    match &self.layout_error {
+                        Some(e) => text::caption(format!("That layout couldn't be saved, so nothing was changed: {e}")).into(),
+                        None => widget::Space::new().into(),
+                    },
                 ])
-                .spacing(12)
+                .spacing(8)
+                .align_x(cosmic::iced::Alignment::Center)
                 .into(),
                 lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),

@@ -82,7 +82,7 @@ pub(crate) fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Elem
 pub(crate) fn list_row<'a>(
     shell: &'a Shell,
     start: &'a StartMenu,
-    app: &'a str,
+    app: &str,
     sub: Option<String>,
     selected: bool,
 ) -> Element<'a, Message> {
@@ -103,7 +103,7 @@ pub(crate) fn list_row<'a>(
 }
 
 pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
-    if shell.config.start_layout != crate::config::StartLayout::Current {
+    if start.layout != crate::config::StartLayout::Current {
         return crate::start_layouts::menu(shell, start);
     }
     let search = container(

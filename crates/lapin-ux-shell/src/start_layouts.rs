@@ -10,8 +10,10 @@ use cosmic::{theme, Element};
 use crate::app::{Message, PowerAction, SEARCH_ID, Shell, StartMenu, StartPage, rect_key};
 use crate::config::{Role, StartLayout, find_app};
 use crate::panels::PanelMsg;
+use crate::start_search::StartItem;
 use crate::start_view::{list_row, search_results, tracked};
 use crate::style;
+use lapin_ux_core::pins::Pin;
 
 impl StartLayout {
     /// Width of the Start surface for this layout.
@@ -58,6 +60,15 @@ fn open_dir<'a>(name: &'static str, label: &'static str, dir: &str) -> Element<'
 fn files_app<'a>(shell: &Shell, label: &'static str) -> Element<'a, Message> {
     match find_app(&shell.catalog, Role::Files) {
         Some(id) => entry("computer-symbolic", label, false, Message::Launch(id)),
+        None => widget::Space::new().into(),
+    }
+}
+
+/// Explorer's Home page lists the recent files, and it has no way to open
+/// "Recent" on its own from outside, so this opens Explorer.
+fn recent_items<'a>(shell: &Shell) -> Element<'a, Message> {
+    match find_app(&shell.catalog, Role::Files) {
+        Some(id) => entry("document-open-recent-symbolic", "Recent items", false, Message::Launch(id)),
         None => widget::Space::new().into(),
     }
 }
@@ -117,26 +128,54 @@ fn strip<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// Pinned apps, as rows.
-fn pinned_rows<'a>(shell: &'a Shell, start: &'a StartMenu) -> Vec<Element<'a, Message>> {
-    shell
-        .config
-        .pinned_start
-        .iter()
-        .filter(|a| shell.catalog.get(a).is_some())
-        .map(|a| list_row(shell, start, a, None, false))
-        .collect()
+/// What the Home page of a list layout shows, in order: the pins (apps in a
+/// pinned folder are listed one by one), then, in the two-column layouts, the
+/// recently opened apps that aren't pinned. The keyboard list and the rows
+/// drawn both come from this, so the highlight always sits on the right row.
+pub fn home_items(shell: &Shell, layout: StartLayout) -> Vec<StartItem> {
+    let mut items = Vec::new();
+    for (i, pin) in shell.visible_pins() {
+        match pin {
+            Pin::App(a) => items.push(StartItem::App(a)),
+            Pin::Folder { apps, .. } => items.extend(apps.into_iter().map(StartItem::App)),
+            _ => items.push(StartItem::Pin(i)),
+        }
+    }
+    if layout != StartLayout::Classic {
+        let pinned: Vec<String> = items
+            .iter()
+            .filter_map(|i| if let StartItem::App(a) = i { Some(a.clone()) } else { None })
+            .collect();
+        let recent = shell
+            .state
+            .recent_apps
+            .iter()
+            .filter(|a| shell.catalog.get(a).is_some() && !pinned.contains(a))
+            .take(4)
+            .cloned()
+            .map(StartItem::App);
+        items.extend(recent);
+    }
+    items
 }
 
-/// Recently opened apps, as rows (what is not already pinned).
-fn recent_rows<'a>(shell: &'a Shell, start: &'a StartMenu) -> Vec<Element<'a, Message>> {
-    shell
-        .state
-        .recent_apps
-        .iter()
-        .filter(|a| shell.catalog.get(a).is_some() && !shell.config.pinned_start.contains(a))
-        .take(4)
-        .map(|a| list_row(shell, start, a, None, false))
+/// The rows for `home_items`.
+fn home_rows<'a>(shell: &'a Shell, start: &'a StartMenu) -> Vec<Element<'a, Message>> {
+    let pins = shell.visible_pins();
+    home_items(shell, start.layout)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(n, item)| {
+            let lit = start.selected == Some(n);
+            match item {
+                StartItem::App(a) => Some(list_row(shell, start, &a, None, lit)),
+                StartItem::Pin(i) => pins
+                    .iter()
+                    .find(|(j, _)| *j == i)
+                    .map(|(_, p)| crate::start_pins::pin_row(shell, start, i, p, lit)),
+                _ => None,
+            }
+        })
         .collect()
 }
 
@@ -175,7 +214,7 @@ fn left_column<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Messag
         return programs_list(shell, start);
     }
     let mut list = column::with_capacity(12).spacing(2);
-    for r in pinned_rows(shell, start).into_iter().chain(recent_rows(shell, start)) {
+    for r in home_rows(shell, start) {
         list = list.push(r);
     }
     column::with_children(vec![
@@ -218,8 +257,7 @@ fn two_columns<'a>(shell: &'a Shell, start: &'a StartMenu, programs: bool) -> El
             .push(open_dir("folder-pictures-symbolic", "Pictures", "Pictures"))
             .push(open_dir("folder-music-symbolic", "Music", "Music"))
             .push(open_dir("folder-games-symbolic", "Games", "Games"))
-            .push(entry("document-open-recent-symbolic", "Recent items", false, Message::OpenFile(
-                std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Documents"))))
+            .push(recent_items(shell))
             .push(files_app(shell, "Computer"))
             .push(entry("preferences-system-symbolic", "Control Panel", false, Message::OpenSettings("")))
             .push(entry("printer-symbolic", "Devices and printers", false, Message::OpenSettings("printers")))
@@ -230,8 +268,7 @@ fn two_columns<'a>(shell: &'a Shell, start: &'a StartMenu, programs: bool) -> El
             .push(open_dir("folder-documents-symbolic", "Documents", "Documents"))
             .push(open_dir("folder-pictures-symbolic", "Pictures", "Pictures"))
             .push(files_app(shell, "Computer"))
-            .push(entry("document-open-recent-symbolic", "Recent items", false, Message::OpenFile(
-                std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Documents"))))
+            .push(recent_items(shell))
             .push(entry("preferences-system-symbolic", "Control Panel", false, Message::OpenSettings("")))
             .push(entry("printer-symbolic", "Printers", false, Message::OpenSettings("printers")))
             .push(search_row())
@@ -267,7 +304,7 @@ fn classic<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
         programs_list(shell, start)
     } else {
         let mut list = column::with_capacity(16).spacing(2);
-        for r in pinned_rows(shell, start) {
+        for r in home_rows(shell, start) {
             list = list.push(r);
         }
         list = list
@@ -300,7 +337,7 @@ fn classic<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
 
 /// The Start menu for a layout other than Current.
 pub fn menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
-    match shell.config.start_layout {
+    match start.layout {
         StartLayout::Classic => classic(shell, start),
         StartLayout::ClassicTwoColumns => two_columns(shell, start, false),
         StartLayout::ProgramsList => two_columns(shell, start, true),
