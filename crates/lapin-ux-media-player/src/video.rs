@@ -117,9 +117,39 @@ pub fn map_property(name: &str, value: &Value) -> Vec<Event> {
             };
             vec![Event::HasVideo(on)]
         }
+        "track-list" => vec![Event::Tracks(parse_tracks(value.as_str().unwrap_or("")))],
         "metadata/by-key/Artist" => vec![Event::Artist(value.as_str().unwrap_or("").into())],
         "metadata/by-key/Album" => vec![Event::Album(value.as_str().unwrap_or("").into())],
         _ => engine::property(name, value),
+    }
+}
+
+/// The audio and subtitle tracks in libmpv's `track-list` (JSON text). Video
+/// tracks and anything unreadable are left out.
+pub fn parse_tracks(json_text: &str) -> Vec<engine::Track> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_text) else { return Vec::new() };
+    items
+        .iter()
+        .filter_map(|t| {
+            let subtitle = match t.get("type")?.as_str()? {
+                "audio" => false,
+                "sub" => true,
+                _ => return None,
+            };
+            let text = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            Some(engine::Track { id: t.get("id")?.as_i64()?, subtitle, title: text("title"), lang: text("lang"), selected: t.get("selected").and_then(Value::as_bool).unwrap_or(false) })
+        })
+        .collect()
+}
+
+/// What a track is called in the menu: its title and language when the file
+/// has them, else "Track N".
+pub fn track_label(t: &engine::Track, number: usize) -> String {
+    match (t.title.is_empty(), t.lang.is_empty()) {
+        (false, false) => format!("{} ({})", t.title, t.lang),
+        (false, true) => t.title.clone(),
+        (true, false) => t.lang.clone(),
+        (true, true) => format!("Track {number}"),
     }
 }
 
@@ -160,6 +190,7 @@ const OBSERVED: &[(&str, Kind)] = &[
     ("speed", Kind::Double),
     ("media-title", Kind::Text),
     ("vid", Kind::Text),
+    ("track-list", Kind::Text),
     ("hwdec-current", Kind::Text),
     ("metadata/by-key/Artist", Kind::Text),
     ("metadata/by-key/Album", Kind::Text),
@@ -572,6 +603,32 @@ mod tests {
         assert!(matches!(end_event(0, String::new), Some(Event::Ended { error: None })));
         assert!(matches!(end_event(4, || "bad".into()), Some(Event::Ended { error: Some(e) }) if e == "bad"));
         assert!(end_event(2, String::new).is_none());
+    }
+
+    #[test]
+    fn tracks_are_read_from_the_list() {
+        let json = r#"[{"id":1,"type":"video","selected":true},
+            {"id":1,"type":"audio","lang":"eng","title":"Stereo","selected":true},
+            {"id":2,"type":"audio","lang":"fra"},
+            {"id":1,"type":"sub","external":true},
+            {"type":"sub"}]"#;
+        let t = parse_tracks(json);
+        assert_eq!(t.len(), 3);
+        assert!(!t[0].subtitle && t[0].selected && t[0].id == 1);
+        assert!(!t[1].selected && t[1].lang == "fra");
+        assert!(t[2].subtitle);
+        assert!(parse_tracks("").is_empty());
+        assert!(parse_tracks("{}").is_empty());
+        assert!(matches!(&map_property("track-list", &json!("[]"))[..], [Event::Tracks(v)] if v.is_empty()));
+    }
+
+    #[test]
+    fn track_labels() {
+        let t = |title: &str, lang: &str| engine::Track { id: 1, subtitle: false, title: title.into(), lang: lang.into(), selected: false };
+        assert_eq!(track_label(&t("Stereo", "eng"), 1), "Stereo (eng)");
+        assert_eq!(track_label(&t("Stereo", ""), 1), "Stereo");
+        assert_eq!(track_label(&t("", "eng"), 1), "eng");
+        assert_eq!(track_label(&t("", ""), 2), "Track 2");
     }
 
     #[test]

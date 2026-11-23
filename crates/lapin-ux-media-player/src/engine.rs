@@ -14,6 +14,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
+/// One audio or subtitle track of the file that is playing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Track {
+    pub id: i64,
+    pub subtitle: bool,
+    pub title: String,
+    pub lang: String,
+    pub selected: bool,
+}
+
 /// What the player tells the window.
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -34,6 +44,8 @@ pub enum Event {
     StreamTitle(String),
     /// A picture or video track is playing (mpv opens its own video window).
     HasVideo(bool),
+    /// The audio and subtitle tracks of the file (video engine only).
+    Tracks(Vec<Track>),
     /// The sound outputs mpv can use: (name, description).
     Devices(Vec<(String, String)>),
     /// The output in use (mpv's `audio-device` name).

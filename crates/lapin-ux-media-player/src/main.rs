@@ -292,6 +292,10 @@ enum Message {
     Activity,
     ToggleFullscreen,
     LeaveFullscreen,
+    /// Opens or closes the audio (false) or subtitle (true) menu of the control bar.
+    TrackMenu(bool),
+    /// Chooses a track; `None` turns subtitles off.
+    PickTrack(bool, Option<i64>),
     /// Redraws the picture page so the control bar can hide by itself.
     Tick,
     Mpris(mpris::Cmd),
@@ -416,6 +420,9 @@ struct App {
     /// Last mouse move or key press while a video plays, for the control bar.
     last_activity: std::time::Instant,
     fullscreen: bool,
+    /// Audio and subtitle tracks of the playing video, and which menu is open (true: subtitles).
+    media_tracks: Vec<engine::Track>,
+    track_menu: Option<bool>,
 }
 
 fn fmt_time(s: f64) -> String {
@@ -474,6 +481,8 @@ impl App {
             }
             self.video_on = use_video;
             self.frame = None;
+            self.media_tracks.clear();
+            self.track_menu = None;
         }
         self.index = Some(i);
         self.notice = None;
@@ -574,7 +583,12 @@ impl App {
                 self.now.pos = t;
                 self.confirmed_pos = t;
             }
-            E::Started => self.awaiting_start = false,
+            E::Started => {
+                self.awaiting_start = false;
+                self.media_tracks.clear();
+                self.track_menu = None;
+            }
+            E::Tracks(t) => self.media_tracks = t,
             E::Rejected { id, why } => {
                 if id == engine::SEEK_ID {
                     self.now.pos = self.confirmed_pos;
@@ -684,6 +698,8 @@ impl App {
         if self.video_on {
             self.video_on = false;
             self.frame = None;
+            self.media_tracks.clear();
+            self.track_menu = None;
             self.index = None;
             self.now = Now::default();
         }
@@ -740,6 +756,8 @@ impl App {
                 self.station = None;
                 self.now = Now::default();
                 self.frame = None;
+                self.media_tracks.clear();
+                self.track_menu = None;
                 return self.set_fullscreen(false);
             }
             Action::Next => {
@@ -1337,6 +1355,8 @@ impl App {
         let paused = self.now.paused;
         let bar = self.transport();
         let fullscreen = self.fullscreen;
+        let audio: Vec<_> = self.media_tracks.iter().filter(|t| !t.subtitle).collect();
+        let subs: Vec<_> = self.media_tracks.iter().filter(|t| t.subtitle).collect();
         let picture = cosmic::widget::responsive(move |sz| {
             size.store(video::pack_size(sz.width as u32, sz.height as u32), std::sync::atomic::Ordering::Relaxed);
             let inner: Element<'_, Message> = match &frame {
@@ -1349,7 +1369,27 @@ impl App {
         let mut layers = cosmic::iced::widget::stack![area];
         if show_bar || paused {
             let exit = button::icon(icon::from_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" })).name(if fullscreen { "Leave full screen" } else { "Full screen" }).on_press(Message::ToggleFullscreen);
-            let overlay = column::with_capacity(2).push(widget::space::vertical()).push(container(row::with_capacity(2).push(container(bar).width(Length::Fill)).push(exit).align_y(Alignment::Center)).class(theme::Container::Background));
+            let mut buttons = row::with_capacity(4).align_y(Alignment::Center);
+            if audio.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("audio-x-generic-symbolic")).name("Audio tracks").on_press(Message::TrackMenu(false)));
+            }
+            if !subs.is_empty() {
+                buttons = buttons.push(button::icon(icon::from_name("media-view-subtitles-symbolic")).name("Subtitles").on_press(Message::TrackMenu(true)));
+            }
+            let mut overlay = column::with_capacity(3).push(widget::space::vertical());
+            if let Some(sub) = self.track_menu {
+                let list = if sub { &subs } else { &audio };
+                let mut menu = column::with_capacity(list.len() + 2).spacing(2).push(text::heading(if sub { "Subtitles" } else { "Audio tracks" }));
+                if sub {
+                    menu = menu.push(button::custom(text::body("Off")).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(!subs.iter().any(|t| t.selected))).on_press(Message::PickTrack(true, None)));
+                }
+                for (n, t) in list.iter().enumerate() {
+                    menu = menu.push(button::custom(text::body(video::track_label(t, n + 1))).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(t.selected)).on_press(Message::PickTrack(sub, Some(t.id))));
+                }
+                let panel = container(menu).padding(8).width(Length::Fixed(280.0)).class(theme::Container::Background);
+                overlay = overlay.push(container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8]));
+            }
+            overlay = overlay.push(container(row::with_capacity(3).push(container(bar).width(Length::Fill)).push(buttons).push(exit).align_y(Alignment::Center)).class(theme::Container::Background));
             layers = layers.push(lapin_ux_ui::a11y::group("Video controls", overlay));
         }
         layers.width(Length::Fill).height(Length::Fill).into()
@@ -1438,6 +1478,16 @@ impl App {
             Message::Tick => {}
             Message::ToggleFullscreen => return self.set_fullscreen(!self.fullscreen),
             Message::LeaveFullscreen => return self.set_fullscreen(false),
+            Message::TrackMenu(sub) => {
+                self.track_menu = if self.track_menu == Some(sub) { None } else { Some(sub) };
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::PickTrack(sub, id) => {
+                self.track_menu = None;
+                if let Some(e) = &self.video {
+                    e.set(if sub { "sid" } else { "aid" }, match id { Some(i) => json!(i), None => json!("no") });
+                }
+            }
             Message::Mpris(c) => return self.mpris_cmd(c),
             Message::Menu(m) => self.menu = if self.menu == Some(m) { None } else { Some(m) },
             Message::Do(a) => {
@@ -1511,6 +1561,8 @@ impl App {
                 if self.video_on {
                     self.video_on = false;
                     self.frame = None;
+                    self.media_tracks.clear();
+                    self.track_menu = None;
                     self.index = None;
                     self.now = Now::default();
                     self.notice = Some("Video stopped to apply the graphics card setting.".to_string());
@@ -1692,6 +1744,8 @@ impl cosmic::Application for App {
             video_size: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(video::pack_size(0, 0))),
             last_activity: std::time::Instant::now(),
             fullscreen: false,
+            media_tracks: Vec::new(),
+            track_menu: None,
         };
         match library::load_stations() {
             Ok(list) => app.stations = list,
