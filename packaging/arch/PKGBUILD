@@ -28,6 +28,9 @@ makedepends=(
     'just' 'pam' 'dav1d'
     # lapin-ux-portal build
     'pipewire'
+    # lapin-store build: cosmic-store links libflatpak, and makepkg -s only
+    # installs the global makedepends of a split package
+    'flatpak'
 )
 # Everything below is pinned to COSMIC's stable release epoch-1.11.0.
 # The COSMIC version Lapin's replacements stand in for: versioned provides,

@@ -1,6 +1,6 @@
 # Store (`lapin-store`)
 
-The Store (#77) is COSMIC Store with Lapin UX's names and layout, for Flatpak and Arch apps. It is a patch set on COSMIC Store at the epoch-1.11.0 commit (`16b1667`), in `packaging/lapin-ux-store/`. Rebuild it with the commands in that folder's `README`.
+The Store (#77) is COSMIC Store with Lapin UX's names and layout, for Flatpak apps (Arch packages come later, see "Not yet"). It is a patch set on COSMIC Store at the epoch-1.11.0 commit (`16b1667`), in `packaging/lapin-ux-store/`. Rebuild it with the commands in that folder's `README`.
 
 ## First stage (this one)
 
@@ -16,7 +16,7 @@ The Store (#77) is COSMIC Store with Lapin UX's names and layout, for Flatpak an
 
 ## Coexistence
 
-The Store writes no COSMIC or GTK setting that Lapin UX adds, so nothing is new in `items()` of `tools/lapin-ux-uninstall`. `lapin-store` is in `LAPIN_PKGS` and its stock package is `cosmic-store` in `STOCK`, so the uninstaller checks `pacman -Si cosmic-store` first and brings COSMIC Store back. `tools/test-uninstall/run.sh` scenario U checks both lists.
+The Store writes no COSMIC or GTK setting that Lapin UX adds, so nothing is new in `items()` of `tools/lapin-ux-uninstall`. `lapin-store` is in `LAPIN_PKGS` and its stock package is `cosmic-store` in `STOCK`, so when COSMIC is installed, or when something outside Lapin still needs `cosmic-store`, the uninstaller checks `pacman -Si cosmic-store` first and brings COSMIC Store back. Without either, it only removes `lapin-store`. `tools/test-uninstall/run.sh` scenario U checks both lists.
 
 ## Not yet
 

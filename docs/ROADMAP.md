@@ -83,7 +83,7 @@ In this order:
 - [x] Firmware updates (BIOS, SSDs, docks) *(not yet tried with real firmware)*
 - [x] Control Panel — every item opens the matching Settings page
 
-## Phase 4 — zero learning curve (15 of 19, 2 partly)
+## Phase 4 — zero learning curve (15 of 19, 3 partly)
 
 - [x] Night light and desktop peek
 - [x] Touchpad gestures *(untested on a real touchpad)*
@@ -101,7 +101,7 @@ In this order:
 - [x] Touch keyboard
 - [~] Magnifier and colour filters; Narrator — *paused for now (it didn't work reliably); contrast themes off for now: none of our own yet*
 - [x] System sounds and pointers (style, busy colour and size in Settings)
-- [ ] **Store** (first stage built: fork, session gating, Home and Library names, packaging; the rest is tracked on #77)
+- [~] **Store** (first stage built: fork, session gating, Home and Library names, packaging; the rest is tracked on #77)
 - [x] A clear admin prompt
 - [x] Richer file preview in search
 

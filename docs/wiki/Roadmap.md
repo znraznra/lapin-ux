@@ -30,7 +30,7 @@ Last updated 2026-11-08, build `41a45cf`.
 - Partial: Open/Save dialogs (tidy footer and title done; navigation pane is still COSMIC's)
 - **Not started: File Explorer** (fork of COSMIC Files; command bar, Home, Gallery, details pane)
 
-## Phase 4: Zero learning curve (15 done, 2 partial, 2 not started)
+## Phase 4: Zero learning curve (15 done, 3 partial, 1 not started)
 - Done: Night light and desktop peek, touchpad gestures, open/minimize/restore animations, Super+X/Run/Super+P/Ctrl+Alt+Del/Alt+F4, lock and sign-in screens, first-run setup, desktop icons/properties, Task Manager (incl. Users and Services), snipping tool, input indicator, touch keyboard, Magnifier and colour filters, sounds and pointers, admin prompt, search preview pane
 - Partial: title bars (GTK, Electron, Qt apps keep theirs by choice); accessibility (Narrator paused since 2 Nov and hidden everywhere, contrast themes off)
 - In progress: **Store** (fork of COSMIC Store, first stage built). Not started: **snip markup editor**
