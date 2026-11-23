@@ -66,6 +66,6 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos turn left and right in the viewer (#203). | 1 |
 | Mon 23 Nov | Photos grid memory (#203): thumbnails far from the visible stretch are dropped, the grid restarts when the source folder changes, and a failed turn shows its note until the next try. | 1 |
 | Mon 23 Nov | Photos edit (#203): brighter, darker, contrast, black and white and crops in the viewer, saved as a copy. | 1 |
-| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos are matched by canonical path. | 1 |
-| Tue 24 Nov | Photos turn left and right now writes through an exclusively created temporary file (#203). | 1 |
+| Tue 24 Nov | Photos turn left and right now writes through an exclusively created, owner-only temporary file and syncs the folder after the rename (#203). | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. The password check and write share one lock file, and a hidden picture handed over by Files no longer opens while Hidden is locked. | 1 |
 | Tue 24 Nov | Photos edit copies are written through an exclusively created temporary file, never replace an existing file, and inherit Hidden from the original (#203). | 1 |

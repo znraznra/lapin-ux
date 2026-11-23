@@ -191,7 +191,8 @@ struct Photo {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Scanned(Scan),
+    /// A finished scan, with the number of the request that started it.
+    Scanned(u64, Scan),
     Section(Section),
     Source(Option<Folder>),
     ToggleSidebar,
@@ -318,6 +319,9 @@ struct App {
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
+    /// Where each photo was found, to its canonical name (`Photo.key`), so the
+    /// saved lists can be matched without touching the disk for every tile.
+    keys: HashMap<PathBuf, PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
     /// Photos the person hid. They show only in the Hidden section.
@@ -340,6 +344,8 @@ struct App {
     hidden_unreadable: bool,
     /// Hidden was unlocked since the person last opened it.
     hidden_open: bool,
+    /// Number of the newest scan asked for; older results are dropped.
+    scan_gen: u64,
     /// Set while the box for a new password is open.
     setting_lock: bool,
     lock_text: String,
@@ -403,8 +409,10 @@ fn photo_key(path: &Path) -> PathBuf {
 /// read or understood is an error, so it is never overwritten by accident.
 fn read_favorites(file: &Path) -> std::io::Result<HashSet<PathBuf>> {
     match std::fs::read_to_string(file) {
+        // Every entry is read under its canonical name, so a list saved under
+        // another spelling of a path (symlink, `..`) still matches the picture.
         Ok(s) => serde_json::from_str::<Vec<PathBuf>>(&s)
-            .map(|v| v.into_iter().collect())
+            .map(|v| v.iter().map(|p| photo_key(p)).collect())
             .map_err(std::io::Error::other),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashSet::new()),
         Err(e) => Err(e),
@@ -456,10 +464,11 @@ fn set_in(name: &str, paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<Pa
     lock.lock()?; // released when `lock` is dropped
     let mut set = read_favorites(&file)?;
     for path in paths {
+        let key = photo_key(path);
         if on {
-            set.insert(path.clone());
+            set.insert(key);
         } else {
-            set.remove(path);
+            set.remove(&key);
         }
     }
     write_favorites(&file, &set)?;
@@ -580,8 +589,18 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut unreadable = 0usize;
     let mut truncated = false;
-    let roots: Vec<PathBuf> = Folder::ALL.into_iter().filter_map(Folder::dir).chain(extra).collect();
-    'walk: for root in roots {
+    // The usual folders share one budget. Each added folder gets a budget of its
+    // own, so a full Pictures folder cannot make a folder the person just added
+    // look empty.
+    let standard: Vec<PathBuf> = Folder::ALL.into_iter().filter_map(Folder::dir).collect();
+    let roots: Vec<(PathBuf, bool)> =
+        standard.into_iter().map(|d| (d, false)).chain(extra.into_iter().map(|d| (d, true))).collect();
+    let mut standard_full = false;
+    'walk: for (root, is_extra) in roots {
+        if !is_extra && standard_full {
+            continue;
+        }
+        let base = if is_extra { found.len() } else { 0 };
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
@@ -616,9 +635,12 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
                         found.push(Photo { path, key, modified });
                     }
                 }
-                if found.len() >= MAX_PHOTOS {
+                if found.len() - base >= MAX_PHOTOS {
                     truncated = true;
-                    break 'walk;
+                    if !is_extra {
+                        standard_full = true;
+                    }
+                    continue 'walk;
                 }
             }
         }
@@ -645,15 +667,98 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
 
 /// Opens a picture upright, as the camera meant it (EXIF rotation).
 fn decode(path: &Path) -> Option<image::DynamicImage> {
+    decode_keeping_exif(path).map(|(img, _)| img)
+}
+
+/// Like `decode`, and also gives back the picture's EXIF block with the rotation
+/// tag reset to "upright" (the pixels already are), so a rewrite of the file can
+/// keep the capture date, camera and the rest.
+fn decode_keeping_exif(path: &Path) -> Option<(image::DynamicImage, Option<Vec<u8>>)> {
     use image::ImageDecoder;
     let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
     let mut decoder = reader.into_decoder().ok()?;
     let orientation = decoder.orientation().ok();
+    let mut exif = decoder.exif_metadata().ok().flatten();
+    if let Some(exif) = exif.as_mut() {
+        let _ = image::metadata::Orientation::remove_from_exif_chunk(exif);
+    }
     let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
     if let Some(o) = orientation {
         img.apply_orientation(o);
     }
-    Some(img)
+    Some((img, exif))
+}
+
+/// Writes a picture into an already open file in the format `ext` names,
+/// carrying `exif` along where the format can hold it (JPEG, PNG, WebP).
+fn save_with_exif(
+    img: &image::DynamicImage,
+    file: &std::fs::File,
+    ext: &str,
+    exif: Option<Vec<u8>>,
+) -> image::ImageResult<()> {
+    use image::ImageEncoder;
+    let mut out = std::io::BufWriter::new(file);
+    let format = match ext {
+        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
+        "png" => image::ImageFormat::Png,
+        "webp" => image::ImageFormat::WebP,
+        _ => image::ImageFormat::Bmp,
+    };
+    let result = match (exif, format) {
+        (Some(exif), image::ImageFormat::Jpeg) => {
+            let mut enc = image::codecs::jpeg::JpegEncoder::new(&mut out);
+            let _ = enc.set_exif_metadata(exif);
+            // JPEG has no alpha.
+            if img.color().has_alpha() {
+                image::DynamicImage::ImageRgb8(img.to_rgb8()).write_with_encoder(enc)
+            } else {
+                img.write_with_encoder(enc)
+            }
+        }
+        (Some(exif), image::ImageFormat::Png) => {
+            let mut enc = image::codecs::png::PngEncoder::new(&mut out);
+            let _ = enc.set_exif_metadata(exif);
+            img.write_with_encoder(enc)
+        }
+        (Some(exif), image::ImageFormat::WebP) => {
+            let mut enc = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+            let _ = enc.set_exif_metadata(exif);
+            img.write_with_encoder(enc)
+        }
+        _ => img.write_to(&mut out, format),
+    };
+    result?;
+    std::io::Write::flush(&mut out)?;
+    Ok(())
+}
+
+/// Creates a new file beside `path` that nothing else can have made first
+/// (O_EXCL, which also refuses a symlink planted at the name), so a leftover
+/// or hostile entry is never written through (CWE-59).
+fn create_temp_beside(path: &Path) -> Option<(PathBuf, std::fs::File)> {
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    create_temp_beside_seeded(path, seed)
+}
+
+/// The seed is a parameter so a test can name the first candidate.
+fn create_temp_beside_seeded(path: &Path, seed: u128) -> Option<(PathBuf, std::fs::File)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let name = path.file_name().and_then(|n| n.to_str())?;
+    for attempt in 0..8u32 {
+        let tmp = path.with_file_name(format!(".{name}.{}.{seed:x}.{attempt}.tmp", std::process::id()));
+        // Owner-only while it is being written (CWE-378); the caller puts the
+        // picture's own permissions back before the rename.
+        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) {
+            Ok(file) => return Some((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Turns the picture a quarter turn and writes it back. The file is saved
@@ -665,42 +770,28 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
     if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
         return Err("This kind of picture cannot be turned.".into());
     }
-    let img = decode(path).ok_or("The picture could not be read.")?;
+    let (img, exif) = decode_keeping_exif(path).ok_or("The picture could not be read.")?;
     let turned = if clockwise { img.rotate90() } else { img.rotate270() };
-    let format = image_format(&ext);
-    let (tmp, file) = create_temp_beside(path).ok_or("The picture could not be saved. Is the folder read-only?")?;
-    let result = write_image(&turned, &file, format).and_then(|()| {
+    let (tmp, file) =
+        create_temp_beside(path).ok_or("The picture could not be saved. Is the folder read-only?")?;
+    let result = save_with_exif(&turned, &file, &ext, exif).map_err(|e| e.to_string()).and_then(|()| {
         if let Ok(meta) = std::fs::metadata(path) {
-            let _ = file.set_permissions(meta.permissions());
+            file.set_permissions(meta.permissions()).map_err(|e| e.to_string())?;
         }
         file.sync_all().map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        // Make the rename itself durable, so a crash cannot bring the old
+        // picture back after we reported the new one as saved.
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::File::open(dir).and_then(|d| d.sync_all()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     });
     drop(file);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     result.map_err(|_| "The picture could not be saved. Is the folder read-only?".to_string())
-}
-
-/// Creates a temporary file beside `path`, exclusively (O_EXCL, which also
-/// refuses a symlink planted at that name), so a leftover or hostile entry can
-/// never be written through (CWE-59).
-fn create_temp_beside(path: &Path) -> Option<(PathBuf, std::fs::File)> {
-    let name = path.file_name().and_then(|n| n.to_str())?;
-    let seed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    for attempt in 0..8u32 {
-        let tmp = path.with_file_name(format!(".{name}.{}.{seed:x}.{attempt}.tmp", std::process::id()));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
-            Ok(file) => return Some((tmp, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return None,
-        }
-    }
-    None
 }
 
 fn image_format(ext: &str) -> image::ImageFormat {
@@ -888,9 +979,21 @@ impl Lock {
 
 const LOCK_ROUNDS: u32 = 20_000;
 
-const LOCK_UNREADABLE: &str = "Hidden stays locked because its password file could not be read. Fix or remove hidden-lock.json in ~/.config/dev.lapinux.Photos, then start Photos again.";
+/// Where a saved list lives, for messages: the real path `store_file` gives
+/// (it follows `XDG_CONFIG_HOME`), never a guessed `~/.config`.
+fn store_path_text(name: &str) -> String {
+    store_file(name).map(|p| p.display().to_string()).unwrap_or_else(|| format!("{name}.json in Photos' config folder"))
+}
+
+fn lock_unreadable_msg() -> String {
+    format!("Hidden stays locked because its password file could not be read. Fix or remove {}, then start Photos again.", store_path_text("hidden-lock"))
+}
+
+fn hidden_unreadable_msg() -> String {
+    format!("The list of hidden photos could not be read, so no pictures are shown. Fix or remove {}, then start Photos again.", store_path_text("hidden"))
+}
+
 const LOCK_CHANGED: &str = "The password was changed in another window. Type the current one to open Hidden.";
-const HIDDEN_UNREADABLE: &str = "The list of hidden photos could not be read, so no pictures are shown. Fix or remove hidden.json in ~/.config/dev.lapinux.Photos, then start Photos again.";
 
 fn stretch(salt: &[u8], password: &str) -> [u8; 32] {
     let mut data = salt.to_vec();
@@ -949,6 +1052,41 @@ fn save_lock(lock: &Lock) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// How a password change ended.
+enum Replaced {
+    Done,
+    /// Another window changed or removed the password since this one read it.
+    Changed,
+    /// The saved password could not be read, so nothing was written over it.
+    Unreadable,
+    Failed(std::io::Error),
+}
+
+/// Replaces (or, with `None`, removes) the saved password, but only if it is
+/// still `expected`. The read, the comparison and the write happen under one
+/// lock file, so two windows cannot both pass the check and overwrite each
+/// other.
+fn replace_lock(expected: &Option<Lock>, new: Option<&Lock>) -> Replaced {
+    let guarded = || -> std::io::Result<Replaced> {
+        let file = store_file("hidden-lock").ok_or_else(|| std::io::Error::other("no config folder"))?;
+        let dir = file.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
+        std::fs::create_dir_all(dir)?;
+        let guard = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("hidden-lock.lock"))?;
+        guard.lock()?; // released when `guard` is dropped
+        match load_lock() {
+            Err(_) => return Ok(Replaced::Unreadable),
+            Ok(saved) if &saved != expected => return Ok(Replaced::Changed),
+            Ok(_) => {}
+        }
+        match new {
+            Some(l) => save_lock(l)?,
+            None => remove_lock()?,
+        }
+        Ok(Replaced::Done)
+    };
+    guarded().unwrap_or_else(Replaced::Failed)
 }
 
 fn remove_lock() -> std::io::Result<()> {
@@ -1057,7 +1195,17 @@ type Albums = BTreeMap<String, Vec<PathBuf>>;
 
 fn read_albums(file: &Path) -> std::io::Result<Albums> {
     match std::fs::read_to_string(file) {
-        Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other),
+        Ok(s) => serde_json::from_str::<Albums>(&s).map_err(std::io::Error::other).map(|albums| {
+            // Photos are listed under their canonical names, once each.
+            albums
+                .into_iter()
+                .map(|(name, list)| {
+                    let mut seen = HashSet::new();
+                    let list: Vec<PathBuf> = list.iter().map(|p| photo_key(p)).filter(|k| seen.insert(k.clone())).collect();
+                    (name, list)
+                })
+                .collect()
+        }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Albums::new()),
         Err(e) => Err(e),
     }
@@ -1126,6 +1274,8 @@ impl App {
             return Vec::new();
         }
         let root = self.source_extra.clone().or_else(|| self.source.and_then(Folder::dir));
+        // A photo reached through a symlink belongs to the folder it really lives in.
+        let root_key = root.as_deref().map(photo_key);
         let now = SystemTime::now();
         self.photos
             .iter()
@@ -1138,16 +1288,19 @@ impl App {
                     Section::Gallery | Section::Hidden => true,
                     Section::Screenshots => is_screenshot(&p.path),
                     Section::Gifs => is_gif(&p.path),
-                    Section::Favorites => self.favorites.contains(&p.path),
+                    Section::Favorites => self.favorites.contains(&p.key),
                     Section::Album => self
                         .album
                         .as_ref()
                         .and_then(|a| self.albums.get(a))
-                        .is_some_and(|list| list.contains(&p.path)),
+                        .is_some_and(|list| list.contains(&p.key)),
                     // A date in the future (a wrong camera clock) still counts as recent.
                     Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
                 };
-                in_section && root.as_ref().map_or(true, |r| p.path.starts_with(r))
+                in_section
+                    && root.as_ref().map_or(true, |r| {
+                        p.path.starts_with(r) || root_key.as_ref().is_some_and(|k| p.key.starts_with(k))
+                    })
             })
             .collect()
     }
@@ -1174,12 +1327,14 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scan_gen += 1;
+        let generation = self.scan_gen;
         let starred = self.favorites.clone();
         let extra = self.extra.clone();
         Task::future(async move {
             let found = tokio::task::spawn_blocking(move || scan(starred, extra)).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
+            cosmic::Action::App(Message::Scanned(generation, found))
         })
     }
 
@@ -1289,7 +1444,19 @@ impl App {
             self.lock_unreadable = unreadable;
             self.hidden_open = false;
             self.setting_lock = false;
+            // Nothing picked in Hidden, and no half-asked delete, survives the
+            // lock changing under it.
+            self.clear_selection();
         }
+    }
+
+    /// The canonical name of the photo found at `path`.
+    fn key_of(&self, path: &Path) -> PathBuf {
+        self.keys.get(path).cloned().unwrap_or_else(|| photo_key(path))
+    }
+
+    fn is_favorite(&self, path: &Path) -> bool {
+        self.favorites.contains(&self.key_of(path))
     }
 
     fn clear_selection(&mut self) {
@@ -1403,6 +1570,7 @@ impl cosmic::Application for App {
             dims: HashMap::new(),
             asked: HashSet::new(),
             favorites: load_favorites(),
+            keys: HashMap::new(),
             hidden: hidden_set.unwrap_or_default(),
             hidden_unreadable,
             albums: load_albums(),
@@ -1411,6 +1579,7 @@ impl cosmic::Application for App {
             renaming: None,
             lock: saved_lock.as_ref().ok().cloned().flatten(),
             lock_unreadable: saved_lock.is_err(),
+            scan_gen: 0,
             hidden_open: false,
             setting_lock: false,
             lock_text: String::new(),
@@ -1477,7 +1646,10 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Scanned(found) => {
+            // An older scan finishing after a newer one was asked for would
+            // bring back folders or photos the person just removed.
+            Message::Scanned(generation, _) if generation != self.scan_gen => {}
+            Message::Scanned(_, found) => {
                 self.read_errors = found.unreadable > 0;
                 self.notice = match (found.unreadable, found.truncated) {
                     (0, false) => None,
@@ -1488,19 +1660,36 @@ impl cosmic::Application for App {
                     )),
                 };
                 self.photos = found.photos;
+                self.keys = self.photos.iter().map(|p| (p.path.clone(), p.key.clone())).collect();
                 self.scanning = false;
                 let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
                 self.selected.retain(|p| live.contains(p));
                 // A picture handed over by Files opens straight in the viewer.
+                // Read the saved password and Hidden list now, so a picture that
+                // is hidden never opens without the password.
+                self.sync_lock();
                 let open = match self.start.take() {
                     Some(p) if is_photo(&p) => {
                         let p = p.canonicalize().unwrap_or(p);
                         let key = photo_key(&p);
-                        if !self.photos.iter().any(|x| x.key == key) {
-                            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                            self.photos.insert(0, Photo { path: p.clone(), key, modified });
+                        let hidden_now = self.is_hidden(&Photo { path: p.clone(), key: key.clone(), modified: SystemTime::UNIX_EPOCH });
+                        if self.hidden_unreadable || (hidden_now && (self.lock_unreadable || self.lock.is_some())) {
+                            // Hidden and locked, or the lists could not be read:
+                            // show the gallery instead of the picture.
+                            Task::none()
+                        } else {
+                            // Open the entry the scan already has for this file, so
+                            // the viewer and the lists see one photo.
+                            let path = match self.photos.iter().find(|x| x.key == key) {
+                                Some(x) => x.path.clone(),
+                                None => {
+                                    let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+                                    self.photos.insert(0, Photo { path: p.clone(), key, modified });
+                                    p
+                                }
+                            };
+                            self.open(path)
                         }
-                        self.open(p)
                     }
                     _ => Task::none(),
                 };
@@ -1595,7 +1784,9 @@ impl cosmic::Application for App {
             }
             Message::SelectAll => {
                 if self.viewing.is_none() {
-                    // Only the tiles on screen, so nothing the user can't see is batch-deleted.
+                    // The tiles loaded so far (`tile_limit`, which grows as you scroll),
+                    // never a photo the list does not show, so nothing unseen is
+                    // batch-deleted.
                     self.selected = self.shown().into_iter().take(self.tile_limit).map(|p| p.path.clone()).collect();
                     self.select_mode = true;
                     self.confirm_delete = false;
@@ -1606,7 +1797,7 @@ impl cosmic::Application for App {
                 if paths.is_empty() {
                     return Task::none();
                 }
-                let on = !paths.iter().all(|p| self.favorites.contains(p));
+                let on = !paths.iter().all(|p| self.is_favorite(p));
                 match set_favorites(&paths, on) {
                     Ok(saved) => {
                         self.favorites = saved;
@@ -1627,7 +1818,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AddToAlbum(name) => {
-                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 self.menu = None;
                 if paths.is_empty() {
                     return Task::none();
@@ -1653,7 +1844,7 @@ impl cosmic::Application for App {
             }
             Message::RemoveFromAlbum => {
                 let (Some(name), false) = (self.album.clone(), self.selected.is_empty()) else { return Task::none() };
-                let gone = self.selected.clone();
+                let gone: HashSet<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 match edit_albums(|a| {
                     if let Some(list) = a.get_mut(&name) {
                         list.retain(|p| !gone.contains(p));
@@ -1725,12 +1916,17 @@ impl cosmic::Application for App {
                 if self.hidden_locked() {
                     return self.refresh_view();
                 }
-                match remove_lock() {
-                    Ok(()) => {
+                match replace_lock(&self.lock, None) {
+                    Replaced::Done => {
                         self.lock = None;
                         self.lock_msg = None;
                     }
-                    Err(e) => {
+                    Replaced::Changed | Replaced::Unreadable => {
+                        self.sync_lock();
+                        self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
+                        return self.refresh_view();
+                    }
+                    Replaced::Failed(e) => {
                         tracing::warn!("could not remove the Hidden password: {e}");
                         self.lock_msg = Some("The password could not be removed.".to_string());
                     }
@@ -1744,20 +1940,29 @@ impl cosmic::Application for App {
                     }
                     // Never write over a password another window set or changed
                     // meanwhile, or one that could not be read.
-                    let before = (self.lock.clone(), self.lock_unreadable);
-                    self.sync_lock();
-                    if self.lock_unreadable || before != (self.lock.clone(), self.lock_unreadable) {
-                        self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
-                        return self.refresh_view();
-                    }
-                    match make_lock(&text).and_then(|l| save_lock(&l).map(|()| l)) {
-                        Ok(l) => {
-                            self.lock = Some(l);
+                    // The check and the write share one lock file, so a second
+                    // window cannot slip in between them.
+                    let made = match make_lock(&text) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::warn!("could not make the Hidden password: {e}");
+                            self.lock_msg = Some("The password could not be saved.".to_string());
+                            return Task::none();
+                        }
+                    };
+                    match replace_lock(&self.lock, Some(&made)) {
+                        Replaced::Done => {
+                            self.lock = Some(made);
                             self.hidden_open = true;
                             self.setting_lock = false;
                             self.lock_msg = None;
                         }
-                        Err(e) => {
+                        Replaced::Changed | Replaced::Unreadable => {
+                            self.sync_lock();
+                            self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
+                            return self.refresh_view();
+                        }
+                        Replaced::Failed(e) => {
                             tracing::warn!("could not save the Hidden password: {e}");
                             self.lock_msg = Some("The password could not be saved.".to_string());
                         }
@@ -1768,7 +1973,7 @@ impl cosmic::Application for App {
                     self.sync_lock();
                     self.lock_unreadable
                 } {
-                    self.lock_msg = Some(LOCK_UNREADABLE.to_string());
+                    self.lock_msg = Some(lock_unreadable_msg());
                 } else if self.lock.is_none() {
                     // The password was removed in another window.
                     self.lock_msg = None;
@@ -1825,7 +2030,7 @@ impl cosmic::Application for App {
                     }
                     return Task::none();
                 }
-                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 let had = !paths.is_empty();
                 let open = name.clone();
                 match edit_albums(|a| {
@@ -1919,7 +2124,8 @@ impl cosmic::Application for App {
                 }
             }
             Message::HideTargets => {
-                if self.selected.is_empty() {
+                // A locked Hidden section shows nothing, so nothing in it can be picked.
+                if self.selected.is_empty() || self.hidden_locked() {
                     return Task::none();
                 }
                 let hide = self.section != Section::Hidden;
@@ -1935,6 +2141,7 @@ impl cosmic::Application for App {
                 match set_in("hidden", &paths, hide) {
                     Ok(saved) => {
                         self.hidden = saved;
+                        self.hidden_unreadable = false;
                         self.notice = None;
                         self.clear_selection();
                     }
@@ -1946,13 +2153,16 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AskDelete => {
-                if self.viewing.is_none() && !self.selected.is_empty() {
+                if self.viewing.is_none() && !self.selected.is_empty() && !self.hidden_locked() {
                     self.confirm_delete = true;
                 }
             }
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
+                if self.hidden_locked() {
+                    return Task::none();
+                }
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
                 if paths.is_empty() {
                     return Task::none();
@@ -2194,7 +2404,7 @@ impl cosmic::Application for App {
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
-                let on = !self.favorites.contains(&path);
+                let on = !self.is_favorite(&path);
                 // A full disk or a read-only home must not end the program (#174).
                 match set_favorite(&path, on) {
                     // The saved list already holds changes made in other windows.
@@ -2326,7 +2536,7 @@ impl App {
                 n => format!("{n} selected"),
             }));
             bar = bar.push(button::standard("Select all").on_press(Message::SelectAll));
-            let all_starred = n > 0 && self.selected.iter().all(|p| self.favorites.contains(p));
+            let all_starred = n > 0 && self.selected.iter().all(|p| self.is_favorite(p));
             let mut star = button::icon(icon::from_name(if all_starred { "starred-symbolic" } else { "non-starred-symbolic" }))
                 .name(if all_starred { "Remove from favorites" } else { "Add to favorites" });
             let mut bin = button::icon(icon::from_name("user-trash-symbolic")).name("Move to the Recycle Bin");
@@ -2407,13 +2617,14 @@ impl App {
                 .spacing(12)
                 .align_x(Alignment::Center)
                 .push(icon::from_name("system-lock-screen-symbolic").size(48))
-                .push(text::body(LOCK_UNREADABLE));
+                .push(text::body(lock_unreadable_msg()));
             return container(col).center(Length::Fill).padding(24).into();
         }
         let mut col = column::with_capacity(4)
             .spacing(12)
             .align_x(Alignment::Center)
-            .push(icon::from_name("system-lock-screen-symbolic").size(48))
+            .push(icon::from_name("system-lock-screen-symbolic").size(48));
+        col = col
             .push(text::body("Hidden is locked. Type its password to look."))
             .push(
                 widget::secure_input("Password", &self.lock_text, None, true)
@@ -2571,7 +2782,7 @@ impl App {
 
         let shown = self.shown();
         let body: Element<'_, Message> = if self.hidden_unreadable {
-            container(text::body(HIDDEN_UNREADABLE)).center(Length::Fill).padding(24).into()
+            container(text::body(hidden_unreadable_msg())).center(Length::Fill).padding(24).into()
         } else if self.hidden_locked() {
             self.lock_screen()
         } else if self.scanning {
@@ -2695,7 +2906,7 @@ impl App {
             None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(w).height(h).into(),
         };
         let mut tile = stack![picture];
-        if self.favorites.contains(path) {
+        if self.is_favorite(path) {
             tile = tile.push(
                 container(icon::from_name("starred-symbolic").size(16))
                     .padding(6)
@@ -2745,7 +2956,7 @@ impl App {
 
         let list = self.viewer_list();
         let index = list.iter().position(|p| p.path == path);
-        let favorite = self.favorites.contains(path);
+        let favorite = self.is_favorite(path);
 
         let mut bar = row::with_capacity(7)
             .spacing(4)
@@ -2926,37 +3137,97 @@ mod lock_tests {
         assert!(!lock.matches(""));
     }
 
+    /// A directory made exclusively for one test (a leftover with the same name
+    /// is never reused) and removed when the test ends, even on a panic.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let base = std::env::temp_dir();
+            for n in 0..100u32 {
+                let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                let dir = base.join(format!("lapin-{label}-{}-{nanos:x}-{n}", std::process::id()));
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => return TestDir(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => panic!("could not make a test folder: {e}"),
+                }
+            }
+            panic!("could not make a unique test folder");
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn rotate_turns_and_leaves_no_temp_file() {
-        let dir = std::env::temp_dir().join(format!("lapin-rotate-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pic = dir.join("a.png");
+        let dir = TestDir::new("rotate");
+        let pic = dir.0.join("a.png");
         image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
         rotate_file(&pic, true).unwrap();
         let turned = image::open(&pic).unwrap();
         assert_eq!((turned.width(), turned.height()), (2, 4));
-        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        let left: Vec<_> = std::fs::read_dir(&dir.0).unwrap().flatten().collect();
         assert_eq!(left.len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn rotate_never_writes_through_a_planted_link() {
-        let dir = std::env::temp_dir().join(format!("lapin-rotate-link-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pic = dir.join("b.png");
+    fn staging_file_skips_a_planted_link_and_keeps_its_target() {
+        let dir = TestDir::new("rotate-link");
+        let pic = dir.0.join("b.png");
         image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        let victim = dir.join("victim.txt");
+        let victim = dir.0.join("victim.txt");
         std::fs::write(&victim, "keep").unwrap();
-        // Plant links at the old, predictable temporary names.
-        let name = "b.png";
-        for ext in ["png"] {
-            let old = dir.join(format!(".{name}.{}.tmp.{ext}", std::process::id()));
-            let _ = std::os::unix::fs::symlink(&victim, old);
-        }
-        rotate_file(&pic, false).unwrap();
+        // Plant a link at exactly the first name the opener will try.
+        let seed = 0x5eed_u128;
+        let first = dir.0.join(format!(".b.png.{}.{seed:x}.0.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &first).expect("the test link must be created");
+        let (tmp, mut file) = create_temp_beside_seeded(&pic, seed).expect("another candidate is used");
+        assert_ne!(tmp, first, "the planted name must be skipped");
+        assert!(tmp.to_string_lossy().ends_with(".1.tmp"));
+        std::io::Write::write_all(&mut file, b"new").unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::symlink_metadata(&first).unwrap().file_type().is_symlink());
+        // The staging file is owner-only while it holds the bytes.
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o077, 0);
+    }
+
+    #[test]
+    fn rotate_keeps_the_pictures_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TestDir::new("rotate-mode");
+        let pic = dir.0.join("c.png");
+        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
+        std::fs::set_permissions(&pic, std::fs::Permissions::from_mode(0o640)).unwrap();
+        rotate_file(&pic, true).unwrap();
+        assert_eq!(std::fs::metadata(&pic).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    #[test]
+    fn saved_lists_match_by_canonical_name() {
+        use std::os::unix::fs::symlink;
+        let guard = TestDir::new("alias");
+        let dir = guard.0.clone();
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/a.png"), b"x").unwrap();
+        symlink(dir.join("real"), dir.join("alias")).unwrap();
+        let direct = dir.join("real/a.png");
+        let aliased = dir.join("alias/a.png");
+        assert_ne!(direct, aliased);
+        assert_eq!(photo_key(&direct), photo_key(&aliased));
+
+        let favorites = dir.join("favorites.json");
+        std::fs::write(&favorites, serde_json::to_string(&vec![&aliased]).unwrap()).unwrap();
+        assert!(read_favorites(&favorites).unwrap().contains(&photo_key(&direct)));
+
+        let albums = dir.join("albums.json");
+        std::fs::write(&albums, serde_json::to_string(&BTreeMap::from([("x", vec![&aliased, &direct])])).unwrap()).unwrap();
+        assert_eq!(read_albums(&albums).unwrap()["x"], vec![photo_key(&direct)]);
     }
 
     #[test]
