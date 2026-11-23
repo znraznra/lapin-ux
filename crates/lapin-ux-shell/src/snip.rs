@@ -291,7 +291,9 @@ async fn notify(summary: &str, body: String, image: Option<&std::path::Path>) {
     let (Some(path), Some(mut signals), Ok(id)) = (image.map(|p| p.to_path_buf()), signals, reply.and_then(|r| r.body().deserialize::<u32>())) else { return };
     // Wait for the click in the background; the shell must not be held up.
     tokio::spawn(async move {
-        let deadline = tokio::time::sleep(std::time::Duration::from_secs(600));
+        // Long enough for a snip kept in the notification centre; ends earlier when the
+        // notification is dismissed or its action is used.
+        let deadline = tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60));
         tokio::pin!(deadline);
         loop {
             tokio::select! {
@@ -315,10 +317,14 @@ async fn notify(summary: &str, body: String, image: Option<&std::path::Path>) {
                         return;
                     }
                     if member == "NotificationClosed"
-                        && let Ok((nid, _)) = msg.body().deserialize::<(u32, u32)>()
+                        && let Ok((nid, reason)) = msg.body().deserialize::<(u32, u32)>()
                         && nid == id
                     {
-                        // Kept in the notification centre, where "Edit" can still be pressed.
+                        // Dismissed by the user (2): nothing can press "Edit" any more.
+                        if reason == 2 {
+                            return;
+                        }
+                        // Otherwise it is kept in the notification centre, where "Edit" can still be pressed.
                         continue;
                     }
                 }

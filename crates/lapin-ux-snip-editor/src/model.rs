@@ -62,16 +62,16 @@ pub fn coverage(d: f32, r: f32) -> f32 {
     (r + 0.5 - d).clamp(0.0, 1.0)
 }
 
-/// Paints a stroke on `img`. `scale` converts picture pixels to the pixels of
-/// `img` (1.0 for the real picture, less for the preview). The stroke is
+/// Paints a stroke on `img`. `scale` (x, y) converts picture pixels to the pixels of
+/// `img` ((1.0, 1.0) for the real picture, less for the preview). The stroke is
 /// first collected in a coverage mask and blended once, so a highlighter
 /// stroke that crosses itself stays one even colour.
-pub fn draw_stroke(img: &mut RgbaImage, s: &Stroke, scale: f32) {
+pub fn draw_stroke(img: &mut RgbaImage, s: &Stroke, scale: (f32, f32)) {
     if s.points.is_empty() || img.width() == 0 || img.height() == 0 {
         return;
     }
-    let r = (s.width * scale / 2.0).max(0.5);
-    let pts: Vec<(f32, f32)> = s.points.iter().map(|p| (p.0 * scale, p.1 * scale)).collect();
+    let r = (s.width * (scale.0 + scale.1) / 4.0).max(0.5);
+    let pts: Vec<(f32, f32)> = s.points.iter().map(|p| (p.0 * scale.0, p.1 * scale.1)).collect();
     let pad = r + 1.0;
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for p in &pts {
@@ -125,10 +125,14 @@ pub fn draw_stroke(img: &mut RgbaImage, s: &Stroke, scale: f32) {
 /// Lays `color` over a pixel with strength `a` (0 to 1).
 pub fn blend(px: &mut Rgba<u8>, color: [u8; 3], a: f32) {
     let a = a.clamp(0.0, 1.0);
-    for (i, c) in color.iter().enumerate() {
-        px.0[i] = (px.0[i] as f32 * (1.0 - a) + *c as f32 * a).round() as u8;
+    let da = px.0[3] as f32 / 255.0;
+    let oa = a + da * (1.0 - a);
+    if oa > 0.0 {
+        for (i, c) in color.iter().enumerate() {
+            px.0[i] = ((*c as f32 * a + px.0[i] as f32 * da * (1.0 - a)) / oa).round() as u8;
+        }
     }
-    px.0[3] = (px.0[3] as f32 + (255.0 - px.0[3] as f32) * a).round() as u8;
+    px.0[3] = (oa * 255.0).round() as u8;
 }
 
 /// Smallest side of the crop rectangle, in picture pixels.
@@ -234,10 +238,10 @@ pub fn drag_crop(start: Crop, grip: Grip, from: (f32, f32), to: (f32, f32), w: u
 /// Paints the crop frame on a preview: the outside dimmed, a border and a
 /// square at every corner and edge middle. `scale` is preview pixels per
 /// picture pixel.
-pub fn draw_crop_frame(img: &mut RgbaImage, c: &Crop, scale: f32) {
+pub fn draw_crop_frame(img: &mut RgbaImage, c: &Crop, scale: (f32, f32)) {
     let (w, h) = (img.width() as f32, img.height() as f32);
-    let (x0, y0) = ((c.x0 * scale).clamp(0.0, w), (c.y0 * scale).clamp(0.0, h));
-    let (x1, y1) = ((c.x1 * scale).clamp(0.0, w), (c.y1 * scale).clamp(0.0, h));
+    let (x0, y0) = ((c.x0 * scale.0).clamp(0.0, w), (c.y0 * scale.1).clamp(0.0, h));
+    let (x1, y1) = ((c.x1 * scale.0).clamp(0.0, w), (c.y1 * scale.1).clamp(0.0, h));
     for y in 0..img.height() {
         for x in 0..img.width() {
             let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -366,7 +370,7 @@ mod tests {
     #[test]
     fn pen_paints_its_line_and_leaves_the_rest() {
         let mut img = white(20, 20);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[(2.0, 10.0), (18.0, 10.0)], 4.0), 1.0);
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[(2.0, 10.0), (18.0, 10.0)], 4.0), (1.0, 1.0));
         assert_eq!(img.get_pixel(10, 10).0, [200, 0, 0, 255]);
         assert_eq!(img.get_pixel(10, 3).0, [255, 255, 255, 255]);
     }
@@ -374,7 +378,7 @@ mod tests {
     #[test]
     fn a_single_point_makes_a_dot() {
         let mut img = white(20, 20);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[(10.0, 10.0)], 6.0), 1.0);
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[(10.0, 10.0)], 6.0), (1.0, 1.0));
         assert_eq!(img.get_pixel(10, 10).0, [200, 0, 0, 255]);
         assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255, 255]);
     }
@@ -384,7 +388,7 @@ mod tests {
         let mut img = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
         let mut s = stroke(Ink::Highlighter, &[(2.0, 10.0), (18.0, 10.0)], 6.0);
         s.color = [255, 255, 0];
-        draw_stroke(&mut img, &s, 1.0);
+        draw_stroke(&mut img, &s, (1.0, 1.0));
         let p = img.get_pixel(10, 10).0;
         assert_eq!(p, [102, 102, 0, 255]);
     }
@@ -394,25 +398,35 @@ mod tests {
         let mut img = RgbaImage::from_pixel(30, 30, Rgba([0, 0, 0, 255]));
         let mut s = stroke(Ink::Highlighter, &[(5.0, 15.0), (25.0, 15.0), (5.0, 15.0)], 6.0);
         s.color = [255, 255, 0];
-        draw_stroke(&mut img, &s, 1.0);
+        draw_stroke(&mut img, &s, (1.0, 1.0));
         assert_eq!(img.get_pixel(15, 15).0, [102, 102, 0, 255]);
     }
 
     #[test]
     fn strokes_off_the_picture_do_not_panic() {
         let mut img = white(10, 10);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[(-50.0, -50.0), (500.0, 500.0)], 8.0), 1.0);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[(-50.0, 300.0)], 8.0), 1.0);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[], 8.0), 1.0);
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[(-50.0, -50.0), (500.0, 500.0)], 8.0), (1.0, 1.0));
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[(-50.0, 300.0)], 8.0), (1.0, 1.0));
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[], 8.0), (1.0, 1.0));
     }
 
     #[test]
     fn preview_scale_moves_the_stroke() {
         let mut img = white(20, 20);
-        draw_stroke(&mut img, &stroke(Ink::Pen, &[(20.0, 20.0)], 4.0), 0.5);
+        draw_stroke(&mut img, &stroke(Ink::Pen, &[(20.0, 20.0)], 4.0), (0.5, 0.5));
         // The dot is drawn around (10, 10), half way to where it was set.
         assert!(img.get_pixel(10, 10).0[1] < 200);
         assert_eq!(img.get_pixel(19, 19).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn blend_keeps_transparency() {
+        let mut px = Rgba([0, 0, 0, 0]);
+        blend(&mut px, [255, 255, 0], 0.4);
+        assert_eq!(px.0, [255, 255, 0, 102]);
+        let mut opaque = Rgba([0, 0, 0, 255]);
+        blend(&mut opaque, [255, 255, 255], 0.5);
+        assert_eq!(opaque.0, [128, 128, 128, 255]);
     }
 
     #[test]
@@ -472,7 +486,7 @@ mod tests {
     #[test]
     fn crop_frame_dims_outside_and_keeps_inside() {
         let mut img = white(40, 40);
-        draw_crop_frame(&mut img, &Crop { x0: 10.0, y0: 10.0, x1: 30.0, y1: 30.0 }, 1.0);
+        draw_crop_frame(&mut img, &Crop { x0: 10.0, y0: 10.0, x1: 30.0, y1: 30.0 }, (1.0, 1.0));
         assert_eq!(img.get_pixel(1, 1).0, [128, 128, 128, 255]);
         assert_eq!(img.get_pixel(20, 20).0, [255, 255, 255, 255]);
     }

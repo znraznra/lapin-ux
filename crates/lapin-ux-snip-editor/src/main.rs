@@ -113,7 +113,7 @@ impl App {
     /// Redraws the preview: the picture, every stroke, and the crop frame while cropping.
     fn refresh(&mut self) {
         let (Some(small), Some(base)) = (&self.small, &self.base) else { return };
-        let scale = small.width() as f32 / base.width() as f32;
+        let scale = (small.width() as f32 / base.width() as f32, small.height() as f32 / base.height() as f32);
         let mut img = small.clone();
         for s in self.strokes.iter().chain(self.drawing.iter()) {
             model::draw_stroke(&mut img, s, scale);
@@ -129,7 +129,7 @@ impl App {
         let base = self.base.as_ref()?;
         let mut img = (**base).clone();
         for s in &self.strokes {
-            model::draw_stroke(&mut img, s, 1.0);
+            model::draw_stroke(&mut img, s, (1.0, 1.0));
         }
         let (w, h) = img.dimensions();
         if self.crop.is_full(w, h) {
@@ -167,7 +167,16 @@ impl App {
 fn load(path: PathBuf) -> Task<Message> {
     Task::future(async move {
         let result = tokio::task::spawn_blocking(move || {
-            image::open(&path).map(|i| Arc::new(i.to_rgba8())).map_err(|e| e.to_string())
+            use image::ImageDecoder;
+            let err = |e: image::ImageError| e.to_string();
+            let reader = image::ImageReader::open(&path).map_err(|e| e.to_string())?.with_guessed_format().map_err(|e| e.to_string())?;
+            let mut decoder = reader.into_decoder().map_err(err)?;
+            let orientation = decoder.orientation().ok();
+            let mut img = image::DynamicImage::from_decoder(decoder).map_err(err)?;
+            if let Some(o) = orientation {
+                img.apply_orientation(o);
+            }
+            Ok::<_, String>(Arc::new(img.to_rgba8()))
         })
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
@@ -193,26 +202,36 @@ fn pictures_dir() -> PathBuf {
         .unwrap_or_else(|| home.join("Pictures"))
 }
 
-/// A name in Pictures/Screenshots that does not exist yet.
-fn new_path() -> std::io::Result<PathBuf> {
+/// Creates a new file in Pictures/Screenshots. The name is claimed with
+/// `create_new`, so two saves at once never share a file.
+fn create_new_file() -> std::io::Result<(PathBuf, std::fs::File)> {
     let dir = pictures_dir().join("Screenshots");
     std::fs::create_dir_all(&dir)?;
     let stamp = chrono::Local::now().format("Screenshot %Y-%m-%d %H%M%S edited");
     let mut path = dir.join(format!("{stamp}.png"));
     let mut n = 2;
-    while path.exists() {
-        path = dir.join(format!("{stamp} {n}.png"));
-        n += 1;
+    loop {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((path, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                path = dir.join(format!("{stamp} {n}.png"));
+                n += 1;
+            }
+            Err(e) => return Err(e),
+        }
     }
-    Ok(path)
 }
 
 fn save(img: RgbaImage) -> Task<Message> {
     Task::future(async move {
         let result = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
             let bytes = encode_png(&img)?;
-            let path = new_path().map_err(|e| e.to_string())?;
-            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            let (path, mut file) = create_new_file().map_err(|e| e.to_string())?;
+            if let Err(e) = file.write_all(&bytes).and_then(|()| file.flush()) {
+                drop(file);
+                let _ = std::fs::remove_file(&path);
+                return Err(e.to_string());
+            }
             Ok(path)
         })
         .await
@@ -238,7 +257,10 @@ fn copy(img: RgbaImage) -> Task<Message> {
                 stdin.write_all(&bytes).map_err(|e| e.to_string())?;
             }
             // wl-copy hands the picture to a background copy of itself and returns.
-            child.wait().map_err(|e| e.to_string())?;
+            let status = child.wait().map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("wl-copy stopped with {status}"));
+            }
             Ok(())
         })
         .await
@@ -324,6 +346,19 @@ impl cosmic::Application for App {
             }
             Message::Loaded(Err(e)) => self.failed = Some(format!("This picture could not be opened: {e}")),
             Message::Tool(t) => {
+                // A crop that was set but not applied is applied now, so the
+                // preview and the saved picture always agree.
+                if self.tool == Tool::Crop && t != Tool::Crop {
+                    if let Some((w, h)) = self.base.as_ref().map(|b| b.dimensions()) {
+                        if !self.crop.is_full(w, h) {
+                            if let (Some(img), Some(snap)) = (self.finished(), self.snap()) {
+                                self.history.record(snap);
+                                self.strokes.clear();
+                                self.set_base(Arc::new(img));
+                            }
+                        }
+                    }
+                }
                 self.tool = t;
                 self.drawing = None;
                 self.drag = None;

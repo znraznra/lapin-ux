@@ -737,6 +737,9 @@ impl App {
         if self.favorites_unsaved {
             bar = bar.push(text::caption(FAVORITES_UNSAVED));
         }
+        if let Some(n) = &self.notice {
+            bar = bar.push(text::caption(n.clone()));
+        }
         let bar = bar
             .push(
                 button::icon(icon::from_name("go-previous-symbolic"))
