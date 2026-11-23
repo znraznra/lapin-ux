@@ -644,7 +644,7 @@ impl cosmic::Application for App {
                 let tiles = self.want_section_thumbs();
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
-                    Some(p) if is_photo(&p) => {
+                    Some(p) if is_photo(&p) && !p.is_dir() => {
                         let p = p.canonicalize().unwrap_or(p);
                         if !self.photos.iter().any(|x| x.path == p) {
                             let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
@@ -723,6 +723,10 @@ impl cosmic::Application for App {
                     self.action_error = Some("Type a file name without slashes.".into());
                     return Task::none();
                 }
+                if name.starts_with('.') {
+                    self.action_error = Some("Start the name with a letter or number. Names that begin with a dot are hidden from the gallery.".into());
+                    return Task::none();
+                }
                 if !is_photo(Path::new(&name)) {
                     self.action_error = Some("Keep a picture extension such as .jpg or .png.".into());
                     return Task::none();
@@ -779,7 +783,8 @@ impl cosmic::Application for App {
                     // never lingers as a zombie while Photos stays open.
                     return Task::future(async move {
                         match tokio::process::Command::new("xdg-open").arg(&dir).status().await {
-                            Ok(_) => cosmic::Action::App(Message::LocationFailed(String::new())),
+                            Ok(status) if status.success() => cosmic::Action::App(Message::LocationFailed(String::new())),
+                            Ok(status) => cosmic::Action::App(Message::LocationFailed(format!("Could not open the folder ({status})."))),
                             Err(e) => cosmic::Action::App(Message::LocationFailed(format!("Could not open the folder: {e}"))),
                         }
                     });
