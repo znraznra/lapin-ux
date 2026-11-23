@@ -61,4 +61,4 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | 1 |
 | Mon 23 Nov | Photos rename album (#203): More > Rename this album. | 1 |
 | Mon 23 Nov | Photos Hidden password (#203): lock screen for Hidden, set, change and remove from More. | 1 |
-| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos are matched by canonical path. | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. | 1 |
