@@ -208,6 +208,10 @@ enum Message {
     SelectAll,
     FavoriteTargets,
     HideTargets,
+    /// Hide or Unhide the picture the viewer shows.
+    HideViewing,
+    /// Time to redraw the progress of a running vault job.
+    JobTick,
     /// Opens the folder chooser.
     AddFolder,
     FolderPicked(Option<PathBuf>),
@@ -278,6 +282,24 @@ static FULL_DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
 /// The picture the viewer wants now; queued decodes of any other picture are dropped.
 static VIEWING: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
+/// Progress of the running vault job: pictures done and pictures in all.
+/// A total of 0 means the job has no countable steps (the password check).
+static JOB_DONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static JOB_TOTAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn job_begin(total: usize) {
+    JOB_DONE.store(0, std::sync::atomic::Ordering::Relaxed);
+    JOB_TOTAL.store(total, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn job_step() {
+    JOB_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn job_progress() -> (usize, usize) {
+    (JOB_DONE.load(std::sync::atomic::Ordering::Relaxed), JOB_TOTAL.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 fn set_viewing(path: Option<PathBuf>) {
     *VIEWING.lock().unwrap_or_else(|e| e.into_inner()) = path;
 }
@@ -338,6 +360,10 @@ struct App {
     vault_photos: Vec<Photo>,
     /// A vault job is running (they take a moment: the password is slow on purpose).
     vault_busy: bool,
+    /// What the running vault job is doing, shown above its progress bar.
+    job_label: String,
+    /// The picture the viewer moves to when the one it shows is hidden.
+    hide_next: Option<PathBuf>,
     /// Hidden was unlocked since the person last opened it.
     hidden_open: bool,
     /// Set while the box for a new password is open.
@@ -564,6 +590,7 @@ struct VaultOutcome {
 
 /// Runs a vault job off the UI thread (the password stretching takes a moment).
 fn vault_task(job: impl FnOnce() -> Result<VaultOutcome, String> + Send + 'static) -> Task<Message> {
+    job_begin(0);
     Task::future(async move {
         let r = tokio::task::spawn_blocking(job)
             .await
@@ -599,7 +626,9 @@ fn vault_setup(password: &str, plain: Vec<PathBuf>) -> Result<VaultOutcome, Stri
     vault::set_key(Some(key));
     let mut out = VaultOutcome { set: Some(true), ..Default::default() };
     let mut failed = 0;
+    job_begin(plain.len());
     for p in plain.iter().filter(|p| p.is_file()) {
+        job_step();
         match vault::add(dir, &key, &mut out.entries, p) {
             Ok(_) => out.moved.push(p.clone()),
             Err(e) => {
@@ -627,7 +656,9 @@ fn vault_hide(paths: &[PathBuf]) -> Result<VaultOutcome, String> {
     let key = vault_open_key()?;
     let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, ..Default::default() };
     let mut failed = 0;
+    job_begin(paths.len());
     for p in paths {
+        job_step();
         match vault::add(dir, &key, &mut out.entries, p) {
             Ok(_) => out.moved.push(p.clone()),
             Err(e) => {
@@ -645,7 +676,9 @@ fn vault_unhide(paths: &[PathBuf]) -> Result<VaultOutcome, String> {
     let key = vault_open_key()?;
     let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, rescan: true, ..Default::default() };
     let mut failed = 0;
+    job_begin(paths.len());
     for p in paths {
+        job_step();
         let Some(id) = p.file_stem().and_then(|s| s.to_str()) else { continue };
         if let Err(e) = vault::restore(dir, &key, &mut out.entries, id) {
             tracing::warn!("could not take a picture out of the vault: {e}");
@@ -675,7 +708,9 @@ fn vault_remove() -> Result<VaultOutcome, String> {
     let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, rescan: true, ..Default::default() };
     let ids: Vec<String> = out.entries.iter().map(|e| e.id.clone()).collect();
     let (mut back, mut failed) = (Vec::new(), 0);
+    job_begin(ids.len());
     for id in ids {
+        job_step();
         match vault::restore(dir, &key, &mut out.entries, &id) {
             Ok(p) => back.push(p),
             Err(e) => {
@@ -1365,6 +1400,8 @@ impl cosmic::Application for App {
             vault_set: vault::default_dir().is_some_and(|d| vault::exists(d)),
             vault_photos: Vec::new(),
             vault_busy: false,
+            job_label: String::new(),
+            hide_next: None,
             hidden_open: false,
             setting_lock: false,
             lock_text: String::new(),
@@ -1403,7 +1440,12 @@ impl cosmic::Application for App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([tick, cosmic::iced::event::listen_with(|event, status, _| match event {
+        let job = if self.vault_busy {
+            cosmic::iced::time::every(Duration::from_millis(200)).map(|_| Message::JobTick)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([tick, job, cosmic::iced::event::listen_with(|event, status, _| match event {
             cosmic::iced::Event::Keyboard(KeyEvent::ModifiersChanged(m)) => Some(Message::Modifiers(m)),
             cosmic::iced::Event::Mouse(MouseEvent::WheelScrolled { delta }) => {
                 let y = match delta {
@@ -1677,7 +1719,8 @@ impl cosmic::Application for App {
                     return Task::none();
                 }
                 self.vault_busy = true;
-                self.notice = Some("Taking your pictures out of the vault...".to_string());
+                self.job_label = "Taking your pictures out of the vault".to_string();
+                self.notice = None;
                 return vault_task(vault_remove);
             }
             Message::LockSubmit => {
@@ -1696,14 +1739,18 @@ impl cosmic::Application for App {
                             return Task::none();
                         }
                         self.vault_busy = true;
+                        self.job_label = "Changing the password".to_string();
                         return vault_task(move || vault_change(&text));
                     }
                     let plain: Vec<PathBuf> = self.hidden.iter().cloned().collect();
                     self.vault_busy = true;
+                    self.job_label = "Moving your hidden pictures into the vault".to_string();
                     self.lock_msg = Some("Setting up the vault...".to_string());
                     return vault_task(move || vault_setup(&text, plain));
                 }
                 self.vault_busy = true;
+                self.job_label = "Checking the password".to_string();
+                job_begin(0);
                 self.lock_msg = Some("Checking the password...".to_string());
                 return Task::future(async move {
                     let r = tokio::task::spawn_blocking(move || vault_unlock(&text))
@@ -1734,6 +1781,7 @@ impl cosmic::Application for App {
                 let o = match done {
                     Ok(o) => o,
                     Err(e) => {
+                        self.hide_next = None;
                         if self.setting_lock {
                             self.lock_msg = Some(e);
                         } else {
@@ -1769,11 +1817,20 @@ impl cosmic::Application for App {
                 }
                 self.clear_selection();
                 let view = self.refresh_view();
+                // A picture hidden or unhidden from the viewer: show the next one.
+                let next = self.hide_next.take();
+                let go = match self.viewing.clone() {
+                    Some(v) if gone.contains(&v) => match next {
+                        Some(p) => self.open(p),
+                        None => self.back(),
+                    },
+                    _ => Task::none(),
+                };
                 if o.rescan {
                     self.scanning = true;
-                    return Task::batch([view, self.scan_task()]);
+                    return Task::batch([view, go, self.scan_task()]);
                 }
-                return view;
+                return Task::batch([view, go]);
             }
             Message::RenameAlbum => {
                 let Some(name) = self.album.clone() else { return Task::none() };
@@ -1911,6 +1968,40 @@ impl cosmic::Application for App {
                     }
                 }
             }
+            // Only redraws, so the progress bar follows the counters.
+            Message::JobTick => {}
+            Message::HideViewing => {
+                let Some(path) = self.viewing.clone() else { return Task::none() };
+                if self.vault_busy {
+                    return Task::none();
+                }
+                let hide = self.section != Section::Hidden;
+                let next = {
+                    let list = self.viewer_list();
+                    list.iter().position(|p| p.path == path).and_then(|i| {
+                        list.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| list.get(j))).map(|p| p.path.clone())
+                    })
+                };
+                self.hide_next = next;
+                self.selected = HashSet::from([path.clone()]);
+                let work = self.update(Message::HideTargets);
+                self.selected.clear();
+                if self.vault_busy {
+                    // The vault job finishes in VaultDone, which moves on.
+                    return work;
+                }
+                // Plain hide is done already; move on only if it was kept.
+                let kept = self.hidden.contains(&path) == hide;
+                let next = self.hide_next.take();
+                if !kept {
+                    return work;
+                }
+                let go = match next {
+                    Some(p) => self.open(p),
+                    None => self.back(),
+                };
+                return Task::batch([work, go]);
+            }
             Message::HideTargets => {
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
                 if paths.is_empty() {
@@ -1919,6 +2010,7 @@ impl cosmic::Application for App {
                 let hide = self.section != Section::Hidden;
                 if self.vault_set {
                     if self.vault_busy {
+                        self.notice = Some("Wait for the current job to finish first.".to_string());
                         return Task::none();
                     }
                     if hide {
@@ -1926,14 +2018,16 @@ impl cosmic::Application for App {
                             self.notice = Some("Open Hidden and type the password first, then hide.".to_string());
                             return Task::none();
                         }
-                        self.notice = Some("Moving the pictures into the vault...".to_string());
+                        self.notice = None;
+                        self.job_label = "Moving pictures into the vault".to_string();
                         self.vault_busy = true;
                         return vault_task(move || vault_hide(&paths));
                     }
                     if !paths.iter().all(|p| vault::is_vault_path(p)) {
                         return Task::none();
                     }
-                    self.notice = Some("Taking the pictures out of the vault...".to_string());
+                    self.notice = None;
+                    self.job_label = "Taking pictures out of the vault".to_string();
                     self.vault_busy = true;
                     return vault_task(move || vault_unhide(&paths));
                 }
@@ -2421,6 +2515,30 @@ impl App {
     }
 
     /// The box for a new Hidden password.
+    /// A progress bar for a running Hide, Unhide or vault job, so a big batch
+    /// is never a silent wait.
+    fn job_bar(&self) -> Option<Element<'_, Message>> {
+        if !self.vault_busy {
+            return None;
+        }
+        let (done, total) = job_progress();
+        let (caption, bar) = if total > 0 {
+            (
+                format!("{}: {} of {}", self.job_label, done.min(total), total),
+                widget::progress_bar::determinate_linear(done.min(total) as f32 / total as f32),
+            )
+        } else {
+            (format!("{}...", self.job_label), widget::progress_bar::indeterminate_linear())
+        };
+        Some(
+            container(column::with_capacity(2).spacing(6).push(text::caption(caption)).push(bar))
+                .padding([6, 8])
+                .width(Length::Fill)
+                .class(theme::Container::Card)
+                .into(),
+        )
+    }
+
     fn set_lock_bar(&self) -> Element<'_, Message> {
         let mut save = button::suggested("Save");
         if !self.lock_text.is_empty() {
@@ -2625,6 +2743,9 @@ impl App {
         if self.setting_lock {
             page = page.push(self.set_lock_bar());
         }
+        if let Some(b) = self.job_bar() {
+            page = page.push(b);
+        }
         let mut main = row::with_capacity(2).height(Length::Fill);
         if self.sidebar {
             main = main.push(sidebar);
@@ -2782,6 +2903,12 @@ impl App {
                     .name(if self.fullscreen { "Leave full screen" } else { "Full screen" })
                     .on_press(Message::Fullscreen),
             )
+            .push({
+                let unhide = self.section == Section::Hidden;
+                button::icon(icon::from_name(if unhide { "view-reveal-symbolic" } else { "view-conceal-symbolic" }))
+                    .name(if unhide { "Unhide this picture" } else { "Hide this picture" })
+                    .on_press_maybe((!self.vault_busy).then_some(Message::HideViewing))
+            })
             .push_maybe((!vaulted).then(|| {
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))
                     .name(if favorite { "Remove from favorites" } else { "Add to favorites" })
@@ -2790,6 +2917,9 @@ impl App {
         let mut top = column::with_capacity(2).push(container(bar).padding([4, 8]).class(theme::Container::Card));
         if let Some(n) = &self.notice {
             top = top.push(container(text::caption(n.as_str())).padding([4, 8]).class(theme::Container::Card));
+        }
+        if let Some(b) = self.job_bar() {
+            top = top.push(b);
         }
         if self.edit_open && !vaulted {
             let panel = row::with_capacity(9)

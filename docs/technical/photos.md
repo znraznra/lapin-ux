@@ -40,6 +40,9 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 - Turn left / Turn right in the viewer toolbar rewrite the file turned a quarter (a failed turn shows a note under the toolbar, cleared on the next try) (JPEG, PNG, WebP, BMP; not GIF). The camera's rotation tag is baked in and dropped, the write goes through a temporary file, and JPEG is compressed once more.
 - Edit in the viewer: the pencil button shows Brighter, Darker, More contrast, Less contrast, Black and white, and Crop square, 16:9 or 4:3 (the middle of the picture is kept). Every edit is saved as a copy, "name (edited).ext" beside the original (or "(edited 2)" and so on, never over an existing file), and the copy opens. Editing a copy edits it in place, so repeated tweaks do not pile up files. JPEG, PNG, WebP and BMP; not GIF. The write goes through a temporary file.
 
+- Progress for vault jobs: while Hide or Unhide with a password, setting, changing or removing the password, or checking the password runs, a bar under the toolbar (in the gallery and in the viewer) says what is happening and counts "12 of 340" pictures. A step is counted after each picture is finished (two atomic counters read every 200 ms). Checking the password has no count, so its bar just moves. A second Hide or Unhide pressed while one runs shows a note instead of starting.
+- Hide from the viewer: an eye button in the viewer toolbar hides the open picture (in Hidden it unhides it) and then shows the next picture, or the previous one if it was last, or goes back to the gallery if it was the only one. With a password the move runs as a vault job and the viewer moves on when it finishes; the button is off while a job runs. Hiding into the vault still needs the password typed once (Hidden), as in the grid.
+
 ## Not yet
 
 Free-hand crop (dragging a box), undo for edits, and a brightness slider.
