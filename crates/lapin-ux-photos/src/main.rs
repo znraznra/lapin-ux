@@ -215,6 +215,12 @@ enum Message {
     RemoveFromAlbum,
     DeleteAlbum,
     RenameAlbum,
+    LockText(String),
+    LockSubmit,
+    LockCancel,
+    /// Opens the box for a new Hidden password.
+    SetLock,
+    RemoveLock,
     /// Shows the box for naming a new album.
     NewAlbum,
     NewAlbumName(String),
@@ -258,6 +264,7 @@ fn still_viewing(path: &Path) -> bool {
 /// How long each photo stays in the slideshow.
 const SLIDE_TIME: std::time::Duration = std::time::Duration::from_secs(4);
 const ALBUMS_UNSAVED: &str = "Your albums could not be saved, so the change was not kept.";
+static LOCK_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-lock"));
 static NEW_ALBUM_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-new-album"));
 const FAVORITES_UNSAVED: &str = "Your favorites could not be saved, so the change was not kept.";
 
@@ -300,6 +307,14 @@ struct App {
     new_album: Option<String>,
     /// Set while the name box renames this album instead of making a new one.
     renaming: Option<String>,
+    /// The Hidden password (salt and hash), if one is set.
+    lock: Option<Lock>,
+    /// Hidden was unlocked since the person last opened it.
+    hidden_open: bool,
+    /// Set while the box for a new password is open.
+    setting_lock: bool,
+    lock_text: String,
+    lock_msg: Option<String>,
     albums_unsaved: bool,
     selected: HashSet<PathBuf>,
     select_mode: bool,
@@ -628,6 +643,146 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The Hidden password: a random salt and a slow hash of salt plus password,
+/// both as hex. This keeps the section out of casual sight; the pictures are
+/// not encrypted.
+#[derive(Clone)]
+struct Lock {
+    salt: String,
+    hash: String,
+}
+
+impl Lock {
+    fn matches(&self, password: &str) -> bool {
+        let Some(salt) = from_hex(&self.salt) else { return false };
+        let want = to_hex(&stretch(&salt, password));
+        // Compare every byte so the time does not say how much matched.
+        want.len() == self.hash.len() && want.bytes().zip(self.hash.bytes()).fold(0u8, |d, (a, b)| d | (a ^ b)) == 0
+    }
+}
+
+const LOCK_ROUNDS: u32 = 20_000;
+
+fn stretch(salt: &[u8], password: &str) -> [u8; 32] {
+    let mut data = salt.to_vec();
+    data.extend_from_slice(password.as_bytes());
+    let mut h = sha256(&data);
+    for _ in 0..LOCK_ROUNDS {
+        let mut next = h.to_vec();
+        next.extend_from_slice(salt);
+        h = sha256(&next);
+    }
+    h
+}
+
+fn to_hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn from_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 || !s.is_ascii() {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+fn make_lock(password: &str) -> std::io::Result<Lock> {
+    use std::io::Read;
+    let mut salt = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut salt)?;
+    Ok(Lock { salt: to_hex(&salt), hash: to_hex(&stretch(&salt, password)) })
+}
+
+fn load_lock() -> Option<Lock> {
+    let file = store_file("hidden-lock")?;
+    let s = match std::fs::read_to_string(&file) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!("could not read the Hidden password: {e}");
+            return None;
+        }
+    };
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    Some(Lock { salt: v.get("salt")?.as_str()?.to_string(), hash: v.get("hash")?.as_str()?.to_string() })
+}
+
+fn save_lock(lock: &Lock) -> std::io::Result<()> {
+    let file = store_file("hidden-lock").ok_or_else(|| std::io::Error::other("no config folder"))?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let bytes = serde_json::to_vec(&serde_json::json!({ "salt": lock.salt, "hash": lock.hash })).map_err(std::io::Error::other)?;
+    let tmp = dir.join(format!("hidden-lock.json.{}.tmp", std::process::id()));
+    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &file));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn remove_lock() -> std::io::Result<()> {
+    let Some(file) = store_file("hidden-lock") else { return Ok(()) };
+    match std::fs::remove_file(file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// SHA-256 (FIPS 180-4), small enough to keep here instead of a new crate.
+fn sha256(data: &[u8]) -> [u8; 32] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+    for chunk in msg.chunks(64) {
+        let mut w = [0u32; 64];
+        for (i, b) in chunk.chunks(4).enumerate() {
+            w[i] = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+            *x = x.wrapping_add(y);
+        }
+    }
+    let mut out = [0u8; 32];
+    for (i, x) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&x.to_be_bytes());
+    }
+    out
+}
+
 fn load_folders() -> Vec<PathBuf> {
     let Some(file) = store_file("folders") else { return Vec::new() };
     match read_folders(&file) {
@@ -736,6 +891,9 @@ impl App {
 
     /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
+        if self.hidden_locked() {
+            return Vec::new();
+        }
         let root = self.source_extra.clone().or_else(|| self.source.and_then(Folder::dir));
         let now = SystemTime::now();
         self.photos
@@ -871,6 +1029,11 @@ impl App {
         Task::batch([tiles, reel])
     }
 
+    /// The Hidden section is showing and its password has not been entered yet.
+    fn hidden_locked(&self) -> bool {
+        self.section == Section::Hidden && self.lock.is_some() && !self.hidden_open
+    }
+
     fn clear_selection(&mut self) {
         self.selected.clear();
         self.select_mode = false;
@@ -966,6 +1129,11 @@ impl cosmic::Application for App {
             album: None,
             new_album: None,
             renaming: None,
+            lock: load_lock(),
+            hidden_open: false,
+            setting_lock: false,
+            lock_text: String::new(),
+            lock_msg: None,
             albums_unsaved: false,
             selected: HashSet::new(),
             select_mode: false,
@@ -1057,6 +1225,10 @@ impl cosmic::Application for App {
             }
             Message::Section(s) => {
                 self.section = s;
+                self.hidden_open = false;
+                self.setting_lock = false;
+                self.lock_text.clear();
+                self.lock_msg = None;
                 self.album = None;
                 self.menu = None;
                 self.clear_selection();
@@ -1238,6 +1410,59 @@ impl cosmic::Application for App {
             Message::CancelNewAlbum => {
                 self.new_album = None;
                 self.renaming = None;
+            }
+            Message::LockText(s) => self.lock_text = s,
+            Message::LockCancel => {
+                self.setting_lock = false;
+                self.lock_text.clear();
+                self.lock_msg = None;
+            }
+            Message::SetLock => {
+                self.menu = None;
+                self.setting_lock = true;
+                self.lock_text.clear();
+                self.lock_msg = None;
+                return widget::text_input::focus(LOCK_ID.clone());
+            }
+            Message::RemoveLock => {
+                self.menu = None;
+                match remove_lock() {
+                    Ok(()) => {
+                        self.lock = None;
+                        self.lock_msg = None;
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not remove the Hidden password: {e}");
+                        self.lock_msg = Some("The password could not be removed.".to_string());
+                    }
+                }
+            }
+            Message::LockSubmit => {
+                let text = std::mem::take(&mut self.lock_text);
+                if self.setting_lock {
+                    if text.is_empty() {
+                        return Task::none();
+                    }
+                    match make_lock(&text).and_then(|l| save_lock(&l).map(|()| l)) {
+                        Ok(l) => {
+                            self.lock = Some(l);
+                            self.hidden_open = true;
+                            self.setting_lock = false;
+                            self.lock_msg = None;
+                        }
+                        Err(e) => {
+                            tracing::warn!("could not save the Hidden password: {e}");
+                            self.lock_msg = Some("The password could not be saved.".to_string());
+                        }
+                    }
+                } else if self.lock.as_ref().is_some_and(|l| l.matches(&text)) {
+                    self.hidden_open = true;
+                    self.lock_msg = None;
+                    return self.refresh_view();
+                } else {
+                    self.lock_msg = Some("That is not the password.".to_string());
+                    return widget::text_input::focus(LOCK_ID.clone());
+                }
             }
             Message::RenameAlbum => {
                 let Some(name) = self.album.clone() else { return Task::none() };
@@ -1477,6 +1702,9 @@ impl cosmic::Application for App {
                 }
                 if self.menu.is_some() {
                     self.menu = None;
+                } else if self.setting_lock {
+                    self.setting_lock = false;
+                    self.lock_text.clear();
                 } else if self.new_album.is_some() {
                     self.new_album = None;
                     self.renaming = None;
@@ -1689,6 +1917,14 @@ impl App {
         }
 
         let mut more = vec![Self::menu_item("Slideshow", Some("media-playback-start-symbolic"), false, Message::Slideshow), Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        if self.section == Section::Hidden && !self.hidden_locked() {
+            if self.lock.is_some() {
+                more.push(Self::menu_item("Change the password", Some("system-lock-screen-symbolic"), false, Message::SetLock));
+                more.push(Self::menu_item("Remove the password", Some("list-remove-symbolic"), false, Message::RemoveLock));
+            } else {
+                more.push(Self::menu_item("Set a password", Some("system-lock-screen-symbolic"), false, Message::SetLock));
+            }
+        }
         if self.source_extra.is_some() {
             more.push(Self::menu_item("Stop looking in this folder", Some("list-remove-symbolic"), false, Message::RemoveFolder));
         }
@@ -1713,6 +1949,60 @@ impl App {
             more_btn.into()
         });
         bar.into()
+    }
+
+    /// Shown in place of the pictures while Hidden is locked.
+    fn lock_screen(&self) -> Element<'_, Message> {
+        let mut unlock = button::suggested("Unlock");
+        if !self.lock_text.is_empty() {
+            unlock = unlock.on_press(Message::LockSubmit);
+        }
+        let mut col = column::with_capacity(4)
+            .spacing(12)
+            .align_x(Alignment::Center)
+            .push(icon::from_name("system-lock-screen-symbolic").size(48))
+            .push(text::body("Hidden is locked. Type its password to look."))
+            .push(
+                widget::secure_input("Password", &self.lock_text, None, true)
+                    .id(LOCK_ID.clone())
+                    .on_input(Message::LockText)
+                    .on_submit(|_| Message::LockSubmit)
+                    .width(Length::Fixed(260.0)),
+            )
+            .push(unlock);
+        if let Some(msg) = &self.lock_msg {
+            col = col.push(text::caption(msg.as_str()));
+        }
+        container(col).center(Length::Fill).into()
+    }
+
+    /// The box for a new Hidden password.
+    fn set_lock_bar(&self) -> Element<'_, Message> {
+        let mut save = button::suggested("Save");
+        if !self.lock_text.is_empty() {
+            save = save.on_press(Message::LockSubmit);
+        }
+        let mut col = column::with_capacity(2).spacing(4).push(
+            row::with_capacity(5)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(text::body("Choose a password for Hidden"))
+                .push(
+                    widget::secure_input("New password", &self.lock_text, None, true)
+                        .id(LOCK_ID.clone())
+                        .on_input(Message::LockText)
+                        .on_submit(|_| Message::LockSubmit)
+                        .width(Length::Fixed(260.0)),
+                )
+                .push(widget::Space::new().width(Length::Fill))
+                .push(button::standard("Cancel").on_press(Message::LockCancel))
+                .push(save),
+        );
+        col = col.push(text::caption("This keeps Hidden out of sight on this computer. It does not encrypt the pictures."));
+        if let Some(msg) = &self.lock_msg {
+            col = col.push(text::caption(msg.as_str()));
+        }
+        container(col).padding([8, 16]).class(theme::Container::Card).width(Length::Fill).into()
     }
 
     /// The box for naming a new album. The selected photos, if any, go into it.
@@ -1827,7 +2117,9 @@ impl App {
         let sidebar = container(scrollable(nav)).width(Length::Fixed(220.0)).padding(8);
 
         let shown = self.shown();
-        let body: Element<'_, Message> = if self.scanning {
+        let body: Element<'_, Message> = if self.hidden_locked() {
+            self.lock_screen()
+        } else if self.scanning {
             container(text::body("Looking for your pictures...")).center(Length::Fill).into()
         } else if shown.is_empty() {
             let msg = match (self.section, self.read_errors) {
@@ -1888,6 +2180,9 @@ impl App {
         }
         if self.new_album.is_some() {
             page = page.push(self.new_album_bar());
+        }
+        if self.setting_lock {
+            page = page.push(self.set_lock_bar());
         }
         let mut main = row::with_capacity(2).height(Length::Fill);
         if self.sidebar {
@@ -2076,4 +2371,23 @@ fn main() -> cosmic::iced::Result {
             .size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)),
         start,
     )
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn sha256_known_answers() {
+        assert_eq!(to_hex(&sha256(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(to_hex(&sha256(b"")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    #[test]
+    fn password_matches_only_itself() {
+        let lock = Lock { salt: to_hex(&[7u8; 16]), hash: to_hex(&stretch(&[7u8; 16], "kitten")) };
+        assert!(lock.matches("kitten"));
+        assert!(!lock.matches("Kitten"));
+        assert!(!lock.matches(""));
+    }
 }

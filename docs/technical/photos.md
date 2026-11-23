@@ -26,6 +26,7 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
   - **Slideshow**: **More > Slideshow** in the gallery, or the play button in the viewer. It starts at the open photo (or the first selected one, or the first shown), follows what the current section shows, moves on every 4 seconds and starts over after the last photo. The button turns into pause, and Esc or Back to the gallery stops it. Left and Right still work while it plays.
   - **Add folder**: the folder drop-down in the toolbar has an **Add folder...** item, which opens the usual folder dialog. The folder is searched like Pictures, Downloads, Desktop and Documents, shows up in the drop-down under its own name, and is remembered in `folders.json`. **More > Stop looking in this folder** forgets it again (the folder itself is not touched).
   - **Rename this album**: in an album, **More > Rename this album** shows the name box with the current name. A name that another album already uses is refused.
+  - **Password for Hidden**: in Hidden, **More > Set a password** (later **Change** or **Remove the password**). With a password set, Hidden shows a lock screen until it is typed, and locks again when you leave the section. It is a salted, repeated SHA-256 in `hidden-lock.json`. It keeps Hidden out of casual sight; the pictures are not encrypted and their files stay where they are.
 - Favorites and hidden photos are saved as path lists in `~/.config/dev.lapinux.Photos/favorites.json` and `hidden.json`, each written under its own lock file and swapped in atomically. Albums are a name to path-list map in `albums.json`, saved the same way (`albums.lock`). Added folders are a path list in `folders.json` (`folders.lock`).
 - Favorites are saved in `favorites.json`. A failed save is logged and never ends the program (#174).
 
@@ -35,4 +36,4 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 
 ## Not yet
 
-A lock or password for Hidden, a slideshow timer setting and fullscreen, lazy tile loading on scroll, rotate and edit.
+A slideshow timer setting and fullscreen, lazy tile loading on scroll, rotate and edit.
