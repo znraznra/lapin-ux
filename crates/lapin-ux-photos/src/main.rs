@@ -215,7 +215,7 @@ enum Message {
     SlideshowTick,
     /// Turns the open picture a quarter turn (true: clockwise) and saves it.
     Rotate(bool),
-    Rotated(PathBuf, Result<(), String>),
+    Rotated(PathBuf, Result<Saved, String>),
     /// The grid was scrolled; near the bottom it shows more tiles.
     GridScrolled(f32),
     /// Steps the slideshow speed to the next choice.
@@ -659,12 +659,34 @@ fn decode(path: &Path) -> Option<image::DynamicImage> {
     Some(img)
 }
 
+/// What a rotate left on disk. `durable` is false when the new file is in place
+/// but the folder could not be flushed, so a crash right now could still bring
+/// the old picture back. The picture is kept and shown either way.
+#[derive(Debug, Clone)]
+struct Saved {
+    path: PathBuf,
+    durable: bool,
+}
+
+const NOT_DURABLE: &str = "Saved, but the disk did not confirm it yet. Keep the computer on for a moment.";
+
+/// Makes a rename in `path`'s folder durable.
+fn sync_parent(path: &Path) -> bool {
+    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => std::fs::File::open(dir).and_then(|d| d.sync_all()).is_ok(),
+        None => true,
+    }
+}
+
 /// Turns the picture a quarter turn and writes it back. The file is saved
 /// upright (the camera's rotation tag is baked in and dropped), through a
 /// temporary file so a failure leaves the original alone. JPEG is saved again,
-/// so it is compressed once more.
-fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
+/// so it is compressed once more. A symlink is followed: the file it points to
+/// is the one that is replaced, and the link stays a link.
+fn rotate_file(path: &Path, clockwise: bool) -> Result<Saved, String> {
     use std::os::unix::fs::OpenOptionsExt;
+    let real = path.canonicalize().map_err(|_| "The picture could not be read.".to_string())?;
+    let path = real.as_path();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
         return Err("This kind of picture cannot be turned.".into());
@@ -712,19 +734,16 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
             file.set_permissions(meta.permissions()).map_err(|e| e.to_string())?;
         }
         file.sync_all().map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-        // Make the rename itself durable, so a crash cannot bring the old
-        // picture back after we reported the new one as saved.
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::File::open(dir).and_then(|d| d.sync_all()).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     });
     drop(file);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    result.map_err(|_| "The picture could not be saved. Is the folder read-only?".to_string())
+    result.map_err(|_| "The picture could not be saved. Is the folder read-only?".to_string())?;
+    // The new picture is in place. A folder that cannot be flushed is told to
+    // the person, not turned into a failure that hides a saved file.
+    Ok(Saved { path: real.clone(), durable: sync_parent(&real) })
 }
 
 fn handle(img: image::DynamicImage) -> Handle {
@@ -2113,8 +2132,9 @@ impl cosmic::Application for App {
                 });
             }
             Message::Rotated(path, done) => match done {
-                Ok(()) => {
-                    self.notice = None;
+                Ok(saved) => {
+                    self.notice = if saved.durable { None } else { Some(NOT_DURABLE.into()) };
+                    tracing::debug!("turned {}", saved.path.display());
                     self.asked.remove(&path);
                     self.thumbs.remove(&path);
                     self.dims.remove(&path);
@@ -2823,6 +2843,24 @@ mod lock_tests {
         assert_eq!((turned.width(), turned.height()), (2, 4));
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
         assert_eq!(left.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotate_through_a_symlink_keeps_the_link_and_its_key() {
+        let dir = std::env::temp_dir().join(format!("lapin-rotate-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.png");
+        image::DynamicImage::new_rgb8(4, 2).save(&real).unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let key = photo_key(&link);
+        let saved = rotate_file(&link, true).unwrap();
+        assert!(saved.durable);
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(photo_key(&link), key);
+        let turned = image::open(&real).unwrap();
+        assert_eq!((turned.width(), turned.height()), (2, 4));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

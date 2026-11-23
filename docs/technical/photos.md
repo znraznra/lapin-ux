@@ -41,3 +41,4 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 ## Not yet
 
 Editing beyond turning (crop, brightness).
+- Rotate (viewer): follows a symlink to the real file and replaces that, so the link stays a link and the picture keeps its name in Favorites, albums and Hidden. If the folder cannot be flushed after the swap, the new picture is still shown and a note says the disk has not confirmed it yet.
