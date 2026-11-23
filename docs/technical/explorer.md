@@ -164,7 +164,13 @@ the other. On both pages a click picks an item (the pane follows it: a drive, a
 pinned folder or a file shows its details; nothing picked says "Select a file or
 folder to see its details."), a double-click opens it, and right-click opens a
 menu: Open, Open in new tab, Open item location, Copy path, Properties, and
-Unpin from Home, Remove from recents or Disconnect where they apply. Favorites and
+Unpin from Home, Pin to Home (drives), Remove from recents or Disconnect where
+they apply. Right-click on empty space opens the page's own menu (Refresh, and
+Map network drive on This PC). There is one menu per page, wrapped around the
+scrollable (an item picks itself on right-press, empty space clears the pick), so
+the popup opens at the pointer instead of below the item (#169). With nothing
+picked, This PC's pane shows a drive count. Not built yet: Eject, Format, View
+(tiles or list) and Properties of This PC. Favorites and
 Recent share one list (#168): fixed-width columns (Name, Date accessed, File
 location) with the same row height and icons as a folder. Drag the right edge of
 a heading to resize that column and click a heading to sort (the arrow shows the
