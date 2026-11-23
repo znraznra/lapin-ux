@@ -6,6 +6,7 @@
 
 mod engine;
 mod library;
+mod mpris;
 
 use std::path::{Path, PathBuf};
 
@@ -25,17 +26,19 @@ enum Section {
     Artists,
     Albums,
     Songs,
+    Favourites,
     Videos,
     Radio,
     MadeForYou,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    const ALL: [Section; 8] = [
         Section::ListenNow,
         Section::Artists,
         Section::Albums,
         Section::Songs,
+        Section::Favourites,
         Section::Videos,
         Section::Radio,
         Section::MadeForYou,
@@ -46,6 +49,7 @@ impl Section {
             Section::Artists => "Artists",
             Section::Albums => "Albums",
             Section::Songs => "Songs",
+            Section::Favourites => "Favourite Songs",
             Section::Videos => "Videos",
             Section::Radio => "Radio",
             Section::MadeForYou => "Made for You",
@@ -57,6 +61,7 @@ impl Section {
             Section::Artists => "avatar-default-symbolic",
             Section::Albums => "media-optical-symbolic",
             Section::Songs => "audio-x-generic-symbolic",
+            Section::Favourites => "emblem-favorite-symbolic",
             Section::Videos => "video-x-generic-symbolic",
             Section::Radio => "network-wireless-symbolic",
             Section::MadeForYou => "starred-symbolic",
@@ -97,7 +102,7 @@ impl MenuId {
             MenuId::File => &[("Open...", Prompt(Ask::Open)), ("Quit", Quit)],
             MenuId::Edit => &[("Add radio station...", AddStation), ("Import stations...", Prompt(Ask::ImportStations)), ("Export stations...", Prompt(Ask::ExportStations))],
             MenuId::Media => &[("Play / Pause", PlayPause), ("Stop", Stop), ("Next", Next), ("Previous", Prev)],
-            MenuId::View => &[("Show queue", ToggleQueue), ("Songs", Show(Section::Songs)), ("Videos", Show(Section::Videos)), ("Radio", Show(Section::Radio))],
+            MenuId::View => &[("Show queue", ToggleQueue), ("Output device", ToggleDevices), ("Mini player", ToggleMini), ("Songs", Show(Section::Songs)), ("Videos", Show(Section::Videos)), ("Radio", Show(Section::Radio))],
             MenuId::Controls => &[
                 ("Jump back 10 seconds", Back10),
                 ("Jump forward 10 seconds", Fwd10),
@@ -147,6 +152,8 @@ enum Action {
     Next,
     Prev,
     ToggleQueue,
+    ToggleDevices,
+    ToggleMini,
     Show(Section),
     Back10,
     Fwd10,
@@ -199,6 +206,8 @@ struct Now {
 #[derive(Debug, Clone)]
 enum Message {
     Engine(engine::Event),
+    Mpris(mpris::Cmd),
+    SetDevice(String),
     Menu(MenuId),
     Do(Action),
     Show(Section),
@@ -223,6 +232,8 @@ enum Message {
     StationSave,
     StationDelete(usize),
     StationFavourite(usize),
+    /// Star or unstar a song, by file path.
+    ToggleFavourite(String),
     StationCancel,
     Shutdown,
 }
@@ -243,6 +254,11 @@ struct App {
     /// Station being played, so the star and the stream title can follow it.
     station: Option<usize>,
     show_queue: bool,
+    /// Sound outputs mpv found: (name, description). `device` is the one in use.
+    devices: Vec<(String, String)>,
+    device: String,
+    show_devices: bool,
+    mini: bool,
     shuffle: bool,
     repeat: Repeat,
     now: Now,
@@ -256,6 +272,8 @@ struct App {
     start: Vec<String>,
     /// Number of times each file was played, for Made for You.
     plays: std::collections::HashMap<String, u32>,
+    /// Paths of the songs the user starred.
+    favourites: std::collections::HashSet<String>,
 }
 
 fn fmt_time(s: f64) -> String {
@@ -265,6 +283,14 @@ fn fmt_time(s: f64) -> String {
 
 fn plays_path() -> PathBuf {
     engine::config_dir().join("plays.json")
+}
+
+fn device_path() -> PathBuf {
+    engine::config_dir().join("output-device")
+}
+
+fn favourites_path() -> PathBuf {
+    engine::config_dir().join("favourites.json")
 }
 
 fn pseudo_random(n: usize) -> usize {
@@ -347,6 +373,12 @@ impl App {
         match e {
             E::Ready(eng) => {
                 eng.set("volume", json!(self.volume));
+                if let Ok(d) = std::fs::read_to_string(device_path()) {
+                    let d = d.trim();
+                    if !d.is_empty() && d != "auto" {
+                        eng.set("audio-device", json!(d));
+                    }
+                }
                 self.engine = Some(eng);
                 self.problem = None;
                 for target in std::mem::take(&mut self.start) {
@@ -364,6 +396,8 @@ impl App {
             E::Volume(v) => self.volume = v,
             E::Mute(m) => self.muted = m,
             E::Speed(_) => {}
+            E::Devices(d) => self.devices = d,
+            E::Device(d) => self.device = d,
             E::Title(t) => {
                 if !t.is_empty() && (self.now.title.is_empty() || self.station.is_some()) {
                     self.now.title = t;
@@ -427,6 +461,14 @@ impl App {
                 }
             }
             Action::ToggleQueue => self.show_queue = !self.show_queue,
+            Action::ToggleDevices => self.show_devices = !self.show_devices,
+            Action::ToggleMini => {
+                self.mini = !self.mini;
+                if let Some(id) = self.core.main_window_id() {
+                    let size = if self.mini { Size::new(760.0, 150.0) } else { Size::new(1100.0, 720.0) };
+                    return cosmic::iced::window::resize(id, size);
+                }
+            }
             Action::Show(s) => self.section = s,
             Action::Back10 => send(&|e| e.seek_by(-10.0)),
             Action::Fwd10 => send(&|e| e.seek_by(10.0)),
@@ -534,6 +576,20 @@ impl App {
         }
     }
 
+    fn toggle_favourite(&mut self, path: String) {
+        if !self.favourites.remove(&path) {
+            self.favourites.insert(path);
+        }
+        if let Some(dir) = favourites_path().parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut sorted: Vec<&String> = self.favourites.iter().collect();
+        sorted.sort();
+        if let Err(e) = std::fs::write(favourites_path(), serde_json::to_string(&sorted).unwrap_or_default()) {
+            self.notice = Some(format!("Your favourite songs could not be saved: {e}"));
+        }
+    }
+
     fn save_stations(&mut self) {
         if let Err(e) = library::save_stations(&self.stations) {
             self.notice = Some(format!("The stations could not be saved: {e}"));
@@ -612,13 +668,20 @@ impl App {
             let fav = self.stations.get(i).is_some_and(|s| s.favourite);
             card = card.push(icon_btn(if fav { "starred-symbolic" } else { "non-starred-symbolic" }, if fav { "Remove from favourites" } else { "Add to favourites" }, Message::StationFavourite(i)));
         }
+        if self.station.is_none() {
+            if let Some(item) = self.index.and_then(|i| self.queue.get(i)) {
+                let fav = self.favourites.contains(&item.target);
+                card = card.push(icon_btn(if fav { "starred-symbolic" } else { "non-starred-symbolic" }, if fav { "Remove from favourites" } else { "Add to favourites" }, Message::ToggleFavourite(item.target.clone())));
+            }
+        }
         let volume = slider(0.0..=100.0f32, self.volume.min(100.0) as f32, Message::Volume).name("Volume").class(lapin_ux_ui::slider()).width(Length::Fixed(110.0));
         let vol_icon = if self.muted || self.volume <= 0.0 { "audio-volume-muted-symbolic" } else { "audio-volume-high-symbolic" };
-        let right = row::with_capacity(3)
+        let right = row::with_capacity(5)
             .spacing(4)
             .align_y(Alignment::Center)
             .push(icon_btn(vol_icon, "Mute", Message::Do(Action::Mute)))
             .push(volume)
+            .push(icon_btn("audio-speakers-symbolic", "Output device", Message::Do(Action::ToggleDevices)).selected(self.show_devices))
             .push(icon_btn("view-list-symbolic", "Queue", Message::Do(Action::ToggleQueue)).selected(self.show_queue));
         let bar = row::with_capacity(3).spacing(20).align_y(Alignment::Center).push(left).push(container(card).width(Length::FillPortion(3)).padding([6, 12]).class(theme::Container::Card)).push(right);
         container(lapin_ux_ui::a11y::group("Playback controls", bar)).padding([6, 12]).width(Length::Fill).into()
@@ -655,7 +718,11 @@ impl App {
                 .push(icon::from_name(if t.kind == Kind::Video { "video-x-generic-symbolic" } else { "audio-x-generic-symbolic" }).size(16))
                 .push(text::body(t.title.clone()).width(Length::FillPortion(3)))
                 .push(text::caption(sub).width(Length::FillPortion(2)));
-            col = col.push(button::custom(content).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(self.queue.get(self.index.unwrap_or(usize::MAX)).is_some_and(|q| q.target == items[i].target))).on_press(Message::PlayList(items.clone(), i)));
+            let key = t.path.to_string_lossy().into_owned();
+            let fav = self.favourites.contains(&key);
+            let play = button::custom(content).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(self.queue.get(self.index.unwrap_or(usize::MAX)).is_some_and(|q| q.target == items[i].target))).on_press(Message::PlayList(items.clone(), i));
+            let star = button::icon(icon::from_name(if fav { "starred-symbolic" } else { "non-starred-symbolic" })).name(if fav { "Remove from favourites" } else { "Add to favourites" }).on_press(Message::ToggleFavourite(key));
+            col = col.push(row::with_capacity(2).spacing(4).align_y(Alignment::Center).push(play).push(star));
         }
         scrollable(col).height(Length::Fill).into()
     }
@@ -779,6 +846,18 @@ impl App {
         scrollable(col).height(Length::Fill).into()
     }
 
+    fn device_panel(&self) -> Element<'_, Message> {
+        let mut col = column::with_capacity(self.devices.len() + 2).spacing(2).push(text::heading("Output device"));
+        if self.devices.is_empty() {
+            col = col.push(text::caption("No sound outputs found"));
+        }
+        for (name, desc) in &self.devices {
+            let current = *name == self.device;
+            col = col.push(button::custom(text::body(desc.clone())).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(current)).on_press(Message::SetDevice(name.clone())));
+        }
+        container(lapin_ux_ui::a11y::group("Output device", scrollable(col))).width(Length::Fixed(260.0)).height(Length::Fill).padding(8).into()
+    }
+
     fn queue_panel(&self) -> Element<'_, Message> {
         let mut col = column::with_capacity(self.queue.len() + 1).spacing(2).push(text::heading("Queue"));
         if self.queue.is_empty() {
@@ -792,74 +871,65 @@ impl App {
 }
 
 
-impl cosmic::Application for App {
-    type Executor = cosmic::executor::Default;
-    type Flags = Vec<String>;
-    type Message = Message;
-    const APP_ID: &'static str = APP_ID;
-
-    fn core(&self) -> &Core {
-        &self.core
+impl App {
+    /// What the desktop's media controls should show.
+    fn mpris_state(&self) -> mpris::State {
+        let has_media = self.engine.is_some() && self.index.is_some();
+        mpris::State {
+            has_media,
+            playing: has_media && !self.now.paused,
+            title: if self.now.stream_title.is_empty() { self.now.title.clone() } else { self.now.stream_title.clone() },
+            artist: self.now.artist.clone(),
+            album: self.now.album.clone(),
+            dur: self.now.dur,
+            pos: self.now.pos,
+            volume: if self.muted { 0.0 } else { self.volume },
+        }
     }
 
-    fn core_mut(&mut self) -> &mut Core {
-        &mut self.core
+    fn mpris_cmd(&mut self, c: mpris::Cmd) -> Task<Message> {
+        use mpris::Cmd;
+        match c {
+            Cmd::PlayPause => return self.update_cmd(Message::PlayPause),
+            Cmd::Play | Cmd::Pause => {
+                let want_paused = c == Cmd::Pause;
+                if self.index.is_none() {
+                    if !want_paused {
+                        return self.update_cmd(Message::PlayPause);
+                    }
+                } else if self.now.paused != want_paused {
+                    return self.update_cmd(Message::PlayPause);
+                }
+            }
+            Cmd::Next => return self.do_action(Action::Next),
+            Cmd::Prev => return self.do_action(Action::Prev),
+            Cmd::Stop => return self.do_action(Action::Stop),
+            Cmd::SeekBy(d) => {
+                if let Some(e) = &self.engine {
+                    e.seek_by(d);
+                }
+            }
+            Cmd::SeekTo(t) => {
+                if let Some(e) = &self.engine {
+                    e.seek_to(t);
+                    self.now.pos = t;
+                }
+            }
+            Cmd::Raise => return match self.core.main_window_id() { Some(id) => cosmic::iced::window::gain_focus(id), None => Task::none() },
+        }
+        Task::none()
     }
 
-    fn init(core: Core, start: Vec<String>) -> (Self, Task<Message>) {
-        let mut app = App {
-            core,
-            engine: None,
-            problem: None,
-            notice: None,
-            tracks: Vec::new(),
-            scanning: true,
-            stations: library::load_stations(),
-            section: Section::ListenNow,
-            menu: None,
-            search: String::new(),
-            queue: Vec::new(),
-            index: None,
-            station: None,
-            show_queue: false,
-            shuffle: false,
-            repeat: Repeat::Off,
-            now: Now::default(),
-            volume: 80.0,
-            muted: false,
-            drag: None,
-            ask: None,
-            new_station: None,
-            about: false,
-            start,
-            plays: std::fs::read_to_string(plays_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
-        };
-        let title = match app.core.main_window_id() {
-            Some(id) => app.set_window_title("Media Player".into(), id),
-            None => Task::none(),
-        };
-        let scan = Task::future(async {
-            let found = tokio::task::spawn_blocking(run_scan).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
-        });
-        (app, Task::batch([title, scan]))
+    fn update_cmd(&mut self, m: Message) -> Task<Message> {
+        self.handle(m)
     }
+}
 
-    fn header_start(&self) -> Vec<Element<'_, Message>> {
-        vec![lapin_ux_ui::title_bar("applications-multimedia", "Media Player")]
-    }
-
-    fn subscription(&self) -> Subscription<Message> {
-        engine::subscription().map(Message::Engine)
-    }
-
-    fn on_app_exit(&mut self) -> Option<Message> {
-        Some(Message::Shutdown)
-    }
-
-    fn update(&mut self, message: Message) -> Task<Message> {
+impl App {
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Engine(e) => self.engine_event(e),
+            Message::Mpris(c) => return self.mpris_cmd(c),
             Message::Menu(m) => self.menu = if self.menu == Some(m) { None } else { Some(m) },
             Message::Do(a) => {
                 self.menu = None;
@@ -949,6 +1019,19 @@ impl cosmic::Application for App {
                     self.save_stations();
                 }
             }
+            Message::SetDevice(name) => {
+                if let Some(e) = &self.engine {
+                    e.set("audio-device", json!(name));
+                }
+                if let Some(dir) = device_path().parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if let Err(e) = std::fs::write(device_path(), &name) {
+                    self.notice = Some(format!("Could not remember the output device ({e})."));
+                }
+                self.device = name;
+            }
+            Message::ToggleFavourite(path) => self.toggle_favourite(path),
             Message::StationFavourite(i) => {
                 if let Some(s) = self.stations.get_mut(i) {
                     s.favourite = !s.favourite;
@@ -964,13 +1047,99 @@ impl cosmic::Application for App {
         }
         Task::none()
     }
+}
+
+impl cosmic::Application for App {
+    type Executor = cosmic::executor::Default;
+    type Flags = Vec<String>;
+    type Message = Message;
+    const APP_ID: &'static str = APP_ID;
+
+    fn core(&self) -> &Core {
+        &self.core
+    }
+
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.core
+    }
+
+    fn init(core: Core, start: Vec<String>) -> (Self, Task<Message>) {
+        let mut app = App {
+            core,
+            engine: None,
+            problem: None,
+            notice: None,
+            tracks: Vec::new(),
+            scanning: true,
+            stations: library::load_stations(),
+            section: Section::ListenNow,
+            menu: None,
+            search: String::new(),
+            queue: Vec::new(),
+            index: None,
+            station: None,
+            show_queue: false,
+            devices: Vec::new(),
+            device: String::from("auto"),
+            show_devices: false,
+            mini: false,
+            shuffle: false,
+            repeat: Repeat::Off,
+            now: Now::default(),
+            volume: 80.0,
+            muted: false,
+            drag: None,
+            ask: None,
+            new_station: None,
+            about: false,
+            start,
+            favourites: std::fs::read_to_string(favourites_path()).ok().and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().collect(),
+            plays: std::fs::read_to_string(plays_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+        };
+        let title = match app.core.main_window_id() {
+            Some(id) => app.set_window_title("Media Player".into(), id),
+            None => Task::none(),
+        };
+        let scan = Task::future(async {
+            let found = tokio::task::spawn_blocking(run_scan).await.unwrap_or_default();
+            cosmic::Action::App(Message::Scanned(found))
+        });
+        (app, Task::batch([title, scan]))
+    }
+
+    fn header_start(&self) -> Vec<Element<'_, Message>> {
+        vec![lapin_ux_ui::title_bar("applications-multimedia", "Media Player")]
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        Subscription::batch([engine::subscription().map(Message::Engine), mpris::subscription().map(Message::Mpris)])
+    }
+
+    fn on_app_exit(&mut self) -> Option<Message> {
+        Some(Message::Shutdown)
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        mpris::publish(self.mpris_state());
+        task
+    }
 
     fn view(&self) -> Element<'_, Message> {
+        if self.mini {
+            let back = button::standard("Full player").on_press(Message::Do(Action::ToggleMini));
+            let mut page = column::with_capacity(3).push(self.transport());
+            if let Some(msg) = self.problem.as_ref().or(self.notice.as_ref()) {
+                page = page.push(container(text::body(msg.clone())).padding([4, 16]));
+            }
+            return container(lapin_ux_ui::a11y::group("Mini player", page.push(container(back).padding([0, 16, 6, 16])))).width(Length::Fill).height(Length::Fill).into();
+        }
         let body: Element<'_, Message> = match self.section {
             Section::ListenNow => self.listen_now(),
             Section::Artists => self.shelf(false),
             Section::Albums => self.shelf(true),
             Section::Songs => self.track_rows(self.visible_tracks(Kind::Audio)),
+            Section::Favourites => self.track_rows(self.tracks.iter().filter(|t| self.favourites.contains(&t.path.to_string_lossy().into_owned()) && library::matches(t, &self.search)).collect()),
             Section::Videos => self.track_rows(self.visible_tracks(Kind::Video)),
             Section::Radio => self.radio(),
             Section::MadeForYou => self.made_for_you(),
@@ -978,6 +1147,9 @@ impl cosmic::Application for App {
         let mut main = row::with_capacity(3).push(self.sidebar()).push(container(body).width(Length::Fill).height(Length::Fill));
         if self.show_queue {
             main = main.push(self.queue_panel());
+        }
+        if self.show_devices {
+            main = main.push(self.device_panel());
         }
         let mut page = column::with_capacity(6).push(self.menu_bar()).push(self.transport());
         if let Some(msg) = self.problem.as_ref().or(self.notice.as_ref()) {

@@ -34,6 +34,10 @@ pub enum Event {
     StreamTitle(String),
     /// A picture or video track is playing (mpv opens its own video window).
     HasVideo(bool),
+    /// The sound outputs mpv can use: (name, description).
+    Devices(Vec<(String, String)>),
+    /// The output in use (mpv's `audio-device` name).
+    Device(String),
     Loaded,
     /// The file ended by itself (`error` is mpv's reason when it failed).
     Ended { error: Option<String> },
@@ -85,6 +89,7 @@ fn socket_path() -> PathBuf {
 /// Properties the window follows: (observe id, name).
 const OBSERVED: &[&str] = &[
     "pause", "time-pos", "duration", "volume", "mute", "speed", "media-title", "metadata", "vid",
+    "audio-device-list", "audio-device",
 ];
 
 /// One line from mpv's socket, as events. Pure, so it is tested without mpv.
@@ -119,6 +124,22 @@ fn property(name: &str, data: &Value) -> Vec<Event> {
         "volume" => num.map(Event::Volume).into_iter().collect(),
         "speed" => num.map(Event::Speed).into_iter().collect(),
         "media-title" => vec![Event::Title(data.as_str().unwrap_or("").to_string())],
+        "audio-device" => vec![Event::Device(data.as_str().unwrap_or("auto").to_string())],
+        "audio-device-list" => {
+            let list = data
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|d| {
+                            let name = d.get("name")?.as_str()?.to_string();
+                            let desc = d.get("description").and_then(Value::as_str).unwrap_or(&name).to_string();
+                            Some((name, desc))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            vec![Event::Devices(list)]
+        }
         // `vid` is a track number while a video or cover picture shows, false otherwise.
         "vid" => vec![Event::HasVideo(data.as_i64().is_some())],
         "metadata" => {
@@ -269,5 +290,18 @@ mod tests {
     fn never_uses_the_users_mpv_folder() {
         let a = args(Path::new("/run/x.sock"));
         assert!(a.iter().any(|s| s.starts_with("--config-dir=") && s.contains("dev.lapinux.MediaPlayer")));
+    }
+
+    #[test]
+    fn output_devices() {
+        let line = r#"{"event":"property-change","id":9,"name":"audio-device-list","data":[{"name":"auto","description":"Autoselect device"},{"name":"pipewire/alsa_output.x","description":"Speakers"}]}"#;
+        match parse_line(line).as_slice() {
+            [Event::Devices(d)] => {
+                assert_eq!(d.len(), 2);
+                assert_eq!(d[1], ("pipewire/alsa_output.x".to_string(), "Speakers".to_string()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(matches!(parse_line(r#"{"event":"property-change","name":"audio-device","data":"auto"}"#).as_slice(), [Event::Device(d)] if d == "auto"));
     }
 }
