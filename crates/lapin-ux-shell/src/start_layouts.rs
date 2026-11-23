@@ -7,7 +7,7 @@ use cosmic::iced::{Alignment, Background, Border, Length};
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text, text_input};
 use cosmic::{theme, Element};
 
-use crate::app::{Message, PowerAction, SEARCH_ID, Shell, StartMenu, StartPage, rect_key};
+use crate::app::{Message, SEARCH_ID, Shell, StartMenu, StartPage, rect_key};
 use crate::config::{Role, StartLayout, find_app};
 use crate::panels::PanelMsg;
 use crate::start_search::StartItem;
@@ -99,7 +99,7 @@ fn search_box<'a>(start: &'a StartMenu) -> Element<'a, Message> {
 
 fn power_row<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
     row::with_children(vec![
-        entry("system-shutdown-symbolic", "Shut Down", false, Message::Power(PowerAction::ShutDown)),
+        entry("system-shutdown-symbolic", "Shut Down", false, Message::PowerMenu),
         tracked(
             shell,
             rect_key(start.id, "power"),
