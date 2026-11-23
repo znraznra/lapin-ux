@@ -235,3 +235,13 @@ developer contact is listed because the About widget turns those into mail
 links. The Explorer app icon is not part of this change. Patch
 `packaging/lapin-ux-files/0034-*`; outside a Lapin session both strings and the
 About page are stock.
+
+## Your folder and Home (#216)
+
+"Home" is only the start page. The user's own folder is labelled with the
+account's full name (the first field of the passwd GECOS entry), or the user
+name when no full name is set (`config::lapin_user_label()`). It is used in the
+sidebar tree, the address bar and tab titles (`folder_name`), the Open and Save
+dialog sidebar, the quick-access tiles and the favourite's `display_name`.
+Outside a Lapin session the folder stays "Home" as in stock COSMIC. Patch
+`packaging/lapin-ux-files/0042-*`.

@@ -41,6 +41,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
+| Mon 23 Nov | Explorer (#216): your own folder is named after your account (your full name, or your user name if none is set) in the sidebar, address bar, window title, Open and Save dialogs and This PC. "Home" always means the start page. | Retest |
 
 ## Phase dates
 
