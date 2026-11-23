@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Photos (#74): an offline picture app. The front end is a dark Gallery (all
+//! Photos (#74): an offline picture app. The front end is a Gallery (all
 //! photos by date, Favorites, and your picture folders); opening a photo, or
-//! clicking an image in Files, shows it in a light single-image viewer with a
-//! floating toolbar and a filmstrip. Nothing leaves the computer: no cloud, no
-//! accounts, no network.
+//! clicking an image in Files, shows it in a single-image viewer with a toolbar
+//! and a filmstrip. Both follow the system theme (#200). Nothing leaves the
+//! computer: no cloud, no accounts, no network.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use cosmic::app::{Settings, Task};
 use cosmic::iced::keyboard::{Event as KeyEvent, Key, key::Named};
-use cosmic::iced::widget::{stack, themer};
+use cosmic::iced::widget::stack;
 use cosmic::iced::{Alignment, Length, Size, Subscription};
 use cosmic::widget::image::Handle;
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text};
@@ -104,6 +104,26 @@ enum Message {
     Prev,
     Next,
     ToggleFavorite(PathBuf),
+    /// Opens or closes the "More actions" menu.
+    ToggleMenu,
+    StartRename,
+    RenameInput(String),
+    RenameCommit,
+    AskDelete,
+    CancelOverlay,
+    ConfirmDelete,
+    OpenLocation,
+    /// A rename or delete finished: the old path and what came of it.
+    Renamed(PathBuf, Result<PathBuf, String>),
+    Deleted(PathBuf, Result<(), String>),
+}
+
+/// What the viewer's menu is showing over the picture.
+#[derive(Debug, Clone, PartialEq)]
+enum Overlay {
+    Menu,
+    Rename(String),
+    ConfirmDelete,
 }
 
 /// Full-size decodes allowed at once, so paging quickly through a folder queues
@@ -144,6 +164,9 @@ struct App {
     full: Option<(PathBuf, Handle)>,
     /// The picture to open at start, from the command line or Files.
     start: Option<PathBuf>,
+    overlay: Option<Overlay>,
+    /// What the last rename or delete could not do.
+    action_error: Option<String>,
 }
 
 fn favorites_file() -> Option<PathBuf> {
@@ -375,6 +398,8 @@ impl App {
     fn open(&mut self, path: PathBuf) -> Task<Message> {
         self.viewing = Some(path.clone());
         set_viewing(Some(path.clone()));
+        self.overlay = None;
+        self.action_error = None;
         self.full = None;
         self.failed = None;
         let near = self.neighbours(&path, 6);
@@ -426,7 +451,69 @@ impl App {
         self.open(next)
     }
 
+    /// A renamed photo keeps its place in the list, its thumbnail and its star.
+    fn after_rename(&mut self, old: PathBuf, new: PathBuf) -> Task<Message> {
+        for p in &mut self.photos {
+            if p.path == old {
+                p.path = new.clone();
+            }
+        }
+        if let Some(h) = self.thumbs.remove(&old) {
+            self.thumbs.insert(new.clone(), h);
+        }
+        if self.asked.remove(&old) {
+            self.asked.insert(new.clone());
+        }
+        if self.favorites.contains(&old) {
+            let moved = set_favorite(&new, true).and_then(|_| set_favorite(&old, false));
+            match moved {
+                Ok(saved) => {
+                    self.favorites = saved;
+                    self.favorites_unsaved = false;
+                }
+                Err(e) => {
+                    tracing::warn!("could not move the favorite: {e}");
+                    self.favorites_unsaved = true;
+                    self.favorites.remove(&old);
+                    self.favorites.insert(new.clone());
+                }
+            }
+        }
+        if self.viewing.as_deref() == Some(old.as_path()) {
+            return self.open(new);
+        }
+        Task::none()
+    }
+
+    /// A deleted photo moves the viewer to the next one, or the one before it,
+    /// or back to the gallery when it was the only one.
+    fn after_delete(&mut self, path: PathBuf) -> Task<Message> {
+        let next = {
+            let list = self.viewer_list();
+            list.iter().position(|p| p.path == path).and_then(|i| {
+                list.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| list.get(j))).map(|p| p.path.clone())
+            })
+        };
+        self.photos.retain(|p| p.path != path);
+        self.thumbs.remove(&path);
+        self.asked.remove(&path);
+        if self.favorites.remove(&path) {
+            if let Err(e) = set_favorite(&path, false) {
+                tracing::warn!("could not drop the favorite: {e}");
+            }
+        }
+        if self.viewing.as_deref() == Some(path.as_path()) {
+            return match next {
+                Some(n) => self.open(n),
+                None => self.back(),
+            };
+        }
+        Task::none()
+    }
+
     fn back(&mut self) -> Task<Message> {
+        self.overlay = None;
+        self.action_error = None;
         self.viewing = None;
         set_viewing(None);
         self.full = None;
@@ -468,6 +555,8 @@ impl cosmic::Application for App {
             viewing: None,
             full: None,
             start,
+            overlay: None,
+            action_error: None,
         };
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Photos".into(), id),
@@ -562,8 +651,96 @@ impl cosmic::Application for App {
                 }
             }
             Message::Back => {
+                // Escape closes the menu first, then the viewer.
+                if self.overlay.take().is_some() {
+                    return Task::none();
+                }
                 if self.viewing.is_some() {
                     return self.back();
+                }
+            }
+            Message::ToggleMenu => {
+                self.action_error = None;
+                self.overlay = if self.overlay.is_some() { None } else { Some(Overlay::Menu) };
+            }
+            Message::StartRename => {
+                if let Some(p) = &self.viewing {
+                    self.overlay = Some(Overlay::Rename(file_name(p)));
+                }
+            }
+            Message::RenameInput(t) => {
+                if let Some(Overlay::Rename(cur)) = &mut self.overlay {
+                    *cur = t;
+                }
+            }
+            Message::RenameCommit => {
+                let (Some(old), Some(Overlay::Rename(name))) = (self.viewing.clone(), self.overlay.clone()) else {
+                    return Task::none();
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+                    self.action_error = Some("Type a file name without slashes.".into());
+                    return Task::none();
+                }
+                if !is_photo(Path::new(&name)) {
+                    self.action_error = Some("Keep a picture extension such as .jpg or .png.".into());
+                    return Task::none();
+                }
+                let new = old.with_file_name(&name);
+                if new == old {
+                    self.overlay = None;
+                    return Task::none();
+                }
+                self.action_error = None;
+                return Task::future(async move {
+                    let key = old.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        // Never replace another file: rename would overwrite it silently.
+                        if new.exists() {
+                            return Err("A file with that name already exists.".to_string());
+                        }
+                        std::fs::rename(&old, &new).map(|()| new).map_err(|e| format!("Could not rename: {e}"))
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    cosmic::Action::App(Message::Renamed(key, result))
+                });
+            }
+            Message::Renamed(old, Err(e)) => {
+                if self.viewing.as_deref() == Some(old.as_path()) {
+                    self.action_error = Some(e);
+                }
+            }
+            Message::Renamed(old, Ok(new)) => return self.after_rename(old, new),
+            Message::AskDelete => self.overlay = Some(Overlay::ConfirmDelete),
+            Message::CancelOverlay => self.overlay = None,
+            Message::ConfirmDelete => {
+                let Some(path) = self.viewing.clone() else { return Task::none() };
+                self.overlay = None;
+                return Task::future(async move {
+                    let key = path.clone();
+                    // To the Recycle Bin, never a permanent delete.
+                    let out = tokio::process::Command::new("gio").arg("trash").arg("--").arg(&path).output().await;
+                    let result = match out {
+                        Ok(o) if o.status.success() => Ok(()),
+                        Ok(o) => Err(format!("Could not move it to the Recycle Bin: {}", String::from_utf8_lossy(&o.stderr).trim())),
+                        Err(e) => Err(format!("Could not move it to the Recycle Bin: {e}")),
+                    };
+                    cosmic::Action::App(Message::Deleted(key, result))
+                });
+            }
+            Message::Deleted(path, Err(e)) => {
+                if self.viewing.as_deref() == Some(path.as_path()) {
+                    self.action_error = Some(e);
+                }
+            }
+            Message::Deleted(path, Ok(())) => return self.after_delete(path),
+            Message::OpenLocation => {
+                self.overlay = None;
+                if let Some(dir) = self.viewing.as_deref().and_then(Path::parent) {
+                    if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
+                        self.action_error = Some(format!("Could not open the folder: {e}"));
+                    }
                 }
             }
             Message::Prev => return self.step(-1),
@@ -590,8 +767,8 @@ impl cosmic::Application for App {
 
     fn view(&self) -> Element<'_, Message> {
         match &self.viewing {
-            Some(path) => themer(Some(cosmic::Theme::light()), container(self.viewer(path)).class(theme::Container::Background).width(Length::Fill).height(Length::Fill)).into(),
-            None => themer(Some(cosmic::Theme::dark()), container(self.gallery()).class(theme::Container::Background).width(Length::Fill).height(Length::Fill)).into(),
+            Some(path) => container(self.viewer(path)).class(theme::Container::Background).width(Length::Fill).height(Length::Fill).into(),
+            None => container(self.gallery()).class(theme::Container::Background).width(Length::Fill).height(Length::Fill).into(),
         }
     }
 }
@@ -676,12 +853,17 @@ impl App {
         let side = Length::Fixed(TILE as f32);
         let picture: Element<'_, Message> = match self.thumbs.get(path) {
             Some(h) => widget::image(h.clone()).content_fit(cosmic::iced::ContentFit::Cover).width(side).height(side).into(),
-            None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(side).height(side).into(),
+            // A neutral backdrop, so an unloaded tile reads in light and dark.
+            None => container(icon::from_name("image-x-generic-symbolic").size(32))
+                .center(side)
+                .height(side)
+                .class(theme::Container::Card)
+                .into(),
         };
         let mut tile = stack![picture];
         if self.favorites.contains(path) {
             tile = tile.push(
-                container(icon::from_name("starred-symbolic").size(16))
+                container(container(icon::from_name("starred-symbolic").size(16)).padding(3).class(theme::Container::Card))
                     .padding(6)
                     .align_x(Alignment::End)
                     .align_y(Alignment::End)
@@ -723,13 +905,23 @@ impl App {
         let mut bar = row::with_capacity(7)
             .spacing(4)
             .align_y(Alignment::Center)
-            .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back to the gallery").on_press(Message::Back))
+            .push(
+                button::standard("Back")
+                    .leading_icon(icon::from_name("go-previous-symbolic"))
+                    .name("Back to the gallery")
+                    .on_press(Message::Back),
+            )
             .push(container(text::body(file_name(path))).padding([0, 8]))
             .push(widget::Space::new().width(Length::Fill));
         if self.favorites_unsaved {
             bar = bar.push(text::caption(FAVORITES_UNSAVED));
         }
         let bar = bar
+            .push(
+                button::icon(icon::from_name("view-more-symbolic"))
+                    .name("More actions")
+                    .on_press(Message::ToggleMenu),
+            )
             .push(
                 button::icon(icon::from_name("go-previous-symbolic"))
                     .name("Previous photo")
@@ -746,9 +938,44 @@ impl App {
                     .on_press(Message::ToggleFavorite(path.to_path_buf())),
             );
         let toolbar = container(container(bar).padding([4, 8]).class(theme::Container::Card))
-            .padding(12)
-            .width(Length::Fill)
-            .align_y(Alignment::Start);
+            .padding([12, 12, 0, 12])
+            .width(Length::Fill);
+
+        // The menu and its follow-up questions sit in their own row under the bar.
+        let panel: Option<Element<'_, Message>> = match &self.overlay {
+            None => None,
+            Some(Overlay::Menu) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .push(button::standard("Rename").name("Rename").on_press(Message::StartRename))
+                    .push(button::destructive("Delete").name("Delete").on_press(Message::AskDelete))
+                    .push(button::standard("Open file location").name("Open file location").on_press(Message::OpenLocation))
+                    .into(),
+            ),
+            Some(Overlay::Rename(name)) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        widget::text_input("File name", name.clone())
+                            .on_input(Message::RenameInput)
+                            .on_submit(|_| Message::RenameCommit)
+                            .width(Length::Fixed(320.0)),
+                    )
+                    .push(button::suggested("Rename").name("Rename").on_press(Message::RenameCommit))
+                    .push(button::standard("Cancel").name("Cancel").on_press(Message::CancelOverlay))
+                    .into(),
+            ),
+            Some(Overlay::ConfirmDelete) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(text::body(format!("Move {} to the Recycle Bin?", file_name(path))))
+                    .push(button::destructive("Delete").name("Delete").on_press(Message::ConfirmDelete))
+                    .push(button::standard("Cancel").name("Cancel").on_press(Message::CancelOverlay))
+                    .into(),
+            ),
+        };
 
         let mut strip = row::with_capacity(13).spacing(6).align_y(Alignment::Center);
         for p in self.neighbours(path, 6) {
@@ -770,11 +997,21 @@ impl App {
         let filmstrip = container(container(strip).padding(6).class(theme::Container::Card))
             .padding(12)
             .width(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::End)
-            .height(Length::Fill);
+            .align_x(Alignment::Center);
 
-        lapin_ux_ui::a11y::group("Photo viewer", stack![picture, toolbar, filmstrip])
+        // Bars take their own space, so the picture is fitted between them and
+        // never drawn under them.
+        let mut page = column::with_capacity(5).push(toolbar);
+        if let Some(panel) = panel {
+            page = page.push(container(panel).padding([8, 12, 0, 12]));
+        }
+        if let Some(e) = &self.action_error {
+            page = page.push(container(text::caption(e.clone())).padding([4, 12, 0, 12]));
+        }
+        let page = page
+            .push(container(picture).padding(8).width(Length::Fill).height(Length::Fill))
+            .push(filmstrip);
+        lapin_ux_ui::a11y::group("Photo viewer", page)
     }
 }
 
