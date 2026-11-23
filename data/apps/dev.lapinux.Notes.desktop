@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Notes
+Comment=Write and edit text and code
+Exec=lapin-ux-notes %F
+Icon=accessories-text-editor
+Categories=Utility;TextEditor;Development;
+Keywords=text;editor;code;notepad;
+MimeType=text/plain;text/markdown;text/x-csrc;text/x-chdr;text/x-c++src;text/x-python;text/x-shellscript;text/x-log;text/html;text/css;text/csv;text/xml;application/json;application/xml;application/x-shellscript;application/toml;application/yaml;
+StartupNotify=true
+StartupWMClass=dev.lapinux.Notes

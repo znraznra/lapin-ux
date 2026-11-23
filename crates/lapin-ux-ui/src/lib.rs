@@ -140,6 +140,81 @@ pub fn title_bar<'a, M: 'static>(icon_name: &'a str, title: &'a str) -> cosmic::
         .into()
 }
 
+/// One entry of a menu in [`menu_bar`]. `msg: None` draws a separator.
+pub struct MenuItem<M> {
+    pub label: String,
+    /// Shortcut shown at the right ("Ctrl+S"). The app handles the keys.
+    pub accel: String,
+    pub msg: Option<M>,
+    /// `Some` draws a check mark column (on or off).
+    pub checked: Option<bool>,
+}
+
+impl<M> MenuItem<M> {
+    pub fn new(label: impl Into<String>, accel: impl Into<String>, msg: M) -> Self {
+        Self { label: label.into(), accel: accel.into(), msg: Some(msg), checked: None }
+    }
+    pub fn check(label: impl Into<String>, on: bool, msg: M) -> Self {
+        Self { label: label.into(), accel: String::new(), msg: Some(msg), checked: Some(on) }
+    }
+    pub fn separator() -> Self {
+        Self { label: String::new(), accel: String::new(), msg: None, checked: None }
+    }
+}
+
+/// A row of menu titles (File, Edit…) whose pop-ups list their entries with
+/// shortcuts. `open` is the menu currently shown; `on_open` is sent when a
+/// title is clicked (`Some(i)`) or the pop-up should close (`None`). Entries
+/// send their message and the app should then close the menu.
+pub fn menu_bar<'a, M: Clone + 'static>(
+    menus: Vec<(String, Vec<MenuItem<M>>)>,
+    open: Option<usize>,
+    on_open: impl Fn(Option<usize>) -> M + 'a,
+) -> cosmic::Element<'a, M> {
+    use cosmic::widget::{self, popover, button, column, container, row, text};
+    let mut bar = row::with_capacity(menus.len()).spacing(2).align_y(cosmic::iced::Alignment::Center);
+    for (i, (title, items)) in menus.into_iter().enumerate() {
+        let is_open = open == Some(i);
+        let head = button::custom(text::body(title.clone()))
+            .padding([4, 10])
+            .class(nav_item(is_open))
+            .on_press(on_open(if is_open { None } else { Some(i) }));
+        let head: cosmic::Element<'a, M> = if is_open {
+            let mut col = column::with_capacity(items.len()).spacing(1).padding(4);
+            for it in items {
+                match it.msg {
+                    None => col = col.push(container(widget::divider::horizontal::light()).padding([3, 0])),
+                    Some(msg) => {
+                        let mark = match it.checked {
+                            Some(true) => "\u{2713}",
+                            _ => "",
+                        };
+                        let line = row::with_capacity(3)
+                            .spacing(12)
+                            .align_y(cosmic::iced::Alignment::Center)
+                            .push(container(text::body(mark)).width(16))
+                            .push(container(text::body(it.label)).width(cosmic::iced::Length::Fill))
+                            .push(text::caption(it.accel));
+                        col = col.push(
+                            button::custom(line)
+                                .padding([4, 8])
+                                .width(260)
+                                .class(nav_item(false))
+                                .on_press(msg),
+                        );
+                    }
+                }
+            }
+            let panel = container(col).class(cosmic::theme::Container::Dialog(false)).width(cosmic::iced::Length::Shrink);
+            popover(head).popup(panel).position(widget::popover::Position::Bottom).on_close(on_open(None)).into()
+        } else {
+            head.into()
+        };
+        bar = bar.push(head);
+    }
+    a11y::group("Menu bar", bar)
+}
+
 /// Screen reader helpers.
 pub mod a11y {
     use cosmic::iced::core::widget::{tree, Operation, Tree};
