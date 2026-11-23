@@ -653,14 +653,48 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
     }
     let img = decode(path).ok_or("The picture could not be read.")?;
     let turned = if clockwise { img.rotate90() } else { img.rotate270() };
+    let format = match ext.as_str() {
+        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
+        "png" => image::ImageFormat::Png,
+        "webp" => image::ImageFormat::WebP,
+        _ => image::ImageFormat::Bmp,
+    };
     let name = path.file_name().and_then(|n| n.to_str()).ok_or("The picture has no name.")?;
-    let tmp = path.with_file_name(format!(".{name}.{}.tmp.{ext}", std::process::id()));
-    let result = turned.save(&tmp).map_err(|e| e.to_string()).and_then(|()| {
-        if let Ok(meta) = std::fs::metadata(path) {
-            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    // The temporary file is created exclusively (O_EXCL, which also refuses a
+    // symlink planted at that name) beside the picture, so a leftover or
+    // hostile entry can never be written through (CWE-59).
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut created = None;
+    for attempt in 0..8u32 {
+        let tmp = path.with_file_name(format!(".{name}.{}.{seed:x}.{attempt}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => break,
         }
+    }
+    let (tmp, file) = created.ok_or("The picture could not be saved. Is the folder read-only?")?;
+    let result = {
+        let mut out = std::io::BufWriter::new(&file);
+        turned
+            .write_to(&mut out, format)
+            .map_err(|e| e.to_string())
+            .and_then(|()| std::io::Write::flush(&mut out).map_err(|e| e.to_string()))
+    }
+    .and_then(|()| {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let _ = file.set_permissions(meta.permissions());
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     });
+    drop(file);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -2625,5 +2659,38 @@ mod lock_tests {
         assert!(lock.matches("kitten"));
         assert!(!lock.matches("Kitten"));
         assert!(!lock.matches(""));
+    }
+
+    #[test]
+    fn rotate_turns_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("lapin-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pic = dir.join("a.png");
+        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
+        rotate_file(&pic, true).unwrap();
+        let turned = image::open(&pic).unwrap();
+        assert_eq!((turned.width(), turned.height()), (2, 4));
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotate_never_writes_through_a_planted_link() {
+        let dir = std::env::temp_dir().join(format!("lapin-rotate-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pic = dir.join("b.png");
+        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "keep").unwrap();
+        // Plant links at the old, predictable temporary names.
+        let name = "b.png";
+        for ext in ["png"] {
+            let old = dir.join(format!(".{name}.{}.tmp.{ext}", std::process::id()));
+            let _ = std::os::unix::fs::symlink(&victim, old);
+        }
+        rotate_file(&pic, false).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
