@@ -117,7 +117,7 @@ impl Shell {
             self.anims.start = None;
         }
         let left = self.config.alignment == TaskbarAlignment::Left;
-        let m = self.edge_margin(self.above_bar() - self.start_drop() as i32, if left { 12 } else { 0 }, 0);
+        let m = self.start_margin(self.above_bar() - self.start_drop() as i32, if left { 12 } else { 0 }, 0);
         set_margin(id, m.top, m.right, m.bottom, m.left)
     }
 

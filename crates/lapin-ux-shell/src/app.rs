@@ -591,8 +591,8 @@ impl Shell {
         });
         let left = self.config.alignment == TaskbarAlignment::Left;
         let above = self.above_bar();
-        let start_edge = self.edge();
-        let start_margin = self.edge_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
+        let start_edge = self.start_edge();
+        let start_margin = self.start_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
         self.anim_start_opened(id);
         Task::batch([
@@ -810,8 +810,12 @@ impl Shell {
                     (false, true) => Gravity::Top,
                     (false, false) => Gravity::Bottom,
                 },
-                // slide_x | flip_y | resize_x | resize_y
-                constraint_adjustment: 1 | 8 | 16 | 32,
+                // slide_x | flip_y | resize_x | resize_y. Beside a side bar
+                // (#195, #196) only slide: flipping or resizing a menu that
+                // doesn't fit below the pointer made the reactive popup
+                // flip back and forth, and cut it off at the screen edge.
+                // Sliding up keeps it whole and still.
+                constraint_adjustment: if side.is_some() { 1 | 2 } else { 1 | 8 | 16 | 32 },
                 offset: match side {
                     Some(true) => (-8, 0),
                     Some(false) => (8, 0),
