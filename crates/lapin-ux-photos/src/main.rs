@@ -568,6 +568,14 @@ fn is_photo(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+/// True when the first bytes of the file are one of the supported picture
+/// formats, whatever the file is called.
+fn sniffs_as_photo(path: &Path) -> bool {
+    use image::ImageFormat as F;
+    let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else { return false };
+    matches!(reader.format(), Some(F::Jpeg | F::Png | F::WebP | F::Bmp | F::Gif))
+}
+
 /// What a scan found, and what it could not look at.
 #[derive(Debug, Clone, Default)]
 struct Scan {
@@ -649,7 +657,10 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     }
     // Starred pictures outside the folders above still belong in Favorites.
     for path in favorites {
-        if !is_photo(&path) {
+        // Saved favorites are canonical names, so a starred symlink such as
+        // `a.jpg -> raw-file` arrives as its target. The extension is then no
+        // evidence either way: the content decides.
+        if !is_photo(&path) && !sniffs_as_photo(&path) {
             continue;
         }
         let key = photo_key(&path);
@@ -1583,7 +1594,7 @@ impl App {
     /// Reads the saved password again, because another Photos window may have
     /// set, changed or removed it since this one started. A change closes
     /// Hidden, so a window that was unlocked with the old password does not
-    /// stay open under the new one.
+    /// stay open under the new one. The Hidden list is re-read too.
     fn sync_lock(&mut self) {
         let saved = load_lock();
         let (lock, unreadable) = match &saved {
@@ -1601,6 +1612,22 @@ impl App {
             // Nothing picked in Hidden, and no half-asked delete, survives the
             // lock changing under it.
             self.clear_selection();
+        }
+        // The Hidden list is read again with the password: another window may
+        // have hidden or unhidden pictures, or left the file unreadable, and a
+        // decision about what may open must not rest on the list read at start.
+        match try_load_set("hidden") {
+            Ok(set) => {
+                self.hidden = set;
+                self.hidden_unreadable = false;
+            }
+            Err(e) => {
+                tracing::warn!("could not read the hidden photos: {e}");
+                if !self.hidden_unreadable {
+                    self.clear_selection();
+                }
+                self.hidden_unreadable = true;
+            }
         }
     }
 
@@ -1948,6 +1975,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::FavoriteTargets => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
                 if paths.is_empty() {
                     return Task::none();
@@ -1973,6 +2001,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AddToAlbum(name) => {
+                self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 self.menu = None;
                 if paths.is_empty() {
@@ -1998,6 +2027,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::RemoveFromAlbum => {
+                self.sync_lock();
                 let (Some(name), false) = (self.album.clone(), self.selected.is_empty()) else { return Task::none() };
                 let gone: HashSet<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 match edit_albums(|a| {
@@ -2279,6 +2309,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::HideTargets => {
+                // The password may have changed in another window: read it again
+                // (which clears the selection if so) before acting on the selection.
+                self.sync_lock();
                 // A locked Hidden section shows nothing, so nothing in it can be picked.
                 if self.selected.is_empty() || self.hidden_locked() {
                     return Task::none();
@@ -2308,6 +2341,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AskDelete => {
+                self.sync_lock();
                 if self.viewing.is_none() && !self.selected.is_empty() && !self.hidden_locked() {
                     self.confirm_delete = true;
                 }
@@ -2315,6 +2349,7 @@ impl cosmic::Application for App {
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
+                self.sync_lock();
                 if self.hidden_locked() {
                     return Task::none();
                 }
@@ -2555,9 +2590,12 @@ impl cosmic::Application for App {
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
-                let on = !self.is_favorite(&path);
+                // The key is read fresh, not from the scan: a link retargeted since
+                // then must star (and unstar) the file it points to now.
+                let key = photo_key(&path);
+                let on = !self.favorites.contains(&key);
                 // A full disk or a read-only home must not end the program (#174).
-                match set_favorite(&path, on) {
+                match set_favorite(&key, on) {
                     // The saved list already holds changes made in other windows.
                     Ok(saved) => {
                         self.favorites = saved;
@@ -3326,6 +3364,23 @@ mod lock_tests {
     }
 
     #[test]
+    fn rotate_through_a_symlink_keeps_the_link_and_its_key() {
+        let guard = TestDir::new("rotate-symlink");
+        let dir = guard.0.clone();
+        let real = dir.join("real.png");
+        image::DynamicImage::new_rgb8(4, 2).save(&real).unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let key = photo_key(&link);
+        let saved = rotate_file(&link, true).unwrap();
+        assert!(saved.durable);
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(photo_key(&link), key);
+        let turned = image::open(&real).unwrap();
+        assert_eq!((turned.width(), turned.height()), (2, 4));
+    }
+
+    #[test]
     fn staging_file_skips_a_planted_link_and_keeps_its_target() {
         let dir = TestDir::new("rotate-link");
         let pic = dir.0.join("b.png");
@@ -3356,6 +3411,25 @@ mod lock_tests {
         std::fs::set_permissions(&pic, std::fs::Permissions::from_mode(0o640)).unwrap();
         assert!(rotate_file(&pic, true).unwrap().durable);
         assert_eq!(std::fs::metadata(&pic).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    #[test]
+    fn favorite_direction_uses_the_fresh_key_not_the_scan_one() {
+        let guard = TestDir::new("fav-key");
+        let dir = guard.0.clone();
+        std::fs::write(dir.join("a.png"), b"x").unwrap();
+        std::fs::write(dir.join("b.png"), b"y").unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(dir.join("a.png"), &link).unwrap();
+        let stale = photo_key(&link);
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(dir.join("b.png"), &link).unwrap();
+        let fresh = photo_key(&link);
+        assert_ne!(stale, fresh);
+        // Only b.png is starred: the toggle must read the link as b.png.
+        let favorites: HashSet<PathBuf> = HashSet::from([fresh.clone()]);
+        assert!(favorites.contains(&photo_key(&link)));
+        assert!(!favorites.contains(&stale));
     }
 
     #[test]
@@ -3519,5 +3593,24 @@ mod lock_tests {
         assert!(other.try_lock().is_err(), "a second holder must not get the lock");
         drop(held);
         assert!(other.try_lock().is_ok(), "released once the first is done");
+    }
+
+    #[test]
+    fn starred_symlink_to_extensionless_picture_is_kept() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("lapin-photos-sniff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        std::fs::write(dir.join("raw-file"), png).unwrap();
+        std::fs::write(dir.join("notes"), b"just text").unwrap();
+        symlink(dir.join("raw-file"), dir.join("a.jpg")).unwrap();
+        // The saved list holds the canonical name, which has no extension.
+        let key = photo_key(&dir.join("a.jpg"));
+        assert!(!is_photo(&key));
+        assert!(sniffs_as_photo(&key));
+        assert!(!sniffs_as_photo(&dir.join("notes")));
+        assert!(!sniffs_as_photo(&dir.join("missing")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
