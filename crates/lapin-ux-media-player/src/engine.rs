@@ -59,6 +59,11 @@ pub struct Engine {
 pub const SEEK_ID: u64 = 9001;
 
 impl Engine {
+    /// A handle plus the receiving end, for an engine that is not the mpv process (the embedded video one).
+    pub fn channel() -> (Engine, mpsc::UnboundedReceiver<(Vec<Value>, Option<u64>)>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Engine { tx }, rx)
+    }
     pub fn command(&self, args: Vec<Value>) {
         let _ = self.tx.send((args, None));
     }
@@ -143,7 +148,7 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     }
 }
 
-fn property(name: &str, data: &Value) -> Vec<Event> {
+pub(crate) fn property(name: &str, data: &Value) -> Vec<Event> {
     let num = data.as_f64();
     match name {
         "pause" => data.as_bool().map(Event::Pause).into_iter().collect(),

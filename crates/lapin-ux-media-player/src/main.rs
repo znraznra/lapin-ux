@@ -10,6 +10,7 @@ mod mpris;
 mod pick;
 mod settings;
 mod tags;
+mod video;
 
 use std::path::{Path, PathBuf};
 
@@ -284,6 +285,13 @@ struct Now {
 #[derive(Debug, Clone)]
 enum Message {
     Engine(engine::Event),
+    Video(video::Out),
+    /// Mouse moved or a key was pressed over a playing video.
+    Activity,
+    ToggleFullscreen,
+    LeaveFullscreen,
+    /// Redraws the picture page so the control bar can hide by itself.
+    Tick,
     Mpris(mpris::Cmd),
     SetDevice(String),
     Menu(MenuId),
@@ -333,6 +341,7 @@ enum Message {
 enum Switch {
     UseTags,
     ShowCovers,
+    GpuVideo,
 }
 
 struct App {
@@ -385,6 +394,22 @@ struct App {
     covers: std::collections::HashMap<PathBuf, widget::image::Handle>,
     /// Which scan the answers belong to, so a slow older scan cannot replace a newer one.
     scan_id: u64,
+    /// The video engine inside this window (libmpv). `None` until it starts, or
+    /// when it could not, in which case videos open in mpv's own window.
+    video: Option<engine::Engine>,
+    /// The video engine could not start, so the old own-window path is used.
+    video_failed: bool,
+    /// The item being played is shown by the video engine, not the music one.
+    video_on: bool,
+    /// The queue from the command line starts once both engines have answered.
+    begun: bool,
+    /// Newest picture from the video engine.
+    frame: Option<widget::image::Handle>,
+    /// Size of the picture area in pixels, read by the video engine's thread.
+    video_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Last mouse move or key press while a video plays, for the control bar.
+    last_activity: std::time::Instant,
+    fullscreen: bool,
 }
 
 fn fmt_time(s: f64) -> String {
@@ -430,10 +455,19 @@ fn run_scan(roots: Vec<PathBuf>) -> (Vec<Track>, usize) {
 impl App {
     fn play_index(&mut self, i: usize) {
         let Some(item) = self.queue.get(i).cloned() else { return };
-        let Some(engine) = &self.engine else {
+        let use_video = item.kind == Kind::Video && self.video.is_some();
+        let Some(engine) = (if use_video { self.video.clone() } else { self.engine.clone() }) else {
             self.notice = Some(self.problem.clone().unwrap_or_else(|| "The player engine is still starting.".into()));
             return;
         };
+        if use_video != self.video_on {
+            // the other engine stops, and its last events are ignored from here on
+            if let Some(other) = if use_video { &self.engine } else { &self.video } {
+                other.stop();
+            }
+            self.video_on = use_video;
+            self.frame = None;
+        }
         self.index = Some(i);
         self.notice = None;
         self.now = Now { title: item.title.clone(), artist: item.artist.clone(), ..Default::default() };
@@ -526,14 +560,7 @@ impl App {
                 }
                 self.engine = Some(eng);
                 self.problem = None;
-                for target in std::mem::take(&mut self.start) {
-                    let p = Path::new(&target);
-                    let item = Item::new(p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), String::new(), target.clone(), library::kind_of(p).unwrap_or(Kind::Audio));
-                    self.queue.push(item);
-                }
-                if !self.queue.is_empty() && self.index.is_none() {
-                    self.play_index(0);
-                }
+                self.start_queue();
             }
             E::Pause(p) => self.now.paused = p,
             E::Time(t) => {
@@ -590,8 +617,83 @@ impl App {
         }
     }
 
+    /// The engine that plays what is on now: the video one while a video is shown.
+    fn active(&self) -> Option<engine::Engine> {
+        if self.video_on { self.video.clone() } else { self.engine.clone() }
+    }
+
+    /// Plays what was given on the command line, once the music engine is up and
+    /// the video engine has either started or given up, so a video file named
+    /// at launch lands in the right one.
+    fn start_queue(&mut self) {
+        if self.begun || self.engine.is_none() || (self.video.is_none() && !self.video_failed) {
+            return;
+        }
+        self.begun = true;
+        for target in std::mem::take(&mut self.start) {
+            let p = Path::new(&target);
+            let item = Item::new(p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), String::new(), target.clone(), library::kind_of(p).unwrap_or(Kind::Audio));
+            self.queue.push(item);
+        }
+        if !self.queue.is_empty() && self.index.is_none() {
+            self.play_index(0);
+        }
+    }
+
+    /// Something from the video engine.
+    fn video_out(&mut self, out: video::Out) {
+        use engine::Event as E;
+        match out {
+            video::Out::Event(E::Ready(eng)) => {
+                eng.set("volume", json!(self.volume));
+                self.video = Some(eng);
+                self.video_failed = false;
+                self.start_queue();
+            }
+            video::Out::Event(E::Failed(why)) => self.video_gone(&why),
+            video::Out::Unavailable(why) => self.video_gone(&why),
+            video::Out::Event(e) => {
+                if self.video_on {
+                    self.engine_event(e);
+                }
+            }
+            video::Out::Frame(h) => {
+                if self.video_on {
+                    self.frame = Some(h);
+                }
+            }
+        }
+    }
+
+    /// The video engine could not start or stopped: videos open in mpv's own window.
+    fn video_gone(&mut self, why: &str) {
+        self.video = None;
+        self.video_failed = true;
+        if self.video_on {
+            self.video_on = false;
+            self.frame = None;
+            self.index = None;
+            self.now = Now::default();
+        }
+        self.notice = Some(format!("Video cannot be shown inside this window ({why}). Videos open in their own window instead."));
+        self.start_queue();
+    }
+
+    fn set_fullscreen(&mut self, on: bool) -> Task<Message> {
+        let on = on && self.video_on;
+        if self.fullscreen == on {
+            return Task::none();
+        }
+        self.fullscreen = on;
+        self.last_activity = std::time::Instant::now();
+        match self.core.main_window_id() {
+            Some(id) => cosmic::iced::window::set_mode(id, if on { cosmic::iced::window::Mode::Fullscreen } else { cosmic::iced::window::Mode::Windowed }),
+            None => Task::none(),
+        }
+    }
+
     fn do_action(&mut self, a: Action) -> Task<Message> {
-        let eng = self.engine.clone();
+        let eng = self.active();
         let send = |f: &dyn Fn(&engine::Engine)| {
             if let Some(e) = &eng {
                 f(e)
@@ -625,6 +727,8 @@ impl App {
                 self.index = None;
                 self.station = None;
                 self.now = Now::default();
+                self.frame = None;
+                return self.set_fullscreen(false);
             }
             Action::Next => {
                 self.fail_streak = 0;
@@ -661,7 +765,12 @@ impl App {
                 self.queue.clear();
                 self.index = None;
             }
-            Action::Fullscreen => send(&|e| e.toggle("fullscreen")),
+            Action::Fullscreen => {
+                if self.video_on {
+                    return self.set_fullscreen(!self.fullscreen);
+                }
+                send(&|e| e.toggle("fullscreen"))
+            }
             Action::About => self.about = !self.about,
         }
         Task::none()
@@ -669,7 +778,7 @@ impl App {
 
     fn set_volume(&mut self, v: f64) {
         self.volume = v;
-        if let Some(e) = &self.engine {
+        for e in [&self.engine, &self.video].into_iter().flatten() {
             e.set("volume", json!(v));
         }
     }
@@ -1156,6 +1265,7 @@ impl App {
         col = col.push(text::heading("Titles and pictures"));
         col = col.push(widget::toggler(self.settings.use_tags).label("Read titles, artists and albums from the files".to_string()).on_toggle(|_| Message::Toggle(Switch::UseTags)));
         col = col.push(widget::toggler(self.settings.show_covers).label("Show album pictures".to_string()).on_toggle(|_| Message::Toggle(Switch::ShowCovers)));
+        col = col.push(widget::toggler(self.settings.gpu_video).label("Use the graphics card to play video".to_string()).on_toggle(|_| Message::Toggle(Switch::GpuVideo)));
         col = col.push(text::heading("Sound output"));
         if self.devices.is_empty() {
             col = col.push(text::caption("No sound outputs found"));
@@ -1181,6 +1291,33 @@ impl App {
         container(lapin_ux_ui::a11y::group("Output device", scrollable(col))).width(Length::Fixed(260.0)).height(Length::Fill).padding(8).into()
     }
 
+    /// The picture, with the control bar laid over it. The bar is drawn over the
+    /// picture (not beside it), so hiding it never changes the picture's size.
+    fn video_page(&self) -> Element<'_, Message> {
+        let size = self.video_size.clone();
+        let frame = self.frame.clone();
+        let show_bar = video::bar_visible(self.now.paused, self.last_activity.elapsed());
+        let paused = self.now.paused;
+        let bar = self.transport();
+        let fullscreen = self.fullscreen;
+        let picture = cosmic::widget::responsive(move |sz| {
+            size.store(video::pack_size(sz.width as u32, sz.height as u32), std::sync::atomic::Ordering::Relaxed);
+            let inner: Element<'_, Message> = match &frame {
+                Some(h) => widget::image(h.clone()).width(Length::Fill).height(Length::Fill).content_fit(cosmic::iced::ContentFit::Contain).into(),
+                None => container(text::body("Opening video")).center(Length::Fill).into(),
+            };
+            container(inner).width(Length::Fill).height(Length::Fill).class(theme::Container::custom(|_| cosmic::iced::widget::container::Style { background: Some(cosmic::iced::Color::BLACK.into()), ..Default::default() })).into()
+        });
+        let area = cosmic::widget::mouse_area(picture).on_move(|_| Message::Activity).on_double_click(Message::ToggleFullscreen);
+        let mut layers = cosmic::iced::widget::stack![area];
+        if show_bar || paused {
+            let exit = button::icon(icon::from_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" })).name(if fullscreen { "Leave full screen" } else { "Full screen" }).on_press(Message::ToggleFullscreen);
+            let overlay = column::with_capacity(2).push(widget::space::vertical()).push(container(row::with_capacity(2).push(container(bar).width(Length::Fill)).push(exit).align_y(Alignment::Center)).class(theme::Container::Background));
+            layers = layers.push(lapin_ux_ui::a11y::group("Video controls", overlay));
+        }
+        layers.width(Length::Fill).height(Length::Fill).into()
+    }
+
     fn queue_panel(&self) -> Element<'_, Message> {
         let mut col = column::with_capacity(self.queue.len() + 1).spacing(2).push(text::heading("Queue"));
         if self.queue.is_empty() {
@@ -1198,7 +1335,7 @@ impl App {
 impl App {
     /// What the desktop's media controls should show.
     fn mpris_state(&self) -> mpris::State {
-        let has_media = self.engine.is_some() && self.index.is_some();
+        let has_media = self.active().is_some() && self.index.is_some();
         mpris::State {
             has_media,
             playing: has_media && !self.now.paused,
@@ -1229,12 +1366,12 @@ impl App {
             Cmd::Prev => return self.do_action(Action::Prev),
             Cmd::Stop => return self.do_action(Action::Stop),
             Cmd::SeekBy(d) => {
-                if let Some(e) = &self.engine {
+                if let Some(e) = self.active() {
                     e.seek_by(d);
                 }
             }
             Cmd::SeekTo(t) => {
-                if let Some(e) = &self.engine {
+                if let Some(e) = self.active() {
                     e.seek_to(t);
                     self.now.pos = t;
                 }
@@ -1252,7 +1389,18 @@ impl App {
 impl App {
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Engine(e) => self.engine_event(e),
+            Message::Engine(e) => {
+                // while a video plays the music engine only reports itself and the outputs
+                use engine::Event as E;
+                if !self.video_on || matches!(e, E::Ready(_) | E::Failed(_) | E::Devices(_) | E::Device(_)) {
+                    self.engine_event(e);
+                }
+            }
+            Message::Video(out) => self.video_out(out),
+            Message::Activity => self.last_activity = std::time::Instant::now(),
+            Message::Tick => {}
+            Message::ToggleFullscreen => return self.set_fullscreen(!self.fullscreen),
+            Message::LeaveFullscreen => return self.set_fullscreen(false),
             Message::Mpris(c) => return self.mpris_cmd(c),
             Message::Menu(m) => self.menu = if self.menu == Some(m) { None } else { Some(m) },
             Message::Do(a) => {
@@ -1288,7 +1436,7 @@ impl App {
             }
             Message::SeekDrag(v) => self.drag = Some(v),
             Message::SeekRelease => {
-                if let (Some(v), Some(e)) = (self.drag.take(), &self.engine) {
+                if let (Some(v), Some(e)) = (self.drag.take(), self.active()) {
                     e.seek_to(f64::from(v) * self.now.dur);
                     self.now.pos = f64::from(v) * self.now.dur;
                 }
@@ -1317,8 +1465,24 @@ impl App {
                     self.covers = found.into_iter().map(|(dir, png)| (dir, widget::image::Handle::from_path(png))).collect();
                 }
             }
+            Message::Toggle(Switch::GpuVideo) => {
+                self.settings.gpu_video = !self.settings.gpu_video;
+                self.save_settings();
+                // the video engine restarts with the new choice, so stop what it was playing
+                self.video = None;
+                self.video_failed = false;
+                if self.video_on {
+                    self.video_on = false;
+                    self.frame = None;
+                    self.index = None;
+                    self.now = Now::default();
+                    self.notice = Some("Video stopped to apply the graphics card setting.".to_string());
+                    return self.set_fullscreen(false);
+                }
+            }
             Message::Toggle(sw) => {
                 match sw {
+                    Switch::GpuVideo => {}
                     Switch::UseTags => self.settings.use_tags = !self.settings.use_tags,
                     Switch::ShowCovers => self.settings.show_covers = !self.settings.show_covers,
                 }
@@ -1404,8 +1568,12 @@ impl App {
                 }
             }
             Message::Shutdown => {
-                if let Some(e) = &self.engine {
+                let mut any = false;
+                for e in [&self.engine, &self.video].into_iter().flatten() {
                     e.command(vec![json!("quit")]);
+                    any = true;
+                }
+                if any {
                     std::thread::sleep(std::time::Duration::from_millis(150));
                 }
             }
@@ -1467,6 +1635,14 @@ impl cosmic::Application for App {
             settings: settings::Settings::load(),
             covers: std::collections::HashMap::new(),
             scan_id: 0,
+            video: None,
+            video_failed: false,
+            video_on: false,
+            begun: false,
+            frame: None,
+            video_size: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(video::pack_size(0, 0))),
+            last_activity: std::time::Instant::now(),
+            fullscreen: false,
         };
         match library::load_stations() {
             Ok(list) => app.stations = list,
@@ -1488,7 +1664,16 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([engine::subscription().map(Message::Engine), mpris::subscription().map(Message::Mpris)])
+        let mut subs = vec![
+            engine::subscription().map(Message::Engine),
+            mpris::subscription().map(Message::Mpris),
+            video::subscription(self.settings.gpu_video, self.video_size.clone()).map(Message::Video),
+        ];
+        if self.video_on {
+            subs.push(cosmic::iced::event::listen_with(key_message));
+            subs.push(cosmic::iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Tick));
+        }
+        Subscription::batch(subs)
     }
 
     fn on_app_exit(&mut self) -> Option<Message> {
@@ -1502,6 +1687,9 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        if self.fullscreen && self.video_on {
+            return container(lapin_ux_ui::a11y::group("Video", self.video_page())).width(Length::Fill).height(Length::Fill).into();
+        }
         if self.mini {
             let back = button::standard("Full player").on_press(Message::Do(Action::ToggleMini));
             let mut page = column::with_capacity(3).push(self.transport());
@@ -1517,12 +1705,21 @@ impl cosmic::Application for App {
             Section::Songs => self.track_rows(self.visible_tracks(Kind::Audio)),
             Section::Favourites => self.track_rows(self.tracks.iter().filter(|t| self.favourites.contains(&t.path.to_string_lossy().into_owned()) && library::matches(t, &self.search)).collect()),
             Section::Videos => {
-                let list = self.track_rows(self.visible_tracks(Kind::Video));
-                // while a video plays, its playlist sits beside the list (the picture is in mpv's own window)
-                if self.now.has_video && !self.show_queue && !self.queue.is_empty() {
-                    row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
+                if self.video_on {
+                    // the picture, with the playlist beside it
+                    let mut r = row::with_capacity(2).push(container(self.video_page()).width(Length::Fill).height(Length::Fill));
+                    if !self.show_queue && !self.queue.is_empty() {
+                        r = r.push(self.queue_panel());
+                    }
+                    r.into()
                 } else {
-                    list
+                    let list = self.track_rows(self.visible_tracks(Kind::Video));
+                    // without the in-window player the picture is in mpv's own window
+                    if self.now.has_video && !self.show_queue && !self.queue.is_empty() {
+                        row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
+                    } else {
+                        list
+                    }
                 }
             }
             Section::Radio => self.radio(),
@@ -1554,6 +1751,40 @@ impl cosmic::Application for App {
         }
         page = page.push(widget::divider::horizontal::default()).push(main);
         container(lapin_ux_ui::a11y::group("Media Player", page)).class(theme::Container::Background).width(Length::Fill).height(Length::Fill).into()
+    }
+}
+
+/// What a key or the mouse means while a video is shown. Other keys count as
+/// activity, so the control bar comes back.
+fn key_message(event: cosmic::iced::Event, status: cosmic::iced::event::Status, _id: cosmic::iced::window::Id) -> Option<Message> {
+    use cosmic::iced::{Event, keyboard, mouse};
+    match event {
+        Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::Activity),
+        Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) if status == cosmic::iced::event::Status::Ignored => Some(key_to_message(&key, modifiers.is_empty())),
+        _ => None,
+    }
+}
+
+fn key_to_message(key: &cosmic::iced::keyboard::Key, plain: bool) -> Message {
+    use cosmic::iced::keyboard::{Key, key::Named};
+    match key {
+        Key::Named(Named::Escape) => Message::LeaveFullscreen,
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Message::ToggleFullscreen,
+        _ => Message::Activity,
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use cosmic::iced::keyboard::{Key, key::Named};
+
+    #[test]
+    fn keys_map_to_fullscreen_and_activity() {
+        assert!(matches!(key_to_message(&Key::Named(Named::Escape), true), Message::LeaveFullscreen));
+        assert!(matches!(key_to_message(&Key::Character("F".into()), true), Message::ToggleFullscreen));
+        assert!(matches!(key_to_message(&Key::Character("f".into()), false), Message::Activity));
+        assert!(matches!(key_to_message(&Key::Named(Named::Enter), true), Message::Activity));
     }
 }
 

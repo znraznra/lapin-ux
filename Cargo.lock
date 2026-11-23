@@ -2981,6 +2981,7 @@ dependencies = [
  "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",
+ "libmpv2-sys",
  "serde",
  "serde_json",
  "tokio",
@@ -3210,6 +3211,12 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
+name = "libmpv2-sys"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edb32cabe7176b7d270b0dca6ff418b75187ae8d3854423e3d06fbff376841e4"
 
 [[package]]
 name = "libredox"

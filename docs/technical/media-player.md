@@ -8,15 +8,15 @@ The player runs `mpv` as its own process and drives it over mpv's JSON IPC socke
 
 - No linking, so mpv's GPL stays on its side of the process boundary and the player carries no fork patches (`git diff packaging/` shows no change to any `*.patch`).
 - A codec crash ends mpv, not the window. The player shows that playback stopped.
-- No `libmpv` headers are needed to build. The package depends on `mpv`.
+- Music and radio use this process only. Video is the one exception, see "Video in the window" below.
 - mpv runs with `--config-dir=~/.config/dev.lapinux.MediaPlayer/mpv`, so `~/.config/mpv` and stock mpv are never read or changed.
 
-Embedding libmpv's render output inside the window is a later stage, after a spike. Until then video opens in mpv's own window (`--wayland-app-id=dev.lapinux.MediaPlayer.Video`).
+When libmpv cannot start, video falls back to this process and opens in mpv's own window (`--wayland-app-id=dev.lapinux.MediaPlayer.Video`), with a notice.
 
 ## Two views
 
 - **Music library**: a sidebar with Listen Now, Artists, Albums, Songs, Favourite Songs, Videos, Radio and Made for You, a search box, and a transport bar (previous, play/pause, next, shuffle, repeat, seek, volume, output device, queue). Cards show covers as coloured tiles.
-- **Video mode**: Videos lists the video files found; playing one hands it to mpv's window while the transport bar keeps control of it.
+- **Video mode**: Videos lists the video files found; playing one shows the picture inside the window (see below) with the playlist beside it.
 
 The menu bar has File, Edit, Media, View, Controls, Playlist, Window and Help. The window follows the system light or dark theme and does not set a theme of its own.
 
@@ -57,6 +57,20 @@ The player writes only its own `dev.lapinux.MediaPlayer` folder, so nothing is a
 - Titles, artists and albums are read from the files with `ffprobe` (time-limited, four at a time) and cached in `tags.json` by path, size and modified time. Album pictures come from `cover`, `folder` or `front` images in the album folder, or from a picture inside the file via `ffmpeg`, scaled to 256 px and cached in `covers/`. A scan that was replaced by a newer one is ignored.
 - Settings (`settings.json`, the last item in the sidebar): library folders, reading tags, showing album pictures, sound output and clearing the play history. Nothing here is shared with another app.
 
+## Video in the window
+
+- Video only runs through libmpv (`libmpv2-sys`, raw bindings, linked at build time). Music, radio, MPRIS, the queue and output device code are unchanged and still use the separate mpv process. The package depends on `mpv`, which provides `libmpv.so` on Arch.
+- A thread named `lapin-video` owns the mpv handle and a software render context. It reports through the same `engine::Event` type, so the rest of the player does not care which engine plays. Frames are drawn into an RGBA buffer at the size of the picture area (at most 1920x1080) and shown as an image. At most two frames wait for the window; a newer frame replaces an older one that was not shown.
+- `config=no` and an own config folder: `~/.config/mpv` is never read or changed. Nothing touches the network until you open a web address.
+- **Hardware decoding** is a Settings switch, on by default: "Use the graphics card to play video". On means `hwdec=auto-safe`. Because the software render path cannot take pictures that stay on the card, methods that only work zero-copy (vaapi, nvdec, cuda, drm and similar) are changed to their `-copy` form, and if nothing worked `auto-copy-safe` is tried once. Off means software decoding. Changing the switch restarts the video engine and stops a playing video.
+- **Zero-copy** (a dmabuf imported into a wgpu texture, or a Wayland subsurface under the window) is not done. It needs changes below libcosmic's iced renderer and a per-driver import path, which is not small or safe to add here. The copy back costs some CPU on 4K but 1080p is fine. It stays a later stage.
+- The Video page has the picture, an auto-hiding control bar and the playlist beside it. The bar hides after about 3 s without mouse movement, shows on movement or any key, and never hides while paused. F or a double click enters full screen, Esc leaves it. Icon-only buttons are named and surfaces are grouped for screen readers.
+- If libmpv fails to start (missing library, no render context), the player says so and plays video in mpv's own window as before.
+
+## Retest on hardware
+
+Compiled and unit-tested only. Needs a real display with a video file: picture appears inside the window and resizes with it; audio and seek work; the bar hides after 3 s and returns on movement or a key, and stays while paused; F, double click and Esc; the playlist panel follows the playing file; switching the graphics card setting off and on; a file whose codec only decodes on the card; opening a file named on the command line; fallback window when libmpv is unavailable.
+
 ## Not yet
 
-The video picture still plays in mpv's own window, with its own bar that hides by itself. While a video plays, the Videos page shows the playlist beside the list. Drawing the picture inside the player window needs either libmpv's render API or frame piping, which is a larger change and needs a decision.
+Zero-copy video (see above), and subtitle and audio track menus in the control bar.
