@@ -37,6 +37,9 @@ pub struct Buffer {
     redo: Vec<Vec<Edit>>,
     /// Edits of the current typing run are merged into one undo step.
     open_group: bool,
+    /// While set, every edit joins one undo step (multi-caret edits).
+    joining: bool,
+    join_started: bool,
     /// Bumped on every change, so caches know when to rebuild.
     pub revision: u64,
     saved_revision: u64,
@@ -66,6 +69,8 @@ impl Buffer {
             undo: Vec::new(),
             redo: Vec::new(),
             open_group: false,
+            joining: false,
+            join_started: false,
             revision: 0,
             saved_revision: 0,
         };
@@ -316,7 +321,7 @@ impl Buffer {
         self.revision += 1;
         self.redo.clear();
         let edit = Edit { at: a, removed, inserted: text.to_string(), caret_before, caret_after };
-        if group && self.open_group {
+        if (group && self.open_group) || (self.joining && self.join_started) {
             if let Some(last) = self.undo.last_mut() {
                 last.push(edit);
                 return;
@@ -324,6 +329,21 @@ impl Buffer {
         }
         self.undo.push(vec![edit]);
         self.open_group = group;
+        if self.joining {
+            self.join_started = true;
+        }
+    }
+
+    /// Everything edited until `end_join` is one undo step.
+    pub fn begin_join(&mut self) {
+        self.open_group = false;
+        self.joining = true;
+        self.join_started = false;
+    }
+    pub fn end_join(&mut self) {
+        self.joining = false;
+        self.join_started = false;
+        self.open_group = false;
     }
 
     /// Ends the current undo group (a click, an arrow key, a pause).

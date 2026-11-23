@@ -27,6 +27,32 @@ pub struct Settings {
     pub auto_close: bool,
     pub auto_indent: bool,
     pub recent: Vec<String>,
+    /// Thumbnail of the whole file next to the text.
+    pub minimap: bool,
+    /// Offer word completions while typing.
+    pub autocomplete: bool,
+    /// Saved macros, by name.
+    pub macros: Vec<SavedMacro>,
+    /// Commands run from the Run panel, newest first.
+    pub commands: Vec<String>,
+    /// Colour overrides by token class (hex like #aabbcc).
+    pub styles: std::collections::BTreeMap<String, String>,
+}
+
+/// One recorded step of a macro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MacroStep {
+    Text(String),
+    /// A named key with its modifiers (ctrl, shift, alt).
+    Key(String, bool, bool, bool),
+    /// A menu command by its stable name.
+    Cmd(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SavedMacro {
+    pub name: String,
+    pub steps: Vec<MacroStep>,
 }
 
 impl Default for Settings {
@@ -43,6 +69,11 @@ impl Default for Settings {
             auto_close: true,
             auto_indent: true,
             recent: Vec::new(),
+            minimap: false,
+            autocomplete: false,
+            macros: Vec::new(),
+            commands: Vec::new(),
+            styles: Default::default(),
         }
     }
 }

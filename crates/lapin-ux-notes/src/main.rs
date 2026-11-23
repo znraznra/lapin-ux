@@ -2,6 +2,9 @@
 //! Lapin Notes: a text and code editor. Everything stays on this computer.
 
 mod buffer;
+mod diff;
+mod hex;
+mod outline;
 mod editor;
 mod encoding;
 mod lang;
@@ -204,10 +207,15 @@ struct Tab {
     scroll_x: f32,
     scroll_y: f32,
     want: Option<usize>,
+    col_anchor: Option<Pos>,
     readonly: bool,
     mtime: Option<SystemTime>,
     indent: Indent,
     untitled: usize,
+    /// Extra carets as (anchor, caret); the primary one lives in `buf`.
+    extra: Vec<(Pos, Pos)>,
+    bookmarks: std::collections::BTreeSet<usize>,
+    line_marks: std::collections::BTreeMap<usize, u8>,
 }
 
 impl Tab {
@@ -234,10 +242,14 @@ impl Tab {
             scroll_x: 0.0,
             scroll_y: 0.0,
             want: None,
+            col_anchor: None,
             readonly: false,
             mtime: None,
             indent,
             untitled,
+            extra: Vec::new(),
+            bookmarks: Default::default(),
+            line_marks: Default::default(),
         }
     }
 
@@ -328,6 +340,17 @@ enum Cmd {
     ClearRecent,
     About,
     Shortcuts,
+    AddNext,
+    CaretAbove,
+    CaretBelow,
+    ClearCarets,
+    BmToggle,
+    BmNext,
+    BmPrev,
+    BmClear,
+    BmDelete,
+    BmCopy,
+    Minimap,
 }
 
 #[derive(Debug, Clone)]
@@ -539,6 +562,12 @@ impl App {
 
     /// Runs an edit on the active tab unless it is read-only.
     fn edit(&mut self, f: impl FnOnce(&mut Tab, &Settings)) {
+        self.tabs[self.active].extra.clear();
+        self.edit_keep(f);
+    }
+
+    /// Like `edit`, but leaves the extra carets alone (the closure owns them).
+    fn edit_keep(&mut self, f: impl FnOnce(&mut Tab, &Settings)) {
         let t = &mut self.tabs[self.active];
         if t.readonly {
             self.status = "This file is read-only. Use File, Read-only to unlock it.".into();
@@ -548,8 +577,26 @@ impl App {
         t.hl.borrow_mut().invalidate(line);
         t.want = None;
         t.buf.break_undo();
+        let (lines0, start) = (t.buf.line_count(), t.buf.selection().0.line);
         f(t, &self.settings);
         t.buf.break_undo();
+        let lines1 = t.buf.line_count();
+        if lines1 != lines0 && !t.bookmarks.is_empty() {
+            let d = lines1 as isize - lines0 as isize;
+            t.bookmarks = t
+                .bookmarks
+                .iter()
+                .filter_map(|&b| {
+                    if b <= start {
+                        Some(b)
+                    } else if d < 0 && b as isize <= start as isize - d {
+                        None
+                    } else {
+                        Some((b as isize + d).max(0) as usize)
+                    }
+                })
+                .collect();
+        }
     }
 
     fn edit_all(&mut self, f: impl FnOnce(&mut Tab, &Settings)) {
@@ -562,7 +609,7 @@ impl App {
     fn type_text(&mut self, s: &str) {
         let auto = self.settings.auto_close;
         let over = self.overwrite;
-        self.edit(|t, _| {
+        self.edit_multi(|t, _| {
             for ch in s.chars() {
                 if auto && s.chars().count() == 1 && !t.buf.has_selection() {
                     if lineops::is_overtype(&t.buf, ch) {
@@ -589,7 +636,7 @@ impl App {
 
     fn enter(&mut self) {
         let ai = self.settings.auto_indent;
-        self.edit(|t, _| {
+        self.edit_multi(|t, _| {
             if ai {
                 let (txt, n) = lineops::newline_text(&t.buf, t.indent);
                 let total = txt.chars().count();
@@ -604,8 +651,8 @@ impl App {
     }
 
     fn tab_key(&mut self, back: bool) {
-        let multi = self.selection_line_span();
-        self.edit(|t, _| {
+        let multi = self.selection_line_span() || !self.tabs[self.active].extra.is_empty() && back;
+        self.edit_multi(|t, _| {
             if multi || back {
                 lineops::indent_lines(&mut t.buf, t.indent, back);
             } else if t.indent.use_spaces {
@@ -619,9 +666,201 @@ impl App {
         });
     }
 
+    fn all_selected_text(t: &Tab) -> String {
+        let mut v: Vec<(Pos, String)> = Vec::new();
+        for &(a, c) in &t.extra {
+            v.push((a.min(c), t.buf.slice(a.min(c), a.max(c))));
+        }
+        v.push((t.buf.selection().0, t.buf.selected_text()));
+        v.sort_by_key(|x| x.0);
+        v.into_iter().map(|x| x.1).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
+    }
+
     fn nav(&mut self, key: Named, ctrl: bool, shift: bool) -> bool {
         let page = self.vp.1.max(2) as isize - 1;
         let t = &mut self.tabs[self.active];
+        let is_nav = matches!(
+            key,
+            Named::ArrowUp | Named::ArrowDown | Named::PageUp | Named::PageDown | Named::ArrowLeft | Named::ArrowRight | Named::Home | Named::End
+        );
+        if !is_nav {
+            return false;
+        }
+        if t.extra.is_empty() {
+            return Self::nav_one(t, page, key, ctrl, shift);
+        }
+        let mut sels = t.extra.clone();
+        sels.push((t.buf.anchor, t.buf.caret));
+        let mut out = Vec::with_capacity(sels.len());
+        for (a, c) in sels {
+            t.buf.select_range(a, c);
+            t.want = None;
+            Self::nav_one(t, page, key, ctrl, shift);
+            out.push((t.buf.anchor, t.buf.caret));
+        }
+        Self::set_selections(t, out);
+        true
+    }
+
+    /// Makes `sels` the selections of the tab: the last one is the primary
+    /// caret, overlapping or identical ones are merged.
+    fn set_selections(t: &mut Tab, mut sels: Vec<(Pos, Pos)>) {
+        let prim = sels.pop().unwrap_or((t.buf.anchor, t.buf.caret));
+        let mut extra: Vec<(Pos, Pos)> = Vec::new();
+        let key = |s: &(Pos, Pos)| (s.0.min(s.1), s.0.max(s.1));
+        let pk = key(&prim);
+        sels.sort_by_key(key);
+        for s in sels {
+            let k = key(&s);
+            let clash_prev = extra.last().map(|l| { let lk = key(l); k.0 < lk.1 || (k.0 == lk.0) }).unwrap_or(false);
+            let clash_prim = k.0 < pk.1 && pk.0 < k.1 || k == pk || (k.0 == k.1 && k.0 == pk.0);
+            if !clash_prev && !clash_prim {
+                extra.push(s);
+            }
+        }
+        t.buf.select_range(prim.0, prim.1);
+        t.extra = extra;
+    }
+
+    /// Chars from `p` to the end of the document.
+    fn dist_to_end(b: &Buffer, p: Pos) -> usize {
+        let mut d = b.line_len(p.line) - p.col.min(b.line_len(p.line));
+        for l in p.line + 1..b.line_count() {
+            d += b.line_len(l) + 1;
+        }
+        d
+    }
+
+    /// The position `d` chars before the end of the document.
+    fn pos_from_end(b: &Buffer, mut d: usize) -> Pos {
+        let mut l = b.line_count() - 1;
+        loop {
+            let n = b.line_len(l);
+            if d <= n {
+                return Pos::new(l, n - d);
+            }
+            if l == 0 {
+                return Pos::new(0, 0);
+            }
+            d -= n + 1;
+            l -= 1;
+        }
+    }
+
+    /// Selects the cells between `a` and `p` on every line in between.
+    fn column_select(t: &mut Tab, a: Pos, p: Pos) {
+        let tab = t.indent.width;
+        let xa = cell_of(t.buf.line(a.line), a.col, tab);
+        let xp = cell_of(t.buf.line(p.line), p.col, tab);
+        let (lo, hi) = (xa.min(xp), xa.max(xp));
+        let (l0, l1) = (a.line.min(p.line), a.line.max(p.line));
+        let mut sels = Vec::new();
+        for l in l0..=l1 {
+            let line = t.buf.line(l);
+            let c1 = view::col_at_cell(line, lo, tab);
+            let c2 = view::col_at_cell(line, hi, tab);
+            let (an, ca) = if xp >= xa { (c1, c2) } else { (c2, c1) };
+            sels.push((l, Pos::new(l, an), Pos::new(l, ca)));
+        }
+        let prim_i = sels.iter().position(|s| s.0 == p.line).unwrap_or(0);
+        let prim = sels.remove(prim_i);
+        t.want = None;
+        t.buf.select_range(prim.1, prim.2);
+        t.extra = sels.into_iter().map(|s| (s.1, s.2)).collect();
+    }
+
+    fn add_caret_vertical(&mut self, d: isize) {
+        let t = &mut self.tabs[self.active];
+        let c = t.buf.caret;
+        let nl = c.line as isize + d;
+        if nl < 0 || nl as usize >= t.buf.line_count() {
+            return;
+        }
+        let tab = t.indent.width;
+        let x = cell_of(t.buf.line(c.line), c.col, tab);
+        let nl = nl as usize;
+        let col = view::col_at_cell(t.buf.line(nl), x, tab);
+        let prim = (t.buf.anchor, t.buf.caret);
+        t.extra.push(prim);
+        t.buf.set_caret(Pos::new(nl, col), false);
+    }
+
+    /// Ctrl+Alt+D: select the word, then add the next match as another caret.
+    fn add_next_match(&mut self) {
+        let t = &mut self.tabs[self.active];
+        if !t.buf.has_selection() {
+            let c = t.buf.caret;
+            t.buf.select_word_at(c);
+            return;
+        }
+        let needle = t.buf.selected_text();
+        if needle.is_empty() || needle.contains('\n') {
+            return;
+        }
+        let nlen = needle.chars().count();
+        let (_, end) = t.buf.selection();
+        // search from the end of the latest selection, then wrap
+        let from = t.extra.iter().map(|e| e.0.max(e.1)).chain([end]).max().unwrap_or(end);
+        let line_find = |t: &Tab, l: usize, from_col: usize| -> Option<usize> {
+            let line = t.buf.line(l);
+            let chars: Vec<char> = line.chars().collect();
+            let n: Vec<char> = needle.chars().collect();
+            if chars.len() < n.len() {
+                return None;
+            }
+            (from_col..=chars.len() - n.len()).find(|&i| chars[i..i + n.len()] == n[..])
+        };
+        let total = t.buf.line_count();
+        let mut hit = None;
+        for k in 0..=total {
+            let l = (from.line + k) % total;
+            let start = if k == 0 { from.col } else { 0 };
+            if let Some(c) = line_find(t, l, start) {
+                let at = Pos::new(l, c);
+                // skip matches that are already carets
+                let taken = t.extra.iter().chain([&(t.buf.anchor, t.buf.caret)]).any(|e| e.0.min(e.1) == at);
+                if !taken {
+                    hit = Some(at);
+                    break;
+                }
+            }
+        }
+        if let Some(at) = hit {
+            let prim = (t.buf.anchor, t.buf.caret);
+            t.extra.push(prim);
+            t.buf.select_range(at, Pos::new(at.line, at.col + nlen));
+        }
+    }
+
+    /// Runs an edit once per caret (bottom to top so earlier carets keep
+    /// their place). With a single caret it is a plain edit.
+    fn edit_multi(&mut self, mut f: impl FnMut(&mut Tab, &Settings)) {
+        if self.tabs[self.active].extra.is_empty() {
+            return self.edit(f);
+        }
+        self.edit_keep(|t, s| {
+            let mut sels = t.extra.clone();
+            let prim_i = sels.len();
+            sels.push((t.buf.anchor, t.buf.caret));
+            let mut order: Vec<usize> = (0..sels.len()).collect();
+            order.sort_by_key(|&i| std::cmp::Reverse(sels[i].0.min(sels[i].1)));
+            t.buf.begin_join();
+            let mut out = vec![(0usize, 0usize); sels.len()];
+            for i in order {
+                let (a, c) = sels[i];
+                t.buf.select_range(a, c);
+                f(t, s);
+                out[i] = (Self::dist_to_end(&t.buf, t.buf.anchor), Self::dist_to_end(&t.buf, t.buf.caret));
+            }
+            t.buf.end_join();
+            let mut res: Vec<(Pos, Pos)> = out.iter().map(|&(a, c)| (Self::pos_from_end(&t.buf, a), Self::pos_from_end(&t.buf, c))).collect();
+            let prim = res.remove(prim_i);
+            res.push(prim);
+            Self::set_selections(t, res);
+        });
+    }
+
+    fn nav_one(t: &mut Tab, page: isize, key: Named, ctrl: bool, shift: bool) -> bool {
         t.buf.break_undo();
         let vertical = |t: &mut Tab, d: isize| {
             let x = *t.want.get_or_insert_with(|| {
@@ -934,18 +1173,69 @@ impl App {
             Cmd::Undo => self.edit_all(|t, _| t.buf.undo()),
             Cmd::Redo => self.edit_all(|t, _| t.buf.redo()),
             Cmd::Cut => {
-                let s = self.tabs[self.active].buf.selected_text();
+                let s = Self::all_selected_text(&self.tabs[self.active]);
                 if !s.is_empty() {
                     tasks.push(clip_write(s));
-                    self.edit(|t, _| t.buf.replace_selection(""));
+                    self.edit_multi(|t, _| t.buf.replace_selection(""));
                 }
             }
             Cmd::Copy => {
-                let s = self.tabs[self.active].buf.selected_text();
+                let s = Self::all_selected_text(&self.tabs[self.active]);
                 if !s.is_empty() {
                     tasks.push(clip_write(s));
                 }
             }
+            Cmd::AddNext => self.add_next_match(),
+            Cmd::CaretAbove => self.add_caret_vertical(-1),
+            Cmd::CaretBelow => self.add_caret_vertical(1),
+            Cmd::ClearCarets => self.tabs[self.active].extra.clear(),
+            Cmd::BmToggle => {
+                let t = &mut self.tabs[self.active];
+                let l = t.buf.caret.line;
+                if !t.bookmarks.remove(&l) {
+                    t.bookmarks.insert(l);
+                }
+            }
+            Cmd::BmNext | Cmd::BmPrev => {
+                let fwd = matches!(c, Cmd::BmNext);
+                let t = &mut self.tabs[self.active];
+                let l = t.buf.caret.line;
+                let hit = if fwd {
+                    t.bookmarks.range(l + 1..).next().or_else(|| t.bookmarks.iter().next())
+                } else {
+                    t.bookmarks.range(..l).next_back().or_else(|| t.bookmarks.iter().next_back())
+                };
+                if let Some(&h) = hit {
+                    t.extra.clear();
+                    t.buf.set_caret(Pos::new(h, 0), false);
+                } else {
+                    self.status = "No bookmarks. Ctrl+F2 adds one on this line.".into();
+                }
+            }
+            Cmd::BmClear => self.tabs[self.active].bookmarks.clear(),
+            Cmd::BmCopy => {
+                let t = &self.tabs[self.active];
+                let s: Vec<&str> = t.bookmarks.iter().filter(|&&l| l < t.buf.line_count()).map(|&l| t.buf.line(l)).collect();
+                if !s.is_empty() {
+                    tasks.push(clip_write(s.join("\n")));
+                }
+            }
+            Cmd::BmDelete => {
+                let marked: Vec<usize> = self.tabs[self.active].bookmarks.iter().rev().copied().collect();
+                if !marked.is_empty() {
+                    self.edit_all(|t, _| {
+                        t.buf.begin_join();
+                        for l in marked {
+                            if l < t.buf.line_count() {
+                                lineops::delete_line_at(&mut t.buf, l);
+                            }
+                        }
+                        t.buf.end_join();
+                        t.bookmarks.clear();
+                    });
+                }
+            }
+            Cmd::Minimap => self.settings.minimap = !self.settings.minimap,
             Cmd::Paste => tasks.push(cosmic::iced::clipboard::read().map(|t| cosmic::Action::App(Message::Pasted(t)))),
             Cmd::SelectAll => self.tabs[self.active].buf.select_all(),
             Cmd::Indent => self.tab_key(false),
@@ -1118,6 +1408,7 @@ impl App {
                     ("f", true) => Some(Cmd::Files),
                     ("h", _) => Some(Cmd::Replace),
                     ("g", _) => Some(Cmd::Goto),
+                    ("d", _) if alt => Some(Cmd::AddNext),
                     ("d", _) => Some(Cmd::Dup),
                     ("l", _) => Some(Cmd::DelLine),
                     ("j", _) => Some(Cmd::Join),
@@ -1140,10 +1431,35 @@ impl App {
                 Named::PageDown if ctrl => return self.cmd(Cmd::NextTab),
                 Named::PageUp if ctrl => return self.cmd(Cmd::PrevTab),
                 Named::F3 => return self.cmd(if shift { Cmd::FindPrev } else { Cmd::FindNext }),
+                Named::ArrowUp if ctrl && alt => return self.cmd(Cmd::CaretAbove),
+                Named::ArrowDown if ctrl && alt => return self.cmd(Cmd::CaretBelow),
+                Named::ArrowUp | Named::ArrowDown | Named::ArrowLeft | Named::ArrowRight if alt && shift && !ctrl => {
+                    let t = &mut self.tabs[self.active];
+                    let c = t.buf.caret;
+                    let a = t.col_anchor.unwrap_or(c);
+                    let tab = t.indent.width;
+                    let x = cell_of(t.buf.line(c.line), c.col, tab);
+                    let p = match n {
+                        Named::ArrowLeft => Pos::new(c.line, c.col.saturating_sub(1)),
+                        Named::ArrowRight => Pos::new(c.line, (c.col + 1).min(t.buf.line_len(c.line))),
+                        Named::ArrowUp if c.line > 0 => Pos::new(c.line - 1, view::col_at_cell(t.buf.line(c.line - 1), x, tab)),
+                        Named::ArrowDown if c.line + 1 < t.buf.line_count() => Pos::new(c.line + 1, view::col_at_cell(t.buf.line(c.line + 1), x, tab)),
+                        _ => c,
+                    };
+                    t.col_anchor = Some(a);
+                    Self::column_select(t, a, p);
+                    return Task::none();
+                }
+                Named::F2 if ctrl => return self.cmd(Cmd::BmToggle),
+                Named::F2 => return self.cmd(if shift { Cmd::BmPrev } else { Cmd::BmNext }),
                 Named::ArrowUp if alt || (ctrl && shift) => return self.cmd(Cmd::MoveUp),
                 Named::ArrowDown if alt || (ctrl && shift) => return self.cmd(Cmd::MoveDown),
                 Named::Escape => {
                     self.menu = None;
+                    let t = &mut self.tabs[self.active];
+                    if !t.extra.is_empty() && self.panel == Panel::None {
+                        t.extra.clear();
+                    }
                     self.panel = Panel::None;
                     return Task::none();
                 }
@@ -1161,12 +1477,12 @@ impl App {
                 }
                 Named::Backspace => {
                     let w = ctrl;
-                    self.edit(|t, _| if w { t.buf.delete_word(-1) } else { t.buf.backspace() });
+                    self.edit_multi(|t, _| if w { t.buf.delete_word(-1) } else { t.buf.backspace() });
                     return Task::none();
                 }
                 Named::Delete => {
                     let w = ctrl;
-                    self.edit(|t, _| if w { t.buf.delete_word(1) } else { t.buf.delete() });
+                    self.edit_multi(|t, _| if w { t.buf.delete_word(1) } else { t.buf.delete() });
                     return Task::none();
                 }
                 _ => {
@@ -1312,19 +1628,55 @@ impl cosmic::Application for App {
             Message::Ed(ev) => {
                 self.menu = None;
                 match ev {
-                    Ev::Press { pos, clicks, extend } => {
+                    Ev::Press { pos, clicks, extend, alt, ctrl } => {
                         let t = &mut self.tabs[self.active];
                         t.want = None;
                         t.buf.break_undo();
-                        match clicks {
-                            1 => t.buf.set_caret(pos, extend),
-                            2 => t.buf.select_word_at(pos),
-                            _ => t.buf.select_line_at(pos.line),
+                        if ctrl && clicks == 1 && !alt {
+                            // Ctrl+click adds a caret (or removes the one clicked).
+                            let prim = (t.buf.anchor, t.buf.caret);
+                            if let Some(i) = t.extra.iter().position(|e| e.1 == pos) {
+                                t.extra.remove(i);
+                            } else {
+                                t.extra.push(prim);
+                                t.buf.set_caret(pos, false);
+                            }
+                            t.col_anchor = None;
+                        } else {
+                            t.extra.clear();
+                            t.col_anchor = Some(pos);
+                            match clicks {
+                                1 => t.buf.set_caret(pos, extend),
+                                2 => t.buf.select_word_at(pos),
+                                _ => t.buf.select_line_at(pos.line),
+                            }
                         }
                     }
-                    Ev::Drag(p) => {
+                    Ev::Drag(p, alt) => {
                         let t = &mut self.tabs[self.active];
-                        t.buf.set_caret(p, true);
+                        if alt {
+                            let a = t.col_anchor.unwrap_or(t.buf.anchor);
+                            Self::column_select(t, a, p);
+                        } else if t.extra.is_empty() || t.col_anchor.is_none() {
+                            t.buf.set_caret(p, true);
+                        } else {
+                            let a = t.col_anchor.unwrap_or(t.buf.anchor);
+                            Self::column_select(t, a, p);
+                        }
+                    }
+                    Ev::Bookmark(line) => {
+                        let t = &mut self.tabs[self.active];
+                        if !t.bookmarks.remove(&line) {
+                            t.bookmarks.insert(line);
+                        }
+                    }
+                    Ev::Minimap(row) => {
+                        let lh = line_h(self.settings.font_size);
+                        let vrows = self.vp.1;
+                        let max = self.max_scroll(&self.tabs[self.active]);
+                        let t = &mut self.tabs[self.active];
+                        let top = row.saturating_sub(vrows / 2);
+                        t.scroll_y = (top as f32 * lh).clamp(0.0, max);
                     }
                     Ev::Release => {}
                     Ev::Scroll(dy) => {
@@ -1523,7 +1875,17 @@ impl cosmic::Application for App {
             Message::Pasted(t) => {
                 if let Some(t) = t {
                     let t = t.replace("\r\n", "\n").replace('\r', "\n");
-                    self.edit(|tab, _| tab.buf.insert(&t));
+                    let n = self.tabs[self.active].extra.len() + 1;
+                    let parts: Vec<String> = t.split('\n').map(String::from).collect();
+                    if n > 1 && parts.len() == n {
+                        let mut k = n;
+                        self.edit_multi(|tab, _| {
+                            k -= 1;
+                            tab.buf.insert(&parts[k]);
+                        });
+                    } else {
+                        self.edit_multi(|tab, _| tab.buf.insert(&t));
+                    }
                     follow = true;
                 }
             }
@@ -1736,6 +2098,10 @@ impl cosmic::Application for App {
             scroll_x: t.scroll_x,
             bracket,
             marks: &t.marks,
+            extra: &t.extra,
+            bookmarks: &t.bookmarks,
+            line_marks: &t.line_marks,
+            minimap: self.settings.minimap,
             on: Box::new(Message::Ed),
         }
         .into();

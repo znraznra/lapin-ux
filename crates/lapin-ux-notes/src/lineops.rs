@@ -43,6 +43,11 @@ pub fn delete_lines(b: &mut Buffer) {
     }
 }
 
+pub fn delete_line_at(b: &mut Buffer, line: usize) {
+    b.set_caret(Pos::new(line, 0), false);
+    delete_lines(b);
+}
+
 /// `dir` is -1 (up) or 1 (down). Returns false when it cannot move.
 pub fn move_lines(b: &mut Buffer, dir: i32) -> bool {
     let (f, l) = selected_lines(b);

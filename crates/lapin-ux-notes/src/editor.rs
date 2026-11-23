@@ -23,8 +23,13 @@ use crate::view::{cell_of, char_cells, Folds, Rows};
 #[derive(Debug, Clone)]
 pub enum Ev {
     /// Mouse press at a position: `clicks` is 1, 2 or 3; `extend` for Shift.
-    Press { pos: Pos, clicks: u8, extend: bool },
-    Drag(Pos),
+    Press { pos: Pos, clicks: u8, extend: bool, alt: bool, ctrl: bool },
+    /// Drag to a position; the flag is Alt (column selection).
+    Drag(Pos, bool),
+    /// A click on the bookmark cell of the gutter.
+    Bookmark(usize),
+    /// A click or drag on the minimap: the document row to centre.
+    Minimap(usize),
     Release,
     /// Scroll by this many pixels (positive = down).
     Scroll(f32),
@@ -59,6 +64,12 @@ pub struct Editor<'a, M> {
     pub bracket: Option<(Pos, Pos)>,
     /// Matches to mark (start, end) in the visible lines.
     pub marks: &'a [(Pos, Pos)],
+    /// Extra carets and selections (multi-caret and column mode).
+    pub extra: &'a [(Pos, Pos)],
+    pub bookmarks: &'a std::collections::BTreeSet<usize>,
+    /// Diff marks per line: 1 added, 2 removed, 3 changed.
+    pub line_marks: &'a std::collections::BTreeMap<usize, u8>,
+    pub minimap: bool,
     pub on: Box<dyn Fn(Ev) -> M + 'a>,
 }
 
@@ -68,17 +79,38 @@ struct State {
     size_font: f32,
     reported: (usize, usize, u32),
     dragging: bool,
+    mm_drag: bool,
     last_click: Option<mouse::Click>,
+    mods: cosmic::iced::core::keyboard::Modifiers,
 }
+
+const MM_W: f32 = 100.0;
 
 fn line_h(font: f32) -> f32 {
     (font * 1.4).round()
 }
 
 impl<'a, M> Editor<'a, M> {
+    /// First document row shown at the top of the minimap.
+    fn mm_top(&self, b: Rectangle, lh: f32) -> usize {
+        let fit = (b.height / 2.0) as usize;
+        let total = self.rows.len();
+        if total <= fit {
+            return 0;
+        }
+        let vis = (b.height / lh).max(1.0);
+        let max_scroll = ((total as f32 * lh) - vis * lh).max(1.0);
+        ((self.scroll_y / max_scroll).clamp(0.0, 1.0) * (total - fit) as f32) as usize
+    }
+
+    /// The document row under a y position in the minimap.
+    fn mm_row(&self, b: Rectangle, lh: f32, y: f32) -> usize {
+        (self.mm_top(b, lh) + ((y - b.y).max(0.0) / 2.0) as usize).min(self.rows.len().saturating_sub(1))
+    }
+
     fn gutter_cells(&self) -> usize {
         if !self.cfg.line_numbers {
-            return 2;
+            return 3;
         }
         let digits = self.buf.line_count().max(1).to_string().len().max(3);
         digits + 3
@@ -142,7 +174,8 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
         let b = layout.bounds();
         let lh = line_h(self.cfg.font_size);
         let gutter = self.gutter_cells() as f32 * st.cell_w;
-        let cols = (((b.width - gutter) / st.cell_w).floor().max(1.0)) as usize;
+        let mm = if self.minimap { MM_W } else { 0.0 };
+        let cols = (((b.width - gutter - mm) / st.cell_w).floor().max(1.0)) as usize;
         let rws = ((b.height / lh).floor().max(1.0)) as usize;
         let key = (cols, rws, st.cell_w.to_bits());
         if st.reported != key {
@@ -157,11 +190,25 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
         };
 
         match event {
+            Event::Keyboard(cosmic::iced::core::keyboard::Event::ModifiersChanged(m)) => st.mods = *m,
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(p) = cursor.position_in(b).map(|q| Point::new(q.x + b.x, q.y + b.y)) else { return };
+                if self.minimap && p.x > b.x + b.width - MM_W {
+                    st.mm_drag = true;
+                    let r = self.mm_row(b, lh, p.y);
+                    shell.publish((self.on)(Ev::Minimap(r)));
+                    shell.capture_event();
+                    return;
+                }
                 let (row, x) = locate(p, st);
                 let row = row.min(self.rows.len().saturating_sub(1));
                 if p.x - b.x < gutter {
+                    let line = self.rows.rows[row].line;
+                    if p.x - b.x < st.cell_w && self.rows.rows[row].first {
+                        shell.publish((self.on)(Ev::Bookmark(line)));
+                        shell.capture_event();
+                        return;
+                    }
                     // The fold mark sits in the last two cells of the gutter.
                     if p.x - b.x > gutter - 2.0 * st.cell_w {
                         let line = self.rows.rows[row].line;
@@ -181,13 +228,21 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                 st.last_click = Some(click);
                 st.dragging = true;
                 let pos = self.rows.pos_at(self.buf, row, x, self.cfg.tab);
-                shell.publish((self.on)(Ev::Press { pos, clicks, extend: false }));
+                shell.publish((self.on)(Ev::Press { pos, clicks, extend: st.mods.shift(), alt: st.mods.alt(), ctrl: st.mods.control() }));
                 shell.capture_event();
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) if st.mm_drag => {
+                let r = self.mm_row(b, lh, position.y);
+                shell.publish((self.on)(Ev::Minimap(r)));
+                shell.capture_event();
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if st.mm_drag => {
+                st.mm_drag = false;
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) if st.dragging => {
                 let (row, x) = locate(*position, st);
                 let pos = self.rows.pos_at(self.buf, row, x, self.cfg.tab);
-                shell.publish((self.on)(Ev::Drag(pos)));
+                shell.publish((self.on)(Ev::Drag(pos, st.mods.alt())));
                 shell.capture_event();
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if st.dragging => {
@@ -261,7 +316,7 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
         let last = (first + count).min(self.rows.len());
         let caret = self.buf.caret;
         let sel = if self.buf.has_selection() { Some(self.buf.selection()) } else { None };
-        let text_clip = Rectangle { x: b.x + gutter, y: b.y, width: (b.width - gutter).max(0.0), height: b.height };
+        let text_clip = Rectangle { x: b.x + gutter, y: b.y, width: (b.width - gutter - if self.minimap { MM_W } else { 0.0 }).max(0.0), height: b.height };
         let draw_text = |renderer: &mut Renderer, s: &str, x: f32, y: f32, col: Color, clip: Rectangle| {
             renderer.fill_text(
                 text::Text {
@@ -297,6 +352,40 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                         renderer::Quad { bounds: Rectangle { x: b.x + gutter, y, width: b.width - gutter, height: lh }, ..Default::default() },
                         cur_bg,
                     );
+                }
+                if let Some(m) = self.line_marks.get(&row.line) {
+                    let base_c = match m {
+                        1 => c.success.base,
+                        2 => c.destructive.base,
+                        _ => c.warning.base,
+                    };
+                    renderer.fill_quad(
+                        renderer::Quad { bounds: Rectangle { x: b.x + gutter, y, width: b.width - gutter, height: lh }, ..Default::default() },
+                        Color { a: 0.16, ..Color::from(base_c) },
+                    );
+                }
+                // Extra carets and selections.
+                for (a, e0) in self.extra {
+                    let (s, e) = if (a.line, a.col) <= (e0.line, e0.col) { (*a, *e0) } else { (*e0, *a) };
+                    if s != e && s.line <= row.line && e.line >= row.line {
+                        let from = if s.line == row.line { s.col.max(row.from) } else { row.from };
+                        let to_col = if e.line == row.line { e.col.min(row.to) } else { row.to };
+                        if to_col > from {
+                            let xa = cell_x(from);
+                            let xb = cell_x(to_col);
+                            renderer.fill_quad(
+                                renderer::Quad { bounds: Rectangle { x: xa, y, width: (xb - xa).max(1.0), height: lh }, ..Default::default() },
+                                sel_bg,
+                            );
+                        }
+                    }
+                    let q = *e0;
+                    if q.line == row.line && q.col >= row.from && (q.col < row.to || (q.col == row.to && row.to == line.chars().count())) {
+                        renderer.fill_quad(
+                            renderer::Quad { bounds: Rectangle { x: cell_x(q.col), y: y + 1.0, width: 2.0, height: lh - 2.0 }, ..Default::default() },
+                            fg,
+                        );
+                    }
                 }
                 // Selection, one quad per row; the line end shows as one extra cell.
                 if let Some((s, e)) = sel {
@@ -406,6 +495,56 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                 }
             }
 
+            if self.minimap {
+                let mx = b.x + b.width - MM_W;
+                renderer.fill_quad(
+                    renderer::Quad { bounds: Rectangle { x: mx, y: b.y, width: MM_W, height: b.height }, ..Default::default() },
+                    bg,
+                );
+                let top = self.mm_top(b, lh);
+                let fit = (b.height / 2.0) as usize;
+                let end = (top + fit).min(self.rows.len());
+                for ri in top..end {
+                    let row = self.rows.rows[ri];
+                    let y = b.y + (ri - top) as f32 * 2.0;
+                    let mut x = 0usize;
+                    let mut start: Option<usize> = None;
+                    let line = self.buf.line(row.line);
+                    for (i, ch) in line.chars().enumerate().skip(row.from).take(row.to.saturating_sub(row.from)) {
+                        let _ = i;
+                        if x >= (MM_W as usize - 6) {
+                            break;
+                        }
+                        if ch.is_whitespace() {
+                            if let Some(s0) = start.take() {
+                                renderer.fill_quad(
+                                    renderer::Quad { bounds: Rectangle { x: mx + 4.0 + s0 as f32, y, width: (x - s0) as f32, height: 1.5 }, ..Default::default() },
+                                    Color { a: 0.45, ..fg },
+                                );
+                            }
+                        } else if start.is_none() {
+                            start = Some(x);
+                        }
+                        x += 1;
+                    }
+                    if let Some(s0) = start {
+                        renderer.fill_quad(
+                            renderer::Quad { bounds: Rectangle { x: mx + 4.0 + s0 as f32, y, width: (x - s0) as f32, height: 1.5 }, ..Default::default() },
+                            Color { a: 0.45, ..fg },
+                        );
+                    }
+                }
+                let vis_rows = (b.height / lh).ceil();
+                let vy = b.y + (first as f32 - top as f32) * 2.0;
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle { x: mx, y: vy.max(b.y), width: MM_W, height: (vis_rows * 2.0).min(b.height) },
+                        border: Border { color: Color { a: 0.5, ..Color::from(c.accent.base) }, width: 1.0, radius: 0.0.into() },
+                        ..Default::default()
+                    },
+                    Color { a: 0.08, ..fg },
+                );
+            }
             // Gutter drawn last so scrolled text never shows under it.
             renderer.fill_quad(
                 renderer::Quad { bounds: Rectangle { x: b.x, y: b.y, width: gutter, height: b.height }, ..Default::default() },
@@ -424,6 +563,16 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                     let x = b.x + (w - n.len().min(w) + 1) as f32 * cw;
                     let col = if row.line == caret.line { fg } else { faint };
                     draw_text(renderer, &n, x, y, col, gclip);
+                }
+                if self.bookmarks.contains(&row.line) {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: Rectangle { x: b.x + 0.2 * cw, y: y + lh * 0.25, width: cw * 0.7, height: lh * 0.5 },
+                            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: (lh * 0.25).into() },
+                            ..Default::default()
+                        },
+                        Color::from(c.accent.base),
+                    );
                 }
                 let mark = if self.folds.contains_key(&row.line) {
                     Some("▸")
