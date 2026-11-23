@@ -118,26 +118,77 @@ pub fn map_property(name: &str, value: &Value) -> Vec<Event> {
             vec![Event::HasVideo(on)]
         }
         "track-list" => vec![Event::Tracks(parse_tracks(value.as_str().unwrap_or("")))],
+        "chapter-list" => vec![Event::Chapters(parse_chapters(value.as_str().unwrap_or("")))],
+        "chapter" => vec![Event::Chapter(value.as_f64().map_or(-1, |c| c as i64))],
+        "ab-loop-a" | "ab-loop-b" => vec![Event::LoopPoint(name.ends_with('b'), loop_is_set(value))],
         "metadata/by-key/Artist" => vec![Event::Artist(value.as_str().unwrap_or("").into())],
         "metadata/by-key/Album" => vec![Event::Album(value.as_str().unwrap_or("").into())],
         _ => engine::property(name, value),
     }
 }
 
-/// The audio and subtitle tracks in libmpv's `track-list` (JSON text). Video
-/// tracks and anything unreadable are left out.
+/// `ab-loop-a` and `ab-loop-b` read as text: "no" while unset, else the time.
+pub fn loop_is_set(value: &Value) -> bool {
+    match value {
+        Value::String(s) => !s.is_empty() && s != "no",
+        Value::Number(_) => true,
+        _ => false,
+    }
+}
+
+/// The chapters in libmpv's `chapter-list` (JSON text): title and start time.
+pub fn parse_chapters(json_text: &str) -> Vec<(String, f64)> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_text) else { return Vec::new() };
+    items
+        .iter()
+        .map(|c| (c.get("title").and_then(Value::as_str).unwrap_or("").to_string(), c.get("time").and_then(Value::as_f64).unwrap_or(0.0)))
+        .collect()
+}
+
+/// What a chapter is called in the menu: its title (or "Chapter N") and where it starts.
+pub fn chapter_label(title: &str, time: f64, number: usize) -> String {
+    let secs = time.max(0.0) as u64;
+    let at = if secs >= 3600 { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) } else { format!("{}:{:02}", secs / 60, secs % 60) };
+    if title.trim().is_empty() { format!("Chapter {number}  {at}") } else { format!("{}  {at}", title.trim()) }
+}
+
+/// The A-B loop button: what pressing it does next (mpv's `ab-loop` cycles
+/// start, end, clear).
+pub fn loop_label(a: bool, b: bool) -> &'static str {
+    match (a, b) {
+        (false, false) => "Repeat a part: set the start",
+        (true, false) => "Repeat a part: set the end",
+        _ => "Repeat a part: stop",
+    }
+}
+
+/// Speeds offered in the speed menu.
+pub const SPEEDS: [f64; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+
+/// A speed as text: "1x", "0.75x", "1.25x".
+pub fn speed_label(speed: f64) -> String {
+    let s = format!("{:.2}", (speed * 100.0).round() / 100.0);
+    format!("{}x", s.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// Subtitle colours offered in the Adjust panel: name and `sub-color` value.
+pub const SUB_COLORS: [(&str, &str); 4] = [("White", "#FFFFFF"), ("Yellow", "#FFFF00"), ("Cyan", "#00FFFF"), ("Green", "#00FF00")];
+
+/// The audio, subtitle and video tracks in libmpv's `track-list` (JSON text).
+/// Cover pictures in a music file are not video tracks. Anything unreadable is left out.
 pub fn parse_tracks(json_text: &str) -> Vec<engine::Track> {
     let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json_text) else { return Vec::new() };
     items
         .iter()
         .filter_map(|t| {
-            let subtitle = match t.get("type")?.as_str()? {
-                "audio" => false,
-                "sub" => true,
+            let kind = match t.get("type")?.as_str()? {
+                "audio" => engine::TrackKind::Audio,
+                "sub" => engine::TrackKind::Subtitle,
+                "video" if !t.get("albumart").and_then(Value::as_bool).unwrap_or(false) => engine::TrackKind::Video,
                 _ => return None,
             };
             let text = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            Some(engine::Track { id: t.get("id")?.as_i64()?, subtitle, title: text("title"), lang: text("lang"), selected: t.get("selected").and_then(Value::as_bool).unwrap_or(false) })
+            Some(engine::Track { id: t.get("id")?.as_i64()?, kind, title: text("title"), lang: text("lang"), selected: t.get("selected").and_then(Value::as_bool).unwrap_or(false) })
         })
         .collect()
 }
@@ -169,6 +220,8 @@ pub enum Tune {
     SubDelay,
     AudioDelay,
     SubScale,
+    /// 0 is the top of the picture, 100 the bottom.
+    SubPos,
 }
 
 impl Tune {
@@ -177,10 +230,15 @@ impl Tune {
             Tune::SubDelay => "sub-delay",
             Tune::AudioDelay => "audio-delay",
             Tune::SubScale => "sub-scale",
+            Tune::SubPos => "sub-pos",
         }
     }
     pub fn default_value(self) -> f64 {
-        if self == Tune::SubScale { 1.0 } else { 0.0 }
+        match self {
+            Tune::SubScale => 1.0,
+            Tune::SubPos => 100.0,
+            _ => 0.0,
+        }
     }
     /// One press of the minus (`dir` < 0) or plus (`dir` > 0) button; 0 resets.
     pub fn step(self, value: f64, dir: i8) -> f64 {
@@ -188,12 +246,17 @@ impl Tune {
             return self.default_value();
         }
         let d = f64::from(dir.signum());
+        if self == Tune::SubPos {
+            return ((value / 5.0).round() * 5.0 + d * 5.0).clamp(0.0, 100.0);
+        }
         let (lo, hi) = if self == Tune::SubScale { (0.3, 3.0) } else { (-60.0, 60.0) };
         // tenths, rounded, so repeated presses never drift (0.1 + 0.2 style sums)
         (((value * 10.0).round() / 10.0 + d / 10.0).clamp(lo, hi) * 10.0).round() / 10.0
     }
     pub fn label(self, value: f64) -> String {
-        if self == Tune::SubScale {
+        if self == Tune::SubPos {
+            format!("{}%", value.round() as i64)
+        } else if self == Tune::SubScale {
             format!("{}%", (value * 100.0).round() as i64)
         } else {
             let v = (value * 10.0).round() / 10.0;
@@ -231,6 +294,10 @@ const OBSERVED: &[(&str, Kind)] = &[
     ("media-title", Kind::Text),
     ("vid", Kind::Text),
     ("track-list", Kind::Text),
+    ("chapter-list", Kind::Text),
+    ("chapter", Kind::Double),
+    ("ab-loop-a", Kind::Text),
+    ("ab-loop-b", Kind::Text),
     ("hwdec-current", Kind::Text),
     ("metadata/by-key/Artist", Kind::Text),
     ("metadata/by-key/Album", Kind::Text),
@@ -651,20 +718,56 @@ mod tests {
             {"id":1,"type":"audio","lang":"eng","title":"Stereo","selected":true},
             {"id":2,"type":"audio","lang":"fra"},
             {"id":1,"type":"sub","external":true},
+            {"id":2,"type":"video","albumart":true},
             {"type":"sub"}]"#;
         let t = parse_tracks(json);
-        assert_eq!(t.len(), 3);
-        assert!(!t[0].subtitle && t[0].selected && t[0].id == 1);
-        assert!(!t[1].selected && t[1].lang == "fra");
-        assert!(t[2].subtitle);
+        assert_eq!(t.len(), 4);
+        assert!(t[0].kind == engine::TrackKind::Video && t[0].selected && t[0].id == 1);
+        assert!(t[1].kind == engine::TrackKind::Audio && t[1].selected);
+        assert!(!t[2].selected && t[2].lang == "fra");
+        assert!(t[3].kind == engine::TrackKind::Subtitle);
         assert!(parse_tracks("").is_empty());
         assert!(parse_tracks("{}").is_empty());
         assert!(matches!(&map_property("track-list", &json!("[]"))[..], [Event::Tracks(v)] if v.is_empty()));
     }
 
     #[test]
+    fn chapters_loop_and_speed() {
+        let c = parse_chapters(r#"[{"title":"Intro","time":0.0},{"title":"","time":65.4},{"time":3725}]"#);
+        assert_eq!(c.len(), 3);
+        assert_eq!(chapter_label(&c[0].0, c[0].1, 1), "Intro  0:00");
+        assert_eq!(chapter_label(&c[1].0, c[1].1, 2), "Chapter 2  1:05");
+        assert_eq!(chapter_label(&c[2].0, c[2].1, 3), "Chapter 3  1:02:05");
+        assert!(parse_chapters("").is_empty());
+        assert!(matches!(&map_property("chapter-list", &json!("[]"))[..], [Event::Chapters(v)] if v.is_empty()));
+        assert!(matches!(map_property("chapter", &json!(2.0))[..], [Event::Chapter(2)]));
+        assert!(matches!(map_property("chapter", &Value::Null)[..], [Event::Chapter(-1)]));
+        assert!(matches!(map_property("ab-loop-a", &json!("12.5"))[..], [Event::LoopPoint(false, true)]));
+        assert!(matches!(map_property("ab-loop-b", &json!("no"))[..], [Event::LoopPoint(true, false)]));
+        assert_ne!(loop_label(false, false), loop_label(true, false));
+        assert_eq!(loop_label(true, true), loop_label(true, true));
+        assert_ne!(loop_label(true, true), loop_label(false, false));
+        assert_eq!(speed_label(1.0), "1x");
+        assert_eq!(speed_label(0.75), "0.75x");
+        assert_eq!(speed_label(1.5), "1.5x");
+        assert_eq!(speed_label(2.0), "2x");
+        assert!(SPEEDS.contains(&1.0));
+    }
+
+    #[test]
+    fn subtitle_position() {
+        assert_eq!(Tune::SubPos.default_value(), 100.0);
+        assert_eq!(Tune::SubPos.step(100.0, 1), 100.0);
+        assert_eq!(Tune::SubPos.step(100.0, -1), 95.0);
+        assert_eq!(Tune::SubPos.step(2.0, -1), 0.0);
+        assert_eq!(Tune::SubPos.step(40.0, 0), 100.0);
+        assert_eq!(Tune::SubPos.label(95.0), "95%");
+        assert_eq!(Tune::SubPos.property(), "sub-pos");
+    }
+
+    #[test]
     fn track_labels() {
-        let t = |title: &str, lang: &str| engine::Track { id: 1, subtitle: false, title: title.into(), lang: lang.into(), selected: false };
+        let t = |title: &str, lang: &str| engine::Track { id: 1, kind: engine::TrackKind::Audio, title: title.into(), lang: lang.into(), selected: false };
         assert_eq!(track_label(&t("Stereo", "eng"), 1), "Stereo (eng)");
         assert_eq!(track_label(&t("Stereo", ""), 1), "Stereo");
         assert_eq!(track_label(&t("", "eng"), 1), "eng");

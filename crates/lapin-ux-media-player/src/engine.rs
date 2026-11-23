@@ -14,11 +14,19 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
-/// One audio or subtitle track of the file that is playing.
+/// What a track of the playing file carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackKind {
+    Audio,
+    Subtitle,
+    Video,
+}
+
+/// One audio, subtitle or video track of the file that is playing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub id: i64,
-    pub subtitle: bool,
+    pub kind: TrackKind,
     pub title: String,
     pub lang: String,
     pub selected: bool,
@@ -34,8 +42,13 @@ pub enum Event {
     Duration(f64),
     Volume(f64),
     Mute(bool),
-    #[allow(dead_code)]
     Speed(f64),
+    /// The chapters of the file: title and start time in seconds (video only).
+    Chapters(Vec<(String, f64)>),
+    /// The chapter that is playing, counted from 0; -1 before the first one (video only).
+    Chapter(i64),
+    /// One end of the A-B loop was set or cleared (`false` is A, `true` is B; video only).
+    LoopPoint(bool, bool),
     /// `media-title`, or the stream's own title when it sends one.
     Title(String),
     Artist(String),

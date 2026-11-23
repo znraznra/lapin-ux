@@ -129,7 +129,23 @@ impl MenuId {
     }
 }
 
-const TUNES: [video::Tune; 3] = [video::Tune::SubDelay, video::Tune::AudioDelay, video::Tune::SubScale];
+/// Right-aligns a panel above the video control bar.
+fn float_right(panel: Element<'_, Message>) -> widget::Container<'_, Message, cosmic::Theme> {
+    container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8])
+}
+
+const TUNES: [video::Tune; 4] = [video::Tune::SubDelay, video::Tune::AudioDelay, video::Tune::SubScale, video::Tune::SubPos];
+
+/// The panels that open above the video control bar, one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarMenu {
+    Audio,
+    Subtitles,
+    Video,
+    Chapters,
+    Speed,
+    Adjust,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ask {
@@ -296,12 +312,16 @@ enum Message {
     Activity,
     ToggleFullscreen,
     LeaveFullscreen,
-    /// Opens or closes the audio (false) or subtitle (true) menu of the control bar.
-    TrackMenu(bool),
-    AdjustMenu,
+    /// Opens or closes one of the menus above the control bar.
+    Bar(BarMenu),
     Tune(video::Tune, i8),
-    /// Chooses a track; `None` turns subtitles off.
-    PickTrack(bool, Option<i64>),
+    /// Chooses a track; `None` turns audio-less choices off (subtitles).
+    PickTrack(engine::TrackKind, Option<i64>),
+    PickChapter(i64),
+    SetSpeed(f64),
+    /// Sets the start of the A-B loop, then its end, then clears it.
+    AbLoop,
+    SubColor(usize),
     /// Redraws the picture page so the control bar can hide by itself.
     Tick,
     Mpris(mpris::Cmd),
@@ -426,12 +446,18 @@ struct App {
     /// Last mouse move or key press while a video plays, for the control bar.
     last_activity: std::time::Instant,
     fullscreen: bool,
-    /// Audio and subtitle tracks of the playing video, and which menu is open (true: subtitles).
+    /// Audio, subtitle and video tracks of the playing video, and which menu is open.
     media_tracks: Vec<engine::Track>,
-    track_menu: Option<bool>,
-    /// The Adjust panel (subtitle file, delays, subtitle size) is open, and its values.
-    adjust_menu: bool,
-    tune: [f64; 3],
+    bar_menu: Option<BarMenu>,
+    /// Chapters (title, start) and the one playing; the ends of the A-B loop that are set.
+    chapters: Vec<(String, f64)>,
+    chapter: i64,
+    loop_a: bool,
+    loop_b: bool,
+    /// Playback speed, the chosen subtitle colour (index into `video::SUB_COLORS`), and the Adjust panel values.
+    speed: f64,
+    sub_color: usize,
+    tune: [f64; 4],
 }
 
 fn fmt_time(s: f64) -> String {
@@ -490,9 +516,7 @@ impl App {
             }
             self.video_on = use_video;
             self.frame = None;
-            self.media_tracks.clear();
-            self.track_menu = None;
-            self.adjust_menu = false;
+            self.clear_media();
         }
         self.index = Some(i);
         self.notice = None;
@@ -596,11 +620,18 @@ impl App {
             E::Started => {
                 self.awaiting_start = false;
                 self.reset_tune();
-                self.media_tracks.clear();
-                self.track_menu = None;
-            self.adjust_menu = false;
+                self.clear_media();
             }
             E::Tracks(t) => self.media_tracks = t,
+            E::Chapters(c) => self.chapters = c,
+            E::Chapter(c) => self.chapter = c,
+            E::LoopPoint(b, set) => {
+                if b {
+                    self.loop_b = set;
+                } else {
+                    self.loop_a = set;
+                }
+            }
             E::Rejected { id, why } => {
                 if id == engine::SEEK_ID {
                     self.now.pos = self.confirmed_pos;
@@ -610,7 +641,7 @@ impl App {
             E::Duration(d) => self.now.dur = d,
             E::Volume(v) => self.volume = v,
             E::Mute(m) => self.muted = m,
-            E::Speed(_) => {}
+            E::Speed(v) => self.speed = v,
             E::Devices(d) => self.devices = d,
             E::Device(d) => self.device = d,
             E::Title(t) => {
@@ -710,9 +741,7 @@ impl App {
         if self.video_on {
             self.video_on = false;
             self.frame = None;
-            self.media_tracks.clear();
-            self.track_menu = None;
-            self.adjust_menu = false;
+            self.clear_media();
             self.index = None;
             self.now = Now::default();
         }
@@ -769,9 +798,7 @@ impl App {
                 self.station = None;
                 self.now = Now::default();
                 self.frame = None;
-                self.media_tracks.clear();
-                self.track_menu = None;
-            self.adjust_menu = false;
+                self.clear_media();
                 return self.set_fullscreen(false);
             }
             Action::Next => {
@@ -940,7 +967,22 @@ impl App {
     }
 
     /// mpv keeps delays and subtitle size from one file to the next; each new file starts from the defaults.
+    fn clear_media(&mut self) {
+        self.media_tracks.clear();
+        self.chapters.clear();
+        self.chapter = -1;
+        self.loop_a = false;
+        self.loop_b = false;
+        self.bar_menu = None;
+    }
+
     fn reset_tune(&mut self) {
+        if self.sub_color != 0 {
+            self.sub_color = 0;
+            if let Some(e) = &self.video {
+                e.set("sub-color", json!(video::SUB_COLORS[0].1));
+            }
+        }
         for (i, t) in TUNES.iter().enumerate() {
             if self.tune[i] != t.default_value() {
                 self.tune[i] = t.default_value();
@@ -1387,8 +1429,10 @@ impl App {
         let paused = self.now.paused;
         let bar = self.transport();
         let fullscreen = self.fullscreen;
-        let audio: Vec<_> = self.media_tracks.iter().filter(|t| !t.subtitle).collect();
-        let subs: Vec<_> = self.media_tracks.iter().filter(|t| t.subtitle).collect();
+        let of_kind = |k: engine::TrackKind| self.media_tracks.iter().filter(move |t| t.kind == k).collect::<Vec<_>>();
+        let audio = of_kind(engine::TrackKind::Audio);
+        let subs = of_kind(engine::TrackKind::Subtitle);
+        let videos = of_kind(engine::TrackKind::Video);
         let picture = cosmic::widget::responsive(move |sz| {
             size.store(video::pack_size(sz.width as u32, sz.height as u32), std::sync::atomic::Ordering::Relaxed);
             let inner: Element<'_, Message> = match &frame {
@@ -1401,49 +1445,89 @@ impl App {
         let mut layers = cosmic::iced::widget::stack![area];
         if show_bar || paused {
             let exit = button::icon(icon::from_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" })).name(if fullscreen { "Leave full screen" } else { "Full screen" }).on_press(Message::ToggleFullscreen);
-            let mut buttons = row::with_capacity(4).align_y(Alignment::Center);
+            let mut buttons = row::with_capacity(8).align_y(Alignment::Center);
+            let loop_icon = if self.loop_a || self.loop_b { "media-playlist-repeat-symbolic" } else { "media-playlist-repeat-song-symbolic" };
+            if self.chapters.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("view-list-symbolic")).name("Chapters").on_press(Message::Bar(BarMenu::Chapters)));
+            }
+            if videos.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("video-x-generic-symbolic")).name("Video tracks").on_press(Message::Bar(BarMenu::Video)));
+            }
             if audio.len() > 1 {
-                buttons = buttons.push(button::icon(icon::from_name("audio-x-generic-symbolic")).name("Audio tracks").on_press(Message::TrackMenu(false)));
+                buttons = buttons.push(button::icon(icon::from_name("audio-x-generic-symbolic")).name("Audio tracks").on_press(Message::Bar(BarMenu::Audio)));
             }
             if !subs.is_empty() {
-                buttons = buttons.push(button::icon(icon::from_name("media-view-subtitles-symbolic")).name("Subtitles").on_press(Message::TrackMenu(true)));
+                buttons = buttons.push(button::icon(icon::from_name("media-view-subtitles-symbolic")).name("Subtitles").on_press(Message::Bar(BarMenu::Subtitles)));
             }
-            buttons = buttons.push(button::icon(icon::from_name("preferences-system-symbolic")).name("Adjust subtitles and sound delay").on_press(Message::AdjustMenu));
+            buttons = buttons
+                .push(button::icon(icon::from_name(loop_icon)).name(video::loop_label(self.loop_a, self.loop_b)).on_press(Message::AbLoop))
+                .push(button::text(video::speed_label(self.speed)).on_press(Message::Bar(BarMenu::Speed)))
+                .push(button::icon(icon::from_name("preferences-system-symbolic")).name("Adjust subtitles and sound delay").on_press(Message::Bar(BarMenu::Adjust)));
             let mut overlay = column::with_capacity(3).push(widget::space::vertical());
-            if self.adjust_menu {
-                let mut menu = column::with_capacity(6).spacing(4).push(text::heading("Adjust"));
-                menu = menu.push(button::standard("Add subtitle file...").width(Length::Fill).on_press(Message::Do(Action::Pick(pick::Job::Subtitles))));
-                for (i, t) in TUNES.iter().enumerate() {
-                    let name = match t {
-                        video::Tune::SubDelay => "Subtitle delay",
-                        video::Tune::AudioDelay => "Sound delay",
-                        video::Tune::SubScale => "Subtitle size",
+            let item = |label: String, selected: bool, msg: Message| button::custom(text::body(label)).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(selected)).on_press(msg);
+            match self.bar_menu {
+                Some(BarMenu::Adjust) => {
+                    let mut menu = column::with_capacity(8).spacing(4).push(text::heading("Adjust"));
+                    menu = menu.push(button::standard("Add subtitle file...").width(Length::Fill).on_press(Message::Do(Action::Pick(pick::Job::Subtitles))));
+                    for (i, t) in TUNES.iter().enumerate() {
+                        let (name, minus, plus) = match t {
+                            video::Tune::SubDelay => ("Subtitle delay", "earlier", "later"),
+                            video::Tune::AudioDelay => ("Sound delay", "earlier", "later"),
+                            video::Tune::SubScale => ("Subtitle size", "smaller", "larger"),
+                            video::Tune::SubPos => ("Subtitle position", "higher", "lower"),
+                        };
+                        // position 100 is the bottom, so "lower" is the plus button
+                        let (minus_dir, plus_dir) = (-1, 1);
+                        menu = menu.push(
+                            row::with_capacity(5)
+                                .spacing(4)
+                                .align_y(Alignment::Center)
+                                .push(text::body(name).width(Length::Fill))
+                                .push(button::icon(icon::from_name("list-remove-symbolic")).name(format!("{name} {minus}")).on_press(Message::Tune(*t, minus_dir)))
+                                .push(button::text(t.label(self.tune[i])).on_press(Message::Tune(*t, 0)))
+                                .push(button::icon(icon::from_name("list-add-symbolic")).name(format!("{name} {plus}")).on_press(Message::Tune(*t, plus_dir))),
+                        );
+                    }
+                    let mut colors = row::with_capacity(5).spacing(4).align_y(Alignment::Center).push(text::body("Subtitle colour").width(Length::Fill));
+                    for (n, (name, _)) in video::SUB_COLORS.iter().enumerate() {
+                        colors = colors.push(button::custom(text::body(*name)).padding([4, 8]).class(lapin_ux_ui::nav_item(self.sub_color == n)).on_press(Message::SubColor(n)));
+                    }
+                    menu = menu.push(colors);
+                    menu = menu.push(text::caption("Press a value to reset it."));
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(440.0)).class(theme::Container::Background).into()));
+                }
+                Some(BarMenu::Speed) => {
+                    let mut menu = column::with_capacity(video::SPEEDS.len() + 1).spacing(2).push(text::heading("Speed"));
+                    for s in video::SPEEDS {
+                        menu = menu.push(item(video::speed_label(s), (self.speed - s).abs() < 0.001, Message::SetSpeed(s)));
+                    }
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(200.0)).class(theme::Container::Background).into()));
+                }
+                Some(BarMenu::Chapters) => {
+                    let mut menu = column::with_capacity(self.chapters.len() + 1).spacing(2).push(text::heading("Chapters"));
+                    let mut list = column::with_capacity(self.chapters.len()).spacing(2);
+                    for (n, (title, at)) in self.chapters.iter().enumerate() {
+                        list = list.push(item(video::chapter_label(title, *at, n + 1), self.chapter == n as i64, Message::PickChapter(n as i64)));
+                    }
+                    menu = menu.push(scrollable(list).height(Length::Fixed(240.0)));
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(320.0)).class(theme::Container::Background).into()));
+                }
+                Some(kind @ (BarMenu::Audio | BarMenu::Subtitles | BarMenu::Video)) => {
+                    let (tk, title, list) = match kind {
+                        BarMenu::Audio => (engine::TrackKind::Audio, "Audio tracks", &audio),
+                        BarMenu::Video => (engine::TrackKind::Video, "Video tracks", &videos),
+                        _ => (engine::TrackKind::Subtitle, "Subtitles", &subs),
                     };
-                    menu = menu.push(
-                        row::with_capacity(5)
-                            .spacing(4)
-                            .align_y(Alignment::Center)
-                            .push(text::body(name).width(Length::Fill))
-                            .push(button::icon(icon::from_name("list-remove-symbolic")).name(format!("{name} smaller")).on_press(Message::Tune(*t, -1)))
-                            .push(button::text(t.label(self.tune[i])).on_press(Message::Tune(*t, 0)))
-                            .push(button::icon(icon::from_name("list-add-symbolic")).name(format!("{name} larger")).on_press(Message::Tune(*t, 1))),
-                    );
+                    let mut menu = column::with_capacity(list.len() + 2).spacing(2).push(text::heading(title));
+                    if tk == engine::TrackKind::Subtitle {
+                        menu = menu.push(item("Off".to_string(), !subs.iter().any(|t| t.selected), Message::PickTrack(tk, None)));
+                    }
+                    for (n, t) in list.iter().enumerate() {
+                        menu = menu.push(item(video::track_label(t, n + 1), t.selected, Message::PickTrack(tk, Some(t.id))));
+                    }
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(280.0)).class(theme::Container::Background).into()));
                 }
-                menu = menu.push(text::caption("Press the value to reset it."));
-                let panel = container(menu).padding(8).width(Length::Fixed(340.0)).class(theme::Container::Background);
-                overlay = overlay.push(container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8]));
-            }
-            if let Some(sub) = self.track_menu {
-                let list = if sub { &subs } else { &audio };
-                let mut menu = column::with_capacity(list.len() + 2).spacing(2).push(text::heading(if sub { "Subtitles" } else { "Audio tracks" }));
-                if sub {
-                    menu = menu.push(button::custom(text::body("Off")).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(!subs.iter().any(|t| t.selected))).on_press(Message::PickTrack(true, None)));
-                }
-                for (n, t) in list.iter().enumerate() {
-                    menu = menu.push(button::custom(text::body(video::track_label(t, n + 1))).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(t.selected)).on_press(Message::PickTrack(sub, Some(t.id))));
-                }
-                let panel = container(menu).padding(8).width(Length::Fixed(280.0)).class(theme::Container::Background);
-                overlay = overlay.push(container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8]));
+                None => {}
             }
             overlay = overlay.push(container(row::with_capacity(3).push(container(bar).width(Length::Fill)).push(buttons).push(exit).align_y(Alignment::Center)).class(theme::Container::Background));
             layers = layers.push(lapin_ux_ui::a11y::group("Video controls", overlay));
@@ -1534,14 +1618,8 @@ impl App {
             Message::Tick => {}
             Message::ToggleFullscreen => return self.set_fullscreen(!self.fullscreen),
             Message::LeaveFullscreen => return self.set_fullscreen(false),
-            Message::TrackMenu(sub) => {
-                self.track_menu = if self.track_menu == Some(sub) { None } else { Some(sub) };
-                self.adjust_menu = false;
-                self.last_activity = std::time::Instant::now();
-            }
-            Message::AdjustMenu => {
-                self.adjust_menu = !self.adjust_menu;
-                self.track_menu = None;
+            Message::Bar(m) => {
+                self.bar_menu = if self.bar_menu == Some(m) { None } else { Some(m) };
                 self.last_activity = std::time::Instant::now();
             }
             Message::Tune(t, dir) => {
@@ -1551,12 +1629,41 @@ impl App {
                 }
                 self.last_activity = std::time::Instant::now();
             }
-            Message::PickTrack(sub, id) => {
-                self.track_menu = None;
-            self.adjust_menu = false;
+            Message::PickTrack(kind, id) => {
+                self.bar_menu = None;
                 if let Some(e) = &self.video {
-                    e.set(if sub { "sid" } else { "aid" }, match id { Some(i) => json!(i), None => json!("no") });
+                    let prop = match kind {
+                        engine::TrackKind::Audio => "aid",
+                        engine::TrackKind::Subtitle => "sid",
+                        engine::TrackKind::Video => "vid",
+                    };
+                    e.set(prop, match id { Some(i) => json!(i), None => json!("no") });
                 }
+            }
+            Message::PickChapter(c) => {
+                self.bar_menu = None;
+                if let Some(e) = &self.video {
+                    e.set("chapter", json!(c));
+                }
+            }
+            Message::SetSpeed(v) => {
+                self.bar_menu = None;
+                if let Some(e) = &self.video {
+                    e.set("speed", json!(v));
+                }
+            }
+            Message::AbLoop => {
+                if let Some(e) = &self.video {
+                    e.command(vec![json!("ab-loop")]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::SubColor(n) => {
+                if let (Some((_, value)), Some(e)) = (video::SUB_COLORS.get(n), &self.video) {
+                    self.sub_color = n;
+                    e.set("sub-color", json!(value));
+                }
+                self.last_activity = std::time::Instant::now();
             }
             Message::Mpris(c) => return self.mpris_cmd(c),
             Message::Menu(m) => self.menu = if self.menu == Some(m) { None } else { Some(m) },
@@ -1631,9 +1738,7 @@ impl App {
                 if self.video_on {
                     self.video_on = false;
                     self.frame = None;
-                    self.media_tracks.clear();
-                    self.track_menu = None;
-            self.adjust_menu = false;
+                    self.clear_media();
                     self.index = None;
                     self.now = Now::default();
                     self.notice = Some("Video stopped to apply the graphics card setting.".to_string());
@@ -1816,8 +1921,13 @@ impl cosmic::Application for App {
             last_activity: std::time::Instant::now(),
             fullscreen: false,
             media_tracks: Vec::new(),
-            track_menu: None,
-            adjust_menu: false,
+            bar_menu: None,
+            chapters: Vec::new(),
+            chapter: -1,
+            loop_a: false,
+            loop_b: false,
+            speed: 1.0,
+            sub_color: 0,
             tune: TUNES.map(video::Tune::default_value),
         };
         match library::load_stations() {
