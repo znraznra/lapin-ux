@@ -33,6 +33,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Photos (#74), stage 1: an offline picture app with a dark gallery (by date, Favorites, your folders) and a light viewer with a filmstrip. | Retest |
 | Mon 23 Nov | Notes (#224), first release: a text and code editor with tabs, session restore, encodings and line endings, find and replace, syntax colours, folding and line operations. The default text editor in the Lapin session only. | Retest |
 | Mon 23 Nov | Notes (#224), second step: Print and Save as PDF, dropping files into the window, dragging tabs to reorder them, and the full Encoding and Language menus. | Retest |
+| Mon 23 Nov | Notes (#224), third step: several carets and column selection, bookmarks, a minimap, a function list, word completion, comparing two tabs and a hex dump. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
 | Sun 22 Nov | Explorer pop-ups (new item, rename, delete, replace, errors) in Lapin's design, stage 1 (#163). | Retest |
 | Sun 22 Nov | Sign-in screen matches the lock screen (#120): the same clock-to-panel fade and corner spacing. | Retest |

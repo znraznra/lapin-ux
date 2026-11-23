@@ -64,9 +64,19 @@ overwritten. Other desktops never read it, and no setting is written.
 Menus, tabs and buttons have names and sit in named groups. The text area is a
 custom widget and is not exposed to screen readers yet.
 
+## Also in this release
+
+- Function list (Search > Function list, Ctrl+Alt+L): definitions found per
+  language by `outline.rs`; clicking one jumps to its line.
+- Word completion (Search > Complete word, Ctrl+Space): a strip of words from
+  the file and the language's keywords; clicking one replaces the word before
+  the caret.
+- Compare with next tab: `diff.rs` marks added, removed and changed lines in
+  the gutter of both tabs; Clear comparison removes the marks.
+- Hex dump in new tab and Hex dump back to text, via `hex.rs` (8 MB limit).
+
 ## Not in this release
 
-Column selection and multi-caret, bookmarks, minimap, function list, split view,
-macros, run commands, a results panel for Find in Files beyond the basic list,
-diff, hex view, auto-completion, a style configurator. Printing other scripts
-than Western European ones needs an embedded font.
+Split view, macros, run commands, a results panel for Find in Files beyond the
+basic list, a style configurator. Printing other scripts than Western European
+ones needs an embedded font.

@@ -311,6 +311,10 @@ enum Cmd {
     Goto,
     Files,
     Outline,
+    HexDump,
+    HexText,
+    Compare,
+    ClearCompare,
     Complete,
     FindNext,
     FindPrev,
@@ -1167,6 +1171,44 @@ impl App {
         self.menu = None;
         let mut tasks: Vec<Task<Message>> = Vec::new();
         match c {
+            Cmd::HexDump => {
+                let (b, _) = self.tabs[self.active].bytes();
+                if b.len() > hex::MAX_BYTES {
+                    self.status = "File is too large for a hex dump".into();
+                } else {
+                    self.active = self.new_tab(&hex::dump(&b), None, Enc::Utf8, Eol::Lf);
+                    self.status = "Hex dump in a new tab".into();
+                }
+            }
+            Cmd::HexText => {
+                let b = hex::parse(&self.tabs[self.active].buf.text());
+                let text = String::from_utf8_lossy(&b).into_owned();
+                self.active = self.new_tab(&text, None, Enc::Utf8, Eol::Lf);
+                self.status = format!("{} bytes read back as text", b.len());
+            }
+            Cmd::Compare => {
+                if self.tabs.len() < 2 {
+                    self.status = "Open a second tab to compare with".into();
+                } else {
+                    let other = (self.active + 1) % self.tabs.len();
+                    let (ta, tb) = (self.tabs[self.active].buf.text(), self.tabs[other].buf.text());
+                    let (la, lb): (Vec<&str>, Vec<&str>) = (ta.split('\n').collect(), tb.split('\n').collect());
+                    match diff::diff(&la, &lb) {
+                        Some((l, r)) => {
+                            let n = l.len() + r.len();
+                            self.tabs[self.active].line_marks = l.into_iter().map(|(i, m)| (i, m.code())).collect();
+                            self.tabs[other].line_marks = r.into_iter().map(|(i, m)| (i, m.code())).collect();
+                            self.status = if n == 0 { "The two tabs are the same".into() } else { format!("Compared with the next tab: {n} differences marked") };
+                        }
+                        None => self.status = "Too large to compare".into(),
+                    }
+                }
+            }
+            Cmd::ClearCompare => {
+                for t in &mut self.tabs {
+                    t.line_marks.clear();
+                }
+            }
             Cmd::New => {
                 self.active = self.new_tab("", None, Enc::Utf8, Eol::Lf);
             }
@@ -1392,7 +1434,7 @@ impl App {
             Cmd::Shortcuts => {
                 self.prompt = Some(Prompt::Info(
                     "Keyboard shortcuts".into(),
-                    "Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+W close tab\nCtrl+F find, Ctrl+H replace, Ctrl+G go to line, Ctrl+Shift+F find in files, F3 / Shift+F3 next / previous\nCtrl+D duplicate line, Ctrl+L delete line, Ctrl+J join lines, Alt+Up / Alt+Down move lines\nCtrl+Q toggle comment, Ctrl+U lower case, Ctrl+Shift+U upper case, Tab / Shift+Tab indent\nCtrl+Plus / Ctrl+Minus / Ctrl+0 zoom, Ctrl+Tab next tab".into(),
+                    "Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+W close tab\nCtrl+F find, Ctrl+H replace, Ctrl+G go to line, Ctrl+Shift+F find in files, F3 / Shift+F3 next / previous\nCtrl+D duplicate line, Ctrl+L delete line, Ctrl+J join lines, Alt+Up / Alt+Down move lines\nCtrl+Q toggle comment, Ctrl+U lower case, Ctrl+Shift+U upper case, Tab / Shift+Tab indent\nCtrl+Plus / Ctrl+Minus / Ctrl+0 zoom, Ctrl+Tab next tab\nCtrl+Alt+L function list, Ctrl+Space complete word".into(),
                 ));
             }
         }
@@ -2229,6 +2271,11 @@ impl App {
             it("Go to line...", "Ctrl+G", Goto),
             it("Function list...", "Ctrl+Alt+L", Outline),
             it("Complete word", "Ctrl+Space", Complete),
+            sep(),
+            it("Compare with next tab", "", Compare),
+            it("Clear comparison", "", ClearCompare),
+            it("Hex dump in new tab", "", HexDump),
+            it("Hex dump back to text", "", HexText),
             sep(),
             it("Toggle bookmark", "Ctrl+F2", BmToggle),
             it("Next bookmark", "F2", BmNext),
