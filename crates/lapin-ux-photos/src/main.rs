@@ -214,6 +214,7 @@ enum Message {
     AddToAlbum(String),
     RemoveFromAlbum,
     DeleteAlbum,
+    RenameAlbum,
     /// Shows the box for naming a new album.
     NewAlbum,
     NewAlbumName(String),
@@ -297,6 +298,8 @@ struct App {
     album: Option<String>,
     /// The name being typed for a new album, while the box is open.
     new_album: Option<String>,
+    /// Set while the name box renames this album instead of making a new one.
+    renaming: Option<String>,
     albums_unsaved: bool,
     selected: HashSet<PathBuf>,
     select_mode: bool,
@@ -962,6 +965,7 @@ impl cosmic::Application for App {
             albums: load_albums(),
             album: None,
             new_album: None,
+            renaming: None,
             albums_unsaved: false,
             selected: HashSet::new(),
             select_mode: false,
@@ -1231,10 +1235,51 @@ impl cosmic::Application for App {
                 return widget::text_input::focus(NEW_ALBUM_ID.clone());
             }
             Message::NewAlbumName(s) => self.new_album = Some(s),
-            Message::CancelNewAlbum => self.new_album = None,
+            Message::CancelNewAlbum => {
+                self.new_album = None;
+                self.renaming = None;
+            }
+            Message::RenameAlbum => {
+                let Some(name) = self.album.clone() else { return Task::none() };
+                self.menu = None;
+                self.new_album = Some(name.clone());
+                self.renaming = Some(name);
+                return widget::text_input::focus(NEW_ALBUM_ID.clone());
+            }
             Message::CreateAlbum => {
                 let name = self.new_album.as_deref().map(|s| s.trim().to_string()).unwrap_or_default();
                 if name.is_empty() {
+                    return Task::none();
+                }
+                if let Some(old) = self.renaming.clone() {
+                    if old == name {
+                        self.new_album = None;
+                        self.renaming = None;
+                        return Task::none();
+                    }
+                    if self.albums.contains_key(&name) {
+                        self.notice = Some("An album with this name already exists.".to_string());
+                        return Task::none();
+                    }
+                    let to = name.clone();
+                    match edit_albums(|a| {
+                        if let Some(list) = a.remove(&old) {
+                            a.insert(to, list);
+                        }
+                    }) {
+                        Ok(saved) => {
+                            self.albums = saved;
+                            self.albums_unsaved = false;
+                            self.new_album = None;
+                            self.renaming = None;
+                            self.notice = None;
+                            self.album = Some(name);
+                        }
+                        Err(e) => {
+                            tracing::warn!("could not save albums: {e}");
+                            self.albums_unsaved = true;
+                        }
+                    }
                     return Task::none();
                 }
                 let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
@@ -1434,6 +1479,7 @@ impl cosmic::Application for App {
                     self.menu = None;
                 } else if self.new_album.is_some() {
                     self.new_album = None;
+                    self.renaming = None;
                 } else if self.confirm_delete {
                     self.confirm_delete = false;
                 } else if self.select_mode || !self.selected.is_empty() {
@@ -1647,6 +1693,7 @@ impl App {
             more.push(Self::menu_item("Stop looking in this folder", Some("list-remove-symbolic"), false, Message::RemoveFolder));
         }
         if self.section == Section::Album {
+            more.push(Self::menu_item("Rename this album", Some("document-edit-symbolic"), false, Message::RenameAlbum));
             more.push(Self::menu_item("Delete this album", Some("user-trash-symbolic"), false, Message::DeleteAlbum));
         }
         let more_open = self.menu == Some(Menu::More);
@@ -1672,13 +1719,15 @@ impl App {
     fn new_album_bar(&self) -> Element<'_, Message> {
         let name = self.new_album.as_deref().unwrap_or_default();
         let n = self.selected.len();
-        let exists = self.albums.contains_key(name.trim());
+        let renaming = self.renaming.is_some();
+        let exists = self.albums.contains_key(name.trim()) && self.renaming.as_deref() != Some(name.trim());
         let prompt = match n {
+            _ if renaming => "Rename this album".to_string(),
             0 => "Name the new album".to_string(),
             1 => "Name the new album for 1 photo".to_string(),
             n => format!("Name the new album for {n} photos"),
         };
-        let mut create = button::suggested("Create");
+        let mut create = button::suggested(if renaming { "Rename" } else { "Create" });
         if !name.trim().is_empty() {
             create = create.on_press(Message::CreateAlbum);
         }
@@ -1698,7 +1747,9 @@ impl App {
                 .push(button::standard("Cancel").on_press(Message::CancelNewAlbum))
                 .push(create),
         );
-        if exists {
+        if exists && renaming {
+            col = col.push(text::caption("An album with this name exists. Pick another name."));
+        } else if exists {
             col = col.push(text::caption("An album with this name exists. The photos will be added to it."));
         }
         if self.albums_unsaved {
