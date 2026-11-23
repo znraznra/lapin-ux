@@ -38,8 +38,9 @@ PR #226): until that is merged, `start-lapin-ux` does not write the default at a
 - `lapin-ux-cosmic-term` (COSMIC Terminal with familiar title bars) stays installable: Lapin
   Terminal does not replace a COSMIC package, so it is in `LAPIN_PKGS` (removed on uninstall)
   but not in `STOCK`.
-- Uninstall: `pacman -R lapin-ux-terminal` or `./uninstall.sh`; nothing outside
-  `~/.config/dev.lapinux.Terminal` is written.
+- Uninstall: `pacman -R lapin-ux-terminal` or `./uninstall.sh`. The package itself writes only
+  `~/.config/dev.lapinux.Terminal`; the default-terminal entry in `mimeapps.list` is written by
+  `start-lapin-ux` and is handed back by the settings swap once #223 / PR #226 is merged.
 
 ## Rebuilding and upstream
 ```sh

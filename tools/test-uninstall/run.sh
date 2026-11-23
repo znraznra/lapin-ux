@@ -526,7 +526,7 @@ bash "$DS" leave
 check "other desktop: its own default terminal back" "grep -q org.gnome.Terminal.desktop \"$M\" && ! grep -q dev.lapinux.Terminal \"$M\""
 bash "$DS" enter
 check "Lapin UX: Lapin Terminal is the default there" "grep -q dev.lapinux.Terminal.desktop \"$M\""
-bash "$DS" leave
+# uninstall runs while the Lapin default is still active, so it has to clean it up itself
 bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
 check "after uninstall: no Lapin Terminal default left" "! grep -q dev.lapinux.Terminal \"$M\""
 }

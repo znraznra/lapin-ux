@@ -32,7 +32,10 @@ jobs:
         run: |
           git clone --quiet --depth 1 --branch "$TAG" https://github.com/alacritty/alacritty.git "$RUNNER_TEMP/alacritty"
           cd "$RUNNER_TEMP/alacritty"
-          for p in "$GITHUB_WORKSPACE"/packaging/lapin-ux-terminal/*.patch; do git apply --check "$p" && git apply "$p"; done
+          for p in "$GITHUB_WORKSPACE"/packaging/lapin-ux-terminal/*.patch; do
+            git apply --check "$p" || exit 1
+            git apply "$p" || exit 1
+          done
       - name: Open an issue when they do not apply
         if: failure() && steps.apply.outcome == 'failure'
         env:
