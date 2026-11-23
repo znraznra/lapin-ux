@@ -514,8 +514,8 @@ check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" 
 # fakebin/pgrep only sees processes this run started, never the surrounding session
 if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T; do
-  h=$(mktemp -d); mkdir -p $h/run
-  env -i HOME=$h USER=$USER XDG_RUNTIME_DIR=$h/run PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
+  h=$(mktemp -d); mkdir -p "$h/run"
+  env -i HOME=$h USER=$USER XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log
 done
 exit $fail

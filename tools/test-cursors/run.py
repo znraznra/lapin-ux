@@ -47,7 +47,9 @@ def unpack(data, expected):
         try:
             cur.unpack_verified(data, part, expected)
         except ValueError as e:
-            return str(e), part, None
+            # look at the disk now, before the temporary folder goes away
+            left = sorted(os.listdir(d))
+            return str(e), part, left
         files = sorted(os.path.relpath(os.path.join(r, f), part)
                        for r, _, fs in os.walk(part) for f in fs)
         return None, part, files
@@ -73,11 +75,17 @@ check("an extra file is refused", err is not None)
 err, _, _ = unpack(b"this is not a zip", want)
 check("a file that isn't a zip is refused", err is not None and "not a zip" in err)
 
-for label, name in (("a '..' path", "pack-abc/../../evil"), ("an absolute path", "/etc/evil"),
-                    ("a backslash path", "pack-abc\\evil"), ("a file outside the top folder", "evil")):
-    bad = make_zip([("pack-abc/assets/light/a.cur", b"one"), (name, b"x")])
-    err, _, files = unpack(bad, digest_of(good))
-    check(f"{label} is refused", err is not None)
+# The archives carry the expected files plus one bad member, so the digest
+# matches and only the path check can refuse them.
+for label, name, why in (("a '..' path", "pack-abc/../../evil", "unsafe path"),
+                         ("an absolute path", "/etc/evil", "unsafe path"),
+                         ("a backslash path", "pack-abc\\evil", "unsafe path"),
+                         ("a file outside the top folder", "evil", "outside the pack's folder")):
+    bad = make_zip([("pack-abc/assets/light/a.cur", b"one"), ("pack-abc/assets/dark/b.cur", b"two"),
+                    (name, b"x")])
+    err, _, left = unpack(bad, want)
+    check(f"{label} is refused by the path check", err is not None and why in err)
+    check(f"{label} leaves nothing on disk", left == [])
 
 link = zipfile.ZipInfo("pack-abc/assets/link")
 link.external_attr = 0o120777 << 16
@@ -98,7 +106,7 @@ cur.MAX_UNPACKED_BYTES = old
 check("a pack that unpacks too big is refused", err is not None and "more than expected" in err)
 
 err, part, files = unpack(changed, want)
-check("nothing is written when the digest doesn't match", files is None and not os.path.exists(part))
+check("nothing is written when the digest doesn't match", err is not None and files == [])
 
 try:
     cur.read_limited(io.BytesIO(b"x" * 11), 10)

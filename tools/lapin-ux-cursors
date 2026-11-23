@@ -154,9 +154,13 @@ def xcursor(frames):
 def https_only_opener():
     """An opener that can only speak https (also across redirects): no file://,
     ftp:// or http:// handler is installed, so whatever URL it's given, it can
-    never read a local file or fall back to plain text."""
+    never read a local file or fall back to plain text. An https proxy from the
+    environment (https_proxy / HTTPS_PROXY, honouring no_proxy) is still used,
+    for https only, so people behind a proxy can download as before."""
     opener = urllib.request.OpenerDirector()
-    for handler in (urllib.request.HTTPSHandler(), urllib.request.HTTPRedirectHandler(),
+    proxy = urllib.request.getproxies().get("https")
+    handlers = [urllib.request.ProxyHandler({"https": proxy})] if proxy else []
+    for handler in (*handlers, urllib.request.HTTPSHandler(), urllib.request.HTTPRedirectHandler(),
                     urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor(),
                     urllib.request.UnknownHandler()):
         opener.add_handler(handler)
