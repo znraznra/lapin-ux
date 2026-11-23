@@ -644,7 +644,7 @@ impl cosmic::Application for App {
                 let tiles = self.want_section_thumbs();
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
-                    Some(p) if is_photo(&p) && !p.is_dir() => {
+                    Some(p) if is_photo(&p) && p.is_file() => {
                         let p = p.canonicalize().unwrap_or(p);
                         if !self.photos.iter().any(|x| x.path == p) {
                             let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
