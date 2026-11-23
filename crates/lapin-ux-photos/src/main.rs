@@ -1401,7 +1401,8 @@ impl cosmic::Application for App {
             }
             Message::SelectAll => {
                 if self.viewing.is_none() {
-                    self.selected = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                    // Only the tiles on screen, so nothing the user can't see is batch-deleted.
+                    self.selected = self.shown().into_iter().take(MAX_TILES).map(|p| p.path.clone()).collect();
                     self.select_mode = true;
                     self.confirm_delete = false;
                 }
