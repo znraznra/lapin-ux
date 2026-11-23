@@ -8,6 +8,8 @@ mod engine;
 mod library;
 mod mpris;
 mod pick;
+mod settings;
+mod tags;
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +33,8 @@ enum Section {
     Videos,
     Radio,
     MadeForYou,
+    /// Not in the library list: opened from the gear at the bottom of the sidebar.
+    Settings,
 }
 
 impl Section {
@@ -54,6 +58,7 @@ impl Section {
             Section::Videos => "Videos",
             Section::Radio => "Radio",
             Section::MadeForYou => "Made for You",
+            Section::Settings => "Settings",
         }
     }
     fn icon(self) -> &'static str {
@@ -66,6 +71,7 @@ impl Section {
             Section::Videos => "video-x-generic-symbolic",
             Section::Radio => "network-wireless-symbolic",
             Section::MadeForYou => "starred-symbolic",
+            Section::Settings => "preferences-system-symbolic",
         }
     }
 }
@@ -100,7 +106,7 @@ impl MenuId {
     fn items(self) -> &'static [(&'static str, Action)] {
         use Action::*;
         match self {
-            MenuId::File => &[("Open file...", Pick(pick::Job::File)), ("Open folder...", Pick(pick::Job::Folder)), ("Open web address...", Prompt(Ask::Open)), ("Quit", Quit)],
+            MenuId::File => &[("Open file...", Pick(pick::Job::File)), ("Open folder...", Pick(pick::Job::Folder)), ("Open web address...", Prompt(Ask::Open)), ("Settings", Show(Section::Settings)), ("Quit", Quit)],
             MenuId::Edit => &[("Add radio station...", AddStation), ("Import stations...", Pick(pick::Job::Stations)), ("Export stations...", Pick(pick::Job::SaveStations))],
             MenuId::Media => &[("Play / Pause", PlayPause), ("Stop", Stop), ("Next", Next), ("Previous", Prev)],
             MenuId::View => &[("Show queue", ToggleQueue), ("Output device", ToggleDevices), ("Mini player", ToggleMini), ("Songs", Show(Section::Songs)), ("Videos", Show(Section::Videos)), ("Radio", Show(Section::Radio))],
@@ -296,7 +302,16 @@ enum Message {
     SeekRelease,
     Volume(f32),
     /// The tracks found, and how many folders or files could not be read.
-    Scanned(Vec<Track>, usize),
+    Scanned(u64, Vec<Track>, usize),
+    /// The same tracks with titles, artists and albums from the files' own tags.
+    Tagged(u64, Vec<Track>),
+    /// A small picture for each folder that has one: (folder, picture file).
+    Covers(u64, Vec<(PathBuf, PathBuf)>),
+    /// A switch on the Settings page.
+    Toggle(Switch),
+    RemoveFolder(usize),
+    Rescan,
+    ResetPlays,
     /// A file dialog answered: the job, and the chosen path or why it could not open.
     Picked(pick::Job, pick::Picked),
     AskInput(String),
@@ -312,6 +327,12 @@ enum Message {
     ToggleFavourite(String),
     StationCancel,
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    UseTags,
+    ShowCovers,
 }
 
 struct App {
@@ -359,6 +380,11 @@ struct App {
     confirmed_pos: f64,
     /// stations.json exists but could not be read, so it is never overwritten.
     stations_error: bool,
+    settings: settings::Settings,
+    /// Album pictures, by the folder they belong to.
+    covers: std::collections::HashMap<PathBuf, widget::image::Handle>,
+    /// Which scan the answers belong to, so a slow older scan cannot replace a newer one.
+    scan_id: u64,
 }
 
 fn fmt_time(s: f64) -> String {
@@ -385,12 +411,17 @@ fn pseudo_random(n: usize) -> usize {
 }
 
 /// The tracks found, and how many folders or files could not be read.
-fn run_scan() -> (Vec<Track>, usize) {
-    let mut out = Vec::new();
+fn run_scan(roots: Vec<PathBuf>) -> (Vec<Track>, usize) {
+    let mut out: Vec<Track> = Vec::new();
     let mut skipped = 0;
-    for d in [dirs::audio_dir(), dirs::video_dir()].into_iter().flatten() {
+    for d in roots {
         let (t, s) = library::scan_report(&d);
-        out.extend(t);
+        // folders may overlap (Music inside a folder that was added too)
+        for x in t {
+            if !out.iter().any(|o| o.path == x.path) {
+                out.push(x);
+            }
+        }
         skipped += s;
     }
     (out, skipped)
@@ -650,9 +681,71 @@ impl App {
 
     /// A file dialog answered. A dialog that could not open (no portal) falls
     /// back to typing the path, so nothing is lost.
+    /// Looks through the library folders again. Titles and pictures follow once
+    /// the files are listed, so the lists show up first.
+    fn start_scan(&mut self) -> Task<Message> {
+        self.scan_id += 1;
+        self.scanning = true;
+        let id = self.scan_id;
+        let roots = self.settings.roots();
+        Task::future(async move {
+            let (found, skipped) = tokio::task::spawn_blocking(move || run_scan(roots)).await.unwrap_or_default();
+            cosmic::Action::App(Message::Scanned(id, found, skipped))
+        })
+    }
+
+    /// Titles and pictures for the files just listed, in the background.
+    fn enrich(&self, tracks: &[Track]) -> Task<Message> {
+        let id = self.scan_id;
+        let mut jobs = Vec::new();
+        if self.settings.use_tags {
+            let t = tracks.to_vec();
+            jobs.push(Task::future(async move {
+                let tagged = tokio::task::spawn_blocking(move || tags::apply(t)).await;
+                match tagged {
+                    Ok(v) => cosmic::Action::App(Message::Tagged(id, v)),
+                    Err(_) => cosmic::Action::App(Message::Tagged(id, Vec::new())),
+                }
+            }));
+        }
+        if self.settings.show_covers {
+            let t = tracks.to_vec();
+            jobs.push(Task::future(async move {
+                let found = tokio::task::spawn_blocking(move || tags::covers(&t)).await.unwrap_or_default();
+                cosmic::Action::App(Message::Covers(id, found))
+            }));
+        }
+        Task::batch(jobs)
+    }
+
+    fn save_settings(&mut self) {
+        if let Err(e) = self.settings.save() {
+            tracing::warn!("could not save settings: {e}");
+            self.notice = Some("The settings could not be saved, so they will be back as they were next time.".into());
+        }
+    }
+
+    fn add_library_folder(&mut self, dir: &str) {
+        if !Path::new(dir).is_dir() {
+            self.notice = Some(format!("{dir} is not a folder."));
+            return;
+        }
+        if self.settings.add_folder(dir) {
+            self.save_settings();
+        } else {
+            self.notice = Some("That folder is already in the library.".into());
+        }
+    }
+
     fn picked(&mut self, job: pick::Job, r: pick::Picked) {
         use pick::Job;
         let kind = match job {
+            Job::LibraryFolder => {
+                if let Ok(Some(dir)) = r {
+                    self.add_library_folder(&dir);
+                }
+                return;
+            }
             Job::File | Job::Folder => Ask::Open,
             Job::Playlist => Ask::ImportPlaylist,
             Job::Stations => Ask::ImportStations,
@@ -881,7 +974,11 @@ impl App {
             let content = row::with_capacity(2).spacing(12).align_y(Alignment::Center).push(icon::from_name(s.icon()).size(16)).push(text::body(s.label()));
             nav = nav.push(button::custom(content).width(Length::Fill).padding([8, 12]).class(lapin_ux_ui::nav_item(self.section == s)).on_press(Message::Show(s)));
         }
-        container(lapin_ux_ui::a11y::group("Library", nav)).width(Length::Fixed(230.0)).padding(8).into()
+        let s = Section::Settings;
+        let content = row::with_capacity(2).spacing(12).align_y(Alignment::Center).push(icon::from_name(s.icon()).size(16)).push(text::body(s.label()));
+        let gear = button::custom(content).width(Length::Fill).padding([8, 12]).class(lapin_ux_ui::nav_item(self.section == s)).on_press(Message::Show(s));
+        let page = column::with_capacity(2).push(scrollable(nav).height(Length::Fill)).push(gear);
+        container(lapin_ux_ui::a11y::group("Library", page)).width(Length::Fixed(230.0)).padding(8).into()
     }
 
     fn visible_tracks(&self, kind: Kind) -> Vec<&Track> {
@@ -935,10 +1032,15 @@ impl App {
         let mut cards: Vec<Element<'_, Message>> = Vec::new();
         for (name, sub, tracks) in groups {
             let items: Vec<Item> = tracks.iter().map(|t| Item::from(*t)).collect();
+            let cover = if by_album && self.settings.show_covers { tracks.first().and_then(|t| t.path.parent()).and_then(|d| self.covers.get(d)) } else { None };
+            let picture: Element<'_, Message> = match cover {
+                Some(h) => container(widget::image(h.clone()).width(Length::Fixed(150.0)).height(Length::Fixed(150.0))).class(theme::Container::Card).into(),
+                None => container(icon::from_name(if by_album { "media-optical-symbolic" } else { "avatar-default-symbolic" }).size(64)).center_x(Length::Fixed(150.0)).padding([24, 0]).class(theme::Container::Card).into(),
+            };
             let face = column::with_capacity(3)
                 .spacing(6)
                 .align_x(Alignment::Center)
-                .push(container(icon::from_name(if by_album { "media-optical-symbolic" } else { "avatar-default-symbolic" }).size(64)).center_x(Length::Fixed(150.0)).padding([24, 0]).class(theme::Container::Card))
+                .push(picture)
                 .push(text::body(name).width(Length::Fixed(150.0)))
                 .push(text::caption(sub).width(Length::Fixed(150.0)));
             cards.push(button::custom(face).padding(4).class(theme::Button::Text).on_press(Message::PlayList(std::sync::Arc::new(items), 0)).into());
@@ -1028,6 +1130,43 @@ impl App {
             col = col.push(button::standard("Play this mix").on_press(Message::PlayList(std::sync::Arc::new(mix), 0)));
         }
         scrollable(col).height(Length::Fill).into()
+    }
+
+    fn settings_page(&self) -> Element<'_, Message> {
+        let mut col = column::with_capacity(16).spacing(10).padding(16).push(text::title3("Settings"));
+        col = col.push(text::heading("Where your music and videos are"));
+        let roots: Vec<String> = if self.settings.folders.is_empty() {
+            self.settings.roots().iter().map(|p| p.to_string_lossy().into_owned()).collect()
+        } else {
+            self.settings.folders.clone()
+        };
+        for (i, f) in roots.into_iter().enumerate() {
+            let mut line = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(text::body(f).width(Length::Fill));
+            if !self.settings.folders.is_empty() {
+                line = line.push(button::standard("Remove").name(format!("Remove folder {}", i + 1)).on_press(Message::RemoveFolder(i)));
+            }
+            col = col.push(line);
+        }
+        col = col.push(
+            row::with_capacity(2)
+                .spacing(8)
+                .push(button::standard("Add a folder").on_press(Message::Do(Action::Pick(pick::Job::LibraryFolder))))
+                .push(button::standard("Look again").on_press(Message::Rescan)),
+        );
+        col = col.push(text::heading("Titles and pictures"));
+        col = col.push(widget::toggler(self.settings.use_tags).label("Read titles, artists and albums from the files".to_string()).on_toggle(|_| Message::Toggle(Switch::UseTags)));
+        col = col.push(widget::toggler(self.settings.show_covers).label("Show album pictures".to_string()).on_toggle(|_| Message::Toggle(Switch::ShowCovers)));
+        col = col.push(text::heading("Sound output"));
+        if self.devices.is_empty() {
+            col = col.push(text::caption("No sound outputs found"));
+        }
+        for (name, desc) in &self.devices {
+            let current = *name == self.device;
+            col = col.push(button::custom(text::body(desc.clone())).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(current)).on_press(Message::SetDevice(name.clone())));
+        }
+        col = col.push(text::heading("History"));
+        col = col.push(button::standard("Clear what I have played").on_press(Message::ResetPlays));
+        scrollable(container(lapin_ux_ui::a11y::group("Settings", col)).max_width(640)).height(Length::Fill).into()
     }
 
     fn device_panel(&self) -> Element<'_, Message> {
@@ -1155,11 +1294,53 @@ impl App {
                 }
             }
             Message::Volume(v) => self.set_volume(f64::from(v)),
-            Message::Scanned(t, skipped) => {
-                self.tracks = t;
+            Message::Scanned(id, t, skipped) => {
+                if id != self.scan_id {
+                    return Task::none();
+                }
                 self.scanning = false;
                 if skipped > 0 {
-                    self.notice = Some(format!("{skipped} folder{} or file{} in Music and Videos could not be read, so some items may be missing.", if skipped == 1 { "" } else { "s" }, if skipped == 1 { "" } else { "s" }));
+                    self.notice = Some(format!("{skipped} folder{} or file{} in the library folders could not be read, so some items may be missing.", if skipped == 1 { "" } else { "s" }, if skipped == 1 { "" } else { "s" }));
+                }
+                let next = self.enrich(&t);
+                self.tracks = t;
+                return next;
+            }
+            Message::Tagged(id, t) => {
+                // an empty answer means the reader failed: keep the names from the folders
+                if id == self.scan_id && !t.is_empty() {
+                    self.tracks = t;
+                }
+            }
+            Message::Covers(id, found) => {
+                if id == self.scan_id {
+                    self.covers = found.into_iter().map(|(dir, png)| (dir, widget::image::Handle::from_path(png))).collect();
+                }
+            }
+            Message::Toggle(sw) => {
+                match sw {
+                    Switch::UseTags => self.settings.use_tags = !self.settings.use_tags,
+                    Switch::ShowCovers => self.settings.show_covers = !self.settings.show_covers,
+                }
+                self.save_settings();
+                // titles and pictures change with these, so look again
+                if !self.settings.show_covers {
+                    self.covers.clear();
+                }
+                return self.start_scan();
+            }
+            Message::RemoveFolder(i) => {
+                self.settings.remove_folder(i);
+                self.save_settings();
+                return self.start_scan();
+            }
+            Message::Rescan => return self.start_scan(),
+            Message::ResetPlays => {
+                self.plays.clear();
+                if let Err(e) = std::fs::remove_file(plays_path()) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        self.notice = Some("The play history could not be cleared.".into());
+                    }
                 }
             }
             Message::AskInput(s) => {
@@ -1283,6 +1464,9 @@ impl cosmic::Application for App {
             fail_streak: 0,
             confirmed_pos: 0.0,
             stations_error: false,
+            settings: settings::Settings::load(),
+            covers: std::collections::HashMap::new(),
+            scan_id: 0,
         };
         match library::load_stations() {
             Ok(list) => app.stations = list,
@@ -1295,10 +1479,7 @@ impl cosmic::Application for App {
             Some(id) => app.set_window_title("Media Player".into(), id),
             None => Task::none(),
         };
-        let scan = Task::future(async {
-            let (found, skipped) = tokio::task::spawn_blocking(run_scan).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found, skipped))
-        });
+        let scan = app.start_scan();
         (app, Task::batch([title, scan]))
     }
 
@@ -1335,9 +1516,18 @@ impl cosmic::Application for App {
             Section::Albums => self.shelf(true),
             Section::Songs => self.track_rows(self.visible_tracks(Kind::Audio)),
             Section::Favourites => self.track_rows(self.tracks.iter().filter(|t| self.favourites.contains(&t.path.to_string_lossy().into_owned()) && library::matches(t, &self.search)).collect()),
-            Section::Videos => self.track_rows(self.visible_tracks(Kind::Video)),
+            Section::Videos => {
+                let list = self.track_rows(self.visible_tracks(Kind::Video));
+                // while a video plays, its playlist sits beside the list (the picture is in mpv's own window)
+                if self.now.has_video && !self.show_queue && !self.queue.is_empty() {
+                    row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
+                } else {
+                    list
+                }
+            }
             Section::Radio => self.radio(),
             Section::MadeForYou => self.made_for_you(),
+            Section::Settings => self.settings_page(),
         };
         let mut main = row::with_capacity(3).push(self.sidebar()).push(container(body).width(Length::Fill).height(Length::Fill));
         if self.show_queue {

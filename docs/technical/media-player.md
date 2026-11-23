@@ -51,6 +51,12 @@ The package ships `/usr/share/applications/lapinux-mimeapps.list`, the desktop-s
 
 The player writes only its own `dev.lapinux.MediaPlayer` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package, so nothing goes in `LAPIN_PKGS` or `STOCK`. Uninstalling never deletes the library data folder.
 
+## Dialogs, tags, covers and Settings
+
+- Open, Open folder, playlists and station import or export use the system file dialogs through the portal (`pick.rs`).
+- Titles, artists and albums are read from the files with `ffprobe` (time-limited, four at a time) and cached in `tags.json` by path, size and modified time. Album pictures come from `cover`, `folder` or `front` images in the album folder, or from a picture inside the file via `ffmpeg`, scaled to 256 px and cached in `covers/`. A scan that was replaced by a newer one is ignored.
+- Settings (`settings.json`, the last item in the sidebar): library folders, reading tags, showing album pictures, sound output and clearing the play history. Nothing here is shared with another app.
+
 ## Not yet
 
-Video inside the window with an auto-hiding bar and playlist panel, tag reading for the whole library and cover art, native file dialogs, and the full Settings pages.
+The video picture still plays in mpv's own window, with its own bar that hides by itself. While a video plays, the Videos page shows the playlist beside the list. Drawing the picture inside the player window needs either libmpv's render API or frame piping, which is a larger change and needs a decision.

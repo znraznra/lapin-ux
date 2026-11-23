@@ -9,6 +9,7 @@ use cosmic::dialog::file_chooser::{self, FileFilter};
 pub enum Job {
     File,
     Folder,
+    LibraryFolder,
     Playlist,
     Stations,
     SavePlaylist,
@@ -61,6 +62,7 @@ pub async fn pick(job: Job) -> Picked {
     match job {
         Job::File => done(open::Dialog::new().title("Open music or video").filter(media_filter()).open_file().await, |r| path_of!(r.url())),
         Job::Folder => done(open::Dialog::new().title("Open a folder").open_folder().await, |r| path_of!(r.url())),
+        Job::LibraryFolder => done(open::Dialog::new().title("Add a folder to the library").open_folder().await, |r| path_of!(r.url())),
         Job::Playlist => done(open::Dialog::new().title("Open playlist").filter(playlist_filter()).open_file().await, |r| path_of!(r.url())),
         Job::Stations => done(open::Dialog::new().title("Import stations").filter(stations_filter()).open_file().await, |r| path_of!(r.url())),
         Job::SavePlaylist => done(
