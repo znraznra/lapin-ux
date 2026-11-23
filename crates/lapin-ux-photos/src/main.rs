@@ -201,6 +201,11 @@ enum Message {
     SelectAll,
     FavoriteTargets,
     HideTargets,
+    /// Opens the folder chooser.
+    AddFolder,
+    FolderPicked(Option<PathBuf>),
+    SourceExtra(PathBuf),
+    RemoveFolder,
     /// Starts the slideshow, or stops it when it is running.
     Slideshow,
     SlideshowTick,
@@ -303,6 +308,10 @@ struct App {
     reel: Option<PathBuf>,
     /// The photo shown in the viewer, as a path (the list can change under it).
     viewing: Option<PathBuf>,
+    /// Folders the person added, saved in `folders.json`.
+    extra: Vec<PathBuf>,
+    /// One of `extra` picked in the source drop-down.
+    source_extra: Option<PathBuf>,
     /// The slideshow is running: the viewer moves on by itself.
     slideshow: bool,
     /// The full-size picture of the viewer or the reel.
@@ -495,13 +504,13 @@ fn sort_photos(photos: &mut [Photo]) {
 /// Every picture under the usual folders, newest first, plus the starred pictures
 /// that live elsewhere. Hidden folders are skipped, and the walk is bounded so a
 /// huge Documents tree cannot stall the app.
-fn scan(favorites: HashSet<PathBuf>) -> Scan {
+fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     let mut found: Vec<Photo> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut unreadable = 0usize;
     let mut truncated = false;
-    'walk: for folder in Folder::ALL {
-        let Some(root) = folder.dir() else { continue };
+    let roots: Vec<PathBuf> = Folder::ALL.into_iter().filter_map(Folder::dir).chain(extra).collect();
+    'walk: for root in roots {
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
@@ -616,6 +625,44 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+fn load_folders() -> Vec<PathBuf> {
+    let Some(file) = store_file("folders") else { return Vec::new() };
+    match read_folders(&file) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("could not read folders: {e}");
+            Vec::new()
+        }
+    }
+}
+
+fn read_folders(file: &Path) -> std::io::Result<Vec<PathBuf>> {
+    match std::fs::read_to_string(file) {
+        Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Changes the added folders and returns them as saved, with the same lock and
+/// atomic swap as the albums.
+fn edit_folders(change: impl FnOnce(&mut Vec<PathBuf>)) -> std::io::Result<Vec<PathBuf>> {
+    let file = store_file("folders").ok_or_else(|| std::io::Error::other("no config folder"))?;
+    let dir = file.parent().ok_or_else(|| std::io::Error::other("folders file has no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("folders.lock"))?;
+    lock.lock()?;
+    let mut list = read_folders(&file)?;
+    change(&mut list);
+    let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
+    let tmp = dir.join(format!("folders.json.{}.tmp", std::process::id()));
+    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &file));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map(|()| list)
+}
+
 /// Album name to the photos in it, in the order they were added.
 type Albums = BTreeMap<String, Vec<PathBuf>>;
 
@@ -686,7 +733,7 @@ impl App {
 
     /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
-        let root = self.source.and_then(Folder::dir);
+        let root = self.source_extra.clone().or_else(|| self.source.and_then(Folder::dir));
         let now = SystemTime::now();
         self.photos
             .iter()
@@ -737,8 +784,9 @@ impl App {
 
     fn scan_task(&self) -> Task<Message> {
         let starred = self.favorites.clone();
+        let extra = self.extra.clone();
         Task::future(async move {
-            let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
+            let found = tokio::task::spawn_blocking(move || scan(starred, extra)).await.unwrap_or_default();
             cosmic::Action::App(Message::Scanned(found))
         })
     }
@@ -922,6 +970,8 @@ impl cosmic::Application for App {
             confirm_delete: false,
             reel: None,
             viewing: None,
+            extra: load_folders(),
+            source_extra: None,
             slideshow: false,
             full: None,
             start,
@@ -1010,6 +1060,7 @@ impl cosmic::Application for App {
             }
             Message::Source(folder) => {
                 self.source = folder;
+                self.source_extra = None;
                 self.menu = None;
                 self.clear_selection();
                 self.save();
@@ -1211,6 +1262,69 @@ impl cosmic::Application for App {
                     Err(e) => {
                         tracing::warn!("could not save albums: {e}");
                         self.albums_unsaved = true;
+                    }
+                }
+            }
+            Message::AddFolder => {
+                self.menu = None;
+                return Task::future(async {
+                    use cosmic::dialog::file_chooser;
+                    let picked = match file_chooser::open::Dialog::new().title("Add a folder of pictures").open_folder().await {
+                        Ok(r) => r.url().to_file_path().ok(),
+                        Err(file_chooser::Error::Cancelled) => None,
+                        Err(e) => {
+                            tracing::warn!("folder chooser failed: {e:?}");
+                            None
+                        }
+                    };
+                    cosmic::Action::App(Message::FolderPicked(picked))
+                });
+            }
+            Message::FolderPicked(None) => {}
+            Message::FolderPicked(Some(dir)) => {
+                if !dir.is_dir() {
+                    return Task::none();
+                }
+                match edit_folders(|l| {
+                    if !l.contains(&dir) {
+                        l.push(dir.clone());
+                    }
+                }) {
+                    Ok(saved) => {
+                        self.extra = saved;
+                        self.source = None;
+                        self.source_extra = Some(dir);
+                        self.notice = None;
+                        self.scanning = true;
+                        return self.scan_task();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save folders: {e}");
+                        self.notice = Some("The folder could not be saved, so Photos will forget it when it closes.".to_string());
+                    }
+                }
+            }
+            Message::SourceExtra(dir) => {
+                self.source = None;
+                self.source_extra = Some(dir);
+                self.menu = None;
+                self.clear_selection();
+                return self.refresh_view();
+            }
+            Message::RemoveFolder => {
+                let Some(dir) = self.source_extra.clone() else { return Task::none() };
+                self.menu = None;
+                match edit_folders(|l| l.retain(|d| d != &dir)) {
+                    Ok(saved) => {
+                        self.extra = saved;
+                        self.source_extra = None;
+                        self.clear_selection();
+                        self.scanning = true;
+                        return self.scan_task();
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not save folders: {e}");
+                        self.notice = Some("The folder could not be removed.".to_string());
                     }
                 }
             }
@@ -1448,6 +1562,11 @@ impl App {
         );
 
         let mut sources = vec![Self::menu_item("All folders", Some("folder-symbolic"), self.source.is_none(), Message::Source(None))];
+        for dir in &self.extra {
+            let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
+            sources.push(Self::menu_item(&name, Some("folder-symbolic"), self.source_extra.as_ref() == Some(dir), Message::SourceExtra(dir.clone())));
+        }
+        sources.push(Self::menu_item("Add folder...", Some("folder-new-symbolic"), false, Message::AddFolder));
         for f in Folder::ALL {
             if f.dir().is_some_and(|d| d.is_dir()) {
                 sources.push(Self::menu_item(f.label(), Some(f.icon()), self.source == Some(f), Message::Source(Some(f))));
@@ -1456,7 +1575,10 @@ impl App {
         bar = bar.push(self.dropdown(
             Menu::Source,
             "folder-symbolic",
-            self.source.map_or("All folders", Folder::label).to_string(),
+            match (&self.source_extra, self.source) {
+                (Some(d), _) => d.file_name().map_or_else(|| d.display().to_string(), |n| n.to_string_lossy().into_owned()),
+                (None, s) => s.map_or("All folders", Folder::label).to_string(),
+            },
             sources,
         ));
 
@@ -1521,6 +1643,9 @@ impl App {
         }
 
         let mut more = vec![Self::menu_item("Slideshow", Some("media-playback-start-symbolic"), false, Message::Slideshow), Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        if self.source_extra.is_some() {
+            more.push(Self::menu_item("Stop looking in this folder", Some("list-remove-symbolic"), false, Message::RemoveFolder));
+        }
         if self.section == Section::Album {
             more.push(Self::menu_item("Delete this album", Some("user-trash-symbolic"), false, Message::DeleteAlbum));
         }

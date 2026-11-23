@@ -6,7 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-libcosmic.workspace = true
+# File dialog for Add folder (XDG portal, which Lapin UX answers with its own file dialog).
+libcosmic = { workspace = true, features = ["xdg-portal"] }
 lapin-ux-core.workspace = true
 lapin-ux-ui.workspace = true
 anyhow.workspace = true

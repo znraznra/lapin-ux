@@ -58,3 +58,4 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
 | Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | 1 |
 | Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | 1 |
+| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | 1 |
