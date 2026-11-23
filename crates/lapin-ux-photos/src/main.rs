@@ -209,6 +209,10 @@ enum Message {
     /// Starts the slideshow, or stops it when it is running.
     Slideshow,
     SlideshowTick,
+    /// Steps the slideshow speed to the next choice.
+    SlideSpeed,
+    /// Fills the screen with the window, or goes back.
+    Fullscreen,
     /// Opens an album.
     Album(String),
     AddToAlbum(String),
@@ -261,8 +265,6 @@ fn still_viewing(path: &Path) -> bool {
     VIEWING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(path)
 }
 
-/// How long each photo stays in the slideshow.
-const SLIDE_TIME: std::time::Duration = std::time::Duration::from_secs(4);
 const ALBUMS_UNSAVED: &str = "Your albums could not be saved, so the change was not kept.";
 static LOCK_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-lock"));
 static NEW_ALBUM_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-new-album"));
@@ -332,6 +334,10 @@ struct App {
     source_extra: Option<PathBuf>,
     /// The slideshow is running: the viewer moves on by itself.
     slideshow: bool,
+    /// Seconds each photo stays in the slideshow (saved).
+    slide_secs: u8,
+    /// The window fills the screen.
+    fullscreen: bool,
     /// The full-size picture of the viewer or the reel.
     full: Option<(PathBuf, Handle)>,
     /// The picture to open at start, from the command line or Files.
@@ -443,14 +449,19 @@ struct Prefs {
     group: Group,
     sidebar: bool,
     source: Option<Folder>,
+    /// Seconds each photo stays in the slideshow.
+    slide_secs: u8,
 }
+
+/// The slideshow speeds the menu steps through.
+const SLIDE_CHOICES: [u8; 4] = [2, 4, 8, 15];
 
 fn prefs_file() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join(APP_ID).join("settings.json"))
 }
 
 fn load_prefs() -> Prefs {
-    let mut prefs = Prefs { size: DEFAULT_SIZE, square: true, group: Group::Days, sidebar: true, source: None };
+    let mut prefs = Prefs { size: DEFAULT_SIZE, square: true, group: Group::Days, sidebar: true, source: None, slide_secs: 4 };
     let Some(file) = prefs_file() else { return prefs };
     let Ok(text) = std::fs::read_to_string(&file) else { return prefs };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -469,6 +480,9 @@ fn load_prefs() -> Prefs {
     if let Some(b) = v.get("sidebar").and_then(|x| x.as_bool()) {
         prefs.sidebar = b;
     }
+    if let Some(n) = v.get("slide_secs").and_then(|x| x.as_u64()) {
+        prefs.slide_secs = n.clamp(1, 60) as u8;
+    }
     prefs.source = v.get("source").and_then(|x| x.as_str()).and_then(|s| Folder::ALL.into_iter().find(|f| f.key() == s));
     prefs
 }
@@ -481,6 +495,7 @@ fn save_prefs(prefs: &Prefs) {
         "group": prefs.group.key(),
         "sidebar": prefs.sidebar,
         "source": prefs.source.map(|f| f.key()),
+        "slide_secs": prefs.slide_secs,
     });
     let result = (|| {
         let dir = file.parent().ok_or_else(|| std::io::Error::other("settings file has no folder"))?;
@@ -882,7 +897,7 @@ fn is_gif(path: &Path) -> bool {
 
 impl App {
     fn prefs(&self) -> Prefs {
-        Prefs { size: self.size, square: self.square, group: self.group, sidebar: self.sidebar, source: self.source }
+        Prefs { size: self.size, square: self.square, group: self.group, sidebar: self.sidebar, source: self.source, slide_secs: self.slide_secs }
     }
 
     fn save(&self) {
@@ -1085,7 +1100,14 @@ impl App {
             Some(id) => self.set_window_title("Photos".into(), id),
             None => Task::none(),
         };
-        Task::batch([title, reel])
+        let windowed = match self.core.main_window_id() {
+            Some(id) if self.fullscreen => {
+                self.fullscreen = false;
+                cosmic::iced::window::set_mode(id, cosmic::iced::window::Mode::Windowed)
+            }
+            _ => Task::none(),
+        };
+        Task::batch([title, reel, windowed])
     }
 }
 
@@ -1115,6 +1137,8 @@ impl cosmic::Application for App {
             failed: None,
             section: Section::Gallery,
             source: prefs.source,
+            slide_secs: prefs.slide_secs,
+            fullscreen: false,
             size: prefs.size,
             square: prefs.square,
             group: prefs.group,
@@ -1162,7 +1186,7 @@ impl cosmic::Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let tick = if self.slideshow {
-            cosmic::iced::time::every(SLIDE_TIME).map(|_| Message::SlideshowTick)
+            cosmic::iced::time::every(std::time::Duration::from_secs(u64::from(self.slide_secs))).map(|_| Message::SlideshowTick)
         } else {
             Subscription::none()
         };
@@ -1731,6 +1755,19 @@ impl cosmic::Application for App {
                     return self.open(start);
                 }
             }
+            Message::SlideSpeed => {
+                self.menu = None;
+                let at = SLIDE_CHOICES.iter().position(|s| *s == self.slide_secs);
+                self.slide_secs = SLIDE_CHOICES[at.map_or(0, |i| (i + 1) % SLIDE_CHOICES.len())];
+                self.save();
+            }
+            Message::Fullscreen => {
+                self.menu = None;
+                self.fullscreen = !self.fullscreen;
+                let mode = if self.fullscreen { cosmic::iced::window::Mode::Fullscreen } else { cosmic::iced::window::Mode::Windowed };
+                let Some(id) = self.core.main_window_id() else { return Task::none() };
+                return cosmic::iced::window::set_mode(id, mode);
+            }
             Message::SlideshowTick => {
                 if !self.slideshow || self.viewing.is_none() {
                     return Task::none();
@@ -1917,6 +1954,7 @@ impl App {
         }
 
         let mut more = vec![Self::menu_item("Slideshow", Some("media-playback-start-symbolic"), false, Message::Slideshow), Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        more.push(Self::menu_item(&format!("Slideshow speed: {} seconds", self.slide_secs), Some("preferences-system-time-symbolic"), false, Message::SlideSpeed));
         if self.section == Section::Hidden && !self.hidden_locked() {
             if self.lock.is_some() {
                 more.push(Self::menu_item("Change the password", Some("system-lock-screen-symbolic"), false, Message::SetLock));
@@ -2319,6 +2357,11 @@ impl App {
                 button::icon(icon::from_name(if self.slideshow { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" }))
                     .name(if self.slideshow { "Stop the slideshow" } else { "Start the slideshow" })
                     .on_press(Message::Slideshow),
+            )
+            .push(
+                button::icon(icon::from_name(if self.fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" }))
+                    .name(if self.fullscreen { "Leave full screen" } else { "Full screen" })
+                    .on_press(Message::Fullscreen),
             )
             .push(
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))

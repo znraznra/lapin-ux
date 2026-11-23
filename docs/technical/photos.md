@@ -33,7 +33,8 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 ## Coexistence
 
 Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package.
+- Slideshow speed: More > "Slideshow speed" steps 2, 4, 8, 15 seconds, saved as `slide_secs` in `settings.json`. The viewer toolbar has a Full screen button; leaving the viewer leaves full screen.
 
 ## Not yet
 
-A slideshow timer setting and fullscreen, lazy tile loading on scroll, rotate and edit.
+Lazy tile loading on scroll, rotate and edit.
