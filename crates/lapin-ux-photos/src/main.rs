@@ -194,9 +194,9 @@ enum Message {
     Reel(PathBuf),
     Refresh,
     /// A thumbnail with its size, so tiles can keep the picture's proportions.
-    Thumb(PathBuf, Option<(Handle, (u32, u32))>),
+    Thumb(PathBuf, u64, Option<(Handle, (u32, u32))>),
     Open(PathBuf),
-    Full(PathBuf, Option<Handle>),
+    Full(PathBuf, u64, Option<Handle>),
     /// A full-size decode that was skipped because the picture is no longer open.
     Ignore,
     Retry,
@@ -248,6 +248,17 @@ struct App {
     dims: HashMap<PathBuf, (u32, u32)>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
+    /// Bumped whenever a picture's cached tile or full decode is thrown away
+    /// (its file changed on disk). Decodes carry the number they started under.
+    epoch: u64,
+    /// The epoch at which each picture's caches were last thrown away: a decode
+    /// that started before it shows the old file and is dropped.
+    stale_since: HashMap<PathBuf, u64>,
+    /// Folder scans that have not reported yet.
+    scans_running: u32,
+    /// Pictures moved to the Recycle Bin while a scan was running; that scan may
+    /// still list them.
+    trashed_meanwhile: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
@@ -586,12 +597,13 @@ impl App {
         if todo.is_empty() {
             return Task::none();
         }
+        let epoch = self.epoch;
         Task::stream(
             futures::stream::iter(todo)
-                .map(|p| async move {
+                .map(move |p| async move {
                     let key = p.clone();
                     let h = tokio::task::spawn_blocking(move || load_thumb(p)).await.ok().flatten();
-                    cosmic::Action::App(Message::Thumb(key, h))
+                    cosmic::Action::App(Message::Thumb(key, epoch, h))
                 })
                 .buffer_unordered(4),
         )
@@ -602,7 +614,8 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scans_running += 1;
         let starred = self.favorites.clone();
         Task::future(async move {
             let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
@@ -614,17 +627,18 @@ impl App {
     /// queued decode of another picture.
     fn want_full(&mut self, path: PathBuf) -> Task<Message> {
         set_viewing(Some(path.clone()));
+        let epoch = self.epoch;
         Task::future(async move {
             let key = path.clone();
             let Ok(_permit) = FULL_DECODES.acquire().await else {
-                return cosmic::Action::App(Message::Full(key, None));
+                return cosmic::Action::App(Message::Full(key, epoch, None));
             };
             // Paged past or closed while waiting for a turn: skip the decode.
             if !still_viewing(&key) {
                 return cosmic::Action::App(Message::Ignore);
             }
             let h = tokio::task::spawn_blocking(move || load_full(path)).await.ok().flatten();
-            cosmic::Action::App(Message::Full(key, h))
+            cosmic::Action::App(Message::Full(key, epoch, h))
         })
     }
 
@@ -659,7 +673,9 @@ impl App {
         let Some(target) = target else {
             self.reel = None;
             if self.viewing.is_none() {
+                set_viewing(None);
                 self.full = None;
+                self.failed = None;
             }
             return Task::none();
         };
@@ -726,12 +742,13 @@ impl App {
         self.viewing = None;
         self.full = None;
         self.failed = None;
-        let reel = match self.reel.clone() {
-            Some(p) if self.size == REEL => self.want_full(p),
-            _ => {
-                set_viewing(None);
-                Task::none()
-            }
+        // The reel may have changed while the viewer was open (a favorite was
+        // removed, a picture trashed), so check it against the list again.
+        let reel = if self.size == REEL {
+            self.sync_reel()
+        } else {
+            set_viewing(None);
+            Task::none()
         };
         let title = match self.core.main_window_id() {
             Some(id) => self.set_window_title("Photos".into(), id),
@@ -775,6 +792,10 @@ impl cosmic::Application for App {
             thumbs: HashMap::new(),
             dims: HashMap::new(),
             asked: HashSet::new(),
+            epoch: 0,
+            stale_since: HashMap::new(),
+            scans_running: 0,
+            trashed_meanwhile: HashSet::new(),
             favorites: load_favorites(),
             selected: HashSet::new(),
             select_mode: false,
@@ -837,7 +858,46 @@ impl cosmic::Application for App {
                         "Showing the first {MAX_PHOTOS} pictures found in your folders, and {n} folder(s) could not be read."
                     )),
                 };
-                self.photos = found.photos;
+                self.scans_running = self.scans_running.saturating_sub(1);
+                let mut photos = found.photos;
+                // Pictures trashed while this scan ran must not come back.
+                if !self.trashed_meanwhile.is_empty() {
+                    photos.retain(|p| !self.trashed_meanwhile.contains(&p.path));
+                }
+                if self.scans_running == 0 {
+                    self.trashed_meanwhile.clear();
+                }
+                // A file that changed on disk needs its tile and full decode again.
+                let old: HashMap<&PathBuf, SystemTime> = self.photos.iter().map(|p| (&p.path, p.modified)).collect();
+                let changed: Vec<PathBuf> = photos
+                    .iter()
+                    .filter(|p| old.get(&p.path).is_some_and(|m| *m != p.modified))
+                    .map(|p| p.path.clone())
+                    .collect();
+                drop(old);
+                let mut redo = Task::none();
+                if !changed.is_empty() {
+                    self.epoch += 1;
+                    for p in &changed {
+                        self.thumbs.remove(p);
+                        self.dims.remove(p);
+                        self.asked.remove(p);
+                        self.stale_since.insert(p.clone(), self.epoch);
+                    }
+                    if self.full.as_ref().is_some_and(|(p, _)| changed.contains(p)) {
+                        self.full = None;
+                    }
+                    if let Some(p) = self.viewing.clone().filter(|p| changed.contains(p)) {
+                        self.failed = None;
+                        redo = self.want_full(p);
+                    } else if let Some(p) = self.reel.clone().filter(|p| changed.contains(p)) {
+                        if self.viewing.is_none() && self.size == REEL {
+                            self.failed = None;
+                            redo = self.want_full(p);
+                        }
+                    }
+                }
+                self.photos = photos;
                 self.scanning = false;
                 let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
                 self.selected.retain(|p| live.contains(p));
@@ -854,7 +914,7 @@ impl cosmic::Application for App {
                     _ => Task::none(),
                 };
                 let view = self.refresh_view();
-                return Task::batch([view, open]);
+                return Task::batch([view, open, redo]);
             }
             Message::Section(s) => {
                 self.section = s;
@@ -954,6 +1014,17 @@ impl cosmic::Application for App {
                         self.favorites_unsaved = true;
                     }
                 }
+                // In the Favorites section an unstarred picture leaves the list,
+                // so the selection must not keep it.
+                let live: HashSet<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                self.selected.retain(|p| live.contains(p));
+                if self.anchor.as_ref().is_some_and(|a| !live.contains(a)) {
+                    self.anchor = None;
+                }
+                if self.selected.is_empty() {
+                    self.select_mode = false;
+                    self.confirm_delete = false;
+                }
                 return self.refresh_view();
             }
             Message::AskDelete => {
@@ -977,6 +1048,9 @@ impl cosmic::Application for App {
             }
             Message::Trashed(done, failed) => {
                 let gone: HashSet<PathBuf> = done.into_iter().collect();
+                if self.scans_running > 0 {
+                    self.trashed_meanwhile.extend(gone.iter().cloned());
+                }
                 self.photos.retain(|p| !gone.contains(&p.path));
                 self.selected.retain(|p| !gone.contains(p));
                 for p in &gone {
@@ -1001,18 +1075,22 @@ impl cosmic::Application for App {
                 self.scanning = true;
                 return self.scan_task();
             }
-            Message::Thumb(path, loaded) => {
-                if let Some((h, dims)) = loaded {
+            Message::Thumb(path, epoch, loaded) => {
+                // A decode that began before the file changed shows the old picture.
+                let stale = self.stale_since.get(&path).is_some_and(|s| epoch < *s);
+                if let (false, Some((h, dims))) = (stale, loaded) {
                     self.dims.insert(path.clone(), dims);
                     self.thumbs.insert(path, h);
                 }
             }
             Message::Open(path) => return self.open(path),
-            Message::Full(path, handle) => {
-                let wanted = match &self.viewing {
-                    Some(v) => *v == path,
-                    None => self.reel.as_ref() == Some(&path),
-                };
+            Message::Full(path, epoch, handle) => {
+                let stale = self.stale_since.get(&path).is_some_and(|s| epoch < *s);
+                let wanted = !stale
+                    && match &self.viewing {
+                        Some(v) => *v == path,
+                        None => self.reel.as_ref() == Some(&path),
+                    };
                 if wanted {
                     match handle {
                         Some(h) => {
@@ -1263,7 +1341,15 @@ impl App {
             }
             container(col.push(text::body(msg))).center(Length::Fill).into()
         } else if self.size == REEL {
-            self.reel_view(&shown)
+            // The reel has no grid to carry the status lines, so they go above it.
+            let mut col = column::with_capacity(3).spacing(8).padding([8, 16, 0, 8]);
+            if self.favorites_unsaved {
+                col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            if let Some(notice) = &self.notice {
+                col = col.push(text::caption(notice.as_str()));
+            }
+            col.push(self.reel_view(&shown)).height(Length::Fill).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
@@ -1355,7 +1441,17 @@ impl App {
         };
         let (w, h) = (Length::Fixed(w), Length::Fixed(h));
         let picture: Element<'_, Message> = match self.thumbs.get(path) {
-            Some(handle) => widget::image(handle.clone()).content_fit(cosmic::iced::ContentFit::Cover).width(w).height(h).into(),
+            Some(handle) => {
+                // Square tiles crop to fill. Otherwise the tile follows the
+                // picture's shape, and where the width is capped (a very wide or
+                // very tall picture) the whole picture stays visible.
+                let fit = if self.square || strip && !self.dims.contains_key(path) {
+                    cosmic::iced::ContentFit::Cover
+                } else {
+                    cosmic::iced::ContentFit::Contain
+                };
+                widget::image(handle.clone()).content_fit(fit).width(w).height(h).into()
+            }
             None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(w).height(h).into(),
         };
         let mut tile = stack![picture];
