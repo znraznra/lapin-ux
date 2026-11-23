@@ -1294,6 +1294,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::Source(folder) => {
+                self.tile_limit = MAX_TILES;
                 self.source = folder;
                 self.source_extra = None;
                 self.menu = None;
@@ -1634,6 +1635,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::SourceExtra(dir) => {
+                self.tile_limit = MAX_TILES;
                 self.source = None;
                 self.source_extra = Some(dir);
                 self.menu = None;
