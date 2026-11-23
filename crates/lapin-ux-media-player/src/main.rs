@@ -136,6 +136,7 @@ enum Ask {
     ExportPlaylist,
     ImportStations,
     ExportStations,
+    LibraryFolder,
 }
 
 impl Ask {
@@ -146,6 +147,7 @@ impl Ask {
             Ask::ExportPlaylist => "Save the queue as (.m3u)",
             Ask::ImportStations => "Stations file (.m3u or .json)",
             Ask::ExportStations => "Save stations as (.json or .m3u)",
+            Ask::LibraryFolder => "Folder to add to the library",
         }
     }
 }
@@ -360,6 +362,10 @@ struct App {
     /// Station being played, so the star and the stream title can follow it.
     station: Option<usize>,
     show_queue: bool,
+    /// The person closed the playlist beside the video list.
+    hide_video_queue: bool,
+    /// A library folder was added, so the next message handler looks again.
+    scan_wanted: bool,
     /// Sound outputs mpv found: (name, description). `device` is the one in use.
     devices: Vec<(String, String)>,
     device: String,
@@ -439,11 +445,12 @@ fn pseudo_random(n: usize) -> usize {
 fn run_scan(roots: Vec<PathBuf>) -> (Vec<Track>, usize) {
     let mut out: Vec<Track> = Vec::new();
     let mut skipped = 0;
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for d in roots {
         let (t, s) = library::scan_report(&d);
         // folders may overlap (Music inside a folder that was added too)
         for x in t {
-            if !out.iter().any(|o| o.path == x.path) {
+            if seen.insert(x.path.clone()) {
                 out.push(x);
             }
         }
@@ -592,7 +599,12 @@ impl App {
             }
             E::Album(a) => self.now.album = a,
             E::StreamTitle(t) => self.now.stream_title = t,
-            E::HasVideo(v) => self.now.has_video = v,
+            E::HasVideo(v) => {
+                if v && !self.now.has_video {
+                    self.hide_video_queue = false;
+                }
+                self.now.has_video = v;
+            }
             E::Loaded => {
                 self.awaiting_start = false;
                 self.notice = None;
@@ -742,7 +754,17 @@ impl App {
                     self.step(false, false, false)
                 }
             }
-            Action::ToggleQueue => self.show_queue = !self.show_queue,
+            Action::ToggleQueue => {
+                if self.show_queue {
+                    self.show_queue = false;
+                    self.hide_video_queue = true;
+                } else if self.inline_queue() {
+                    self.hide_video_queue = true;
+                } else {
+                    self.show_queue = true;
+                    self.hide_video_queue = false;
+                }
+            }
             Action::ToggleDevices => self.show_devices = !self.show_devices,
             Action::ToggleMini => {
                 self.mini = !self.mini;
@@ -774,6 +796,11 @@ impl App {
             Action::About => self.about = !self.about,
         }
         Task::none()
+    }
+
+    /// The playlist that opens beside the video list while a video plays.
+    fn inline_queue(&self) -> bool {
+        self.section == Section::Videos && self.now.has_video && !self.show_queue && !self.hide_video_queue && !self.queue.is_empty()
     }
 
     fn set_volume(&mut self, v: f64) {
@@ -841,6 +868,7 @@ impl App {
         }
         if self.settings.add_folder(dir) {
             self.save_settings();
+            self.scan_wanted = true;
         } else {
             self.notice = Some("That folder is already in the library.".into());
         }
@@ -850,8 +878,14 @@ impl App {
         use pick::Job;
         let kind = match job {
             Job::LibraryFolder => {
-                if let Ok(Some(dir)) = r {
-                    self.add_library_folder(&dir);
+                match r {
+                    Ok(Some(dir)) => self.add_library_folder(&dir),
+                    Ok(None) => {}
+                    Err(why) => {
+                        tracing::warn!("file dialog unavailable: {why}");
+                        self.notice = Some("The file dialog could not open, so type the path instead.".into());
+                        self.ask = Some((Ask::LibraryFolder, String::new()));
+                    }
                 }
                 return;
             }
@@ -878,6 +912,7 @@ impl App {
         }
         let path = expand_tilde(&open_target(&value));
         match kind {
+            Ask::LibraryFolder => self.add_library_folder(&path.to_string_lossy()),
             Ask::Open => {
                 if library::valid_stream_url(&value) {
                     self.station = None;
@@ -914,6 +949,8 @@ impl App {
                 Err(e) => self.notice = Some(format!("The playlist could not be read: {e}")),
             },
             Ask::ExportPlaylist => {
+                // the file is always M3U, so a .pls name would hold the wrong contents
+                let path = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pls")) { path.with_extension("m3u") } else { path };
                 let list: Vec<(String, String)> = self.queue.iter().map(|i| (i.title.clone(), absolute_target(&i.target))).collect();
                 self.notice = Some(match library::write_m3u(&list) {
                     Ok(text) => match std::fs::write(&path, text) {
@@ -1068,7 +1105,7 @@ impl App {
             .push(icon_btn(vol_icon, "Mute", Message::Do(Action::Mute)))
             .push(volume)
             .push(icon_btn("audio-speakers-symbolic", "Output device", Message::Do(Action::ToggleDevices)).selected(self.show_devices))
-            .push(icon_btn("view-list-symbolic", "Queue", Message::Do(Action::ToggleQueue)).selected(self.show_queue));
+            .push(icon_btn("view-list-symbolic", "Queue", Message::Do(Action::ToggleQueue)).selected(self.show_queue || self.inline_queue()));
         let bar = row::with_capacity(3).spacing(20).align_y(Alignment::Center).push(left).push(container(card).width(Length::FillPortion(3)).padding([6, 12]).class(theme::Container::Card)).push(right);
         container(lapin_ux_ui::a11y::group("Playback controls", bar)).padding([6, 12]).width(Length::Fill).into()
     }
@@ -1512,8 +1549,18 @@ impl App {
                     *v = s;
                 }
             }
-            Message::Picked(job, r) => self.picked(job, r),
-            Message::AskSubmit => self.submit_ask(),
+            Message::Picked(job, r) => {
+                self.picked(job, r);
+                if std::mem::take(&mut self.scan_wanted) {
+                    return self.start_scan();
+                }
+            }
+            Message::AskSubmit => {
+                self.submit_ask();
+                if std::mem::take(&mut self.scan_wanted) {
+                    return self.start_scan();
+                }
+            }
             Message::AskCancel => self.ask = None,
             Message::StationName(s) => {
                 if let Some(f) = &mut self.new_station {
@@ -1612,6 +1659,8 @@ impl cosmic::Application for App {
             index: None,
             station: None,
             show_queue: false,
+            hide_video_queue: false,
+            scan_wanted: false,
             devices: Vec::new(),
             device: String::from("auto"),
             show_devices: false,
@@ -1708,14 +1757,14 @@ impl cosmic::Application for App {
                 if self.video_on {
                     // the picture, with the playlist beside it
                     let mut r = row::with_capacity(2).push(container(self.video_page()).width(Length::Fill).height(Length::Fill));
-                    if !self.show_queue && !self.queue.is_empty() {
+                    if self.inline_queue() {
                         r = r.push(self.queue_panel());
                     }
                     r.into()
                 } else {
                     let list = self.track_rows(self.visible_tracks(Kind::Video));
                     // without the in-window player the picture is in mpv's own window
-                    if self.now.has_video && !self.show_queue && !self.queue.is_empty() {
+                    if self.inline_queue() {
                         row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
                     } else {
                         list

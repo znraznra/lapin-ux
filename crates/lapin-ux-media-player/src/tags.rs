@@ -66,12 +66,28 @@ fn fnv(text: &str) -> u64 {
 /// formats (TITLE, Title, title), so they are compared in lower case.
 pub fn parse_tags(json: &str) -> Option<Tags> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let map = v.get("format")?.get("tags")?.as_object()?;
+    // Container tags first; some formats (Ogg, Opus, some MKA) keep them on the
+    // audio stream instead, so those fill in whatever the container lacks.
+    let mut maps: Vec<&serde_json::Map<String, serde_json::Value>> = Vec::new();
+    if let Some(m) = v.get("format").and_then(|f| f.get("tags")).and_then(|t| t.as_object()) {
+        maps.push(m);
+    }
+    if let Some(streams) = v.get("streams").and_then(|s| s.as_array()) {
+        maps.extend(streams.iter().filter_map(|s| s.get("tags").and_then(|t| t.as_object())));
+    }
+    if maps.is_empty() {
+        return None;
+    }
     let get = |k: &str| -> String {
-        map.iter()
-            .find(|(name, _)| name.to_ascii_lowercase() == k)
-            .and_then(|(_, val)| val.as_str())
-            .map(|s| s.trim().to_string())
+        maps.iter()
+            .filter_map(|map| {
+                map.iter()
+                    .find(|(name, _)| name.to_ascii_lowercase() == k)
+                    .and_then(|(_, val)| val.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .next()
             .unwrap_or_default()
     };
     let artist = {
@@ -83,7 +99,16 @@ pub fn parse_tags(json: &str) -> Option<Tags> {
 
 /// Runs a command with a time limit and returns what it printed (at most 1 MB).
 /// A broken file must never leave the player waiting.
-fn run_limited(mut cmd: Command, seconds: u64) -> Option<(bool, Vec<u8>)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ran {
+    Done,
+    /// The program ran and said no (a file it cannot read).
+    Failed,
+    /// Cut off at the time limit, which says nothing about the file.
+    TimedOut,
+}
+
+fn run_limited(mut cmd: Command, seconds: u64) -> Option<(Ran, Vec<u8>)> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
@@ -94,29 +119,33 @@ fn run_limited(mut cmd: Command, seconds: u64) -> Option<(bool, Vec<u8>)> {
         buf
     });
     let start = std::time::Instant::now();
-    let ok = loop {
+    let ran = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
+            Ok(Some(status)) => break if status.success() { Ran::Done } else { Ran::Failed },
             Ok(None) if start.elapsed() < Duration::from_secs(seconds) => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break false;
+                break Ran::TimedOut;
             }
         }
     };
     let buf = reader.join().unwrap_or_default();
-    Some((ok, buf))
+    Some((ran, buf))
 }
 
+/// `None` means "try again later" (ffprobe missing, or cut off at the time
+/// limit), so nothing is cached. A file ffprobe reads but cannot use is cached
+/// as empty.
 fn probe(path: &Path) -> Option<Tags> {
     let mut cmd = Command::new("ffprobe");
-    cmd.args(["-v", "quiet", "-protocol_whitelist", "file", "-print_format", "json", "-show_entries", "format_tags", "-i"]).arg(path);
-    let (ok, out) = run_limited(cmd, PROBE_SECONDS)?;
-    if !ok {
-        return None;
+    cmd.args(["-v", "quiet", "-protocol_whitelist", "file", "-print_format", "json", "-show_entries", "format_tags:stream_tags", "-i"]).arg(path);
+    let (ran, out) = run_limited(cmd, PROBE_SECONDS)?;
+    match ran {
+        Ran::TimedOut => None,
+        Ran::Failed => Some(Tags::default()),
+        Ran::Done => Some(parse_tags(&String::from_utf8_lossy(&out)).unwrap_or_default()),
     }
-    parse_tags(&String::from_utf8_lossy(&out))
 }
 
 fn load_cache() -> HashMap<String, Entry> {
@@ -141,26 +170,28 @@ fn save_cache(map: &HashMap<String, Entry>) {
 /// file name is already the title.
 pub fn apply(mut tracks: Vec<Track>) -> Vec<Track> {
     let mut cache = load_cache();
-    let mut todo: Vec<(usize, PathBuf)> = Vec::new();
-    for (i, t) in tracks.iter().enumerate() {
+    let mut todo: Vec<(PathBuf, (u64, u64))> = Vec::new();
+    for t in tracks.iter() {
         if t.kind != Kind::Audio {
             continue;
         }
         let key = t.path.to_string_lossy().into_owned();
-        let fresh = match (cache.get(&key), stamp(&t.path)) {
+        let now = stamp(&t.path);
+        let fresh = match (cache.get(&key), now) {
             (Some(e), Some((m, s))) => e.mtime == m && e.size == s,
             _ => false,
         };
         if !fresh {
-            todo.push((i, t.path.clone()));
+            // taken before reading, so a file changed meanwhile is read again next time
+            if let Some(st) = now {
+                todo.push((t.path.clone(), st));
+            }
         }
     }
     if !todo.is_empty() {
         let found = probe_many(&todo);
-        for (path, tags) in found {
-            if let Some((mtime, size)) = stamp(&path) {
-                cache.insert(path.to_string_lossy().into_owned(), Entry { mtime, size, tags });
-            }
+        for (path, (mtime, size), tags) in found {
+            cache.insert(path.to_string_lossy().into_owned(), Entry { mtime, size, tags });
         }
         // forget files that are gone, so the cache does not grow for ever
         let live: std::collections::HashSet<String> = tracks.iter().map(|t| t.path.to_string_lossy().into_owned()).collect();
@@ -187,9 +218,10 @@ pub fn merge(t: &mut Track, tags: &Tags) {
     }
 }
 
-/// A few files at a time. A file that cannot be read is cached as empty, so it
-/// is not tried again until it changes.
-fn probe_many(todo: &[(usize, PathBuf)]) -> Vec<(PathBuf, Tags)> {
+/// A few files at a time. A file ffprobe cannot read is cached as empty, so it
+/// is not tried again until it changes; one that timed out is left out and tried
+/// again on the next scan.
+fn probe_many(todo: &[(PathBuf, (u64, u64))]) -> Vec<(PathBuf, (u64, u64), Tags)> {
     let workers = std::thread::available_parallelism().map(|n| n.get().min(4)).unwrap_or(2);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(Vec::with_capacity(todo.len()));
@@ -197,10 +229,11 @@ fn probe_many(todo: &[(usize, PathBuf)]) -> Vec<(PathBuf, Tags)> {
         for _ in 0..workers {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some((_, path)) = todo.get(i) else { break };
-                let tags = probe(path).unwrap_or_default();
-                if let Ok(mut r) = results.lock() {
-                    r.push((path.clone(), tags));
+                let Some((path, st)) = todo.get(i) else { break };
+                if let Some(tags) = probe(path) {
+                    if let Ok(mut r) = results.lock() {
+                        r.push((path.clone(), *st, tags));
+                    }
                 }
             });
         }
@@ -227,14 +260,21 @@ pub fn folder_image(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn scale(src: &Path, out: &Path) -> bool {
+/// `Some(true)` made, `Some(false)` ffmpeg says there is no picture, `None`
+/// could not be tried (ffmpeg missing, or cut off), so try again later.
+fn scale(src: &Path, out: &Path) -> Option<bool> {
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file", "-i"])
         .arg(src)
         .args(["-map", "0:v:0", "-an", "-frames:v", "1", "-vf"])
         .arg(format!("scale={COVER_SIDE}:{COVER_SIDE}:force_original_aspect_ratio=decrease"))
         .arg(out);
-    matches!(run_limited(cmd, PROBE_SECONDS), Some((true, _))) && out.is_file()
+    let (ran, _) = run_limited(cmd, PROBE_SECONDS)?;
+    match ran {
+        Ran::TimedOut => None,
+        Ran::Failed => Some(false),
+        Ran::Done => Some(out.is_file()),
+    }
 }
 
 /// A small picture for one folder: the folder image, or the picture embedded in
@@ -252,12 +292,18 @@ pub fn cover_for(dir: &Path, first_song: &Path) -> Option<PathBuf> {
         return None;
     }
     std::fs::create_dir_all(covers_dir()).ok()?;
-    if scale(&source, &png) {
-        Some(png)
-    } else {
-        let _ = std::fs::remove_file(&png);
-        let _ = std::fs::write(&none, b"");
-        None
+    match scale(&source, &png) {
+        Some(true) => Some(png),
+        Some(false) => {
+            let _ = std::fs::remove_file(&png);
+            let _ = std::fs::write(&none, b"");
+            None
+        }
+        None => {
+            // a cut-off run may leave half a picture behind
+            let _ = std::fs::remove_file(&png);
+            None
+        }
     }
 }
 
@@ -343,8 +389,18 @@ mod tests {
         let mut c = Command::new("sleep");
         c.arg("30");
         let start = std::time::Instant::now();
-        let (ok, _) = run_limited(c, 1).unwrap();
+        let (ran, _) = run_limited(c, 1).unwrap();
+        let ok = ran == Ran::Done;
         assert!(!ok);
         assert!(start.elapsed() < Duration::from_secs(5));
     }
+
+    #[test]
+    fn tags_fall_back_to_the_audio_stream() {
+        let j = r#"{"streams":[{"tags":{"TITLE":"Song","ARTIST":"Band"}}],"format":{"tags":{"album":"Disc"}}}"#;
+        let t = parse_tags(j).unwrap();
+        assert_eq!((t.title.as_str(), t.artist.as_str(), t.album.as_str()), ("Song", "Band", "Disc"));
+        assert!(parse_tags(r#"{"format":{}}"#).is_none());
+    }
+
 }
