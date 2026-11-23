@@ -63,3 +63,4 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos Hidden password (#203): lock screen for Hidden, set, change and remove from More. | 1 |
 | Mon 23 Nov | Photos slideshow speed and full screen (#203): speed in More, Full screen button in the viewer. | 1 |
 | Mon 23 Nov | Photos tiles load as you scroll (#203). | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos are matched by canonical path. | 1 |
