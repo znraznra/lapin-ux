@@ -157,6 +157,15 @@ The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 - Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
 
+**Up and the address bar on network locations (#210, #211).** A share (`smb://`,
+`sftp://`...) is a `Location::Network`, which Up used to ignore. Up now goes to the
+parent folder inside the share, from a share root to the server, and from a server
+to Networks (`lapin_network_parent`). The address bar breaks the uri into
+clickable parts: Networks, the server, then each folder (`lapin_network_crumbs`,
+with `%20` and friends shown as text). The last part opens the editable path and
+the others open that folder, so Back and Forward keep working after Up. This is
+plain navigation, so it is not gated on the Lapin session and writes no settings.
+
 **Pages per tab and the details pane (#168, #169, #170, #175).** Home and This PC
 are properties of each tab (the tab's location), not flags on the window, so two
 tabs can show different pages and switching tabs no longer shows one tab's page in
