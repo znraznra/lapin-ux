@@ -511,8 +511,31 @@ chmod u+w "$D/sounds"
 check "a '.x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/.ocean/stereo/bell.oga\" ]"
 check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" ]"
 }
+scenU() {
+echo "U: default apps chosen in Lapin UX stay in Lapin UX (#223)"
+DS=$(dirname $U)/lapin-ux-desktop-settings
+M=$HOME/.config/mimeapps.list
+mkdir -p $HOME/.config
+printf '[Default Applications]\ninode/directory=nautilus.desktop\nx-scheme-handler/https=firefox.desktop\n' > $M
+bash $U --snapshot; bash $DS enter
+check "Lapin UX starts with the user's own defaults" "grep -q nautilus.desktop $M"
+printf '[Default Applications]\ninode/directory=cosmic-files.desktop\nx-scheme-handler/https=chromium.desktop\n' > $M
+bash $DS leave
+check "other desktop: its own defaults back" "grep -q nautilus.desktop $M && grep -q firefox.desktop $M && ! grep -q cosmic-files $M"
+bash $DS enter
+check "Lapin UX: the defaults chosen there" "grep -q cosmic-files.desktop $M && grep -q chromium.desktop $M"
+bash $DS leave
+rm -f $M; bash $DS enter
+check "a user with no mimeapps.list: Lapin UX gets its own" "grep -q cosmic-files.desktop $M"
+bash $DS leave
+check "other desktop: still no mimeapps.list" "[ ! -e $M ]"
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > $M
+bash $DS enter; bash $DS leave
+bash $U --settings-only --yes > $HOME/out.txt 2>&1
+check "after uninstall: the user's own defaults intact" "grep -q nautilus.desktop $M && ! grep -q cosmic-files $M"
+}
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T; do
+for x in A B C D E F G H I J K L M N O P Q R S T U; do
   h=$(mktemp -d)
   env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' $h.log

@@ -129,7 +129,9 @@ use it for one test.
   Lapin UX shares with other desktops are kept per session: GTK font,
   document font, icons and pointer; COSMIC's font, icons, light/dark mode,
   wallpaper, colours and corners (the four theme folders), keyboard
-  shortcuts, Super key and focus policy; the default X pointer.
+  shortcuts, Super key and focus policy; the default X pointer; and the
+  default apps (`~/.config/mimeapps.list`, written by Settings > Default apps,
+  Open with > Always and Explorer's "Opens with", #223).
   `lapin-ux-desktop-settings enter` (session start) stores the other
   desktops' copy in `~/.local/state/lapin-ux/other-desktops` and puts
   Lapin's (`lapin-desktop`) in place; `leave` (session end) does the

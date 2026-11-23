@@ -28,6 +28,9 @@
 #  * COSMIC settings: interface font, icon theme, wallpaper, colours and
 #    corners, Super key and other shortcuts, focus policy.
 #  * The default X pointer (~/.local/share/icons/default).
+#  * Default apps (~/.config/mimeapps.list), written by Settings > Default
+#    apps, Open with > Always and Explorer's "Opens with": a default set in
+#    Lapin UX stays in Lapin UX (#223).
 # Uninstalling swaps the other desktops' copy back; anything that still looks
 # like Lapin UX's (Selawik, Lapin-UX/Win11 icons, Lapin's pointer, wallpaper,
 # shortcuts, colours) goes back to the restore point, or the desktop's default.
@@ -137,6 +140,7 @@ dconf_do() {
 #   cosmic    one COSMIC setting file (<id>/<key>)
 #   cosmicdir a COSMIC theme folder
 #   pointer   the default X pointer (~/.local/share/icons/default/index.theme)
+#   mimeapps  the default apps (~/.config/mimeapps.list)
 # A saved copy is a file (dconf: the value as text, empty = not set), a copy
 # of the file or folder, or <copy>.absent when there was none.
 
@@ -146,12 +150,14 @@ items() {
     for k in "${COSMIC_KEYS[@]}"; do echo "cosmic $k"; done
     for k in "${THEME_DIRS[@]}"; do echo "cosmicdir $k"; done
     echo "pointer default"
+    echo "mimeapps default"
 }
 item_path() {   # where the live value is (not for dconf)
     case "$1" in
     cosmic) echo "$COSMIC/${2%/*}/v1/${2#*/}" ;;
     cosmicdir) echo "$COSMIC/$2" ;;
     pointer) echo "$DATA/icons/default/index.theme" ;;
+    mimeapps) echo "$CFG/mimeapps.list" ;;
     esac
 }
 snap_path() {
@@ -160,6 +166,7 @@ snap_path() {
     cosmic) echo "$SNAP/cosmic-key/$2" ;;
     cosmicdir) echo "$SNAP/cosmic-dir/$2" ;;
     pointer) echo "$SNAP/default-pointer" ;;
+    mimeapps) echo "$SNAP/mimeapps.list" ;;
     esac
 }
 store_path() { echo "$1/$2/${3//\//__}"; }   # base kind name
@@ -181,6 +188,7 @@ describe() {
     cosmic:activation_policy) echo "COSMIC focus policy" ;;
     cosmicdir:*) echo "COSMIC colours and corners (${2#com.system76.CosmicTheme.})" ;;
     pointer:*) echo "default pointer" ;;
+    mimeapps:*) echo "default apps" ;;
     esac
 }
 
@@ -319,6 +327,9 @@ lapins_at() {   # kind name location-of-a-value
     cosmic) key_is_lapins "${2%/*}" "${2#*/}" "$3" ;;
     cosmicdir) [ -d "$3" ] && theme_is_lapins "$3" ;;
     pointer) [ "$(inherited_pointer "$3")" = "$CURSOR" ] ;;
+    # Default apps are your own choice in every desktop: nothing in the file
+    # is recognisably Lapin's, so it is only ever swapped, never reset (#223).
+    mimeapps) return 1 ;;
     esac
 }
 looks_lapins_now() {   # kind name
