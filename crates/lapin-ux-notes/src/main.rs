@@ -2178,6 +2178,11 @@ impl App {
             it("Move line up", "Alt+Up", MoveUp),
             it("Move line down", "Alt+Down", MoveDown),
             it("Join lines", "Ctrl+J", Join),
+            sep(),
+            it("Add next match to selection", "Ctrl+Alt+D", AddNext),
+            it("Add caret above", "Ctrl+Alt+Up", CaretAbove),
+            it("Add caret below", "Ctrl+Alt+Down", CaretBelow),
+            it("Single caret", "Esc", ClearCarets),
         ];
         let search = vec![
             it("Find...", "Ctrl+F", Find),
@@ -2186,6 +2191,13 @@ impl App {
             it("Replace...", "Ctrl+H", Replace),
             it("Find in files...", "Ctrl+Shift+F", Files),
             it("Go to line...", "Ctrl+G", Goto),
+            sep(),
+            it("Toggle bookmark", "Ctrl+F2", BmToggle),
+            it("Next bookmark", "F2", BmNext),
+            it("Previous bookmark", "Shift+F2", BmPrev),
+            it("Clear bookmarks", "", BmClear),
+            it("Delete bookmarked lines", "", BmDelete),
+            it("Copy bookmarked lines", "", BmCopy),
         ];
         let view = vec![
             ck("Word wrap", s.wrap, Wrap),
@@ -2193,6 +2205,7 @@ impl App {
             ck("Show line endings", s.show_eol, Eols),
             ck("Line numbers", s.line_numbers, LineNumbers),
             ck("Highlight current line", s.hl_line, HlLine),
+            ck("Minimap", s.minimap, Minimap),
             sep(),
             it("Zoom in", "Ctrl++", ZoomIn),
             it("Zoom out", "Ctrl+-", ZoomOut),
