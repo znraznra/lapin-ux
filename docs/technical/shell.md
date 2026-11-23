@@ -11,7 +11,13 @@
   apps stacked, tray and clock at the bottom; the running marker sits on the
   inner edge and alignment Center/Left becomes Center/Top. Start, panels,
   pop-ups, toasts, auto-hide and the work area follow the edge. Start and
-  panels on a side bar anchor to its bottom corner.
+  panels on a side bar anchor to its bottom corner, except Start, which docks
+  in the top corner beside the Start button and slides in sideways (#197).
+  On a side bar the clock shows time and date on one line each (seconds are
+  dropped with AM/PM, the date is split into two short lines), the tray is
+  centred, the notification badge stays round and shows its count below the
+  clock (#194, #204), and the right-click menu opens beside the bar and only
+  slides, so it neither clips nor flickers (#195, #196).
 - The Search box is a real text field: click it to type on the taskbar (the
   taskbar takes the keyboard only meanwhile); Enter shows the results in
   Start; Esc or clicking away clears it.

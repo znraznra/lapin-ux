@@ -232,15 +232,53 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
     // Seconds only when the user turned them on, on either taskbar size
     // (#38; Settings > Taskbar behaviors or Time & language > Date & time).
     let clock_style = shell.clock_style();
-    let mut time = column::with_capacity(2).align_x(if vertical { Alignment::Center } else { Alignment::End });
-    time = time.push(text::caption(clock_style.time(&shell.now)).size(12.0));
-    if !style::small_taskbar() {
-        time = time.push(text::caption(clock_style.date(&shell.now)).size(12.0));
+    // On a side bar the clock has about 48 px: time and date each stay on one
+    // line (no wrapping), seconds drop out of the 12-hour format, the date
+    // splits in two (day and month above, year below, following the chosen
+    // order) and the notification badge sits underneath (#194, #204).
+    let nowrap = cosmic::iced::widget::text::Wrapping::None;
+    let mut time = column::with_capacity(3).align_x(if vertical { Alignment::Center } else { Alignment::End });
+    if vertical {
+        let mut vstyle = clock_style;
+        if vstyle.hour12 {
+            vstyle.seconds = false;
+        }
+        time = time.push(text::caption(vstyle.time(&shell.now)).size(11.0).wrapping(nowrap));
+        let date = clock_style.date(&shell.now);
+        let sep = clock_style.separator;
+        let (top, bottom) = match clock_style.order {
+            lapin_ux_core::clock::DateOrder::Ymd => match date.split_once(sep) {
+                Some((year, rest)) => (year.to_string(), rest.to_string()),
+                None => (date.clone(), String::new()),
+            },
+            _ => match date.rsplit_once(sep) {
+                Some((rest, year)) => (rest.to_string(), year.to_string()),
+                None => (date.clone(), String::new()),
+            },
+        };
+        time = time.push(text::caption(top).size(11.0).wrapping(nowrap));
+        if !bottom.is_empty() {
+            time = time.push(text::caption(bottom).size(11.0).wrapping(nowrap));
+        }
+    } else {
+        time = time.push(text::caption(clock_style.time(&shell.now)).size(12.0));
+        if !style::small_taskbar() {
+            time = time.push(text::caption(clock_style.date(&shell.now)).size(12.0));
+        }
     }
-    let mut clock_content = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(time);
-    if shell.notify.available {
-        clock_content = clock_content.push(notify_badge(shell.notify));
-    }
+    let clock_content: Element<'_, Message> = if vertical {
+        let mut c = column::with_capacity(2).spacing(4).align_x(Alignment::Center).push(time);
+        if shell.notify.available {
+            c = c.push(notify_badge(shell.notify));
+        }
+        c.into()
+    } else {
+        let mut c = row::with_capacity(2).spacing(8).align_y(Alignment::Center).push(time);
+        if shell.notify.available {
+            c = c.push(notify_badge(shell.notify));
+        }
+        c.into()
+    };
     let clock = button::custom(clock_content)
     .padding(if vertical { [4, 2] } else if style::small_taskbar() { [0, 10] } else { [4, 10] })
     .class(style::flat_button(matches!(shell.popup.as_ref().map(|p| &p.kind), Some(PopupKind::Calendar))))
@@ -335,7 +373,7 @@ pub fn taskbar<'a>(shell: &'a Shell, bar: &'a Bar) -> Element<'a, Message> {
         );
     }
     let right: Element<'_, Message> = if vertical {
-        column::with_children(right).spacing(2).align_x(Alignment::Center).into()
+        column::with_children(right).spacing(2).width(Length::Fill).align_x(Alignment::Center).into()
     } else {
         row::with_children(right).spacing(2).align_y(Alignment::Center).into()
     };
@@ -693,7 +731,7 @@ fn load_png(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
     Some((img.width(), img.height(), img.into_raw()))
 }
 
-fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
+fn tray_menu<'a>(shell: &'a Shell, name: &'a str, parent: cosmic::iced::window::Id) -> Element<'a, Message> {
     let Some(entry) = shell.tray.iter().find(|t| t.item.name() == name) else {
         return panel(text::body("Not available"), 200.0);
     };
@@ -746,7 +784,19 @@ fn tray_menu<'a>(shell: &'a Shell, name: &'a str) -> Element<'a, Message> {
             items.push(menu_item("view-pin-symbolic", "Show on taskbar", Message::TrayPin(id, true)));
         }
     }
-    panel(column::with_children(items).spacing(2), 260.0)
+    // Beside a side bar the pop-up only slides (#195, #196), so a long menu
+    // scrolls inside the output's height instead of running off its edge.
+    let output_h = shell
+        .bars
+        .iter()
+        .find(|b| b.id == parent)
+        .or_else(|| shell.main_bar())
+        .and_then(|b| b.output_height)
+        .unwrap_or(720) as f32;
+    // A fixed id: the shell snaps the offset to the top when the menu path
+    // changes (a new id would not reset the offset in this iced version).
+    let body = widget::scrollable(column::with_children(items).spacing(2)).id(tray_menu_scroll_id()).height(Length::Shrink);
+    panel(container(body).max_height((output_h - 32.0).max(160.0)), 260.0)
 }
 
 /// A menu row with a check mark when `on`.
@@ -1051,7 +1101,7 @@ pub fn popup<'a>(shell: &'a Shell, popup: &'a Popup) -> Element<'a, Message> {
                 300.0,
             )
         }
-        PopupKind::TrayMenu(name) => tray_menu(shell, name),
+        PopupKind::TrayMenu(name) => tray_menu(shell, name, popup.parent),
         PopupKind::TaskbarMenu => taskbar_menu(shell, popup.id),
         PopupKind::Account => crate::account::menu(shell),
         PopupKind::MoveToDesktop(w) => crate::taskview::move_menu(shell, *w),
@@ -1132,8 +1182,12 @@ fn notify_badge(state: crate::notify_client::State) -> Element<'static, Message>
         return icon::from_name("notification-symbolic").size(16).into();
     }
     let label = if state.unread > 99 { "99+".to_string() } else { state.unread.to_string() };
-    container(text::caption(label))
-        .padding([0, 6])
+    // One digit stays a round dot, longer counts widen into a pill.
+    let round = label.len() == 1;
+    container(text::caption(label).wrapping(cosmic::iced::widget::text::Wrapping::None))
+        .padding(if round { [0, 0] } else { [0, 5] })
+        .width(if round { Length::Fixed(18.0) } else { Length::Shrink })
+        .align_x(Alignment::Center)
         .height(18)
         .center_y(18)
         .class(cosmic::theme::Container::custom(|t| {
@@ -1155,4 +1209,10 @@ mod logo_tests {
     fn start_icon_is_the_official_logo() {
         assert_eq!(super::START_LOGO, include_bytes!("../../../docs/assets/lapin-ux-logo.svg"));
     }
+}
+
+/// Id of the tray menu's scrollable, shared with the shell so a submenu or
+/// Back can reset the scroll offset.
+pub fn tray_menu_scroll_id() -> widget::Id {
+    widget::Id::new("lapin-tray-menu-scroll")
 }
