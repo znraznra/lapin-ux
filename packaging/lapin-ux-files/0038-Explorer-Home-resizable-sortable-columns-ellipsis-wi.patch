@@ -1,0 +1,527 @@
+From 74a1c0f626b1ec4e9827c7dfc09f0f6afe7f5252 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 08:48:12 +0800
+Subject: [PATCH] Explorer Home: resizable, sortable columns, ellipsis with
+ tooltip, collapsible sections
+
+Refs #168
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs | 360 ++++++++++++++++++++++++++++++++++++++---------------
+ src/tab.rs |  43 +++++++
+ 2 files changed, 303 insertions(+), 100 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 3ded323..6cee4c9 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -76,7 +76,7 @@ use crate::operation::{
+ };
+ use crate::spawn_detached::spawn_detached;
+ use crate::tab::{
+-    self, HOVER_DURATION, HeadingOptions, ItemMetadata, Location, SORT_OPTION_FALLBACK,
++    self, HOVER_DURATION, LapinHomeLayout, HeadingOptions, ItemMetadata, Location, SORT_OPTION_FALLBACK,
+     SearchLocation, Tab,
+ };
+ use crate::trash::{Trash, TrashExt};
+@@ -488,6 +488,13 @@ pub enum Message {
+     /// Lapin UX: nothing to do (a press that only had to be taken).
+     LapinNoop,
+     LapinPageClick(String, Box<Message>),
++    /// Lapin UX (#168): Home's lists: start dragging a column edge, drag it,
++    /// sort by a column, fold or unfold a section.
++    LapinHomeColStart(usize),
++    LapinHomeColDrag(usize, f32),
++    LapinHomeColSave,
++    LapinHomeSort(usize),
++    LapinHomeToggle(usize),
+     LapinPropsEdit(window::Id, tab::LapinPropsEdit),
+     LapinPropsApply(window::Id, bool),
+     LapinPropsCancel(window::Id),
+@@ -875,6 +882,10 @@ pub struct App {
+     lapin_speed: HashMap<u64, LapinSpeed>,
+     /// Lapin UX: the drives under This PC are hidden in the sidebar (#72).
+     lapin_drives_collapsed: bool,
++    /// Lapin UX (#168): column widths, folded sections and sorting on Home,
++    /// and the width a column had when a drag started.
++    lapin_home_layout: tab::LapinHomeLayout,
++    lapin_home_drag: [f32; 3],
+     nav_model: segmented_button::SingleSelectModel,
+     tab_model: segmented_button::Model<segmented_button::SingleSelect>,
+     config_handler: Option<cosmic_config::Config>,
+@@ -1020,8 +1031,7 @@ impl App {
+ 
+         let mut quick: Vec<Element<'_, Message>> = Vec::new();
+         let mut pinned_dirs: Vec<PathBuf> = Vec::new();
+-        let mut pinned_files = widget::column::with_capacity(9).spacing(0);
+-        let mut any_file = false;
++        let mut pinned: Vec<(Option<usize>, LapinHomeFile)> = Vec::new();
+         for (i, favorite) in self.config.favorites.iter().enumerate() {
+             let Some(path) = favorite.path_opt() else { continue };
+             let name = favorite.display_name().unwrap_or_else(|| fl!("filesystem"));
+@@ -1035,34 +1045,7 @@ impl App {
+                 pinned_dirs.push(path.clone());
+                 quick.push(tile(&path, name, location, Some(i)));
+             } else {
+-                any_file = true;
+-                let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+-                let key = format!("p:{}", path.display());
+-                let row_button = widget::button::custom(lapin_file_columns(&path, name, parent))
+-                    .width(Length::Fill)
+-                    .padding([4, space_xs])
+-                    .class(self.lapin_page_class(&key))
+-                    .on_press(Message::LapinPageClick(
+-                        key.clone(),
+-                        Box::new(Message::LapinOpen(path.clone())),
+-                    ));
+-                pinned_files = pinned_files.push(
+-                    widget::row::with_capacity(2)
+-                        .align_y(Alignment::Center)
+-                        .push(
+-                            widget::container(widget::tooltip(
+-                                self.lapin_page_menu(key, row_button.into()),
+-                                widget::text::body(path.display().to_string()),
+-                                widget::tooltip::Position::Bottom,
+-                            ))
+-                            .width(Length::Fill),
+-                        )
+-                        .push(widget::tooltip(
+-                            widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
+-                            widget::text::body(fl!("unpin-from-home")),
+-                            widget::tooltip::Position::Bottom,
+-                        )),
+-                );
++                pinned.push((Some(i), LapinHomeFile::new(path, Some(name))));
+             }
+         }
+         // Folders you used recently: the folders of your recent files.
+@@ -1082,64 +1065,103 @@ impl App {
+         }
+         let quick = widget::flex_row(quick).row_spacing(space_xs).column_spacing(space_xs);
+ 
+-        let mut recent = widget::column::with_capacity(13).spacing(0).push(lapin_file_headings());
+-        let mut shown = 0;
+-        for path in recent_files.iter().take(12) {
+-            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+-            let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+-            let key = format!("r:{}", path.display());
+-            let row_button = widget::button::custom(lapin_file_columns(path, name, parent))
++        let mut recent_list: Vec<(Option<usize>, LapinHomeFile)> = recent_files
++            .iter()
++            .take(12)
++            .map(|path| (None, LapinHomeFile::new(path.clone(), None)))
++            .collect();
++        let layout = &self.lapin_home_layout;
++        lapin_sort_files(&mut pinned, layout.sort);
++        lapin_sort_files(&mut recent_list, layout.sort);
++
++        // One file: the same row in Favorites and in Recent (#168). The whole
++        // path is the tooltip, so cut-off text can still be read.
++        let file_row = |prefix: &str, unpin: Option<usize>, f: &LapinHomeFile| -> Element<'_, Message> {
++            let key = format!("{prefix}:{}", f.path.display());
++            let row_button = widget::button::custom(lapin_file_columns(f, layout))
+                 .width(Length::Fill)
+                 .padding([4, space_xs])
+                 .class(self.lapin_page_class(&key))
+                 .on_press(Message::LapinPageClick(
+                     key.clone(),
+-                    Box::new(Message::LapinOpen(path.clone())),
++                    Box::new(Message::LapinOpen(f.path.clone())),
+                 ));
+-            recent = recent.push(
++            let mut row = widget::row::with_capacity(2).align_y(Alignment::Center).push(
+                 widget::container(widget::tooltip(
+                     self.lapin_page_menu(key, row_button.into()),
+-                    widget::text::body(path.display().to_string()),
++                    widget::text::body(f.path.display().to_string()),
+                     widget::tooltip::Position::Bottom,
+                 ))
+                 .width(Length::Fill),
+             );
+-            shown += 1;
+-        }
+-        if shown == 0 {
+-            recent = recent.push(widget::text::caption(fl!("no-recent-files")));
+-        }
+-        if !any_file {
+-            pinned_files = pinned_files.push(widget::text::caption(fl!("pin-files-hint")));
+-        }
+-        // The headings look like the group headings in folders and on This PC.
+-        let heading = |title: String| -> Element<'_, Message> {
+-            widget::row::with_capacity(3)
++            if let Some(i) = unpin {
++                row = row.push(widget::tooltip(
++                    widget::button::icon(icon::from_name("view-pin-symbolic").size(16)).on_press(Message::LapinUnpin(i)),
++                    widget::text::body(fl!("unpin-from-home")),
++                    widget::tooltip::Position::Bottom,
++                ));
++            }
++            row.into()
++        };
++
++        // Clicking the chevron or the title folds or unfolds a section; only
++        // its content goes, the line stays. The state is remembered.
++        let heading = |section: usize, title: String| -> Element<'_, Message> {
++            let chevron = if layout.collapsed[section] { "go-next-symbolic" } else { "pan-down-symbolic" };
++            widget::row::with_capacity(2)
+                 .spacing(space_xs)
+                 .align_y(Alignment::Center)
+-                .push(icon::from_name("pan-down-symbolic").size(16))
+-                .push(widget::text::body(title).class(theme::Text::Accent))
++                .push(
++                    widget::button::custom(
++                        widget::row::with_capacity(2)
++                            .spacing(space_xs)
++                            .align_y(Alignment::Center)
++                            .push(icon::from_name(chevron).size(16))
++                            .push(widget::text::body(title).class(theme::Text::Accent)),
++                    )
++                    .class(theme::Button::Text)
++                    .padding([2, space_xs])
++                    .on_press(Message::LapinHomeToggle(section)),
++                )
+                 .push(widget::divider::horizontal::default())
+                 .into()
+         };
+-        let pinned_files = if any_file {
+-            widget::column::with_capacity(2).push(lapin_file_headings()).push(pinned_files)
+-        } else {
+-            widget::column::with_capacity(1).push(pinned_files)
+-        };
+-        widget::scrollable(
+-            widget::column::with_capacity(6)
+-                .spacing(space_s)
+-                .padding(space_s)
+-                .push(heading(fl!("quick-access")))
+-                .push(quick)
+-                .push(heading(fl!("favorites")))
+-                .push(pinned_files)
+-                .push(heading(fl!("recent")))
+-                .push(recent),
+-        )
+-        .height(Length::Fill)
+-        .into()
++
++        let mut page = widget::column::with_capacity(9)
++            .spacing(space_s)
++            .padding(space_s)
++            .push(heading(0, fl!("quick-access")));
++        if !layout.collapsed[0] {
++            page = page.push(quick);
++        }
++        page = page.push(heading(1, fl!("favorites")));
++        if !layout.collapsed[1] {
++            let mut list = widget::column::with_capacity(pinned.len() + 2).spacing(0);
++            if pinned.is_empty() {
++                list = list.push(widget::text::caption(fl!("pin-files-hint")));
++            } else {
++                list = list.push(lapin_file_headings(layout));
++                for (unpin, f) in &pinned {
++                    list = list.push(file_row("p", *unpin, f));
++                }
++            }
++            page = page.push(list);
++        }
++        page = page.push(heading(2, fl!("recent")));
++        if !layout.collapsed[2] {
++            let mut list = widget::column::with_capacity(recent_list.len() + 2).spacing(0);
++            if recent_list.is_empty() {
++                list = list.push(lapin_file_headings(layout));
++                list = list.push(widget::text::caption(fl!("no-recent-files")));
++            } else {
++                list = list.push(lapin_file_headings(layout));
++                for (_, f) in &recent_list {
++                    list = list.push(file_row("r", None, f));
++                }
++            }
++            page = page.push(list);
++        }
++        widget::scrollable(page).height(Length::Fill).into()
+     }
+ 
+     /// Lapin UX: the file a Properties window shows.
+@@ -3918,6 +3940,12 @@ impl Application for App {
+             lapin_progress_hidden: false,
+             lapin_speed: HashMap::new(),
+             lapin_drives_collapsed: false,
++            lapin_home_layout: if crate::config::lapin_session() {
++                tab::lapin_home_load()
++            } else {
++                tab::LapinHomeLayout::default()
++            },
++            lapin_home_drag: [0.0; 3],
+             nav_model: segmented_button::ModelBuilder::default().build(),
+             tab_model: segmented_button::ModelBuilder::default().build(),
+             config_handler: flags.config_handler,
+@@ -4527,6 +4555,33 @@ impl Application for App {
+                 self.lapin_page_pick(key.clone());
+                 self.lapin_page_click = Some((key, now));
+             }
++            Message::LapinHomeColStart(i) => {
++                if i < 3 {
++                    self.lapin_home_drag[i] = self.lapin_home_layout.widths[i];
++                }
++            }
++            Message::LapinHomeColDrag(i, dx) => {
++                if i < 3 {
++                    self.lapin_home_layout.widths[i] = (self.lapin_home_drag[i] + dx).clamp(60.0, 800.0);
++                }
++            }
++            Message::LapinHomeColSave => {
++                tab::lapin_home_save(&self.lapin_home_layout);
++            }
++            Message::LapinHomeSort(i) => {
++                let i = i as u8;
++                self.lapin_home_layout.sort = match self.lapin_home_layout.sort {
++                    Some((c, asc)) if c == i => Some((c, !asc)),
++                    _ => Some((i, true)),
++                };
++                tab::lapin_home_save(&self.lapin_home_layout);
++            }
++            Message::LapinHomeToggle(i) => {
++                if let Some(c) = self.lapin_home_layout.collapsed.get_mut(i) {
++                    *c = !*c;
++                    tab::lapin_home_save(&self.lapin_home_layout);
++                }
++            }
+             Message::LapinOpen(path) => {
+                 return self.open_file(&[path]);
+             }
+@@ -9612,46 +9667,151 @@ fn lapin_pane_selected() -> theme::Button {
+     }
+ }
+ 
+-/// Lapin UX: the column headings over Home's file lists.
+-fn lapin_file_headings<'a>() -> Element<'a, Message> {
++/// Width of the grab handle at the right edge of each Home column heading.
++const LAPIN_HOME_HANDLE: f32 = 8.0;
++
++/// Lapin UX (#168): a file listed on Home.
++struct LapinHomeFile {
++    path: PathBuf,
++    name: String,
++    parent: String,
++    accessed: Option<std::time::SystemTime>,
++}
++
++impl LapinHomeFile {
++    fn new(path: PathBuf, name: Option<String>) -> Self {
++        let name = name
++            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()))
++            .unwrap_or_else(|| path.display().to_string());
++        let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
++        let accessed = std::fs::metadata(&path).and_then(|m| m.accessed()).ok();
++        Self { path, name, parent, accessed }
++    }
++}
++
++/// Lapin UX (#168): sort Home's files by a column. With no choice the order
++/// stays as it came (most recently used first).
++fn lapin_sort_files(files: &mut [(Option<usize>, LapinHomeFile)], sort: Option<(u8, bool)>) {
++    let Some((column, ascending)) = sort else { return };
++    files.sort_by(|(_, a), (_, b)| {
++        let order = match column {
++            0 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
++            1 => a.accessed.cmp(&b.accessed),
++            _ => a.parent.to_lowercase().cmp(&b.parent.to_lowercase()),
++        };
++        if ascending { order } else { order.reverse() }
++    });
++}
++
++/// Lapin UX (#168): text cut to fit `px` of width, ending in an ellipsis. The
++/// widths are an estimate (the text renderer has no ellipsis of its own), so
++/// the cells also clip as a safety net.
++fn lapin_ellipsize(text: &str, px: f32) -> String {
++    const UNIT: f32 = 7.2;
++    let unit = |c: char| {
++        if c >= '\u{2E80}' {
++            2.0
++        } else if c.is_uppercase() {
++            1.25
++        } else {
++            1.0
++        }
++    };
++    let budget = (px / UNIT).floor();
++    if text.chars().map(unit).sum::<f32>() <= budget {
++        return text.to_string();
++    }
++    if budget < 2.0 {
++        return String::new();
++    }
++    let mut out = String::new();
++    let mut used = 1.0;
++    for c in text.chars() {
++        used += unit(c);
++        if used > budget {
++            break;
++        }
++        out.push(c);
++    }
++    out.push('\u{2026}');
++    out
++}
++
++/// Lapin UX: the column headings over Home's file lists. Click one to sort,
++/// drag the edge at its right to resize it.
++fn lapin_file_headings<'a>(layout: &LapinHomeLayout) -> Element<'a, Message> {
+     let space_xs = theme::spacing().space_xs;
+-    widget::row::with_capacity(3)
+-        .padding([4, space_xs])
+-        .push(widget::text::heading(fl!("name")).width(Length::FillPortion(3)))
+-        .push(widget::text::heading(fl!("date-accessed")).width(Length::Fixed(200.0)))
+-        .push(widget::text::heading(fl!("file-location")).width(Length::FillPortion(2)))
+-        .into()
++    let mut row = widget::row::with_capacity(3).padding([4, space_xs]).align_y(Alignment::Center);
++    for (i, title) in [fl!("name"), fl!("date-accessed"), fl!("file-location")].into_iter().enumerate() {
++        let mut label = widget::row::with_capacity(2).spacing(space_xs).align_y(Alignment::Center).push(
++            widget::text::heading(title).wrapping(cosmic::iced::widget::text::Wrapping::None),
++        );
++        if let Some((column, ascending)) = layout.sort
++            && usize::from(column) == i
++        {
++            label = label.push(icon::from_name(if ascending { "pan-up-symbolic" } else { "pan-down-symbolic" }).size(12));
++        }
++        let handle = crate::mouse_area::MouseArea::new(
++            widget::container(cosmic::iced::widget::rule::vertical(1))
++                .width(Length::Fixed(LAPIN_HOME_HANDLE))
++                .height(Length::Fixed(16.0))
++                .center_x(Length::Fixed(LAPIN_HOME_HANDLE)),
++        )
++        .on_press(move |_| Message::LapinHomeColStart(i))
++        .on_drag_delta(move |dx| Message::LapinHomeColDrag(i, dx))
++        .on_drag_end(|_| Message::LapinHomeColSave);
++        row = row.push(
++            widget::container(
++                widget::row::with_capacity(2)
++                    .align_y(Alignment::Center)
++                    .push(
++                        crate::mouse_area::MouseArea::new(widget::container(label).width(Length::Fill))
++                            .on_press(move |_| Message::LapinHomeSort(i)),
++                    )
++                    .push(handle),
++            )
++            .width(Length::Fixed(layout.widths[i]))
++            .clip(true),
++        );
++    }
++    row.into()
+ }
+ 
+ /// Lapin UX: one file on Home: icon and name, when it was last opened, and
+-/// its folder.
+-fn lapin_file_columns<'a>(path: &Path, name: String, parent: String) -> Element<'a, Message> {
++/// its folder, in the widths of the column headings. Text that doesn't fit
++/// ends in an ellipsis and never runs into the next column.
++fn lapin_file_columns<'a>(f: &LapinHomeFile, layout: &LapinHomeLayout) -> Element<'a, Message> {
+     let space_xs = theme::spacing().space_xs;
+-    let accessed = std::fs::metadata(path)
+-        .and_then(|m| m.accessed())
+-        .ok()
++    let accessed = f
++        .accessed
+         .and_then(|t| jiff::Timestamp::try_from(t).ok())
+         .map(|ts| ts.to_zoned(jiff::tz::TimeZone::system()).strftime("%d/%m/%Y %-I:%M %P").to_string())
+         .unwrap_or_default();
++    let cell = |width: f32, content: Element<'a, Message>| -> Element<'a, Message> {
++        widget::container(content).width(Length::Fixed(width)).clip(true).into()
++    };
++    let text = |s: &str, avail: f32| -> Element<'a, Message> {
++        widget::text::body(lapin_ellipsize(s, avail))
++            .wrapping(cosmic::iced::widget::text::Wrapping::None)
++            .into()
++    };
++    let [w_name, w_date, w_where] = layout.widths;
++    let icon_space = 16.0 + f32::from(space_xs);
+     widget::row::with_capacity(3)
+         .align_y(Alignment::Center)
+-        .push(
++        .push(cell(
++            w_name,
+             widget::row::with_capacity(2)
+                 .spacing(space_xs)
+                 .align_y(Alignment::Center)
+-                .width(Length::FillPortion(3))
+-                .push(icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(path, None, false), 16)).size(16))
+-                .push(widget::text::body(name).wrapping(cosmic::iced::widget::text::Wrapping::None)),
+-        )
+-        .push(
+-            widget::text::body(accessed)
+-                .width(Length::Fixed(200.0))
+-                .wrapping(cosmic::iced::widget::text::Wrapping::None),
+-        )
+-        .push(
+-            widget::text::body(parent)
+-                .width(Length::FillPortion(2))
+-                .wrapping(cosmic::iced::widget::text::Wrapping::None),
+-        )
++                .push(
++                    icon::icon(crate::mime_icon::mime_icon(crate::mime_icon::mime_for_path(&f.path, None, false), 16))
++                        .size(16),
++                )
++                .push(text(&f.name, w_name - LAPIN_HOME_HANDLE - icon_space))
++                .into(),
++        ))
++        .push(cell(w_date, text(&accessed, w_date - LAPIN_HOME_HANDLE)))
++        .push(cell(w_where, text(&f.parent, w_where - LAPIN_HOME_HANDLE)))
+         .into()
+ }
+diff --git a/src/tab.rs b/src/tab.rs
+index 1013812..c5d58d2 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -8766,6 +8766,49 @@ pub fn lapin_mapped_save(drives: &[LapinMapped]) {
+     }
+ }
+ 
++/// Lapin UX (#168): how the lists on Home are laid out: the widths of the
++/// Name, Date accessed and File location columns, which sections are folded
++/// and how the lists are sorted. Kept in Lapin's own `dev.lapinux.Explorer`.
++#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
++pub struct LapinHomeLayout {
++    pub widths: [f32; 3],
++    /// Quick access, Favorites, Recent.
++    pub collapsed: [bool; 3],
++    /// Column (0 name, 1 date, 2 location) and whether it is ascending.
++    pub sort: Option<(u8, bool)>,
++}
++
++impl Default for LapinHomeLayout {
++    fn default() -> Self {
++        Self {
++            widths: [320.0, 190.0, 360.0],
++            collapsed: [false; 3],
++            sort: None,
++        }
++    }
++}
++
++pub fn lapin_home_load() -> LapinHomeLayout {
++    use cosmic::cosmic_config::ConfigGet;
++    let mut layout = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        .ok()
++        .and_then(|c| c.get::<LapinHomeLayout>("home_layout").ok())
++        .unwrap_or_default();
++    for w in &mut layout.widths {
++        *w = w.clamp(60.0, 800.0);
++    }
++    layout
++}
++
++pub fn lapin_home_save(layout: &LapinHomeLayout) {
++    use cosmic::cosmic_config::ConfigSet;
++    if let Ok(config) = cosmic::cosmic_config::Config::new(LAPIN_EXPLORER_CONFIG, 1)
++        && let Err(err) = config.set("home_layout", layout.clone())
++    {
++        log::warn!("failed to save the Home layout: {err}");
++    }
++}
++
+ /// Lapin UX: a name for a share from its address ("share on 192.168.1.55").
+ pub fn lapin_mapped_name(uri: &str) -> String {
+     let rest = uri.split_once("://").map_or(uri, |(_, r)| r).trim_end_matches('/');
+-- 
+2.56.1
+

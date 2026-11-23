@@ -164,13 +164,20 @@ the other. On both pages a click picks an item (the pane follows it: a drive, a
 pinned folder or a file shows its details; nothing picked says "Select a file or
 folder to see its details."), a double-click opens it, and right-click opens a
 menu: Open, Open in new tab, Open item location, Copy path, Properties, and
-Unpin from Home, Remove from recents or Disconnect where they apply. The Recent
-rows keep to one line with fixed columns (name, last opened, folder) and show the
-full path in a tooltip. On Networks and Recycle Bin the pane follows the selected
+Unpin from Home, Remove from recents or Disconnect where they apply. Favorites and
+Recent share one list (#168): fixed-width columns (Name, Date accessed, File
+location) with the same row height and icons as a folder. Drag the right edge of
+a heading to resize that column and click a heading to sort (the arrow shows the
+direction; no choice keeps the most recently used first). Widths, the sort and
+which sections are folded are kept in `dev.lapinux.Explorer` (`home_layout`).
+Text that doesn't fit ends in "…" (cut by `lapin_ellipsize`, since iced text has
+no ellipsis, and the cell clips as a safety net) and never runs into the next
+column; the full path is the tooltip. Clicking the chevron or title of Quick
+access, Favorites or Recent folds or unfolds its content, the chevron turns, and
+the thin line stays. On Networks and Recycle Bin the pane follows the selected
 item too, and the same empty message shows only while nothing is selected, instead
 of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
-(`config::lapin_session()`); COSMIC's own session is stock. Resizable and sortable
-Recent columns are not part of this change.
+(`config::lapin_session()`); COSMIC's own session is stock.
 
 **Narrow windows** (#151): the file list keeps at least 420 px. Below that
 (window width under 700 px with the 280 px navigation pane) the navigation pane

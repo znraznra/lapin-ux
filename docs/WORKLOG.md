@@ -40,6 +40,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | The file explorer is called Explorer everywhere in the Lapin session, and its About page says Lapin Explorer with credit to COSMIC Files (#173). | Retest |
 | Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
+| Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 
 ## Phase dates
 
