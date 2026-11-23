@@ -729,12 +729,17 @@ fn save_with_exif(
 /// (O_EXCL, which also refuses a symlink planted at the name), so a leftover
 /// or hostile entry is never written through (CWE-59).
 fn create_temp_beside(path: &Path) -> Option<(PathBuf, std::fs::File)> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let name = path.file_name().and_then(|n| n.to_str())?;
     let seed = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    create_temp_beside_seeded(path, seed)
+}
+
+/// The seed is a parameter so a test can name the first candidate.
+fn create_temp_beside_seeded(path: &Path, seed: u128) -> Option<(PathBuf, std::fs::File)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let name = path.file_name().and_then(|n| n.to_str())?;
     for attempt in 0..8u32 {
         let tmp = path.with_file_name(format!(".{name}.{}.{seed:x}.{attempt}.tmp", std::process::id()));
         // Owner-only while it is being written (CWE-378); the caller puts the
@@ -849,9 +854,21 @@ impl Lock {
 
 const LOCK_ROUNDS: u32 = 20_000;
 
-const LOCK_UNREADABLE: &str = "Hidden stays locked because its password file could not be read. Fix or remove hidden-lock.json in ~/.config/dev.lapinux.Photos, then start Photos again.";
+/// Where a saved list lives, for messages: the real path `store_file` gives
+/// (it follows `XDG_CONFIG_HOME`), never a guessed `~/.config`.
+fn store_path_text(name: &str) -> String {
+    store_file(name).map(|p| p.display().to_string()).unwrap_or_else(|| format!("{name}.json in Photos' config folder"))
+}
+
+fn lock_unreadable_msg() -> String {
+    format!("Hidden stays locked because its password file could not be read. Fix or remove {}, then start Photos again.", store_path_text("hidden-lock"))
+}
+
+fn hidden_unreadable_msg() -> String {
+    format!("The list of hidden photos could not be read, so no pictures are shown. Fix or remove {}, then start Photos again.", store_path_text("hidden"))
+}
+
 const LOCK_CHANGED: &str = "The password was changed in another window. Type the current one to open Hidden.";
-const HIDDEN_UNREADABLE: &str = "The list of hidden photos could not be read, so no pictures are shown. Fix or remove hidden.json in ~/.config/dev.lapinux.Photos, then start Photos again.";
 
 fn stretch(salt: &[u8], password: &str) -> [u8; 32] {
     let mut data = salt.to_vec();
@@ -1779,7 +1796,7 @@ impl cosmic::Application for App {
                     }
                     Replaced::Changed | Replaced::Unreadable => {
                         self.sync_lock();
-                        self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
+                        self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
                         return self.refresh_view();
                     }
                     Replaced::Failed(e) => {
@@ -1815,7 +1832,7 @@ impl cosmic::Application for App {
                         }
                         Replaced::Changed | Replaced::Unreadable => {
                             self.sync_lock();
-                            self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
+                            self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
                             return self.refresh_view();
                         }
                         Replaced::Failed(e) => {
@@ -1829,7 +1846,7 @@ impl cosmic::Application for App {
                     self.sync_lock();
                     self.lock_unreadable
                 } {
-                    self.lock_msg = Some(LOCK_UNREADABLE.to_string());
+                    self.lock_msg = Some(lock_unreadable_msg());
                 } else if self.lock.is_none() {
                     // The password was removed in another window.
                     self.lock_msg = None;
@@ -2421,23 +2438,13 @@ impl App {
                 .spacing(12)
                 .align_x(Alignment::Center)
                 .push(icon::from_name("system-lock-screen-symbolic").size(48))
-                .push(text::body(LOCK_UNREADABLE));
+                .push(text::body(lock_unreadable_msg()));
             return container(col).center(Length::Fill).padding(24).into();
         }
         let mut col = column::with_capacity(4)
             .spacing(12)
             .align_x(Alignment::Center)
             .push(icon::from_name("system-lock-screen-symbolic").size(48));
-        if self.lock_unreadable {
-            // The password file is there but cannot be read: stay locked, and
-            // never offer a new password, which would overwrite it.
-            return container(
-                col.push(text::body("Hidden stays locked because its password file could not be read."))
-                    .push(text::caption("Fix or remove hidden-lock.json in ~/.config/dev.lapinux.Photos, then start Photos again.")),
-            )
-            .center(Length::Fill)
-            .into();
-        }
         col = col
             .push(text::body("Hidden is locked. Type its password to look."))
             .push(
@@ -2596,14 +2603,13 @@ impl App {
 
         let shown = self.shown();
         let body: Element<'_, Message> = if self.hidden_unreadable {
-            container(text::body(HIDDEN_UNREADABLE)).center(Length::Fill).padding(24).into()
+            container(text::body(hidden_unreadable_msg())).center(Length::Fill).padding(24).into()
         } else if self.hidden_locked() {
             self.lock_screen()
         } else if self.scanning {
             container(text::body("Looking for your pictures...")).center(Length::Fill).into()
         } else if shown.is_empty() {
             let msg = match (self.section, self.read_errors) {
-                _ if self.hidden_unreadable => "The list of hidden photos could not be read, so no pictures are shown. Fix or remove hidden.json in ~/.config/dev.lapinux.Photos, then start Photos again.",
                 (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
                 (Section::Recents, _) => "Nothing new in the last three days.",
                 (Section::Screenshots, _) => "No screenshots found.",
@@ -2888,58 +2894,82 @@ mod lock_tests {
         assert!(!lock.matches(""));
     }
 
+    /// A directory made exclusively for one test (a leftover with the same name
+    /// is never reused) and removed when the test ends, even on a panic.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let base = std::env::temp_dir();
+            for n in 0..100u32 {
+                let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                let dir = base.join(format!("lapin-{label}-{}-{nanos:x}-{n}", std::process::id()));
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => return TestDir(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => panic!("could not make a test folder: {e}"),
+                }
+            }
+            panic!("could not make a unique test folder");
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn rotate_turns_and_leaves_no_temp_file() {
-        let dir = std::env::temp_dir().join(format!("lapin-rotate-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pic = dir.join("a.png");
+        let dir = TestDir::new("rotate");
+        let pic = dir.0.join("a.png");
         image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
         rotate_file(&pic, true).unwrap();
         let turned = image::open(&pic).unwrap();
         assert_eq!((turned.width(), turned.height()), (2, 4));
-        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        let left: Vec<_> = std::fs::read_dir(&dir.0).unwrap().flatten().collect();
         assert_eq!(left.len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn rotate_never_writes_through_a_planted_link() {
-        let dir = std::env::temp_dir().join(format!("lapin-rotate-link-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pic = dir.join("b.png");
+    fn staging_file_skips_a_planted_link_and_keeps_its_target() {
+        let dir = TestDir::new("rotate-link");
+        let pic = dir.0.join("b.png");
         image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        let victim = dir.join("victim.txt");
+        let victim = dir.0.join("victim.txt");
         std::fs::write(&victim, "keep").unwrap();
-        // Plant links at the old, predictable temporary names.
-        let name = "b.png";
-        for ext in ["png"] {
-            let old = dir.join(format!(".{name}.{}.tmp.{ext}", std::process::id()));
-            let _ = std::os::unix::fs::symlink(&victim, old);
-        }
-        rotate_file(&pic, false).unwrap();
+        // Plant a link at exactly the first name the opener will try.
+        let seed = 0x5eed_u128;
+        let first = dir.0.join(format!(".b.png.{}.{seed:x}.0.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &first).expect("the test link must be created");
+        let (tmp, mut file) = create_temp_beside_seeded(&pic, seed).expect("another candidate is used");
+        assert_ne!(tmp, first, "the planted name must be skipped");
+        assert!(tmp.to_string_lossy().ends_with(".1.tmp"));
+        std::io::Write::write_all(&mut file, b"new").unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::symlink_metadata(&first).unwrap().file_type().is_symlink());
+        // The staging file is owner-only while it holds the bytes.
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o077, 0);
     }
 
     #[test]
     fn rotate_keeps_the_pictures_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("lapin-rotate-mode-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let pic = dir.join("c.png");
+        let dir = TestDir::new("rotate-mode");
+        let pic = dir.0.join("c.png");
         image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
         std::fs::set_permissions(&pic, std::fs::Permissions::from_mode(0o640)).unwrap();
         rotate_file(&pic, true).unwrap();
         assert_eq!(std::fs::metadata(&pic).unwrap().permissions().mode() & 0o777, 0o640);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn saved_lists_match_by_canonical_name() {
         use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!("lapin-photos-alias-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let guard = TestDir::new("alias");
+        let dir = guard.0.clone();
         std::fs::create_dir_all(dir.join("real")).unwrap();
         std::fs::write(dir.join("real/a.png"), b"x").unwrap();
         symlink(dir.join("real"), dir.join("alias")).unwrap();
@@ -2955,6 +2985,5 @@ mod lock_tests {
         let albums = dir.join("albums.json");
         std::fs::write(&albums, serde_json::to_string(&BTreeMap::from([("x", vec![&aliased, &direct])])).unwrap()).unwrap();
         assert_eq!(read_albums(&albums).unwrap()["x"], vec![photo_key(&direct)]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
