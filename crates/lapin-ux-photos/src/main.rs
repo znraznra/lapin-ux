@@ -1155,7 +1155,7 @@ impl App {
     /// Reads the saved password again, because another Photos window may have
     /// set, changed or removed it since this one started. A change closes
     /// Hidden, so a window that was unlocked with the old password does not
-    /// stay open under the new one.
+    /// stay open under the new one. The Hidden list is re-read too.
     fn sync_lock(&mut self) {
         let saved = load_lock();
         let (lock, unreadable) = match &saved {
@@ -1173,6 +1173,22 @@ impl App {
             // Nothing picked in Hidden, and no half-asked delete, survives the
             // lock changing under it.
             self.clear_selection();
+        }
+        // The Hidden list is read again with the password: another window may
+        // have hidden or unhidden pictures, or left the file unreadable, and a
+        // decision about what may open must not rest on the list read at start.
+        match try_load_set("hidden") {
+            Ok(set) => {
+                self.hidden = set;
+                self.hidden_unreadable = false;
+            }
+            Err(e) => {
+                tracing::warn!("could not read the hidden photos: {e}");
+                if !self.hidden_unreadable {
+                    self.clear_selection();
+                }
+                self.hidden_unreadable = true;
+            }
         }
     }
 
@@ -1835,6 +1851,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::HideTargets => {
+                // The password may have changed in another window: read it again
+                // (which clears the selection if so) before acting on the selection.
+                self.sync_lock();
                 // A locked Hidden section shows nothing, so nothing in it can be picked.
                 if self.selected.is_empty() || self.hidden_locked() {
                     return Task::none();
@@ -1863,6 +1882,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AskDelete => {
+                self.sync_lock();
                 if self.viewing.is_none() && !self.selected.is_empty() && !self.hidden_locked() {
                     self.confirm_delete = true;
                 }
@@ -1870,6 +1890,7 @@ impl cosmic::Application for App {
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
+                self.sync_lock();
                 if self.hidden_locked() {
                     return Task::none();
                 }
