@@ -59,23 +59,47 @@ pub fn track_from_path(root: &Path, path: &Path) -> Option<Track> {
     Some(Track { path: path.to_path_buf(), title: clean_title(&stem), artist, album, kind })
 }
 
-pub fn scan(root: &Path) -> Vec<Track> {
-    fn walk(root: &Path, dir: &Path, depth: u32, out: &mut Vec<Track>) {
+/// Files found, and how many folders or entries could not be read.
+pub fn scan_report(root: &Path) -> (Vec<Track>, usize) {
+    fn walk(root: &Path, dir: &Path, depth: u32, out: &mut Vec<Track>, unreadable: &mut usize) {
         if depth > 8 {
             return;
         }
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = rd.flatten().collect();
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => {
+                *unreadable += 1;
+                return;
+            }
+        };
+        let mut entries = Vec::new();
+        for e in rd {
+            match e {
+                Ok(e) => entries.push(e),
+                Err(_) => *unreadable += 1,
+            }
+        }
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             // symlinks are not followed: no loops, nothing outside the folder
-            let Ok(ft) = e.file_type() else { continue };
+            let Ok(ft) = e.file_type() else {
+                *unreadable += 1;
+                continue;
+            };
             let p = e.path();
             if ft.is_dir() {
                 if !e.file_name().to_string_lossy().starts_with('.') {
-                    walk(root, &p, depth + 1, out);
+                    walk(root, &p, depth + 1, out, unreadable);
                 }
             } else if ft.is_file() {
+                // mpv is given the name as text; one that is not valid text would
+                // be changed on the way, so it is left out and counted instead.
+                if p.to_str().is_none() {
+                    if kind_of(&p).is_some() {
+                        *unreadable += 1;
+                    }
+                    continue;
+                }
                 if let Some(t) = track_from_path(root, &p) {
                     out.push(t);
                 }
@@ -83,8 +107,13 @@ pub fn scan(root: &Path) -> Vec<Track> {
         }
     }
     let mut out = Vec::new();
-    walk(root, root, 0, &mut out);
-    out
+    let mut unreadable = 0;
+    walk(root, root, 0, &mut out, &mut unreadable);
+    (out, unreadable)
+}
+
+pub fn scan(root: &Path) -> Vec<Track> {
+    scan_report(root).0
 }
 
 /// Distinct non-empty values, in first-seen order.
@@ -107,21 +136,38 @@ pub fn matches(t: &Track, query: &str) -> bool {
 
 // ---- playlists (.m3u, .m3u8, .pls) ----
 
+/// Targets of a playlist. Local paths are made absolute against `base`; an
+/// address is kept only when it is one of the stream kinds `valid_stream_url`
+/// accepts, because mpv trusts a direct load of any protocol (a playlist must
+/// not be able to open `avdevice://` or similar).
 pub fn parse_playlist(text: &str, base: &Path) -> Vec<String> {
+    // `.pls` files say so; only then do `File1=` and `Title1=` lines mean anything.
+    let pls = text.lines().any(|l| l.trim().trim_start_matches('\u{feff}').eq_ignore_ascii_case("[playlist]"));
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim().trim_start_matches('\u{feff}');
-        let item = if let Some(rest) = line.strip_prefix("File").and_then(|r| r.split_once('=')) {
-            rest.1.trim() // .pls: File1=...
-        } else if line.is_empty() || line.starts_with('#') || line.starts_with('[') || line.contains('=') && !line.contains("://") {
+        if line.is_empty() || line.starts_with('#') {
             continue;
+        }
+        let item = if pls {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let key = key.trim();
+            let is_file = key.len() > 4 && key[..4].eq_ignore_ascii_case("file") && key[4..].chars().all(|c| c.is_ascii_digit());
+            if !is_file {
+                continue;
+            }
+            value.trim()
         } else {
             line
         };
         if item.is_empty() {
             continue;
         }
-        if item.contains("://") || Path::new(item).is_absolute() {
+        if item.contains("://") {
+            if valid_stream_url(item) {
+                out.push(item.to_string());
+            }
+        } else if Path::new(item).is_absolute() {
             out.push(item.to_string());
         } else {
             out.push(base.join(item).to_string_lossy().into_owned());
@@ -130,12 +176,17 @@ pub fn parse_playlist(text: &str, base: &Path) -> Vec<String> {
     out
 }
 
-pub fn write_m3u(items: &[(String, String)]) -> String {
+/// An `.m3u` for the given (title, target) pairs. A line-based format cannot
+/// hold a line break, so such a name is refused instead of written wrongly.
+pub fn write_m3u(items: &[(String, String)]) -> Result<String, String> {
     let mut s = String::from("#EXTM3U\n");
     for (title, target) in items {
-        s.push_str(&format!("#EXTINF:-1,{}\n{}\n", title.replace('\n', " "), target));
+        if target.contains(['\n', '\r']) {
+            return Err(format!("{title} has a line break in its name, which a playlist file cannot hold."));
+        }
+        s.push_str(&format!("#EXTINF:-1,{}\n{}\n", title.replace(['\n', '\r'], " "), target));
     }
-    s
+    Ok(s)
 }
 
 // ---- radio stations ----
@@ -156,8 +207,15 @@ pub fn stations_path() -> PathBuf {
     crate::engine::config_dir().join("stations.json")
 }
 
-pub fn load_stations() -> Vec<Station> {
-    std::fs::read_to_string(stations_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+/// The saved stations. A missing file is a first launch (empty list); a file
+/// that cannot be read or understood is an error, so it is never overwritten
+/// by an empty list.
+pub fn load_stations() -> Result<Vec<Station>, String> {
+    match std::fs::read_to_string(stations_path()) {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("stations.json could not be read ({e})")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("stations.json could not be opened ({e})")),
+    }
 }
 
 pub fn save_stations(list: &[Station]) -> std::io::Result<()> {
@@ -226,8 +284,34 @@ mod tests {
     }
 
     #[test]
+    fn playlists_keep_paths_and_refuse_odd_targets() {
+        // `=` inside an M3U path is part of the name, not a PLS key.
+        let items = parse_playlist("#EXTM3U\n/Music/A=B.mp3\n", Path::new("/b"));
+        assert_eq!(items, vec!["/Music/A=B.mp3".to_string()]);
+        // Only stream addresses come through; other protocols are dropped.
+        let items = parse_playlist("avdevice://x11grab\nytdl://a\nhttps://r.example/live\n", Path::new("/b"));
+        assert_eq!(items, vec!["https://r.example/live".to_string()]);
+        // A name with a line break cannot be written to a line-based file.
+        assert!(write_m3u(&[("A".into(), "/m/a\nb.mp3".into())]).is_err());
+    }
+
+    #[test]
+    fn missing_stations_file_is_empty_but_broken_one_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("lapin-stations-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: tests in this module do not read the environment concurrently.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+        assert_eq!(load_stations().unwrap(), Vec::new());
+        std::fs::create_dir_all(crate::engine::config_dir()).unwrap();
+        std::fs::write(stations_path(), "{ not json").unwrap();
+        assert!(load_stations().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn playlists_round_trip() {
-        let text = write_m3u(&[("A".into(), "/m/a.mp3".into()), ("B".into(), "http://x/y".into())]);
+        let text = write_m3u(&[("A".into(), "/m/a.mp3".into()), ("B".into(), "http://x/y".into())]).unwrap();
         let items = parse_playlist(&text, Path::new("/base"));
         assert_eq!(items, vec!["/m/a.mp3", "http://x/y"]);
         let rel = parse_playlist("#EXTM3U\nsong.mp3\n", Path::new("/base"));

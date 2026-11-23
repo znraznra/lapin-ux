@@ -181,13 +181,82 @@ struct Item {
     title: String,
     artist: String,
     target: String,
+    /// An address on the network, not a file. Never recorded in the play counts.
+    stream: bool,
     #[allow(dead_code)]
     kind: Kind,
 }
 
+impl Item {
+    fn new(title: String, artist: String, target: String, kind: Kind) -> Item {
+        let stream = target.contains("://");
+        Item { title, artist, target, stream, kind }
+    }
+}
+
 impl From<&Track> for Item {
     fn from(t: &Track) -> Self {
-        Item { title: t.title.clone(), artist: t.artist.clone(), target: t.path.to_string_lossy().into_owned(), kind: t.kind }
+        Item::new(t.title.clone(), t.artist.clone(), t.path.to_string_lossy().into_owned(), t.kind)
+    }
+}
+
+/// Decode `%20` style escapes in a `file://` address.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = ((b[i + 1] as char).to_digit(16), (b[i + 2] as char).to_digit(16)) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A command line argument or typed address as something mpv can open:
+/// `file://` addresses become decoded paths, everything else is kept.
+fn open_target(arg: &str) -> String {
+    match arg.strip_prefix("file://") {
+        Some(rest) => {
+            // file://localhost/path and file:///path both mean /path
+            let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+            percent_decode(rest)
+        }
+        None => arg.to_string(),
+    }
+}
+
+/// Expand a leading `~` or `~/` only, never `~name`.
+fn expand_tilde(s: &str) -> PathBuf {
+    if s == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(s));
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(h) = dirs::home_dir() {
+            return h.join(rest);
+        }
+    }
+    PathBuf::from(s)
+}
+
+/// A local path made absolute so an exported playlist works from anywhere.
+fn absolute_target(t: &str) -> String {
+    if t.contains("://") {
+        return t.to_string();
+    }
+    let p = Path::new(t);
+    if p.is_absolute() {
+        return t.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(d) => d.join(p).to_string_lossy().into_owned(),
+        Err(_) => t.to_string(),
     }
 }
 
@@ -212,7 +281,8 @@ enum Message {
     Do(Action),
     Show(Section),
     Search(String),
-    PlayList(Vec<Item>, usize),
+    /// The list is shared, so building a row does not copy the whole queue.
+    PlayList(std::sync::Arc<Vec<Item>>, usize),
     PlayStation(usize),
     PlayPause,
     Next,
@@ -222,7 +292,8 @@ enum Message {
     SeekDrag(f32),
     SeekRelease,
     Volume(f32),
-    Scanned(Vec<Track>),
+    /// The tracks found, and how many folders or files could not be read.
+    Scanned(Vec<Track>, usize),
     AskInput(String),
     AskSubmit,
     AskCancel,
@@ -274,6 +345,15 @@ struct App {
     plays: std::collections::HashMap<String, u32>,
     /// Paths of the songs the user starred.
     favourites: std::collections::HashSet<String>,
+    /// A load was sent and mpv has not said it started yet, so an end-of-file
+    /// that arrives now belongs to the file being replaced.
+    awaiting_start: bool,
+    /// Files in a row that failed to play, so the queue stops instead of looping.
+    fail_streak: usize,
+    /// Last position mpv reported, to go back to when it refuses a seek.
+    confirmed_pos: f64,
+    /// stations.json exists but could not be read, so it is never overwritten.
+    stations_error: bool,
 }
 
 fn fmt_time(s: f64) -> String {
@@ -299,15 +379,16 @@ fn pseudo_random(n: usize) -> usize {
     (t ^ (t >> 7)).wrapping_mul(2654435761) % n.max(1)
 }
 
-fn run_scan() -> Vec<Track> {
+/// The tracks found, and how many folders or files could not be read.
+fn run_scan() -> (Vec<Track>, usize) {
     let mut out = Vec::new();
-    if let Some(d) = dirs::audio_dir() {
-        out.extend(library::scan(&d));
+    let mut skipped = 0;
+    for d in [dirs::audio_dir(), dirs::video_dir()].into_iter().flatten() {
+        let (t, s) = library::scan_report(&d);
+        out.extend(t);
+        skipped += s;
     }
-    if let Some(d) = dirs::video_dir() {
-        out.extend(library::scan(&d));
-    }
-    out
+    (out, skipped)
 }
 
 impl App {
@@ -320,27 +401,49 @@ impl App {
         self.index = Some(i);
         self.notice = None;
         self.now = Now { title: item.title.clone(), artist: item.artist.clone(), ..Default::default() };
+        self.confirmed_pos = 0.0;
+        self.awaiting_start = true;
         engine.load(&item.target);
-        *self.plays.entry(item.target).or_insert(0) += 1;
-        if let Some(dir) = plays_path().parent() {
-            let _ = std::fs::create_dir_all(dir);
+        // Only files on this computer are counted; an address typed in or a
+        // station is never written to disk.
+        if !item.stream {
+            *self.plays.entry(item.target).or_insert(0) += 1;
+            if let Some(dir) = plays_path().parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(plays_path(), serde_json::to_string(&self.plays).unwrap_or_default());
         }
-        let _ = std::fs::write(plays_path(), serde_json::to_string(&self.plays).unwrap_or_default());
     }
 
     fn play_list(&mut self, items: Vec<Item>, at: usize) {
-        self.station = None;
+        // Playing a station again from the queue keeps its star and stream title.
+        self.station = match items.get(at) {
+            Some(it) if it.stream => self.stations.iter().position(|s| s.url == it.target),
+            _ => None,
+        };
         self.queue = items;
+        self.fail_streak = 0;
         self.play_index(at);
     }
 
-    fn step(&mut self, forward: bool, ended: bool) {
+    /// Move to another item. `ended` means the current one finished by itself;
+    /// `failed` that it could not be played, which never repeats it.
+    fn step(&mut self, forward: bool, ended: bool, failed: bool) {
         let n = self.queue.len();
         let Some(i) = self.index else { return };
         if n == 0 {
             return;
         }
-        if ended && self.repeat == Repeat::One {
+        if failed {
+            self.fail_streak += 1;
+            if self.fail_streak >= n {
+                // every item failed in a row: stop, and leave the notice up
+                self.index = None;
+                self.now = Now::default();
+                return;
+            }
+        }
+        if ended && !failed && self.repeat == Repeat::One {
             return self.play_index(i);
         }
         if self.station.is_some() && ended {
@@ -360,7 +463,13 @@ impl App {
             Some(n - 1)
         };
         match next {
-            Some(j) => self.play_index(j),
+            Some(j) => {
+                let keep = if failed { self.notice.clone() } else { None };
+                self.play_index(j);
+                if keep.is_some() {
+                    self.notice = keep; // play_index clears it, the error should stay readable
+                }
+            }
             None => {
                 self.index = None;
                 self.now = Now::default();
@@ -383,7 +492,7 @@ impl App {
                 self.problem = None;
                 for target in std::mem::take(&mut self.start) {
                     let p = Path::new(&target);
-                    let item = Item { title: p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), artist: String::new(), kind: library::kind_of(p).unwrap_or(Kind::Audio), target };
+                    let item = Item::new(p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), String::new(), target.clone(), library::kind_of(p).unwrap_or(Kind::Audio));
                     self.queue.push(item);
                 }
                 if !self.queue.is_empty() && self.index.is_none() {
@@ -391,7 +500,17 @@ impl App {
                 }
             }
             E::Pause(p) => self.now.paused = p,
-            E::Time(t) => self.now.pos = t,
+            E::Time(t) => {
+                self.now.pos = t;
+                self.confirmed_pos = t;
+            }
+            E::Started => self.awaiting_start = false,
+            E::Rejected { id, why } => {
+                if id == engine::SEEK_ID {
+                    self.now.pos = self.confirmed_pos;
+                    self.notice = Some(format!("The player did not accept that jump ({why})."));
+                }
+            }
             E::Duration(d) => self.now.dur = d,
             E::Volume(v) => self.volume = v,
             E::Mute(m) => self.muted = m,
@@ -411,17 +530,23 @@ impl App {
             E::Album(a) => self.now.album = a,
             E::StreamTitle(t) => self.now.stream_title = t,
             E::HasVideo(v) => self.now.has_video = v,
-            E::Loaded => self.notice = None,
+            E::Loaded => {
+                self.awaiting_start = false;
+                self.notice = None;
+                self.fail_streak = 0;
+            }
+            // The end of the file that was just replaced, not of the new one.
+            E::Ended { .. } if self.awaiting_start => {}
             E::Ended { error: Some(why) } => {
                 self.notice = Some(match self.station {
                     Some(i) => format!("{} could not be played ({why}). Check the address in Radio.", self.stations.get(i).map(|s| s.name.as_str()).unwrap_or("The station")),
                     None => format!("{} could not be played ({why}).", self.now.title),
                 });
                 if self.station.is_none() {
-                    self.step(true, true);
+                    self.step(true, true, true);
                 }
             }
-            E::Ended { error: None } => self.step(true, true),
+            E::Ended { error: None } => self.step(true, true, false),
             E::Failed(why) => {
                 self.engine = None;
                 self.problem = Some(why);
@@ -445,19 +570,33 @@ impl App {
                 self.section = Section::Radio;
                 self.new_station = Some(Default::default());
             }
-            Action::PlayPause => send(&|e| e.toggle("pause")),
+            Action::PlayPause => {
+                // Same as the button in the bar: with a queue and nothing
+                // playing it starts the first item, otherwise it pauses or resumes.
+                if self.index.is_none() && !self.queue.is_empty() {
+                    self.fail_streak = 0;
+                    self.play_index(0);
+                } else {
+                    send(&|e| e.toggle("pause"));
+                }
+            }
             Action::Stop => {
                 send(&|e| e.stop());
+                self.awaiting_start = false;
                 self.index = None;
                 self.station = None;
                 self.now = Now::default();
             }
-            Action::Next => self.step(true, false),
+            Action::Next => {
+                self.fail_streak = 0;
+                self.step(true, false, false)
+            }
             Action::Prev => {
                 if self.now.pos > 3.0 {
                     send(&|e| e.seek_to(0.0));
                 } else {
-                    self.step(false, false)
+                    self.fail_streak = 0;
+                    self.step(false, false, false)
                 }
             }
             Action::ToggleQueue => self.show_queue = !self.show_queue,
@@ -502,12 +641,12 @@ impl App {
         if value.is_empty() {
             return;
         }
-        let path = PathBuf::from(value.replacen('~', &dirs::home_dir().unwrap_or_default().to_string_lossy(), 1).trim_start_matches("file://").to_string());
+        let path = expand_tilde(&open_target(&value));
         match kind {
             Ask::Open => {
                 if library::valid_stream_url(&value) {
                     self.station = None;
-                    self.play_list(vec![Item { title: value.clone(), artist: String::new(), target: value, kind: Kind::Audio }], 0);
+                    self.play_list(vec![Item::new(value.clone(), String::new(), value, Kind::Audio)], 0);
                 } else if path.is_dir() {
                     let found = library::scan(&path);
                     if found.is_empty() {
@@ -518,7 +657,7 @@ impl App {
                 } else if path.is_file() {
                     let kind = library::kind_of(&path).unwrap_or(Kind::Audio);
                     let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.play_list(vec![Item { title, artist: String::new(), target: path.to_string_lossy().into_owned(), kind }], 0);
+                    self.play_list(vec![Item::new(title, String::new(), path.to_string_lossy().into_owned(), kind)], 0);
                 } else {
                     self.notice = Some(format!("{value} was not found."));
                 }
@@ -528,7 +667,7 @@ impl App {
                     let base = path.parent().unwrap_or(Path::new("."));
                     let items: Vec<Item> = library::parse_playlist(&text, base)
                         .into_iter()
-                        .map(|t| Item { title: Path::new(&t).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(t.clone()), artist: String::new(), kind: library::kind_of(Path::new(&t)).unwrap_or(Kind::Audio), target: t })
+                        .map(|t| Item::new(Path::new(&t).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(t.clone()), String::new(), t.clone(), library::kind_of(Path::new(&t)).unwrap_or(Kind::Audio)))
                         .collect();
                     if items.is_empty() {
                         self.notice = Some("That playlist has nothing in it.".into());
@@ -540,10 +679,13 @@ impl App {
                 Err(e) => self.notice = Some(format!("The playlist could not be read: {e}")),
             },
             Ask::ExportPlaylist => {
-                let list: Vec<(String, String)> = self.queue.iter().map(|i| (i.title.clone(), i.target.clone())).collect();
-                self.notice = Some(match std::fs::write(&path, library::write_m3u(&list)) {
-                    Ok(()) => format!("Saved {}.", path.display()),
-                    Err(e) => format!("The playlist could not be saved: {e}"),
+                let list: Vec<(String, String)> = self.queue.iter().map(|i| (i.title.clone(), absolute_target(&i.target))).collect();
+                self.notice = Some(match library::write_m3u(&list) {
+                    Ok(text) => match std::fs::write(&path, text) {
+                        Ok(()) => format!("Saved {}.", path.display()),
+                        Err(e) => format!("The playlist could not be saved: {e}"),
+                    },
+                    Err(why) => format!("The playlist was not saved: {why}"),
                 });
             }
             Ask::ImportStations => match std::fs::read_to_string(&path) {
@@ -566,11 +708,14 @@ impl App {
                 let body = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8")) {
                     library::write_m3u(&self.stations.iter().map(|s| (s.name.clone(), s.url.clone())).collect::<Vec<_>>())
                 } else {
-                    serde_json::to_string_pretty(&self.stations).unwrap_or_default()
+                    Ok(serde_json::to_string_pretty(&self.stations).unwrap_or_default())
                 };
-                self.notice = Some(match std::fs::write(&path, body) {
-                    Ok(()) => format!("Saved {}.", path.display()),
-                    Err(e) => format!("The stations could not be saved: {e}"),
+                self.notice = Some(match body {
+                    Ok(body) => match std::fs::write(&path, body) {
+                        Ok(()) => format!("Saved {}.", path.display()),
+                        Err(e) => format!("The stations could not be saved: {e}"),
+                    },
+                    Err(why) => format!("The stations were not saved: {why}"),
                 });
             }
         }
@@ -591,6 +736,12 @@ impl App {
     }
 
     fn save_stations(&mut self) {
+        if self.stations_error {
+            // stations.json is there but could not be read: keep it as it is
+            // instead of replacing it with an empty list.
+            self.notice = Some("Your saved stations could not be read, so changes are not saved. Fix or move stations.json in the player's settings folder.".into());
+            return;
+        }
         if let Err(e) = library::save_stations(&self.stations) {
             self.notice = Some(format!("The stations could not be saved: {e}"));
         }
@@ -708,7 +859,7 @@ impl App {
         if tracks.is_empty() {
             return self.empty(if self.scanning { "Looking for your music and videos..." } else { "Nothing here yet. Put music in your Music folder or videos in Videos, or use File > Open." });
         }
-        let items: Vec<Item> = tracks.iter().map(|t| Item::from(*t)).collect();
+        let items: std::sync::Arc<Vec<Item>> = std::sync::Arc::new(tracks.iter().map(|t| Item::from(*t)).collect());
         let mut col = column::with_capacity(tracks.len()).spacing(2);
         for (i, t) in tracks.iter().enumerate() {
             let sub = if t.artist.is_empty() { String::new() } else { format!("{} - {}", t.artist, t.album).trim_end_matches(" - ").to_string() };
@@ -757,7 +908,7 @@ impl App {
                 .push(container(icon::from_name(if by_album { "media-optical-symbolic" } else { "avatar-default-symbolic" }).size(64)).center_x(Length::Fixed(150.0)).padding([24, 0]).class(theme::Container::Card))
                 .push(text::body(name).width(Length::Fixed(150.0)))
                 .push(text::caption(sub).width(Length::Fixed(150.0)));
-            cards.push(button::custom(face).padding(4).class(theme::Button::Text).on_press(Message::PlayList(items, 0)).into());
+            cards.push(button::custom(face).padding(4).class(theme::Button::Text).on_press(Message::PlayList(std::sync::Arc::new(items), 0)).into());
         }
         scrollable(container(widget::flex_row(cards).row_spacing(12).column_spacing(12)).padding(16)).height(Length::Fill).into()
     }
@@ -837,11 +988,11 @@ impl App {
         let mut col = column::with_capacity(4).spacing(12).padding(16);
         let most: Vec<Item> = played.iter().take(25).map(|t| Item::from(*t)).collect();
         col = col.push(text::title3("Most played"));
-        col = col.push(button::suggested("Play the most played").on_press(Message::PlayList(most, 0)));
+        col = col.push(button::suggested("Play the most played").on_press(Message::PlayList(std::sync::Arc::new(most), 0)));
         if let Some(top) = played.first().map(|t| t.artist.clone()).filter(|a| !a.is_empty()) {
             let mix: Vec<Item> = self.tracks.iter().filter(|t| t.kind == Kind::Audio && t.artist == top).map(Item::from).collect();
             col = col.push(text::title3(format!("More from {top}")));
-            col = col.push(button::standard("Play this mix").on_press(Message::PlayList(mix, 0)));
+            col = col.push(button::standard("Play this mix").on_press(Message::PlayList(std::sync::Arc::new(mix), 0)));
         }
         scrollable(col).height(Length::Fill).into()
     }
@@ -863,8 +1014,9 @@ impl App {
         if self.queue.is_empty() {
             col = col.push(text::caption("Empty"));
         }
+        let queue = std::sync::Arc::new(self.queue.clone());
         for (i, it) in self.queue.iter().enumerate() {
-            col = col.push(button::custom(text::body(it.title.clone())).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(self.index == Some(i))).on_press(Message::PlayList(self.queue.clone(), i)));
+            col = col.push(button::custom(text::body(it.title.clone())).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(self.index == Some(i))).on_press(Message::PlayList(queue.clone(), i)));
         }
         container(scrollable(col)).width(Length::Fixed(260.0)).height(Length::Fill).padding(8).into()
     }
@@ -942,21 +1094,16 @@ impl App {
                     self.section = Section::Songs;
                 }
             }
-            Message::PlayList(items, i) => self.play_list(items, i),
+            Message::PlayList(items, i) => self.play_list(items.as_ref().clone(), i),
             Message::PlayStation(i) => {
                 if let Some(s) = self.stations.get(i).cloned() {
-                    self.queue = vec![Item { title: s.name.clone(), artist: s.genre.clone(), target: s.url, kind: Kind::Audio }];
+                    self.queue = vec![Item { title: s.name.clone(), artist: s.genre.clone(), target: s.url, stream: true, kind: Kind::Audio }];
+                    self.fail_streak = 0;
                     self.play_index(0);
                     self.station = Some(i);
                 }
             }
-            Message::PlayPause => {
-                if self.index.is_none() && self.engine.is_some() && !self.queue.is_empty() {
-                    self.play_index(0);
-                } else if let Some(e) = &self.engine {
-                    e.toggle("pause");
-                }
-            }
+            Message::PlayPause => return self.do_action(Action::PlayPause),
             Message::Next => return self.do_action(Action::Next),
             Message::Prev => return self.do_action(Action::Prev),
             Message::Shuffle => self.shuffle = !self.shuffle,
@@ -975,9 +1122,12 @@ impl App {
                 }
             }
             Message::Volume(v) => self.set_volume(f64::from(v)),
-            Message::Scanned(t) => {
+            Message::Scanned(t, skipped) => {
                 self.tracks = t;
                 self.scanning = false;
+                if skipped > 0 {
+                    self.notice = Some(format!("{skipped} folder{} or file{} in Music and Videos could not be read, so some items may be missing.", if skipped == 1 { "" } else { "s" }, if skipped == 1 { "" } else { "s" }));
+                }
             }
             Message::AskInput(s) => {
                 if let Some((_, v)) = &mut self.ask {
@@ -1071,7 +1221,7 @@ impl cosmic::Application for App {
             notice: None,
             tracks: Vec::new(),
             scanning: true,
-            stations: library::load_stations(),
+            stations: Vec::new(),
             section: Section::ListenNow,
             menu: None,
             search: String::new(),
@@ -1095,14 +1245,25 @@ impl cosmic::Application for App {
             start,
             favourites: std::fs::read_to_string(favourites_path()).ok().and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().collect(),
             plays: std::fs::read_to_string(plays_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            awaiting_start: false,
+            fail_streak: 0,
+            confirmed_pos: 0.0,
+            stations_error: false,
         };
+        match library::load_stations() {
+            Ok(list) => app.stations = list,
+            Err(why) => {
+                app.stations_error = true;
+                app.notice = Some(format!("Your saved stations could not be read ({why}). They are left as they are."));
+            }
+        }
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Media Player".into(), id),
             None => Task::none(),
         };
         let scan = Task::future(async {
-            let found = tokio::task::spawn_blocking(run_scan).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
+            let (found, skipped) = tokio::task::spawn_blocking(run_scan).await.unwrap_or_default();
+            cosmic::Action::App(Message::Scanned(found, skipped))
         });
         (app, Task::batch([title, scan]))
     }
@@ -1178,9 +1339,48 @@ fn main() -> cosmic::iced::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .log_internal_errors(false)
         .init();
-    let start: Vec<String> = std::env::args().skip(1).map(|a| a.strip_prefix("file://").map(str::to_string).unwrap_or(a)).collect();
+    let start: Vec<String> = std::env::args().skip(1).map(|a| open_target(&a)).collect();
     cosmic::app::run::<App>(
         Settings::default().size(Size::new(1100.0, 720.0)).size_limits(cosmic::iced::Limits::NONE.min_width(720.0).min_height(420.0)),
         start,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_addresses_are_decoded() {
+        assert_eq!(open_target("file:///home/a/My%20Song.mp3"), "/home/a/My Song.mp3");
+        assert_eq!(open_target("file://localhost/home/a/b.mp3"), "/home/a/b.mp3");
+        assert_eq!(open_target("/home/a/100%.mp3"), "/home/a/100%.mp3");
+        assert_eq!(open_target("https://example.org/a%20b"), "https://example.org/a%20b");
+        // a stray or cut-off escape is left alone
+        assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%zzb"), "a%zzb");
+        assert_eq!(percent_decode("%C3%A9"), "\u{e9}");
+    }
+
+    #[test]
+    fn only_a_leading_tilde_is_the_home_folder() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/root"));
+        assert_eq!(expand_tilde("~/Music"), home.join("Music"));
+        assert_eq!(expand_tilde("/music/~backup/a.mp3"), PathBuf::from("/music/~backup/a.mp3"));
+        assert_eq!(expand_tilde("~other/a.mp3"), PathBuf::from("~other/a.mp3"));
+    }
+
+    #[test]
+    fn exported_targets_are_absolute() {
+        assert_eq!(absolute_target("/a/b.mp3"), "/a/b.mp3");
+        assert_eq!(absolute_target("http://x.example/s"), "http://x.example/s");
+        let rel = absolute_target("b.mp3");
+        assert!(Path::new(&rel).is_absolute() && rel.ends_with("b.mp3"));
+    }
+
+    #[test]
+    fn network_items_are_marked() {
+        assert!(Item::new("a".into(), String::new(), "https://x.example/s".into(), Kind::Audio).stream);
+        assert!(!Item::new("a".into(), String::new(), "/home/a/b.mp3".into(), Kind::Audio).stream);
+    }
 }

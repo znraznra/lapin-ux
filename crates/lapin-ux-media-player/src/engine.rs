@@ -38,7 +38,12 @@ pub enum Event {
     Devices(Vec<(String, String)>),
     /// The output in use (mpv's `audio-device` name).
     Device(String),
+    /// mpv began opening a file. A file-end that arrives before this belongs to
+    /// the file that was playing before.
+    Started,
     Loaded,
+    /// mpv refused a command that carried an id (see `Engine::seek_to`).
+    Rejected { id: u64, why: String },
     /// The file ended by itself (`error` is mpv's reason when it failed).
     Ended { error: Option<String> },
     Failed(String),
@@ -47,12 +52,18 @@ pub enum Event {
 /// Sends commands to mpv. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Engine {
-    tx: mpsc::UnboundedSender<Vec<Value>>,
+    tx: mpsc::UnboundedSender<(Vec<Value>, Option<u64>)>,
 }
+
+/// `request_id` of seeks, so a refused seek (a stream that cannot seek) is told apart.
+pub const SEEK_ID: u64 = 9001;
 
 impl Engine {
     pub fn command(&self, args: Vec<Value>) {
-        let _ = self.tx.send(args);
+        let _ = self.tx.send((args, None));
+    }
+    fn command_with_id(&self, args: Vec<Value>, id: u64) {
+        let _ = self.tx.send((args, Some(id)));
     }
     pub fn load(&self, target: &str) {
         self.command(vec![json!("loadfile"), json!(target), json!("replace")]);
@@ -64,10 +75,10 @@ impl Engine {
         self.command(vec![json!("set_property"), json!(name), value]);
     }
     pub fn seek_to(&self, seconds: f64) {
-        self.command(vec![json!("seek"), json!(seconds), json!("absolute")]);
+        self.command_with_id(vec![json!("seek"), json!(seconds), json!("absolute")], SEEK_ID);
     }
     pub fn seek_by(&self, seconds: f64) {
-        self.command(vec![json!("seek"), json!(seconds), json!("relative")]);
+        self.command_with_id(vec![json!("seek"), json!(seconds), json!("relative")], SEEK_ID);
     }
     pub fn toggle(&self, name: &str) {
         self.command(vec![json!("cycle"), json!(name)]);
@@ -81,9 +92,18 @@ pub fn config_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("dev.lapinux.MediaPlayer")
 }
 
+/// The IPC socket. mpv does not check who connects, so the folder is the only
+/// protection: `XDG_RUNTIME_DIR` is private to the user; without it, a folder
+/// made just for this process with mode 0700 (never the shared temp folder itself).
 fn socket_path() -> PathBuf {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    dir.join(format!("lapin-ux-media-player-{}.sock", std::process::id()))
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_dir()) {
+        return dir.join(format!("lapin-ux-media-player-{}.sock", std::process::id()));
+    }
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = std::env::temp_dir().join(format!("lapin-ux-media-player-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+    dir.join("mpv.sock")
 }
 
 /// Properties the window follows: (observe id, name).
@@ -95,7 +115,16 @@ const OBSERVED: &[&str] = &[
 /// One line from mpv's socket, as events. Pure, so it is tested without mpv.
 pub fn parse_line(line: &str) -> Vec<Event> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+    // A reply to a command: only refusals of commands that carried an id matter.
+    if v.get("event").is_none() {
+        let err = v.get("error").and_then(Value::as_str).unwrap_or("success");
+        return match v.get("request_id").and_then(Value::as_u64) {
+            Some(id) if err != "success" => vec![Event::Rejected { id, why: err.to_string() }],
+            _ => Vec::new(),
+        };
+    }
     match v.get("event").and_then(Value::as_str) {
+        Some("start-file") => vec![Event::Started],
         Some("property-change") => {
             let name = v.get("name").and_then(Value::as_str).unwrap_or("");
             let data = v.get("data").cloned().unwrap_or(Value::Null);
@@ -208,14 +237,17 @@ pub fn subscription() -> Subscription<Event> {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             let Some(stream) = stream else {
+                // mpv started but never opened its socket: stop it now rather than at exit.
+                let _ = child.kill().await;
+                let _ = std::fs::remove_file(&socket);
                 let _ = out.send(Event::Failed("The player engine did not answer.".into())).await;
                 std::future::pending::<()>().await;
                 return;
             };
             let (read, mut write) = stream.into_split();
-            let (tx, mut rx) = mpsc::unbounded_channel::<Vec<Value>>();
+            let (tx, mut rx) = mpsc::unbounded_channel::<(Vec<Value>, Option<u64>)>();
             for (i, name) in OBSERVED.iter().enumerate() {
-                let _ = tx.send(vec![json!("observe_property"), json!(i + 1), json!(name)]);
+                let _ = tx.send((vec![json!("observe_property"), json!(i + 1), json!(name)], None));
             }
             let _ = out.send(Event::Ready(Engine { tx })).await;
             let mut lines = BufReader::new(read).lines();
@@ -223,7 +255,9 @@ pub fn subscription() -> Subscription<Event> {
                 tokio::select! {
                     cmd = rx.recv() => {
                         let Some(cmd) = cmd else { break };
-                        let mut text = json!({ "command": cmd }).to_string();
+                        let mut body = json!({ "command": cmd.0 });
+                        if let Some(id) = cmd.1 { body["request_id"] = json!(id); }
+                        let mut text = body.to_string();
                         text.push('\n');
                         if write.write_all(text.as_bytes()).await.is_err() { break; }
                     }
@@ -236,6 +270,9 @@ pub fn subscription() -> Subscription<Event> {
             let _ = out.send(Event::Failed("The player engine stopped.".into())).await;
             let _ = child.kill().await;
             let _ = std::fs::remove_file(&socket);
+            if socket.file_name().is_some_and(|n| n == "mpv.sock") {
+                let _ = std::fs::remove_dir(socket.parent().unwrap_or(Path::new("/nonexistent")));
+            }
             std::future::pending::<()>().await;
         })
     })
@@ -244,6 +281,16 @@ pub fn subscription() -> Subscription<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refused_seek_is_reported() {
+        let e = parse_line(r#"{"request_id":9001,"error":"property unavailable"}"#);
+        assert!(matches!(e.as_slice(), [Event::Rejected { id: 9001, .. }]));
+        assert!(parse_line(r#"{"request_id":9001,"error":"success","data":null}"#).is_empty());
+        assert!(parse_line(r#"{"error":"success"}"#).is_empty());
+        let e = parse_line(r#"{"event":"start-file","playlist_entry_id":2}"#);
+        assert!(matches!(e.as_slice(), [Event::Started]));
+    }
 
     #[test]
     fn reads_properties() {
