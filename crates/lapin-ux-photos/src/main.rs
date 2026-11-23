@@ -771,6 +771,41 @@ fn save_lock(lock: &Lock) -> std::io::Result<()> {
     result
 }
 
+/// How a password change ended.
+enum Replaced {
+    Done,
+    /// Another window changed or removed the password since this one read it.
+    Changed,
+    /// The saved password could not be read, so nothing was written over it.
+    Unreadable,
+    Failed(std::io::Error),
+}
+
+/// Replaces (or, with `None`, removes) the saved password, but only if it is
+/// still `expected`. The read, the comparison and the write happen under one
+/// lock file, so two windows cannot both pass the check and overwrite each
+/// other.
+fn replace_lock(expected: &Option<Lock>, new: Option<&Lock>) -> Replaced {
+    let guarded = || -> std::io::Result<Replaced> {
+        let file = store_file("hidden-lock").ok_or_else(|| std::io::Error::other("no config folder"))?;
+        let dir = file.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
+        std::fs::create_dir_all(dir)?;
+        let guard = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("hidden-lock.lock"))?;
+        guard.lock()?; // released when `guard` is dropped
+        match load_lock() {
+            Err(_) => return Ok(Replaced::Unreadable),
+            Ok(saved) if &saved != expected => return Ok(Replaced::Changed),
+            Ok(_) => {}
+        }
+        match new {
+            Some(l) => save_lock(l)?,
+            None => remove_lock()?,
+        }
+        Ok(Replaced::Done)
+    };
+    guarded().unwrap_or_else(Replaced::Failed)
+}
+
 fn remove_lock() -> std::io::Result<()> {
     let Some(file) = store_file("hidden-lock") else { return Ok(()) };
     match std::fs::remove_file(file) {
@@ -1337,15 +1372,31 @@ impl cosmic::Application for App {
                 let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
                 self.selected.retain(|p| live.contains(p));
                 // A picture handed over by Files opens straight in the viewer.
+                // Read the saved password and Hidden list now, so a picture that
+                // is hidden never opens without the password.
+                self.sync_lock();
                 let open = match self.start.take() {
                     Some(p) if is_photo(&p) => {
                         let p = p.canonicalize().unwrap_or(p);
                         let key = photo_key(&p);
-                        if !self.photos.iter().any(|x| x.key == key) {
-                            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                            self.photos.insert(0, Photo { path: p.clone(), key, modified });
+                        let hidden_now = self.is_hidden(&Photo { path: p.clone(), key: key.clone(), modified: SystemTime::UNIX_EPOCH });
+                        if self.hidden_unreadable || (hidden_now && (self.lock_unreadable || self.lock.is_some())) {
+                            // Hidden and locked, or the lists could not be read:
+                            // show the gallery instead of the picture.
+                            Task::none()
+                        } else {
+                            // Open the entry the scan already has for this file, so
+                            // the viewer and the lists see one photo.
+                            let path = match self.photos.iter().find(|x| x.key == key) {
+                                Some(x) => x.path.clone(),
+                                None => {
+                                    let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+                                    self.photos.insert(0, Photo { path: p.clone(), key, modified });
+                                    p
+                                }
+                            };
+                            self.open(path)
                         }
-                        self.open(p)
                     }
                     _ => Task::none(),
                 };
@@ -1567,12 +1618,17 @@ impl cosmic::Application for App {
                 if self.hidden_locked() {
                     return self.refresh_view();
                 }
-                match remove_lock() {
-                    Ok(()) => {
+                match replace_lock(&self.lock, None) {
+                    Replaced::Done => {
                         self.lock = None;
                         self.lock_msg = None;
                     }
-                    Err(e) => {
+                    Replaced::Changed | Replaced::Unreadable => {
+                        self.sync_lock();
+                        self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
+                        return self.refresh_view();
+                    }
+                    Replaced::Failed(e) => {
                         tracing::warn!("could not remove the Hidden password: {e}");
                         self.lock_msg = Some("The password could not be removed.".to_string());
                     }
@@ -1586,20 +1642,29 @@ impl cosmic::Application for App {
                     }
                     // Never write over a password another window set or changed
                     // meanwhile, or one that could not be read.
-                    let before = (self.lock.clone(), self.lock_unreadable);
-                    self.sync_lock();
-                    if self.lock_unreadable || before != (self.lock.clone(), self.lock_unreadable) {
-                        self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
-                        return self.refresh_view();
-                    }
-                    match make_lock(&text).and_then(|l| save_lock(&l).map(|()| l)) {
-                        Ok(l) => {
-                            self.lock = Some(l);
+                    // The check and the write share one lock file, so a second
+                    // window cannot slip in between them.
+                    let made = match make_lock(&text) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::warn!("could not make the Hidden password: {e}");
+                            self.lock_msg = Some("The password could not be saved.".to_string());
+                            return Task::none();
+                        }
+                    };
+                    match replace_lock(&self.lock, Some(&made)) {
+                        Replaced::Done => {
+                            self.lock = Some(made);
                             self.hidden_open = true;
                             self.setting_lock = false;
                             self.lock_msg = None;
                         }
-                        Err(e) => {
+                        Replaced::Changed | Replaced::Unreadable => {
+                            self.sync_lock();
+                            self.lock_msg = Some(if self.lock_unreadable { LOCK_UNREADABLE } else { LOCK_CHANGED }.to_string());
+                            return self.refresh_view();
+                        }
+                        Replaced::Failed(e) => {
                             tracing::warn!("could not save the Hidden password: {e}");
                             self.lock_msg = Some("The password could not be saved.".to_string());
                         }
