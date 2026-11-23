@@ -7,6 +7,7 @@
 mod engine;
 mod library;
 mod mpris;
+mod pick;
 
 use std::path::{Path, PathBuf};
 
@@ -99,8 +100,8 @@ impl MenuId {
     fn items(self) -> &'static [(&'static str, Action)] {
         use Action::*;
         match self {
-            MenuId::File => &[("Open...", Prompt(Ask::Open)), ("Quit", Quit)],
-            MenuId::Edit => &[("Add radio station...", AddStation), ("Import stations...", Prompt(Ask::ImportStations)), ("Export stations...", Prompt(Ask::ExportStations))],
+            MenuId::File => &[("Open file...", Pick(pick::Job::File)), ("Open folder...", Pick(pick::Job::Folder)), ("Open web address...", Prompt(Ask::Open)), ("Quit", Quit)],
+            MenuId::Edit => &[("Add radio station...", AddStation), ("Import stations...", Pick(pick::Job::Stations)), ("Export stations...", Pick(pick::Job::SaveStations))],
             MenuId::Media => &[("Play / Pause", PlayPause), ("Stop", Stop), ("Next", Next), ("Previous", Prev)],
             MenuId::View => &[("Show queue", ToggleQueue), ("Output device", ToggleDevices), ("Mini player", ToggleMini), ("Songs", Show(Section::Songs)), ("Videos", Show(Section::Videos)), ("Radio", Show(Section::Radio))],
             MenuId::Controls => &[
@@ -114,7 +115,7 @@ impl MenuId {
                 ("Quieter", VolDown),
                 ("Mute", Mute),
             ],
-            MenuId::Playlist => &[("Open playlist...", Prompt(Ask::ImportPlaylist)), ("Save queue as playlist...", Prompt(Ask::ExportPlaylist)), ("Clear queue", ClearQueue)],
+            MenuId::Playlist => &[("Open playlist...", Pick(pick::Job::Playlist)), ("Save queue as playlist...", Pick(pick::Job::SavePlaylist)), ("Clear queue", ClearQueue)],
             MenuId::Window => &[("Full screen video", Fullscreen)],
             MenuId::Help => &[("About Lapin Media Player", About)],
         }
@@ -133,7 +134,7 @@ enum Ask {
 impl Ask {
     fn label(self) -> &'static str {
         match self {
-            Ask::Open => "File path or address to play",
+            Ask::Open => "Web address or file path to play",
             Ask::ImportPlaylist => "Playlist file (.m3u, .m3u8, .pls)",
             Ask::ExportPlaylist => "Save the queue as (.m3u)",
             Ask::ImportStations => "Stations file (.m3u or .json)",
@@ -145,6 +146,8 @@ impl Ask {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Prompt(Ask),
+    /// A file dialog from the desktop portal.
+    Pick(pick::Job),
     Quit,
     AddStation,
     PlayPause,
@@ -294,6 +297,8 @@ enum Message {
     Volume(f32),
     /// The tracks found, and how many folders or files could not be read.
     Scanned(Vec<Track>, usize),
+    /// A file dialog answered: the job, and the chosen path or why it could not open.
+    Picked(pick::Job, pick::Picked),
     AskInput(String),
     AskSubmit,
     AskCancel,
@@ -563,6 +568,9 @@ impl App {
         };
         match a {
             Action::Prompt(k) => self.ask = Some((k, String::new())),
+            Action::Pick(job) => {
+                return Task::future(async move { cosmic::Action::App(Message::Picked(job, pick::pick(job).await)) });
+            }
             Action::Quit => {
                 return cosmic::iced::exit();
             }
@@ -637,7 +645,32 @@ impl App {
 
     fn submit_ask(&mut self) {
         let Some((kind, value)) = self.ask.take() else { return };
-        let value = value.trim().to_string();
+        self.apply_ask(kind, value.trim().to_string());
+    }
+
+    /// A file dialog answered. A dialog that could not open (no portal) falls
+    /// back to typing the path, so nothing is lost.
+    fn picked(&mut self, job: pick::Job, r: pick::Picked) {
+        use pick::Job;
+        let kind = match job {
+            Job::File | Job::Folder => Ask::Open,
+            Job::Playlist => Ask::ImportPlaylist,
+            Job::Stations => Ask::ImportStations,
+            Job::SavePlaylist => Ask::ExportPlaylist,
+            Job::SaveStations => Ask::ExportStations,
+        };
+        match r {
+            Ok(Some(path)) => self.apply_ask(kind, path),
+            Ok(None) => {}
+            Err(why) => {
+                tracing::warn!("file dialog unavailable: {why}");
+                self.notice = Some("The file dialog could not open, so type the path instead.".into());
+                self.ask = Some((kind, String::new()));
+            }
+        }
+    }
+
+    fn apply_ask(&mut self, kind: Ask, value: String) {
         if value.is_empty() {
             return;
         }
@@ -1134,6 +1167,7 @@ impl App {
                     *v = s;
                 }
             }
+            Message::Picked(job, r) => self.picked(job, r),
             Message::AskSubmit => self.submit_ask(),
             Message::AskCancel => self.ask = None,
             Message::StationName(s) => {
