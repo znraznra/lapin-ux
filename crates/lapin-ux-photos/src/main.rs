@@ -167,8 +167,8 @@ struct App {
     /// Counts viewer visits, so a late "could not open the folder" from an
     /// earlier photo never shows on the current one.
     visit: u64,
-    /// A rename is running; another waits until it has finished.
-    renaming: bool,
+    /// A rename or delete is running; the other is refused until it has finished.
+    file_op: bool,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
@@ -635,7 +635,7 @@ impl cosmic::Application for App {
             thumb_epoch: HashMap::new(),
             next_epoch: 0,
             visit: 0,
-            renaming: false,
+            file_op: false,
             favorites: load_favorites(),
             viewing: None,
             full: None,
@@ -788,10 +788,10 @@ impl cosmic::Application for App {
                     self.overlay = None;
                     return Task::none();
                 }
-                if self.renaming {
+                if self.file_op {
                     return Task::none();
                 }
-                self.renaming = true;
+                self.file_op = true;
                 self.action_error = None;
                 return Task::future(async move {
                     let key = old.clone();
@@ -804,13 +804,13 @@ impl cosmic::Application for App {
                 });
             }
             Message::Renamed(old, Err(e)) => {
-                self.renaming = false;
+                self.file_op = false;
                 if self.viewing.as_deref() == Some(old.as_path()) {
                     self.action_error = Some(e);
                 }
             }
             Message::Renamed(old, Ok(new)) => {
-                self.renaming = false;
+                self.file_op = false;
                 return self.after_rename(old, new);
             }
             Message::AskDelete => self.overlay = Some(Overlay::ConfirmDelete),
@@ -818,6 +818,13 @@ impl cosmic::Application for App {
             Message::ConfirmDelete => {
                 let Some(path) = self.viewing.clone() else { return Task::none() };
                 self.overlay = None;
+                // One file operation at a time: a rename in flight would
+                // leave this path stale under the delete.
+                if self.file_op {
+                    return Task::none();
+                }
+                self.file_op = true;
+                self.action_error = None;
                 return Task::future(async move {
                     let key = path.clone();
                     // To the Recycle Bin, never a permanent delete.
@@ -831,11 +838,15 @@ impl cosmic::Application for App {
                 });
             }
             Message::Deleted(path, Err(e)) => {
+                self.file_op = false;
                 if self.viewing.as_deref() == Some(path.as_path()) {
                     self.action_error = Some(e);
                 }
             }
-            Message::Deleted(path, Ok(())) => return self.after_delete(path),
+            Message::Deleted(path, Ok(())) => {
+                self.file_op = false;
+                return self.after_delete(path);
+            }
             Message::OpenLocation => {
                 self.overlay = None;
                 if let Some(dir) = self.viewing.as_deref().and_then(Path::parent).map(Path::to_path_buf) {
