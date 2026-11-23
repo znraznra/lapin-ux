@@ -188,7 +188,8 @@ struct Photo {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Scanned(Scan),
+    /// A finished scan, with the number of the request that started it.
+    Scanned(u64, Scan),
     Section(Section),
     Source(Option<Folder>),
     ToggleSidebar,
@@ -321,8 +322,15 @@ struct App {
     renaming: Option<String>,
     /// The Hidden password (salt and hash), if one is set.
     lock: Option<Lock>,
+    /// `hidden-lock.json` exists but could not be read: Hidden stays locked.
+    lock_unreadable: bool,
+    /// `hidden.json` exists but could not be read: no photo is shown, since any
+    /// of them might be a hidden one.
+    hidden_unreadable: bool,
     /// Hidden was unlocked since the person last opened it.
     hidden_open: bool,
+    /// Number of the newest scan asked for; older results are dropped.
+    scan_gen: u64,
     /// Set while the box for a new password is open.
     setting_lock: bool,
     lock_text: String,
@@ -367,12 +375,10 @@ fn store_file(name: &str) -> Option<PathBuf> {
     Some(dirs::config_dir()?.join(APP_ID).join(format!("{name}.json")))
 }
 
-fn load_set(name: &str) -> HashSet<PathBuf> {
-    let Some(file) = store_file(name) else { return HashSet::new() };
-    read_favorites(&file).unwrap_or_else(|e| {
-        tracing::warn!("could not read {name}: {e}");
-        HashSet::new()
-    })
+/// A saved list; `Err` when it exists but cannot be read or understood.
+fn try_load_set(name: &str) -> std::io::Result<HashSet<PathBuf>> {
+    let Some(file) = store_file(name) else { return Ok(HashSet::new()) };
+    read_favorites(&file)
 }
 
 /// The saved favorites. A missing file is an empty list; a file that cannot be
@@ -556,8 +562,18 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut unreadable = 0usize;
     let mut truncated = false;
-    let roots: Vec<PathBuf> = Folder::ALL.into_iter().filter_map(Folder::dir).chain(extra).collect();
-    'walk: for root in roots {
+    // The usual folders share one budget. Each added folder gets a budget of its
+    // own, so a full Pictures folder cannot make a folder the person just added
+    // look empty.
+    let standard: Vec<PathBuf> = Folder::ALL.into_iter().filter_map(Folder::dir).collect();
+    let roots: Vec<(PathBuf, bool)> =
+        standard.into_iter().map(|d| (d, false)).chain(extra.into_iter().map(|d| (d, true))).collect();
+    let mut standard_full = false;
+    'walk: for (root, is_extra) in roots {
+        if !is_extra && standard_full {
+            continue;
+        }
+        let base = if is_extra { found.len() } else { 0 };
         let mut stack = vec![(root, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
@@ -589,9 +605,12 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
                     let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
                     found.push(Photo { path, modified });
                 }
-                if found.len() >= MAX_PHOTOS {
+                if found.len() - base >= MAX_PHOTOS {
                     truncated = true;
-                    break 'walk;
+                    if !is_extra {
+                        standard_full = true;
+                    }
+                    continue 'walk;
                 }
             }
         }
@@ -613,15 +632,62 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
 
 /// Opens a picture upright, as the camera meant it (EXIF rotation).
 fn decode(path: &Path) -> Option<image::DynamicImage> {
+    decode_keeping_exif(path).map(|(img, _)| img)
+}
+
+/// Like `decode`, and also gives back the picture's EXIF block with the rotation
+/// tag reset to "upright" (the pixels already are), so a rewrite of the file can
+/// keep the capture date, camera and the rest.
+fn decode_keeping_exif(path: &Path) -> Option<(image::DynamicImage, Option<Vec<u8>>)> {
     use image::ImageDecoder;
     let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
     let mut decoder = reader.into_decoder().ok()?;
     let orientation = decoder.orientation().ok();
+    let mut exif = decoder.exif_metadata().ok().flatten();
+    if let Some(exif) = exif.as_mut() {
+        let _ = image::metadata::Orientation::remove_from_exif_chunk(exif);
+    }
     let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
     if let Some(o) = orientation {
         img.apply_orientation(o);
     }
-    Some(img)
+    Some((img, exif))
+}
+
+/// Saves a picture in the format its extension names, carrying `exif` along
+/// where the format can hold it (JPEG, PNG, WebP).
+fn save_with_exif(img: &image::DynamicImage, path: &Path, exif: Option<Vec<u8>>) -> image::ImageResult<()> {
+    use image::ImageEncoder;
+    let Some(exif) = exif else {
+        return img.save(path);
+    };
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return img.save(path);
+    }
+    let out = std::io::BufWriter::new(std::fs::File::create(path)?);
+    match ext.as_str() {
+        "jpg" | "jpeg" => {
+            let mut enc = image::codecs::jpeg::JpegEncoder::new(out);
+            let _ = enc.set_exif_metadata(exif);
+            // JPEG has no alpha.
+            if img.color().has_alpha() {
+                image::DynamicImage::ImageRgb8(img.to_rgb8()).write_with_encoder(enc)
+            } else {
+                img.write_with_encoder(enc)
+            }
+        }
+        "png" => {
+            let mut enc = image::codecs::png::PngEncoder::new(out);
+            let _ = enc.set_exif_metadata(exif);
+            img.write_with_encoder(enc)
+        }
+        _ => {
+            let mut enc = image::codecs::webp::WebPEncoder::new_lossless(out);
+            let _ = enc.set_exif_metadata(exif);
+            img.write_with_encoder(enc)
+        }
+    }
 }
 
 /// Turns the picture a quarter turn and writes it back. The file is saved
@@ -633,11 +699,11 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<(), String> {
     if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
         return Err("This kind of picture cannot be turned.".into());
     }
-    let img = decode(path).ok_or("The picture could not be read.")?;
+    let (img, exif) = decode_keeping_exif(path).ok_or("The picture could not be read.")?;
     let turned = if clockwise { img.rotate90() } else { img.rotate270() };
     let name = path.file_name().and_then(|n| n.to_str()).ok_or("The picture has no name.")?;
     let tmp = path.with_file_name(format!(".{name}.{}.tmp.{ext}", std::process::id()));
-    let result = turned.save(&tmp).map_err(|e| e.to_string()).and_then(|()| {
+    let result = save_with_exif(&turned, &tmp, exif).map_err(|e| e.to_string()).and_then(|()| {
         if let Ok(meta) = std::fs::metadata(path) {
             let _ = std::fs::set_permissions(&tmp, meta.permissions());
         }
@@ -747,18 +813,19 @@ fn make_lock(password: &str) -> std::io::Result<Lock> {
     Ok(Lock { salt: to_hex(&salt), hash: to_hex(&stretch(&salt, password)) })
 }
 
-fn load_lock() -> Option<Lock> {
-    let file = store_file("hidden-lock")?;
+/// The saved password. A missing file means none is set; a file that cannot be
+/// read or understood is an error, so Hidden is never opened by accident.
+fn load_lock() -> std::io::Result<Option<Lock>> {
+    let Some(file) = store_file("hidden-lock") else { return Ok(None) };
     let s = match std::fs::read_to_string(&file) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            tracing::warn!("could not read the Hidden password: {e}");
-            return None;
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
     };
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
-    Some(Lock { salt: v.get("salt")?.as_str()?.to_string(), hash: v.get("hash")?.as_str()?.to_string() })
+    let bad = || std::io::Error::other("the password file is not understood");
+    let v: serde_json::Value = serde_json::from_str(&s).map_err(|_| bad())?;
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string).ok_or_else(bad);
+    Ok(Some(Lock { salt: field("salt")?, hash: field("hash")? }))
 }
 
 fn save_lock(lock: &Lock) -> std::io::Result<()> {
@@ -945,7 +1012,7 @@ impl App {
 
     /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
-        if self.hidden_locked() {
+        if self.hidden_locked() || self.hidden_unreadable {
             return Vec::new();
         }
         let root = self.source_extra.clone().or_else(|| self.source.and_then(Folder::dir));
@@ -997,12 +1064,14 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scan_gen += 1;
+        let generation = self.scan_gen;
         let starred = self.favorites.clone();
         let extra = self.extra.clone();
         Task::future(async move {
             let found = tokio::task::spawn_blocking(move || scan(starred, extra)).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
+            cosmic::Action::App(Message::Scanned(generation, found))
         })
     }
 
@@ -1085,7 +1154,7 @@ impl App {
 
     /// The Hidden section is showing and its password has not been entered yet.
     fn hidden_locked(&self) -> bool {
-        self.section == Section::Hidden && self.lock.is_some() && !self.hidden_open
+        self.section == Section::Hidden && (self.lock.is_some() || self.lock_unreadable) && !self.hidden_open
     }
 
     fn clear_selection(&mut self) {
@@ -1166,6 +1235,20 @@ impl cosmic::Application for App {
 
     fn init(core: Core, start: Option<PathBuf>) -> (Self, Task<Message>) {
         let prefs = load_prefs();
+        let (hidden_set, hidden_unreadable) = match try_load_set("hidden") {
+            Ok(set) => (set, false),
+            Err(e) => {
+                tracing::warn!("could not read the hidden photos: {e}");
+                (HashSet::new(), true)
+            }
+        };
+        let (lock, lock_unreadable) = match load_lock() {
+            Ok(lock) => (lock, false),
+            Err(e) => {
+                tracing::warn!("could not read the Hidden password: {e}");
+                (None, true)
+            }
+        };
         let mut app = App {
             core,
             photos: Vec::new(),
@@ -1187,12 +1270,15 @@ impl cosmic::Application for App {
             dims: HashMap::new(),
             asked: HashSet::new(),
             favorites: load_favorites(),
-            hidden: load_set("hidden"),
+            hidden: hidden_set,
             albums: load_albums(),
             album: None,
             new_album: None,
             renaming: None,
-            lock: load_lock(),
+            lock,
+            scan_gen: 0,
+            lock_unreadable,
+            hidden_unreadable,
             hidden_open: false,
             setting_lock: false,
             lock_text: String::new(),
@@ -1259,7 +1345,10 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Scanned(found) => {
+            // An older scan finishing after a newer one was asked for would
+            // bring back folders or photos the person just removed.
+            Message::Scanned(generation, _) if generation != self.scan_gen => {}
+            Message::Scanned(_, found) => {
                 self.read_errors = found.unreadable > 0;
                 self.notice = match (found.unreadable, found.truncated) {
                     (0, false) => None,
@@ -1678,6 +1767,7 @@ impl cosmic::Application for App {
                 match set_in("hidden", &paths, hide) {
                     Ok(saved) => {
                         self.hidden = saved;
+                        self.hidden_unreadable = false;
                         self.notice = None;
                         self.clear_selection();
                     }
@@ -2096,7 +2186,18 @@ impl App {
         let mut col = column::with_capacity(4)
             .spacing(12)
             .align_x(Alignment::Center)
-            .push(icon::from_name("system-lock-screen-symbolic").size(48))
+            .push(icon::from_name("system-lock-screen-symbolic").size(48));
+        if self.lock_unreadable {
+            // The password file is there but cannot be read: stay locked, and
+            // never offer a new password, which would overwrite it.
+            return container(
+                col.push(text::body("Hidden stays locked because its password file could not be read."))
+                    .push(text::caption("Fix or remove hidden-lock.json in ~/.config/dev.lapinux.Photos, then start Photos again.")),
+            )
+            .center(Length::Fill)
+            .into();
+        }
+        col = col
             .push(text::body("Hidden is locked. Type its password to look."))
             .push(
                 widget::secure_input("Password", &self.lock_text, None, true)
@@ -2259,6 +2360,7 @@ impl App {
             container(text::body("Looking for your pictures...")).center(Length::Fill).into()
         } else if shown.is_empty() {
             let msg = match (self.section, self.read_errors) {
+                _ if self.hidden_unreadable => "The list of hidden photos could not be read, so no pictures are shown. Fix or remove hidden.json in ~/.config/dev.lapinux.Photos, then start Photos again.",
                 (Section::Favorites, _) => "No favorites yet. Open a photo and press the star.",
                 (Section::Recents, _) => "Nothing new in the last three days.",
                 (Section::Screenshots, _) => "No screenshots found.",
