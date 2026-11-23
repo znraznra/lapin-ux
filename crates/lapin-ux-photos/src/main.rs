@@ -33,6 +33,10 @@ const DEFAULT_SIZE: u8 = 2;
 /// more, so memory (about 170 KB per tile) grows only as far as you look.
 const MAX_TILES: usize = 200;
 const TILE_STEP: usize = 200;
+/// The grid keeps thumbnails for this many tiles either side of the visible
+/// stretch (headings make the estimate rough), and re-checks every `KEEP_STEP`.
+const KEEP_AROUND: usize = 150;
+const KEEP_STEP: usize = 25;
 /// Recents shows what was saved or changed within this long.
 const RECENT_SECS: u64 = 72 * 3600;
 /// Pictures are shown at most this wide or tall. Bigger ones are scaled down once.
@@ -342,6 +346,8 @@ struct App {
     slideshow: bool,
     /// How many tiles the grid shows right now (grows as you scroll down).
     tile_limit: usize,
+    /// Which stretch of the grid was last kept in memory (see `GridScrolled`).
+    grid_bucket: usize,
     /// Seconds each photo stays in the slideshow (saved).
     slide_secs: u8,
     /// The window fills the screen.
@@ -1203,6 +1209,7 @@ impl cosmic::Application for App {
             source_extra: None,
             slideshow: false,
             tile_limit: MAX_TILES,
+            grid_bucket: usize::MAX,
             full: None,
             start,
         };
@@ -1283,6 +1290,7 @@ impl cosmic::Application for App {
             }
             Message::Section(s) => {
                 self.tile_limit = MAX_TILES;
+                self.grid_bucket = usize::MAX;
                 self.section = s;
                 self.hidden_open = false;
                 self.setting_lock = false;
@@ -1295,6 +1303,7 @@ impl cosmic::Application for App {
             }
             Message::Source(folder) => {
                 self.tile_limit = MAX_TILES;
+                self.grid_bucket = usize::MAX;
                 self.source = folder;
                 self.source_extra = None;
                 self.menu = None;
@@ -1636,6 +1645,7 @@ impl cosmic::Application for App {
             }
             Message::SourceExtra(dir) => {
                 self.tile_limit = MAX_TILES;
+                self.grid_bucket = usize::MAX;
                 self.source = None;
                 self.source_extra = Some(dir);
                 self.menu = None;
@@ -1806,14 +1816,35 @@ impl cosmic::Application for App {
                 return cosmic::iced::window::set_mode(id, mode);
             }
             Message::GridScrolled(y) => {
-                if y > 0.8 && self.tile_limit < self.shown().len() {
+                let all: Vec<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                if y > 0.8 && self.tile_limit < all.len() {
                     self.tile_limit += TILE_STEP;
-                    return self.want_section_thumbs();
                 }
+                // Only the pictures near the visible stretch keep a thumbnail in
+                // memory; the rest are dropped and decoded again on the way back.
+                let shown = all.len().min(self.tile_limit);
+                let centre = (y.clamp(0.0, 1.0) * shown as f32) as usize;
+                let bucket = centre / KEEP_STEP;
+                if bucket == self.grid_bucket {
+                    return Task::none();
+                }
+                self.grid_bucket = bucket;
+                let lo = centre.saturating_sub(KEEP_AROUND);
+                let hi = centre + KEEP_AROUND;
+                let mut near = Vec::new();
+                for (i, p) in all.iter().take(shown).enumerate() {
+                    if i >= lo && i <= hi {
+                        near.push(p.clone());
+                    } else if self.thumbs.remove(p).is_some() {
+                        self.asked.remove(p);
+                    }
+                }
+                return self.want_thumbs(near);
             }
             Message::Rotate(clockwise) => {
                 let Some(path) = self.viewing.clone() else { return Task::none() };
                 self.slideshow = false;
+                self.notice = None;
                 return Task::future(async move {
                     let p = path.clone();
                     let done = tokio::task::spawn_blocking(move || rotate_file(&p, clockwise))

@@ -20,7 +20,7 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 ## How it works
 
 - The scan walks the four folders in the background, up to 5 levels deep, skipping hidden folders, and stops at 20,000 pictures. Starred pictures outside those folders are added on top of that limit, since they are the person's own choice. An empty section still shows the read-error, stopped-early and could-not-save notes, and says "could not be read" only when a folder really failed. Formats: JPEG, PNG, WebP, BMP, GIF.
-- Tiles are 100 to 250 px high (squares or the photo's own proportions, kept between 0.6 and 2 times the height), decoded four at a time off the UI thread, upright by their EXIF rotation. At most 400 tiles are loaded per section (about 46 MB). The grid is not virtualised yet.
+- Tiles are 100 to 250 px high (squares or the photo's own proportions, kept between 0.6 and 2 times the height), decoded four at a time off the UI thread, upright by their EXIF rotation. Thumbnails far from the visible stretch are dropped from memory (see "Tiles load as you scroll").
 - The full picture is decoded when opened and scaled down once if it is larger than 3840 px on either side.
   - **Albums**: the side bar lists them with **New album**. Select photos, then **Add to album** in the toolbar picks an album or makes a new one (a name box appears under the toolbar; Esc closes it). Inside an album, the remove button takes the selected photos out of the album only, never deletes files, and **More > Delete this album** removes the album and leaves the photos alone.
   - **Slideshow**: **More > Slideshow** in the gallery, or the play button in the viewer. It starts at the open photo (or the first selected one, or the first shown), follows what the current section shows, moves on every 4 seconds and starts over after the last photo. The button turns into pause, and Esc or Back to the gallery stops it. Left and Right still work while it plays.
@@ -34,8 +34,8 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 
 Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package.
 - Slideshow speed: More > "Slideshow speed" steps 2, 4, 8, 15 seconds, saved as `slide_secs` in `settings.json`. The viewer toolbar has a Full screen button; leaving the viewer leaves full screen.
-- Tiles load as you scroll: the grid starts with 200 and adds 200 more each time you scroll near the bottom, so the old "Showing the newest 400" line is gone. Changing section starts again at 200.
-- Turn left / Turn right in the viewer toolbar rewrite the file turned a quarter (JPEG, PNG, WebP, BMP; not GIF). The camera's rotation tag is baked in and dropped, the write goes through a temporary file, and JPEG is compressed once more.
+- Tiles load as you scroll: the grid starts with 200 and adds 200 more each time you scroll near the bottom, so the old "Showing the newest 400" line is gone. Changing section starts again at 200. Only the tiles near what you are looking at (about 150 either side) keep their thumbnail in memory; the others are dropped and decoded again when you scroll back, so a very long scroll no longer grows memory. Changing the source folder also starts the grid again at 200.
+- Turn left / Turn right in the viewer toolbar rewrite the file turned a quarter (a failed turn shows a note under the toolbar, cleared on the next try) (JPEG, PNG, WebP, BMP; not GIF). The camera's rotation tag is baked in and dropped, the write goes through a temporary file, and JPEG is compressed once more.
 
 ## Not yet
 
