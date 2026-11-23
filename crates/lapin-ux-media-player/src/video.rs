@@ -163,6 +163,46 @@ pub fn end_event(reason: u32, error_text: impl FnOnce() -> String) -> Option<Eve
     }
 }
 
+/// Which mpv setting the "Adjust" panel changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tune {
+    SubDelay,
+    AudioDelay,
+    SubScale,
+}
+
+impl Tune {
+    pub fn property(self) -> &'static str {
+        match self {
+            Tune::SubDelay => "sub-delay",
+            Tune::AudioDelay => "audio-delay",
+            Tune::SubScale => "sub-scale",
+        }
+    }
+    pub fn default_value(self) -> f64 {
+        if self == Tune::SubScale { 1.0 } else { 0.0 }
+    }
+    /// One press of the minus (`dir` < 0) or plus (`dir` > 0) button; 0 resets.
+    pub fn step(self, value: f64, dir: i8) -> f64 {
+        if dir == 0 {
+            return self.default_value();
+        }
+        let d = f64::from(dir.signum());
+        let (lo, hi) = if self == Tune::SubScale { (0.3, 3.0) } else { (-60.0, 60.0) };
+        // tenths, rounded, so repeated presses never drift (0.1 + 0.2 style sums)
+        (((value * 10.0).round() / 10.0 + d / 10.0).clamp(lo, hi) * 10.0).round() / 10.0
+    }
+    pub fn label(self, value: f64) -> String {
+        if self == Tune::SubScale {
+            format!("{}%", (value * 100.0).round() as i64)
+        } else {
+            let v = (value * 10.0).round() / 10.0;
+            if v == 0.0 { "0 s".to_string() } else { format!("{v:+.1} s") }
+        }
+    }
+}
+
+
 /// Command arguments as libmpv wants them: text. `true` becomes "yes".
 pub fn arg_text(v: &Value) -> String {
     match v {
@@ -637,5 +677,25 @@ mod tests {
         assert_eq!(arg_text(&json!(true)), "yes");
         assert_eq!(arg_text(&json!(false)), "no");
         assert_eq!(arg_text(&json!(5)), "5");
+    }
+
+    #[test]
+    fn tune_steps_and_labels() {
+        assert_eq!(Tune::SubDelay.step(0.0, 1), 0.1);
+        assert_eq!(Tune::SubDelay.step(0.3, -1), 0.2);
+        assert_eq!(Tune::AudioDelay.step(60.0, 1), 60.0);
+        assert_eq!(Tune::SubScale.step(1.0, 1), 1.1);
+        assert_eq!(Tune::SubScale.step(0.3, -1), 0.3);
+        assert_eq!(Tune::SubScale.step(1.4, 0), 1.0);
+        assert_eq!(Tune::SubDelay.step(2.5, 0), 0.0);
+        let mut v = 0.0;
+        for _ in 0..30 {
+            v = Tune::SubDelay.step(v, 1);
+        }
+        assert_eq!(Tune::SubDelay.label(v), "+3.0 s");
+        assert_eq!(Tune::AudioDelay.label(-0.25), "-0.3 s");
+        assert_eq!(Tune::AudioDelay.label(0.0), "0 s");
+        assert_eq!(Tune::SubScale.label(1.1), "110%");
+        assert_eq!(Tune::SubScale.property(), "sub-scale");
     }
 }

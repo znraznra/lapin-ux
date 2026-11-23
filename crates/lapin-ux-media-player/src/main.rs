@@ -129,6 +129,8 @@ impl MenuId {
     }
 }
 
+const TUNES: [video::Tune; 3] = [video::Tune::SubDelay, video::Tune::AudioDelay, video::Tune::SubScale];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ask {
     Open,
@@ -137,6 +139,7 @@ enum Ask {
     ImportStations,
     ExportStations,
     LibraryFolder,
+    Subtitles,
 }
 
 impl Ask {
@@ -148,6 +151,7 @@ impl Ask {
             Ask::ImportStations => "Stations file (.m3u or .json)",
             Ask::ExportStations => "Save stations as (.json or .m3u)",
             Ask::LibraryFolder => "Folder to add to the library",
+            Ask::Subtitles => "Subtitle file (.srt, .ass, .vtt, .sub)",
         }
     }
 }
@@ -294,6 +298,8 @@ enum Message {
     LeaveFullscreen,
     /// Opens or closes the audio (false) or subtitle (true) menu of the control bar.
     TrackMenu(bool),
+    AdjustMenu,
+    Tune(video::Tune, i8),
     /// Chooses a track; `None` turns subtitles off.
     PickTrack(bool, Option<i64>),
     /// Redraws the picture page so the control bar can hide by itself.
@@ -423,6 +429,9 @@ struct App {
     /// Audio and subtitle tracks of the playing video, and which menu is open (true: subtitles).
     media_tracks: Vec<engine::Track>,
     track_menu: Option<bool>,
+    /// The Adjust panel (subtitle file, delays, subtitle size) is open, and its values.
+    adjust_menu: bool,
+    tune: [f64; 3],
 }
 
 fn fmt_time(s: f64) -> String {
@@ -483,6 +492,7 @@ impl App {
             self.frame = None;
             self.media_tracks.clear();
             self.track_menu = None;
+            self.adjust_menu = false;
         }
         self.index = Some(i);
         self.notice = None;
@@ -585,8 +595,10 @@ impl App {
             }
             E::Started => {
                 self.awaiting_start = false;
+                self.reset_tune();
                 self.media_tracks.clear();
                 self.track_menu = None;
+            self.adjust_menu = false;
             }
             E::Tracks(t) => self.media_tracks = t,
             E::Rejected { id, why } => {
@@ -700,6 +712,7 @@ impl App {
             self.frame = None;
             self.media_tracks.clear();
             self.track_menu = None;
+            self.adjust_menu = false;
             self.index = None;
             self.now = Now::default();
         }
@@ -758,6 +771,7 @@ impl App {
                 self.frame = None;
                 self.media_tracks.clear();
                 self.track_menu = None;
+            self.adjust_menu = false;
                 return self.set_fullscreen(false);
             }
             Action::Next => {
@@ -912,6 +926,7 @@ impl App {
             Job::Stations => Ask::ImportStations,
             Job::SavePlaylist => Ask::ExportPlaylist,
             Job::SaveStations => Ask::ExportStations,
+            Job::Subtitles => Ask::Subtitles,
         };
         match r {
             Ok(Some(path)) => self.apply_ask(kind, path),
@@ -924,6 +939,18 @@ impl App {
         }
     }
 
+    /// mpv keeps delays and subtitle size from one file to the next; each new file starts from the defaults.
+    fn reset_tune(&mut self) {
+        for (i, t) in TUNES.iter().enumerate() {
+            if self.tune[i] != t.default_value() {
+                self.tune[i] = t.default_value();
+                if let Some(e) = &self.video {
+                    e.set(t.property(), json!(t.default_value()));
+                }
+            }
+        }
+    }
+
     fn apply_ask(&mut self, kind: Ask, value: String) {
         if value.is_empty() {
             return;
@@ -931,6 +958,11 @@ impl App {
         let path = expand_tilde(&open_target(&value));
         match kind {
             Ask::LibraryFolder => self.add_library_folder(&path.to_string_lossy()),
+            Ask::Subtitles => match (&self.video, path.is_file()) {
+                (Some(e), true) => e.command(vec![json!("sub-add"), json!(path.to_string_lossy()), json!("select")]),
+                (_, false) => self.notice = Some("That subtitle file was not found.".into()),
+                _ => {}
+            },
             Ask::Open => {
                 if library::valid_stream_url(&value) {
                     self.station = None;
@@ -1376,7 +1408,31 @@ impl App {
             if !subs.is_empty() {
                 buttons = buttons.push(button::icon(icon::from_name("media-view-subtitles-symbolic")).name("Subtitles").on_press(Message::TrackMenu(true)));
             }
+            buttons = buttons.push(button::icon(icon::from_name("preferences-system-symbolic")).name("Adjust subtitles and sound delay").on_press(Message::AdjustMenu));
             let mut overlay = column::with_capacity(3).push(widget::space::vertical());
+            if self.adjust_menu {
+                let mut menu = column::with_capacity(6).spacing(4).push(text::heading("Adjust"));
+                menu = menu.push(button::standard("Add subtitle file...").width(Length::Fill).on_press(Message::Do(Action::Pick(pick::Job::Subtitles))));
+                for (i, t) in TUNES.iter().enumerate() {
+                    let name = match t {
+                        video::Tune::SubDelay => "Subtitle delay",
+                        video::Tune::AudioDelay => "Sound delay",
+                        video::Tune::SubScale => "Subtitle size",
+                    };
+                    menu = menu.push(
+                        row::with_capacity(5)
+                            .spacing(4)
+                            .align_y(Alignment::Center)
+                            .push(text::body(name).width(Length::Fill))
+                            .push(button::icon(icon::from_name("list-remove-symbolic")).name(format!("{name} smaller")).on_press(Message::Tune(*t, -1)))
+                            .push(button::text(t.label(self.tune[i])).on_press(Message::Tune(*t, 0)))
+                            .push(button::icon(icon::from_name("list-add-symbolic")).name(format!("{name} larger")).on_press(Message::Tune(*t, 1))),
+                    );
+                }
+                menu = menu.push(text::caption("Press the value to reset it."));
+                let panel = container(menu).padding(8).width(Length::Fixed(340.0)).class(theme::Container::Background);
+                overlay = overlay.push(container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8]));
+            }
             if let Some(sub) = self.track_menu {
                 let list = if sub { &subs } else { &audio };
                 let mut menu = column::with_capacity(list.len() + 2).spacing(2).push(text::heading(if sub { "Subtitles" } else { "Audio tracks" }));
@@ -1480,10 +1536,24 @@ impl App {
             Message::LeaveFullscreen => return self.set_fullscreen(false),
             Message::TrackMenu(sub) => {
                 self.track_menu = if self.track_menu == Some(sub) { None } else { Some(sub) };
+                self.adjust_menu = false;
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::AdjustMenu => {
+                self.adjust_menu = !self.adjust_menu;
+                self.track_menu = None;
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::Tune(t, dir) => {
+                if let (Some(i), Some(e)) = (TUNES.iter().position(|x| *x == t), &self.video) {
+                    self.tune[i] = t.step(self.tune[i], dir);
+                    e.set(t.property(), json!(self.tune[i]));
+                }
                 self.last_activity = std::time::Instant::now();
             }
             Message::PickTrack(sub, id) => {
                 self.track_menu = None;
+            self.adjust_menu = false;
                 if let Some(e) = &self.video {
                     e.set(if sub { "sid" } else { "aid" }, match id { Some(i) => json!(i), None => json!("no") });
                 }
@@ -1563,6 +1633,7 @@ impl App {
                     self.frame = None;
                     self.media_tracks.clear();
                     self.track_menu = None;
+            self.adjust_menu = false;
                     self.index = None;
                     self.now = Now::default();
                     self.notice = Some("Video stopped to apply the graphics card setting.".to_string());
@@ -1746,6 +1817,8 @@ impl cosmic::Application for App {
             fullscreen: false,
             media_tracks: Vec::new(),
             track_menu: None,
+            adjust_menu: false,
+            tune: TUNES.map(video::Tune::default_value),
         };
         match library::load_stations() {
             Ok(list) => app.stations = list,

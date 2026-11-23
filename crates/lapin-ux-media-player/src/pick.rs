@@ -14,6 +14,7 @@ pub enum Job {
     Stations,
     SavePlaylist,
     SaveStations,
+    Subtitles,
 }
 
 /// `Ok(None)` is "cancelled". `Err` means no dialog could be shown (no portal),
@@ -61,6 +62,10 @@ fn stations_filter() -> FileFilter {
     with_extensions(FileFilter::new("Stations"), &["json", "m3u", "m3u8"])
 }
 
+fn subtitle_filter() -> FileFilter {
+    with_extensions(FileFilter::new("Subtitles"), &["srt", "ass", "ssa", "vtt", "sub", "sup"])
+}
+
 fn done<T>(r: Result<T, file_chooser::Error>, f: impl FnOnce(T) -> Picked) -> Picked {
     match r {
         Ok(v) => f(v),
@@ -77,6 +82,7 @@ pub async fn pick(job: Job) -> Picked {
         Job::LibraryFolder => done(open::Dialog::new().title("Add a folder to the library").open_folder().await, |r| path_of!(r.url())),
         Job::Playlist => done(open::Dialog::new().title("Open playlist").filter(playlist_filter()).open_file().await, |r| path_of!(r.url())),
         Job::Stations => done(open::Dialog::new().title("Import stations").filter(stations_filter()).open_file().await, |r| path_of!(r.url())),
+        Job::Subtitles => done(open::Dialog::new().title("Add a subtitle file").filter(subtitle_filter()).open_file().await, |r| path_of!(r.url())),
         Job::SavePlaylist => done(
             save::Dialog::new().title("Save the queue as a playlist".to_string()).file_name("Queue.m3u".to_string()).filter(playlist_save_filter()).save_file().await,
             |r| r.url().map_or(Ok(None), |u| path_of!(u)),
