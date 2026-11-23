@@ -104,6 +104,14 @@ enum Launch {
     Exec { exec: String, terminal: bool, trusted: bool },
 }
 
+/// An empty desktop surface on a display that isn't the main one (#165).
+pub struct ExtraDesktop {
+    pub id: window::Id,
+    pub output: WlOutput,
+    /// Last pointer position on this surface, where a menu opens.
+    pub pointer: Point,
+}
+
 pub struct DesktopView {
     pub id: window::Id,
     pub output: WlOutput,
@@ -314,6 +322,95 @@ impl Shell {
             exclusive_zone: 0,
             ..Default::default()
         })
+    }
+
+    /// Every other display gets an empty desktop surface that takes clicks
+    /// (#165): right-click opens the desktop menu there. Icons stay on the
+    /// main display. Called whenever displays come and go, so plugging one in
+    /// or out never needs another shell (#83).
+    pub(crate) fn sync_extra_desktops(&mut self) -> Task<Message> {
+        let main = self.main_bar().map(|b| b.output.clone());
+        let wanted: Vec<WlOutput> = match main {
+            Some(main) => self.bars.iter().filter(|b| b.output != main).map(|b| b.output.clone()).collect(),
+            None => Vec::new(),
+        };
+        let mut tasks = Vec::new();
+        let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.extra_desktops).into_iter().partition(|e| wanted.contains(&e.output));
+        self.extra_desktops = keep;
+        for e in gone {
+            tasks.push(destroy_layer_surface(e.id));
+        }
+        for output in wanted {
+            if self.extra_desktops.iter().any(|e| e.output == output) {
+                continue;
+            }
+            let id = window::Id::unique();
+            self.extra_desktops.push(ExtraDesktop { id, output: output.clone(), pointer: Point::ORIGIN });
+            tasks.push(get_layer_surface(SctkLayerSurfaceSettings {
+                id,
+                layer: Layer::Bottom,
+                keyboard_interactivity: KeyboardInteractivity::OnDemand,
+                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                output: IcedOutput::Output(output),
+                namespace: "lapin-ux-desktop".into(),
+                size: Some((None, None)),
+                exclusive_zone: 0,
+                ..Default::default()
+            }));
+        }
+        Task::batch(tasks)
+    }
+
+    pub(crate) fn extra_desktop_pointer(&mut self, id: window::Id, p: Point) -> bool {
+        match self.extra_desktops.iter_mut().find(|e| e.id == id) {
+            Some(e) => {
+                e.pointer = p;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A click on an extra display's empty desktop: close any open menu.
+    pub(crate) fn extra_desktop_press(&mut self) -> Task<Message> {
+        let commit = if self.desktop.as_ref().is_some_and(|d| d.rename.is_some()) {
+            self.update_desktop(DesktopMsg::RenameCommit)
+        } else {
+            Task::none()
+        };
+        if let Some(d) = &mut self.desktop
+            && !self.mods.control()
+        {
+            d.selected.clear();
+        }
+        Task::batch([commit, self.close_popup()])
+    }
+
+    /// Right-click on an extra display's empty desktop: the desktop menu, on that display.
+    pub(crate) fn extra_desktop_context(&mut self, id: window::Id) -> Task<Message> {
+        let Some(p) = self.extra_desktops.iter().find(|e| e.id == id).map(|e| e.pointer) else { return Task::none() };
+        if let Some(d) = &mut self.desktop {
+            d.selected.clear();
+        }
+        let key = rect_key(id, "pointer");
+        self.rects.insert(key.clone(), Rectangle { x: p.x, y: p.y, width: 1.0, height: 1.0 });
+        self.open_popup(id, &key, PopupKind::DesktopMenu(None, MenuPage::Main))
+    }
+
+    /// Files dropped on an extra display: copied (or moved) into the desktop
+    /// folder, placed in the next free spot. Icons already on the desktop stay.
+    pub(crate) fn extra_desktop_dropped(&mut self, uris: Option<crate::dnd::Uris>, action: DndAction) -> Task<Message> {
+        let Some(dir) = self.desktop.as_ref().map(|d| d.dir.clone()) else { return Task::none() };
+        let uris = uris.map(|u| u.0).unwrap_or_default();
+        let outside: Vec<PathBuf> = uris
+            .iter()
+            .filter_map(|u| lapin_ux_core::recent::file_uri_to_path(u))
+            .filter(|p| p.parent() != Some(dir.as_path()))
+            .collect();
+        if outside.is_empty() {
+            return Task::none();
+        }
+        self.paste_into_desktop(outside, action == DndAction::Move, None)
     }
 
     /// The output's size minus what the taskbar reserves (#41).
@@ -1721,4 +1818,16 @@ fn open_trash() -> Task<Message> {
         }
         cosmic::Action::App(Message::Noop)
     })
+}
+
+/// The empty desktop on another display: nothing on it, but it takes clicks
+/// and drops, so right-click opens the desktop menu there (#165).
+pub fn extra_view<'a>(id: window::Id) -> Element<'a, Message> {
+    let area = mouse_area(container(widget::Space::new()).width(Length::Fill).height(Length::Fill))
+        .on_press(Message::ExtraDesktopPress)
+        .on_right_press(Message::ExtraDesktopContext(id));
+    cosmic::widget::dnd_destination::dnd_destination_for_data::<crate::dnd::Uris, Message>(area, |uris, action| {
+        Message::ExtraDesktopDropped(uris, action)
+    })
+    .into()
 }
