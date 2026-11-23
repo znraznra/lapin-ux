@@ -101,6 +101,8 @@ enum Message {
     Ignore,
     Retry,
     Back,
+    /// The "Back to the gallery" button: always leaves the viewer, even with a menu open.
+    BackToGallery,
     Prev,
     Next,
     ToggleFavorite(PathBuf),
@@ -113,6 +115,8 @@ enum Message {
     CancelOverlay,
     ConfirmDelete,
     OpenLocation,
+    /// Opening the folder failed to start.
+    LocationFailed(String),
     /// A rename or delete finished: the old path and what came of it.
     Renamed(PathBuf, Result<PathBuf, String>),
     Deleted(PathBuf, Result<(), String>),
@@ -225,6 +229,29 @@ fn set_favorite(path: &Path, on: bool) -> std::io::Result<HashSet<PathBuf>> {
     }
     write_favorites(&file, &set)?;
     Ok(set)
+}
+
+/// Renames `old` to `new` without ever replacing something already there.
+/// A hard link fails if the name is taken (a dangling symlink counts), and the
+/// old name is removed only after it worked, so a file that appears at the new
+/// name in between is never overwritten. File systems without hard links
+/// (FAT, exFAT) fall back to a plain rename after a best-effort check.
+fn rename_no_replace(old: &Path, new: &Path) -> Result<(), String> {
+    const TAKEN: &str = "A file with that name already exists.";
+    match std::fs::hard_link(old, new) {
+        Ok(()) => std::fs::remove_file(old).map_err(|e| {
+            // Undo, so there aren't two names for one photo.
+            let _ = std::fs::remove_file(new);
+            format!("Could not rename: {e}")
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(TAKEN.to_string()),
+        Err(_) => {
+            if std::fs::symlink_metadata(new).is_ok() {
+                return Err(TAKEN.to_string());
+            }
+            std::fs::rename(old, new).map_err(|e| format!("Could not rename: {e}"))
+        }
+    }
 }
 
 fn is_photo(path: &Path) -> bool {
@@ -458,11 +485,20 @@ impl App {
                 p.path = new.clone();
             }
         }
-        if let Some(h) = self.thumbs.remove(&old) {
-            self.thumbs.insert(new.clone(), h);
-        }
-        if self.asked.remove(&old) {
-            self.asked.insert(new.clone());
+        // Carry the "asked" marker over only together with a cached thumbnail.
+        // If the old decode is still pending, its result is filed under the old
+        // name, so the new name must ask for its own.
+        let asked_before = self.asked.remove(&old);
+        let mut refetch = Task::none();
+        match self.thumbs.remove(&old) {
+            Some(h) => {
+                self.thumbs.insert(new.clone(), h);
+                if asked_before {
+                    self.asked.insert(new.clone());
+                }
+            }
+            None if asked_before => refetch = self.want_thumbs(vec![new.clone()]),
+            None => {}
         }
         if self.favorites.contains(&old) {
             let moved = set_favorite(&new, true).and_then(|_| set_favorite(&old, false));
@@ -480,9 +516,9 @@ impl App {
             }
         }
         if self.viewing.as_deref() == Some(old.as_path()) {
-            return self.open(new);
+            return Task::batch([refetch, self.open(new)]);
         }
-        Task::none()
+        refetch
     }
 
     /// A deleted photo moves the viewer to the next one, or the one before it,
@@ -659,6 +695,11 @@ impl cosmic::Application for App {
                     return self.back();
                 }
             }
+            Message::BackToGallery => {
+                if self.viewing.is_some() {
+                    return self.back();
+                }
+            }
             Message::ToggleMenu => {
                 self.action_error = None;
                 self.overlay = if self.overlay.is_some() { None } else { Some(Overlay::Menu) };
@@ -695,11 +736,7 @@ impl cosmic::Application for App {
                 return Task::future(async move {
                     let key = old.clone();
                     let result = tokio::task::spawn_blocking(move || {
-                        // Never replace another file: rename would overwrite it silently.
-                        if new.exists() {
-                            return Err("A file with that name already exists.".to_string());
-                        }
-                        std::fs::rename(&old, &new).map(|()| new).map_err(|e| format!("Could not rename: {e}"))
+                        rename_no_replace(&old, &new).map(|()| new)
                     })
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));
@@ -737,10 +774,20 @@ impl cosmic::Application for App {
             Message::Deleted(path, Ok(())) => return self.after_delete(path),
             Message::OpenLocation => {
                 self.overlay = None;
-                if let Some(dir) = self.viewing.as_deref().and_then(Path::parent) {
-                    if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
-                        self.action_error = Some(format!("Could not open the folder: {e}"));
-                    }
+                if let Some(dir) = self.viewing.as_deref().and_then(Path::parent).map(Path::to_path_buf) {
+                    // Waited for in a task, so the finished helper is reaped and
+                    // never lingers as a zombie while Photos stays open.
+                    return Task::future(async move {
+                        match tokio::process::Command::new("xdg-open").arg(&dir).status().await {
+                            Ok(_) => cosmic::Action::App(Message::LocationFailed(String::new())),
+                            Err(e) => cosmic::Action::App(Message::LocationFailed(format!("Could not open the folder: {e}"))),
+                        }
+                    });
+                }
+            }
+            Message::LocationFailed(e) => {
+                if !e.is_empty() {
+                    self.action_error = Some(e);
                 }
             }
             Message::Prev => return self.step(-1),
@@ -909,7 +956,7 @@ impl App {
                 button::standard("Back")
                     .leading_icon(icon::from_name("go-previous-symbolic"))
                     .name("Back to the gallery")
-                    .on_press(Message::Back),
+                    .on_press(Message::BackToGallery),
             )
             .push(container(text::body(file_name(path))).padding([0, 8]))
             .push(widget::Space::new().width(Length::Fill));
