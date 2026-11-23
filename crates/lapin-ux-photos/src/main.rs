@@ -327,7 +327,7 @@ struct App {
     /// Photos the person hid. They show only in the Hidden section.
     hidden: HashSet<PathBuf>,
     /// Copies an edit made in this session. Only these are edited in place.
-    made: HashSet<PathBuf>,
+    made: HashMap<PathBuf, FileId>,
     /// The albums: name to the photos in it. Saved in `albums.json`.
     albums: Albums,
     /// The album shown when the section is Album.
@@ -431,7 +431,11 @@ fn load_favorites() -> HashSet<PathBuf> {
 
 /// Writes the list next to the real file and renames it over it, so a full disk
 /// or a crash halfway leaves the previous list in place.
-fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
+///
+/// The list is synced before the rename. With `strict` the folder is synced
+/// afterwards too and a failure there is an error, for callers (a hidden copy)
+/// that must not rely on a list a power cut could take back.
+fn write_favorites(file: &Path, set: &HashSet<PathBuf>, strict: bool) -> std::io::Result<()> {
     let mut list: Vec<&PathBuf> = set.iter().collect();
     list.sort();
     let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
@@ -439,11 +443,22 @@ fn write_favorites(file: &Path, set: &HashSet<PathBuf>) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let stem = file.file_name().and_then(|n| n.to_str()).unwrap_or("list.json");
     let tmp = dir.join(format!("{stem}.{}.tmp", std::process::id()));
-    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, file));
+    let result = (|| {
+        use std::io::Write;
+        let mut out = std::fs::File::create(&tmp)?;
+        out.write_all(&bytes)?;
+        out.sync_all()?;
+        drop(out);
+        std::fs::rename(&tmp, file)
+    })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+        return result;
     }
-    result
+    if !sync_parent(file) && strict {
+        return Err(std::io::Error::other("the list could not be synced to disk"));
+    }
+    Ok(())
 }
 
 /// Stars or unstars one photo and returns the list as saved.
@@ -459,6 +474,11 @@ fn set_favorites(paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf
 
 /// Adds photos to, or removes them from, the saved list `name`, under a lock.
 fn set_in(name: &str, paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    set_in_with(name, paths, on, false)
+}
+
+/// `set_in`, optionally requiring the change to be on disk (see `write_favorites`).
+fn set_in_with(name: &str, paths: &[PathBuf], on: bool, strict: bool) -> std::io::Result<HashSet<PathBuf>> {
     let file = store_file(name).ok_or_else(|| std::io::Error::other("no config folder"))?;
     let dir = file.parent().ok_or_else(|| std::io::Error::other("list file has no folder"))?;
     std::fs::create_dir_all(dir)?;
@@ -473,7 +493,7 @@ fn set_in(name: &str, paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<Pa
             set.remove(&key);
         }
     }
-    write_favorites(&file, &set)?;
+    write_favorites(&file, &set, strict)?;
     Ok(set)
 }
 
@@ -781,6 +801,17 @@ fn create_temp_beside_seeded(path: &Path, seed: u128) -> Option<(PathBuf, std::f
 struct Saved {
     path: PathBuf,
     durable: bool,
+    /// Which file is at `path` now (see `file_id`), so a copy made here can be
+    /// told apart from a different file that later takes its name.
+    id: Option<FileId>,
+}
+
+/// Device and inode of a file: who it is, not what it is called.
+type FileId = (u64, u64);
+
+fn file_id(path: &Path) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 const NOT_DURABLE: &str = "Saved, but the disk did not confirm it yet. Keep the computer on for a moment.";
@@ -796,28 +827,21 @@ fn sync_parent(path: &Path) -> bool {
     }
 }
 
-/// True when the PNG bytes start an animation (an `acTL` chunk before the
-/// first `IDAT`). Rewriting such a file would keep only its first frame.
-fn png_is_animated(bytes: &[u8]) -> bool {
-    let mut at = 8;
-    while let Some(head) = bytes.get(at..at + 8) {
-        let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
-        match &head[4..8] {
-            b"acTL" => return true,
-            b"IDAT" | b"IEND" => return false,
-            _ => {}
+/// True only when the decoder itself says the PNG or WebP is a still picture.
+/// An animation, and a file the decoder cannot inspect, both count as "not
+/// known to be still", since a rewrite would keep one frame or fail halfway.
+fn is_still(path: &Path, format: image::ImageFormat) -> bool {
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    let reader = std::io::BufReader::new(file);
+    match format {
+        image::ImageFormat::Png => {
+            image::codecs::png::PngDecoder::new(reader).and_then(|d| d.is_apng()).is_ok_and(|animated| !animated)
         }
-        at = match at.checked_add(12).and_then(|a| a.checked_add(len)) {
-            Some(next) => next,
-            None => return false,
-        };
+        image::ImageFormat::WebP => {
+            image::codecs::webp::WebPDecoder::new(reader).is_ok_and(|d| !d.has_animation())
+        }
+        _ => true,
     }
-    false
-}
-
-/// True when the WebP bytes say they hold an animation (VP8X flag 0x02).
-fn webp_is_animated(bytes: &[u8]) -> bool {
-    bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|f| f & 0x02 != 0)
 }
 
 /// Whether a picture may be rewritten as one still image: what is inside the
@@ -835,11 +859,7 @@ fn transformable(path: &Path, ext: &str) -> bool {
     if guess != image_format(ext) {
         return false;
     }
-    match guess {
-        image::ImageFormat::Png => !png_is_animated(&head),
-        image::ImageFormat::WebP => !webp_is_animated(&head),
-        _ => true,
-    }
+    is_still(path, guess)
 }
 
 /// One rotate or edit at a time on this account, across Photos windows, so two
@@ -901,7 +921,7 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<Saved, String> {
     result.map_err(|_| TURN_FAILED.to_string())?;
     // The new picture is in place. A folder that cannot be flushed is told to
     // the person, not turned into a failure that hides a saved file.
-    Ok(Saved { path: real.clone(), durable: sync_parent(&real) })
+    Ok(Saved { id: file_id(&real), durable: sync_parent(&real), path: real.clone() })
 }
 
 fn image_format(ext: &str) -> image::ImageFormat {
@@ -997,13 +1017,16 @@ fn publish_new(tmp: &Path, target: &Path) -> std::io::Result<()> {
 /// `register` is called with the name the copy will have, after the picture is
 /// written to the temporary file and before the copy gets its name. If it
 /// fails nothing is published, so a copy of a hidden picture is never listed
-/// before it is hidden (CWE-200). If the name is taken meanwhile, the next free
-/// name is registered and tried.
+/// before it is hidden (CWE-200). It returns true when it added an entry that
+/// was not there. If the name is taken meanwhile, that entry is taken back with
+/// `unregister` and the next free name is registered and tried; the same when
+/// publishing fails, so the list never keeps a name that was not used.
 fn edit_file(
     path: &Path,
     edit: Edit,
     in_place: bool,
-    register: &dyn Fn(&Path) -> Result<(), String>,
+    register: &dyn Fn(&Path) -> Result<bool, String>,
+    unregister: &dyn Fn(&Path),
 ) -> Result<Saved, String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
@@ -1022,17 +1045,26 @@ fn edit_file(
         }
         file.sync_all().map_err(|e| e.to_string())?;
         for _ in 0..8 {
-            register(&future_key(&target)).map_err(|_| "hidden".to_string())?;
-            if target == path {
+            let key = future_key(&target);
+            let added = register(&key).map_err(|_| "hidden".to_string())?;
+            let published = if target == path {
                 // A copy made earlier by an edit is edited in place.
-                return std::fs::rename(&tmp, &target).map_err(|e| e.to_string());
-            }
-            match publish_new(&tmp, &target) {
+                std::fs::rename(&tmp, &target)
+            } else {
+                publish_new(&tmp, &target)
+            };
+            match published {
                 Ok(()) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    target = edit_target(path, false, |p| p.exists());
+                Err(e) => {
+                    if added {
+                        unregister(&key);
+                    }
+                    if e.kind() == std::io::ErrorKind::AlreadyExists && target != path {
+                        target = edit_target(path, false, |p| p.exists());
+                    } else {
+                        return Err(e.to_string());
+                    }
                 }
-                Err(e) => return Err(e.to_string()),
             }
         }
         Err("no free name".to_string())
@@ -1044,7 +1076,7 @@ fn edit_file(
         let _ = std::fs::remove_file(&tmp);
     }
     match result {
-        Ok(()) => Ok(Saved { durable: sync_parent(&target), path: target }),
+        Ok(()) => Ok(Saved { id: file_id(&target), durable: sync_parent(&target), path: target }),
         Err(e) if e == "hidden" => {
             Err("The copy was not made, because it could not be added to your hidden photos.".to_string())
         }
@@ -1055,18 +1087,36 @@ fn edit_file(
 /// `edit_file` for the app: one transform at a time, and a copy of a hidden
 /// picture is put on the hidden list before it exists. The list is read under
 /// the lock; if it cannot be read, nothing is made.
-fn edit_locked(path: &Path, edit: Edit, in_place: bool) -> Result<Saved, String> {
+///
+/// `made` is the identity of the copy this session made at `path`, if it is
+/// one. Only when the file there is still that very file is it edited in
+/// place; a different file that took the name gets a copy of its own.
+fn edit_locked(path: &Path, edit: Edit, made: Option<FileId>) -> Result<Saved, String> {
     let _lock = transform_lock().map_err(|_| COPY_FAILED.to_string())?;
     let hidden = try_load_set("hidden")
         .map_err(|_| "Your hidden photos could not be read, so the picture was left as it is.".to_string())?;
     let hide = hidden.contains(&photo_key(path)) || hidden.contains(path);
-    edit_file(path, edit, in_place, &|key| {
-        if hide {
-            set_in("hidden", std::slice::from_ref(&key.to_path_buf()), true).map(|_| ()).map_err(|e| e.to_string())
-        } else {
-            Ok(())
-        }
-    })
+    let in_place = made.is_some() && file_id(path) == made;
+    edit_file(
+        path,
+        edit,
+        in_place,
+        &|key| {
+            if !hide {
+                return Ok(false);
+            }
+            // Strict: the entry must be on disk before the copy exists.
+            let key = key.to_path_buf();
+            let had = try_load_set("hidden").map_err(|e| e.to_string())?.contains(&key);
+            set_in_with("hidden", std::slice::from_ref(&key), true, true).map_err(|e| e.to_string())?;
+            Ok(!had)
+        },
+        &|key| {
+            if let Err(e) = set_in("hidden", std::slice::from_ref(&key.to_path_buf()), false) {
+                tracing::warn!("could not take an unused name off the hidden list: {e}");
+            }
+        },
+    )
 }
 
 /// `rotate_file` for the app, one transform at a time.
@@ -1753,7 +1803,7 @@ impl cosmic::Application for App {
             favorites: load_favorites(),
             keys: HashMap::new(),
             hidden: hidden_set.unwrap_or_default(),
-            made: HashSet::new(),
+            made: HashMap::new(),
             hidden_unreadable,
             albums: load_albums(),
             album: None,
@@ -2520,10 +2570,10 @@ impl cosmic::Application for App {
                 self.notice = None;
                 // Only a copy this session made is edited in place. A picture
                 // that merely has "(edited)" in its name gets a new copy.
-                let in_place = self.made.contains(&photo_key(&path));
+                let made = self.made.get(&photo_key(&path)).copied();
                 return Task::future(async move {
                     let source = path.clone();
-                    let done = tokio::task::spawn_blocking(move || edit_locked(&path, edit, in_place))
+                    let done = tokio::task::spawn_blocking(move || edit_locked(&path, edit, made))
                         .await
                         .unwrap_or_else(|_| Err("The picture could not be edited.".into()));
                     cosmic::Action::App(Message::Edited(source, done))
@@ -2541,8 +2591,8 @@ impl cosmic::Application for App {
                     if self.hidden.contains(&photo_key(&source)) || self.hidden.contains(&source) {
                         self.hidden.insert(key.clone());
                     }
-                    if target != source {
-                        self.made.insert(key.clone());
+                    if let Some(id) = saved.id {
+                        self.made.insert(key.clone(), id);
                     }
                     // A copy that is already listed was edited in place.
                     self.asked.remove(&target);
@@ -2561,6 +2611,13 @@ impl cosmic::Application for App {
             Message::Rotated(path, done) => match done {
                 Ok(saved) => {
                     self.notice = (!saved.durable).then(|| NOT_DURABLE.to_string());
+                    // A turn swaps the file, so a copy made here has a new identity.
+                    if let Some(id) = saved.id {
+                        let key = photo_key(&path);
+                        if self.made.contains_key(&key) {
+                            self.made.insert(key, id);
+                        }
+                    }
                     self.asked.remove(&path);
                     self.thumbs.remove(&path);
                     self.dims.remove(&path);
@@ -3460,8 +3517,39 @@ mod lock_tests {
         pic
     }
 
-    fn ok(_: &Path) -> Result<(), String> {
-        Ok(())
+    fn ok(_: &Path) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn nothing(_: &Path) {}
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+
+    /// A real PNG with an `acTL` chunk in front of its first `IDAT`.
+    fn apng(dir: &Path, name: &str) -> PathBuf {
+        let plain = std::fs::read(png(dir, "plain-for-apng.png")).unwrap();
+        let at = plain.windows(4).position(|w| w == b"IDAT").unwrap() - 4;
+        let mut body = b"acTL".to_vec();
+        body.extend(1u32.to_be_bytes());
+        body.extend(0u32.to_be_bytes());
+        let mut chunk = 8u32.to_be_bytes().to_vec();
+        chunk.extend(&body);
+        chunk.extend(crc32(&body).to_be_bytes());
+        let mut bytes = plain[..at].to_vec();
+        bytes.extend(chunk);
+        bytes.extend(&plain[at..]);
+        let out = dir.join(name);
+        std::fs::write(&out, bytes).unwrap();
+        out
     }
 
     fn leftovers(dir: &Path) -> usize {
@@ -3481,12 +3569,12 @@ mod lock_tests {
         std::fs::write(&victim, "keep").unwrap();
         // A link planted at the old, predictable temporary name.
         let _ = std::os::unix::fs::symlink(&victim, dir.join(format!(".c (edited).png.{}.tmp.png", std::process::id())));
-        let copy = edit_file(&pic, Edit::BlackWhite, false, &ok).unwrap();
+        let copy = edit_file(&pic, Edit::BlackWhite, false, &ok, &nothing).unwrap();
         assert_eq!(copy.path, dir.join("c (edited).png"));
         assert!(copy.durable);
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
         // Editing a copy made this session edits it in place and adds nothing.
-        assert_eq!(edit_file(&copy.path, Edit::Brighter, true, &ok).unwrap().path, copy.path);
+        assert_eq!(edit_file(&copy.path, Edit::Brighter, true, &ok, &nothing).unwrap().path, copy.path);
         assert_eq!(leftovers(dir), 0);
     }
 
@@ -3499,19 +3587,22 @@ mod lock_tests {
         // The name is free when it is chosen and taken just before the copy
         // is published (here: by the registration step that runs in between).
         let seen = std::cell::RefCell::new(Vec::new());
+        let gone = std::cell::RefCell::new(Vec::new());
         let copy = edit_file(&pic, Edit::Darker, false, &|key: &Path| {
             seen.borrow_mut().push(key.to_path_buf());
             if seen.borrow().len() == 1 {
                 std::fs::write(&first, "mine").unwrap();
             }
-            Ok(())
-        })
+            Ok(true)
+        }, &|key: &Path| gone.borrow_mut().push(key.to_path_buf()))
         .unwrap();
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "mine");
         assert_eq!(copy.path, dir.join("d (edited 2).png"));
         // Every name that was tried was registered before it was published.
         let real = dir.canonicalize().unwrap();
         assert_eq!(*seen.borrow(), vec![real.join("d (edited).png"), real.join("d (edited 2).png")]);
+        // The name that was never used is taken off the list again.
+        assert_eq!(*gone.borrow(), vec![real.join("d (edited).png")]);
         assert_eq!(leftovers(dir), 0);
     }
 
@@ -3522,7 +3613,7 @@ mod lock_tests {
         let imported = dir.join("e (edited).png");
         image::DynamicImage::new_rgb8(2, 2).save(&imported).unwrap();
         let before = std::fs::read(&imported).unwrap();
-        let copy = edit_file(&imported, Edit::BlackWhite, false, &ok).unwrap();
+        let copy = edit_file(&imported, Edit::BlackWhite, false, &ok, &nothing).unwrap();
         assert_eq!(copy.path, dir.join("e (edited) (edited).png"));
         assert_eq!(std::fs::read(&imported).unwrap(), before);
     }
@@ -3532,7 +3623,7 @@ mod lock_tests {
         let guard = TestDir::new("edit-register");
         let dir = &guard.0;
         let pic = png(dir, "f.png");
-        let err = edit_file(&pic, Edit::Darker, false, &|_| Err("no".into())).unwrap_err();
+        let err = edit_file(&pic, Edit::Darker, false, &|_| Err("no".into()), &nothing).unwrap_err();
         assert!(err.contains("hidden"), "{err}");
         assert!(!dir.join("f (edited).png").exists());
         assert_eq!(leftovers(dir), 0);
@@ -3563,26 +3654,56 @@ mod lock_tests {
         std::fs::rename(&pic, &wrong).unwrap();
         let before = std::fs::read(&wrong).unwrap();
         assert!(rotate_file(&wrong, true).is_err());
-        assert!(edit_file(&wrong, Edit::Darker, false, &ok).is_err());
+        assert!(edit_file(&wrong, Edit::Darker, false, &ok, &nothing).is_err());
         assert_eq!(std::fs::read(&wrong).unwrap(), before);
         assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
 
-        // The animation markers.
-        let mut apng = b"\x89PNG\r\n\x1a\n".to_vec();
-        for (kind, len) in [(*b"IHDR", 13u32), (*b"acTL", 8)] {
-            apng.extend(len.to_be_bytes());
-            apng.extend(kind);
-            apng.extend(vec![0u8; len as usize + 4]);
-        }
-        assert!(png_is_animated(&apng));
-        let plain = std::fs::read(png(dir, "h.png")).unwrap();
-        assert!(!png_is_animated(&plain));
-        let mut webp = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0".to_vec();
-        webp.push(0x02);
-        webp.extend([0u8; 9]);
-        assert!(webp_is_animated(&webp));
-        webp[20] = 0;
-        assert!(!webp_is_animated(&webp));
+        // A moving picture is refused, a still one is not.
+        let moving = apng(dir, "m.png");
+        let still = png(dir, "s.png");
+        assert!(!transformable(&moving, "png"));
+        assert!(transformable(&still, "png"));
+        assert!(edit_file(&moving, Edit::Darker, false, &ok, &nothing).is_err());
+        // A file the decoder cannot inspect is not known to be still.
+        let broken = dir.join("b.webp");
+        std::fs::write(&broken, b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x02\0\0\0\0\0\0\0\0\0").unwrap();
+        assert!(!transformable(&broken, "webp"));
+    }
+
+    #[test]
+    fn a_name_that_was_never_used_is_taken_off_the_list_when_publishing_fails() {
+        let guard = TestDir::new("edit-unregister");
+        let dir = &guard.0;
+        let pic = png(dir, "u.png");
+        // Publishing cannot work in a folder that is read-only after the
+        // temporary file exists, so make the target a directory instead.
+        std::fs::create_dir(dir.join("u (edited).png")).unwrap();
+        let gone = std::cell::RefCell::new(Vec::new());
+        let copy = edit_file(&pic, Edit::Darker, false, &|_| Ok(true), &|k: &Path| gone.borrow_mut().push(k.to_path_buf())).unwrap();
+        assert_eq!(copy.path, dir.join("u (edited 2).png"));
+        assert!(gone.borrow().is_empty(), "the name that was used stays registered");
+    }
+
+    #[test]
+    fn a_different_file_under_a_copys_name_is_not_edited_in_place() {
+        let guard = TestDir::new("edit-identity");
+        let dir = &guard.0;
+        let pic = png(dir, "i.png");
+        let copy = edit_file(&pic, Edit::BlackWhite, false, &ok, &nothing).unwrap();
+        let id = copy.id;
+        assert!(id.is_some());
+        // Swap another file into the copy's name.
+        let other = png(dir, "other.png");
+        std::fs::rename(&other, &copy.path).unwrap();
+        assert_ne!(file_id(&copy.path), id);
+        let before = std::fs::read(&copy.path).unwrap();
+        // The identity check happens in `edit_locked`'s caller path: a changed
+        // identity means a new copy, never an overwrite.
+        let in_place = id.is_some() && file_id(&copy.path) == id;
+        assert!(!in_place);
+        let next = edit_file(&copy.path, Edit::Darker, in_place, &ok, &nothing).unwrap();
+        assert_ne!(next.path, copy.path);
+        assert_eq!(std::fs::read(&copy.path).unwrap(), before);
     }
 
     #[test]
