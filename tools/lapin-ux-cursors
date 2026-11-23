@@ -142,14 +142,27 @@ def xcursor(frames):
     return bytes(out)
 
 
+def https_only_opener():
+    """An opener that can only speak https (also across redirects): no file://,
+    ftp:// or http:// handler is installed, so whatever URL it's given, it can
+    never read a local file or fall back to plain text."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.HTTPSHandler(), urllib.request.HTTPRedirectHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor(),
+                    urllib.request.UnknownHandler()):
+        opener.add_handler(handler)
+    return opener
+
+
 def fetch(dest):
     print("Downloading the cursor pack…")
     last = None
+    opener = https_only_opener()
     for url in (REPO_ZIP, REPO_ZIP_LATEST):
         try:
             # REPO_ZIP and REPO_ZIP_LATEST are fixed https URLs, never user input.
             assert url.startswith("https://")
-            with urllib.request.urlopen(url, timeout=60) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+            with opener.open(url, timeout=60) as r:
                 data = r.read()
         except Exception as e:  # noqa: BLE001 - any network failure: try the next
             last = e
