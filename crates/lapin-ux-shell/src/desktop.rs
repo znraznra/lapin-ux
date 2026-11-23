@@ -1002,7 +1002,13 @@ impl Shell {
                 "a" => d.selected = d.items.iter().map(|s| s.item.path.clone()).collect(),
                 "c" => return self.update_desktop(DesktopMsg::Copy),
                 "x" => return self.update_desktop(DesktopMsg::Cut),
-                "v" => return self.update_desktop(DesktopMsg::Paste),
+                "v" => {
+                    // Ctrl+V is on the main desktop: not an extra display's menu.
+                    if let Some(d) = &mut self.desktop {
+                        d.menu_on_extra = false;
+                    }
+                    return self.update_desktop(DesktopMsg::Paste);
+                }
                 _ => {}
             },
             DesktopMsg::Cut | DesktopMsg::Copy => {
