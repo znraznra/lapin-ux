@@ -33,8 +33,17 @@ REPO = "https://github.com/SullensCR/Windows-11-Hdpi-Tail-Cursor-Concept-by-jepr
 # reshuffles its branches (main -> v1/v2), which broke the download once.
 REPO_COMMIT = "b14dd9e1fce1efe0c5c3daf9abcae8a0ff2dee07"
 REPO_ZIP = f"{REPO}/archive/{REPO_COMMIT}.zip"
-# If that commit ever disappears: the newest version on the default branch.
-REPO_ZIP_LATEST = f"{REPO}/archive/HEAD.zip"
+# What that commit must contain: a SHA-256 over every file's path and content
+# (see tree_digest), so a changed, swapped or tampered download is refused
+# instead of converted and installed. GitHub's zip bytes aren't stable, the
+# files inside are, so the zip itself isn't hashed. Updating the pack means
+# changing REPO_COMMIT and this value together, after looking at the new files.
+REPO_TREE_SHA256 = "791c26836d8c551d5bd088af8403a8882f506427b34b6f9c0a03f5326fa6f0ba"
+# Sanity limits for what the download may unpack to (the pack is 3 MB zipped,
+# 55 MB unpacked, 109 entries).
+MAX_ZIP_BYTES = 32 * 1024 * 1024
+MAX_UNPACKED_BYTES = 128 * 1024 * 1024
+MAX_ENTRIES = 1000
 THEME_DIR = "Cursor-Concept-W11-Tail-HDPi-by-JepriCreations"
 THEME_NAME = "Cursor Concept W11 Tail HDPi (by JepriCreations)"
 
@@ -154,28 +163,96 @@ def https_only_opener():
     return opener
 
 
+def read_limited(response, limit):
+    """Read a download, stopping with an error when it is bigger than `limit`."""
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"the download is larger than {limit // (1024 * 1024)} MB")
+    return data
+
+
+def pack_members(zf):
+    """The files in the pack zip as (path inside the pack, ZipInfo), sorted,
+    with the zip's top folder removed. Refuses anything that isn't plain files
+    and folders inside the limits, or that would land outside the target."""
+    infos = zf.infolist()
+    if len(infos) > MAX_ENTRIES:
+        raise ValueError("the pack has too many entries")
+    if sum(i.file_size for i in infos) > MAX_UNPACKED_BYTES:
+        raise ValueError("the pack unpacks to more than expected")
+    members = []
+    for info in infos:
+        name = info.filename[:-1] if info.is_dir() else info.filename
+        parts = name.split("/")
+        if "\\" in name or "\0" in name or any(p in ("", ".", "..") for p in parts):
+            raise ValueError(f"unsafe path in the pack: {info.filename!r}")
+        if (info.external_attr >> 16) & 0o170000 not in (0, 0o100000, 0o040000):
+            raise ValueError(f"not a plain file or folder: {info.filename!r}")
+        if info.is_dir():
+            continue
+        if len(parts) < 2:
+            raise ValueError(f"file outside the pack's folder: {info.filename!r}")
+        members.append(("/".join(parts[1:]), info))
+    return sorted(members, key=lambda m: m[0])
+
+
+def tree_digest(zf):
+    """SHA-256 over every file's path and content, in path order, independent
+    of how the zip itself was compressed or what its top folder is called."""
+    import hashlib
+    total = hashlib.sha256()
+    size = 0  # what really came out of the zip, whatever its headers claim
+    for path, info in pack_members(zf):
+        with zf.open(info) as f:
+            digest = hashlib.sha256()
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UNPACKED_BYTES:
+                    raise ValueError("the pack unpacks to more than expected")
+                digest.update(chunk)
+        total.update(path.encode() + b"\0" + digest.hexdigest().encode() + b"\n")
+    return total.hexdigest()
+
+
+def unpack_verified(data, part, expected):
+    """Check `data` (a zip) against `expected` and only then unpack it to
+    `part`. Raises ValueError when it isn't the pack Lapin UX was made for."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"not a zip file: {e}") from e
+    with zf:
+        got = tree_digest(zf)
+        if got != expected:
+            raise ValueError(f"the files don't match the pack Lapin UX expects (got {got})")
+        for path, info in pack_members(zf):
+            target = os.path.join(part, path)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
 def fetch(dest):
     print("Downloading the cursor pack…")
-    last = None
     opener = https_only_opener()
-    for url in (REPO_ZIP, REPO_ZIP_LATEST):
-        try:
-            # REPO_ZIP and REPO_ZIP_LATEST are fixed https URLs, never user input.
-            assert url.startswith("https://")
-            with opener.open(url, timeout=60) as r:
-                data = r.read()
-        except Exception as e:  # noqa: BLE001 - any network failure: try the next
-            last = e
-            print(f"Couldn't download {url}: {e}", file=sys.stderr)
-            continue
-        part = os.path.join(dest, str(len(os.listdir(dest))))
-        zipfile.ZipFile(io.BytesIO(data)).extractall(part)
-        for root, dirs, _ in os.walk(part):
-            if "assets" in dirs and os.path.isdir(os.path.join(root, "assets", "light")):
-                return os.path.join(root, "assets")
-        print(f"{url} doesn't contain the cursor files in the expected layout.", file=sys.stderr)
-    if last is not None:
-        sys.exit(f"Couldn't download the cursor pack (no internet connection?): {last}")
+    try:
+        # REPO_ZIP is fixed above (one commit), and the opener only speaks https.
+        with opener.open(REPO_ZIP, timeout=60) as r:
+            data = read_limited(r, MAX_ZIP_BYTES)
+    except Exception as e:  # noqa: BLE001 - any network failure
+        sys.exit(f"Couldn't download the cursor pack (no internet connection?): {e}")
+    part = os.path.join(dest, "pack")
+    try:
+        unpack_verified(data, part, REPO_TREE_SHA256)
+    except ValueError as e:
+        sys.exit(f"The cursor pack was not installed: {e}.\n"
+                 "Nothing was changed. You can point --from at a folder with the pack instead.")
+    for root, dirs, _ in os.walk(part):
+        if "assets" in dirs and os.path.isdir(os.path.join(root, "assets", "light")):
+            return os.path.join(root, "assets")
     sys.exit("The download doesn't contain the cursor files (the upstream pack changed its layout).")
 
 
