@@ -187,7 +187,10 @@ lapin-ux-desktop-settings enter || true
 # when no default is set. It lands in mimeapps.list, which lapin-ux-desktop-settings hands back
 # to the other desktops' own copy when the session ends. Explorer's "Open in Terminal" and
 # anything else that asks for x-scheme-handler/terminal use it.
+# It is written only when the installed settings swap knows mimeapps.list (#223), so the entry
+# is always handed back at session end; an older build leaves the default alone.
 if [ -f /usr/share/applications/dev.lapinux.Terminal.desktop ] && command -v xdg-mime >/dev/null 2>&1 \
+   && grep -q mimeapps "$(command -v lapin-ux-desktop-settings 2>/dev/null)" 2>/dev/null \
    && [ -z "$(xdg-mime query default x-scheme-handler/terminal 2>/dev/null)" ]; then
     xdg-mime default dev.lapinux.Terminal.desktop x-scheme-handler/terminal || true
 fi

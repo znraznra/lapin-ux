@@ -30,8 +30,9 @@ the app behaves like stock Alacritty under its own names; later Lapin looks go b
 `start-lapin-ux` sets `x-scheme-handler/terminal=dev.lapinux.Terminal.desktop` in the Lapin
 session, only when the package is installed and no default is set (the user's own choice wins).
 Explorer's "Open in Terminal" asks for that handler, so it opens Lapin Terminal there. The entry
-lives in `mimeapps.list`, which `lapin-ux-desktop-settings` swaps per session (#223, PR #226),
-so other desktops never see it. COSMIC's own session is unchanged and keeps COSMIC Terminal.
+lives in `mimeapps.list`. Handing it back needs `mimeapps.list` to be a swapped item (#223,
+PR #226): until that is merged, `start-lapin-ux` does not write the default at all. Once it is,
+`lapin-ux-desktop-settings` swaps the file per session, so other desktops never see it. COSMIC's own session is unchanged and keeps COSMIC Terminal.
 
 ## Coexistence
 - `lapin-ux-cosmic-term` (COSMIC Terminal with familiar title bars) stays installable: Lapin

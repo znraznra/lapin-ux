@@ -513,22 +513,22 @@ check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" 
 }
 scenV() {
 echo "V: Lapin Terminal as default terminal stays in Lapin UX (#225)"
-DS=$(dirname $U)/lapin-ux-desktop-settings
-M=$HOME/.config/mimeapps.list
+DS=$(dirname "$U")/lapin-ux-desktop-settings
+M="$HOME/.config/mimeapps.list"
 if ! grep -q mimeapps "$U"; then echo "  skipped: mimeapps.list is not a swapped item yet (needs #223 / PR #226)"; return; fi
-mkdir -p $HOME/.config
-printf '[Default Applications]\nx-scheme-handler/terminal=org.gnome.Terminal.desktop\n' > $M
-bash $U --snapshot; bash $DS enter
+mkdir -p "$HOME/.config"
+printf '[Default Applications]\nx-scheme-handler/terminal=org.gnome.Terminal.desktop\n' > "$M"
+bash "$U" --snapshot; bash "$DS" enter
 # what start-lapin-ux does in the Lapin session, once a default is not set; the user's own is kept
-check "the user's own default terminal is kept" "grep -q org.gnome.Terminal.desktop $M"
-printf '[Default Applications]\nx-scheme-handler/terminal=dev.lapinux.Terminal.desktop\n' > $M
-bash $DS leave
-check "other desktop: its own default terminal back" "grep -q org.gnome.Terminal.desktop $M && ! grep -q dev.lapinux.Terminal $M"
-bash $DS enter
-check "Lapin UX: Lapin Terminal is the default there" "grep -q dev.lapinux.Terminal.desktop $M"
-bash $DS leave
-bash $U --settings-only --yes > $HOME/out.txt 2>&1
-check "after uninstall: no Lapin Terminal default left" "! grep -q dev.lapinux.Terminal $M"
+check "the user's own default terminal is kept" "grep -q org.gnome.Terminal.desktop \"$M\""
+printf '[Default Applications]\nx-scheme-handler/terminal=dev.lapinux.Terminal.desktop\n' > "$M"
+bash "$DS" leave
+check "other desktop: its own default terminal back" "grep -q org.gnome.Terminal.desktop \"$M\" && ! grep -q dev.lapinux.Terminal \"$M\""
+bash "$DS" enter
+check "Lapin UX: Lapin Terminal is the default there" "grep -q dev.lapinux.Terminal.desktop \"$M\""
+bash "$DS" leave
+bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
+check "after uninstall: no Lapin Terminal default left" "! grep -q dev.lapinux.Terminal \"$M\""
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T V; do
