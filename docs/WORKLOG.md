@@ -65,3 +65,5 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos tiles load as you scroll (#203). | 1 |
 | Mon 23 Nov | Photos turn left and right in the viewer (#203). | 1 |
 | Mon 23 Nov | Photos grid memory (#203): thumbnails far from the visible stretch are dropped, the grid restarts when the source folder changes, and a failed turn shows its note until the next try. | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos are matched by canonical path. | 1 |
+| Tue 24 Nov | Photos turn left and right now writes through an exclusively created temporary file (#203). | 1 |
