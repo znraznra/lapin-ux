@@ -201,6 +201,9 @@ enum Message {
     SelectAll,
     FavoriteTargets,
     HideTargets,
+    /// Starts the slideshow, or stops it when it is running.
+    Slideshow,
+    SlideshowTick,
     /// Opens an album.
     Album(String),
     AddToAlbum(String),
@@ -246,6 +249,8 @@ fn still_viewing(path: &Path) -> bool {
     VIEWING.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(path)
 }
 
+/// How long each photo stays in the slideshow.
+const SLIDE_TIME: std::time::Duration = std::time::Duration::from_secs(4);
 const ALBUMS_UNSAVED: &str = "Your albums could not be saved, so the change was not kept.";
 static NEW_ALBUM_ID: std::sync::LazyLock<widget::Id> = std::sync::LazyLock::new(|| widget::Id::new("lapin-ux-photos-new-album"));
 const FAVORITES_UNSAVED: &str = "Your favorites could not be saved, so the change was not kept.";
@@ -298,6 +303,8 @@ struct App {
     reel: Option<PathBuf>,
     /// The photo shown in the viewer, as a path (the list can change under it).
     viewing: Option<PathBuf>,
+    /// The slideshow is running: the viewer moves on by itself.
+    slideshow: bool,
     /// The full-size picture of the viewer or the reel.
     full: Option<(PathBuf, Handle)>,
     /// The picture to open at start, from the command line or Files.
@@ -849,6 +856,7 @@ impl App {
     }
 
     fn back(&mut self) -> Task<Message> {
+        self.slideshow = false;
         self.viewing = None;
         self.full = None;
         self.failed = None;
@@ -914,6 +922,7 @@ impl cosmic::Application for App {
             confirm_delete: false,
             reel: None,
             viewing: None,
+            slideshow: false,
             full: None,
             start,
         };
@@ -930,7 +939,12 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        cosmic::iced::event::listen_with(|event, status, _| match event {
+        let tick = if self.slideshow {
+            cosmic::iced::time::every(SLIDE_TIME).map(|_| Message::SlideshowTick)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([tick, cosmic::iced::event::listen_with(|event, status, _| match event {
             cosmic::iced::Event::Keyboard(KeyEvent::ModifiersChanged(m)) => Some(Message::Modifiers(m)),
             cosmic::iced::Event::Mouse(MouseEvent::WheelScrolled { delta }) => {
                 let y = match delta {
@@ -953,7 +967,7 @@ impl cosmic::Application for App {
                 }
             }
             _ => None,
-        })
+        })])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1312,6 +1326,39 @@ impl cosmic::Application for App {
                     self.clear_selection();
                 }
             }
+            Message::Slideshow => {
+                self.menu = None;
+                if self.slideshow {
+                    self.slideshow = false;
+                } else {
+                    let list = self.viewer_list();
+                    let start = self
+                        .viewing
+                        .clone()
+                        .filter(|v| list.iter().any(|p| &p.path == v))
+                        .or_else(|| self.selected.iter().find_map(|s| list.iter().find(|p| &p.path == s).map(|p| p.path.clone())))
+                        .or_else(|| list.first().map(|p| p.path.clone()));
+                    let Some(start) = start else { return Task::none() };
+                    self.slideshow = true;
+                    return self.open(start);
+                }
+            }
+            Message::SlideshowTick => {
+                if !self.slideshow || self.viewing.is_none() {
+                    return Task::none();
+                }
+                let list = self.viewer_list();
+                let Some(current) = self.viewing.as_ref() else { return Task::none() };
+                let Some(i) = list.iter().position(|p| &p.path == current) else {
+                    self.slideshow = false;
+                    return Task::none();
+                };
+                let next = list[(i + 1) % list.len()].path.clone();
+                // A single photo has nothing to move on to.
+                if &next != current {
+                    return self.open(next);
+                }
+            }
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
@@ -1473,7 +1520,7 @@ impl App {
             bar = bar.push(button::standard("Select").on_press(Message::SelectMode(true)));
         }
 
-        let mut more = vec![Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
+        let mut more = vec![Self::menu_item("Slideshow", Some("media-playback-start-symbolic"), false, Message::Slideshow), Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
         if self.section == Section::Album {
             more.push(Self::menu_item("Delete this album", Some("user-trash-symbolic"), false, Message::DeleteAlbum));
         }
@@ -1796,6 +1843,11 @@ impl App {
                 button::icon(icon::from_name("go-next-symbolic"))
                     .name("Next photo")
                     .on_press_maybe(index.filter(|i| i + 1 < list.len()).map(|_| Message::Next)),
+            )
+            .push(
+                button::icon(icon::from_name(if self.slideshow { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" }))
+                    .name(if self.slideshow { "Stop the slideshow" } else { "Start the slideshow" })
+                    .on_press(Message::Slideshow),
             )
             .push(
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))

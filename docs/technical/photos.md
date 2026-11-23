@@ -23,6 +23,7 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 - Tiles are 100 to 250 px high (squares or the photo's own proportions, kept between 0.6 and 2 times the height), decoded four at a time off the UI thread, upright by their EXIF rotation. At most 400 tiles are loaded per section (about 46 MB). The grid is not virtualised yet.
 - The full picture is decoded when opened and scaled down once if it is larger than 3840 px on either side.
   - **Albums**: the side bar lists them with **New album**. Select photos, then **Add to album** in the toolbar picks an album or makes a new one (a name box appears under the toolbar; Esc closes it). Inside an album, the remove button takes the selected photos out of the album only, never deletes files, and **More > Delete this album** removes the album and leaves the photos alone.
+  - **Slideshow**: **More > Slideshow** in the gallery, or the play button in the viewer. It starts at the open photo (or the first selected one, or the first shown), follows what the current section shows, moves on every 4 seconds and starts over after the last photo. The button turns into pause, and Esc or Back to the gallery stops it. Left and Right still work while it plays.
 - Favorites and hidden photos are saved as path lists in `~/.config/dev.lapinux.Photos/favorites.json` and `hidden.json`, each written under its own lock file and swapped in atomically. Albums are a name to path-list map in `albums.json`, saved the same way (`albums.lock`).
 - Favorites are saved in `favorites.json`. A failed save is logged and never ends the program (#174).
 
@@ -32,4 +33,4 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 
 ## Not yet
 
-Renaming albums, a lock or password for Hidden, slideshow, Add folder, lazy tile loading on scroll, rotate and edit.
+Renaming albums, a lock or password for Hidden, a slideshow timer setting and fullscreen, Add folder, lazy tile loading on scroll, rotate and edit.

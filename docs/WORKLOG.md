@@ -57,3 +57,4 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | 4 |
 | Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
 | Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | 1 |
+| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | 1 |
