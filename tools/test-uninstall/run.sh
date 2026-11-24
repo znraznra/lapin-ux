@@ -511,8 +511,8 @@ chmod u+w "$D/sounds"
 check "a '.x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/.ocean/stereo/bell.oga\" ]"
 check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" ]"
 }
-scenU() {
-echo "U: default apps chosen in Lapin UX stay in Lapin UX (#223)"
+scenV() {
+echo "V: default apps chosen in Lapin UX stay in Lapin UX (#223)"
 DS="$(dirname "$U")/lapin-ux-desktop-settings"
 M="$HOME/.config/mimeapps.list"
 mkdir -p "$HOME/.config"
@@ -542,10 +542,11 @@ bash "$DS" enter
 bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
 check "uninstall from a Lapin session: the user's own defaults intact" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
 }
-if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T U; do
-  h=$(mktemp -d)
-  env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
-  grep -v -e dbus-daemon -e '^$' $h.log
+# fakebin/pgrep only sees processes this run started, never the surrounding session
+if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
+for x in A B C D E F G H I J K L M N O P Q R S T V; do
+  h=$(mktemp -d); mkdir -p "$h/run"
+  env -i HOME="$h" USER="$USER" XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN="$x" dbus-run-session -- bash "$0" "$U" > "$h.log" 2>&1 || fail=1
+  grep -v -e dbus-daemon -e '^$' "$h.log"
 done
 exit $fail
