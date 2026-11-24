@@ -27,8 +27,11 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | The sign-in screen says plainly when the disk is full (#174), so a failed sign-in is no longer a silent mystery. | Retest |
 | Sun 22 Nov | Warning before the disk is full (#174): a notice when a drive is almost full, shown once and not repeated while it stays low, with a switch in the notification settings. | Retest |
 | Sun 22 Nov | Explorer: Home and This PC are per tab, right-click menus on Home and This PC, a tidier Recent list, and a details pane that follows the page (#168, #169, #170, #175). | Retest |
+| Mon 23 Nov | Explorer: Up and the address bar now work on network shares and mapped drives (#210, #211). | Retest |
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
+| Mon 23 Nov | Photos tiles load as you scroll (#203). | Retest |
+| Mon 23 Nov | Choose a Start layout (#198): Current, Classic, Classic with two columns, or a Programs list, in Settings and in the welcome app. | Retest |
 | Sun 22 Nov | The taskbar can sit on the left or right edge as well as the bottom and top (#41): a narrow icon-only bar, Start, panels, pop-ups, auto-hide and the work area all follow the edge. Chosen in Settings or from the taskbar menu. | Retest |
 | Sun 22 Nov | Photos (#74), stage 1: an offline picture app with a dark gallery (by date, Favorites, your folders) and a light viewer with a filmstrip. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
@@ -41,21 +44,25 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
+| Mon 23 Nov | Explorer (#216): your own folder is named after your account (your full name, or your user name if none is set) in the sidebar, address bar, tab titles, Open and Save dialogs and This PC. "Home" always means the start page. | Retest |
+| Mon 23 Nov | Desktop on every display (#165): right-click the empty desktop on any display opens the desktop menu there, and files can be dropped on it. Icons stay on the main display, and displays plugged in or out are picked up on the fly. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
-| Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | 4 |
-| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
-| Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | 1 |
-| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | 1 |
-| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | 1 |
+| Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | Retest |
+| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | Retest |
+| Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | Retest |
+| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | Retest |
+| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | Retest |
 | Mon 23 Nov | Photos rename album (#203): More > Rename this album. | 1 |
 | Mon 23 Nov | Photos Hidden password (#203): lock screen for Hidden, set, change and remove from More. | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. | 1 |
+| Mon 23 Nov | Code scanning (#190): the first Semgrep findings are triaged. Every workflow action is pinned to a commit, and the cursor-pack download can only use https, is checked against a known hash and has size limits, so it can never read a local file or install a changed pack. The uninstall tests now give the same result when run from inside a Lapin session. | Docs |
+| Tue 24 Nov | Photos review fixes (#241): a starred pipe or device is skipped before it is read, the selection follows Favorites and Hidden changes, New album ends a rename, the rename name is checked under the lock, adding a folder clears the selection, and a failed album save shows outside the naming bar. | 1 |
 | Mon 23 Nov | Photos slideshow speed and full screen (#203): speed in More, Full screen button in the viewer. | 1 |
-| Mon 23 Nov | Photos tiles load as you scroll (#203). | 1 |
 | Mon 23 Nov | Photos turn left and right in the viewer (#203). | 1 |
 | Tue 24 Nov | Photos turn left and right now writes through an exclusively created, owner-only temporary file and syncs the folder after the rename (#203). | 1 |
-| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. The password check and write share one lock file, and a hidden picture handed over by Files no longer opens while Hidden is locked. | 1 |
 | Tue 24 Nov | Photos turn left and right, review round (#203): a second turn waits for the first, thumbnails decoded before a turn are dropped, the format is read from the file (not its name), animated PNG is refused, and the Reel shows notices and loads more as you scroll sideways. | 1 |
 
+| Mon 23 Nov | Explorer details view (#212): column headings and the Date modified, Type and Size cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
 ## Phase dates
 
 | Phase | Started | Finished |
