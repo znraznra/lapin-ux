@@ -187,7 +187,7 @@ struct Photo {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Scanned(Scan),
+    Scanned(u64, Scan),
     Section(Section),
     Source(Option<Folder>),
     ToggleSidebar,
@@ -351,6 +351,8 @@ struct App {
     slideshow: bool,
     /// How many tiles the grid shows right now (grows as you scroll down).
     tile_limit: usize,
+    /// Counts the scans started, so a slow older scan cannot replace a newer list.
+    scan_gen: u64,
     /// Seconds each photo stays in the slideshow (saved).
     slide_secs: u8,
     /// The window fills the screen.
@@ -1010,6 +1012,11 @@ impl App {
         // A photo reached through a symlink belongs to the folder it really lives in.
         let root_key = root.as_deref().map(photo_key);
         let now = SystemTime::now();
+        // Membership of the open album, built once instead of a list scan per photo.
+        let album_keys: Option<HashSet<&PathBuf>> = (self.section == Section::Album)
+            .then(|| self.album.as_ref().and_then(|a| self.albums.get(a)))
+            .flatten()
+            .map(|list| list.iter().collect());
         self.photos
             .iter()
             .filter(|p| {
@@ -1022,11 +1029,7 @@ impl App {
                     Section::Screenshots => is_screenshot(&p.path),
                     Section::Gifs => is_gif(&p.path),
                     Section::Favorites => self.favorites.contains(&p.key),
-                    Section::Album => self
-                        .album
-                        .as_ref()
-                        .and_then(|a| self.albums.get(a))
-                        .is_some_and(|list| list.contains(&p.key)),
+                    Section::Album => album_keys.as_ref().is_some_and(|set| set.contains(&p.key)),
                     // A date in the future (a wrong camera clock) still counts as recent.
                     Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
                 };
@@ -1060,12 +1063,14 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scan_gen += 1;
+        let generation = self.scan_gen;
         let starred = self.favorites.clone();
         let extra = self.extra.clone();
         Task::future(async move {
             let found = tokio::task::spawn_blocking(move || scan(starred, extra)).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
+            cosmic::Action::App(Message::Scanned(generation, found))
         })
     }
 
@@ -1184,8 +1189,12 @@ impl App {
         // decision about what may open must not rest on the list read at start.
         match try_load_set("hidden") {
             Ok(set) => {
+                let changed = set != self.hidden;
                 self.hidden = set;
                 self.hidden_unreadable = false;
+                if changed {
+                    self.reconcile_selection();
+                }
             }
             Err(e) => {
                 tracing::warn!("could not read the hidden photos: {e}");
@@ -1204,6 +1213,18 @@ impl App {
 
     fn is_favorite(&self, path: &Path) -> bool {
         self.favorites.contains(&self.key_of(path))
+    }
+
+    /// Drops from the selection what the current list no longer shows, for
+    /// example a picture another window hid or unhid, and any half-asked delete.
+    fn reconcile_selection(&mut self) {
+        let live: HashSet<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+        self.selected.retain(|p| live.contains(p));
+        self.confirm_delete = false;
+        if self.selected.is_empty() {
+            self.select_mode = false;
+            self.anchor = None;
+        }
     }
 
     fn clear_selection(&mut self) {
@@ -1340,6 +1361,7 @@ impl cosmic::Application for App {
             source_extra: None,
             slideshow: false,
             tile_limit: MAX_TILES,
+            scan_gen: 0,
             full: None,
             start,
         };
@@ -1389,7 +1411,11 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Scanned(found) => {
+            Message::Scanned(generation, _) if generation != self.scan_gen => {
+                // A newer scan was started since: its result is the one to show.
+                return Task::none();
+            }
+            Message::Scanned(_, found) => {
                 self.read_errors = found.unreadable > 0;
                 self.notice = match (found.unreadable, found.truncated) {
                     (0, false) => None,
@@ -1549,6 +1575,7 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::Album(name) => {
+                self.tile_limit = MAX_TILES;
                 self.section = Section::Album;
                 self.album = Some(name);
                 self.menu = None;
@@ -1611,6 +1638,7 @@ impl cosmic::Application for App {
                     Ok(saved) => {
                         self.albums = saved;
                         self.albums_unsaved = false;
+                        self.tile_limit = MAX_TILES;
                         self.section = Section::Gallery;
                         self.album = None;
                         self.clear_selection();
@@ -1624,6 +1652,7 @@ impl cosmic::Application for App {
             }
             Message::NewAlbum => {
                 self.menu = None;
+                self.renaming = None;
                 self.new_album = Some(String::new());
                 return widget::text_input::focus(NEW_ALBUM_ID.clone());
             }
@@ -1745,16 +1774,20 @@ impl cosmic::Application for App {
                         self.renaming = None;
                         return Task::none();
                     }
-                    if self.albums.contains_key(&name) {
-                        self.notice = Some("An album with this name already exists.".to_string());
-                        return Task::none();
-                    }
                     let to = name.clone();
+                    let mut taken = false;
+                    // The check runs under the lock, on the list as it is on disk now.
                     match edit_albums(|a| {
-                        if let Some(list) = a.remove(&old) {
+                        if a.contains_key(&to) {
+                            taken = true;
+                        } else if let Some(list) = a.remove(&old) {
                             a.insert(to, list);
                         }
                     }) {
+                        Ok(saved) if taken => {
+                            self.albums = saved;
+                            self.notice = Some("An album with this name already exists.".to_string());
+                        }
                         Ok(saved) => {
                             self.albums = saved;
                             self.albums_unsaved = false;
@@ -1788,6 +1821,7 @@ impl cosmic::Application for App {
                         if had {
                             self.clear_selection();
                         }
+                        self.tile_limit = MAX_TILES;
                         self.section = Section::Album;
                         self.album = Some(open);
                         return self.refresh_view();
@@ -1827,6 +1861,7 @@ impl cosmic::Application for App {
                         self.extra = saved;
                         self.source = None;
                         self.source_extra = Some(dir);
+                        self.clear_selection();
                         self.notice = None;
                         self.scanning = true;
                         return self.scan_task();
@@ -2528,11 +2563,17 @@ impl App {
         for photo in shown.iter().take(self.tile_limit) {
             strip = strip.push(self.tile(&photo.path, true));
         }
-        column::with_capacity(2)
+        column::with_capacity(3)
             .spacing(8)
             .padding([8, 16, 16, 8])
             .push(big)
-            .push(scrollable::horizontal(strip).width(Length::Fill))
+            .push(
+                scrollable::horizontal(strip)
+                    .width(Length::Fill)
+                    // Near the end of the strip, load the next tiles like the grid does.
+                    .on_scroll(|v| Message::GridScrolled(v.relative_offset().x)),
+            )
+            .push_maybe(self.notice.as_deref().map(text::caption))
             .into()
     }
 
