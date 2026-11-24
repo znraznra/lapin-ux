@@ -58,9 +58,14 @@ fn uri_list_paths(list: &str) -> Vec<PathBuf> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|l| l.strip_prefix("file://"))
-        .map(|rest| {
-            // Skip an optional host ("file://localhost/...").
-            let path = &rest[rest.find('/').unwrap_or(rest.len())..];
+        // Only local files: an empty host or "localhost". Any other
+        // authority names a remote machine and is not a path here.
+        .filter_map(|rest| {
+            let slash = rest.find('/')?;
+            let host = &rest[..slash];
+            (host.is_empty() || host.eq_ignore_ascii_case("localhost")).then(|| &rest[slash..])
+        })
+        .map(|path| {
             let b = path.as_bytes();
             let mut out = Vec::with_capacity(b.len());
             let mut i = 0;
@@ -103,10 +108,23 @@ mod tests {
 fn read_file(path: &Path, force: Option<Enc>) -> Result<Loaded, String> {
     let name = path.display();
     let meta = std::fs::metadata(path).map_err(|e| format!("Could not open {name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name} is not a regular file."));
+    }
     if meta.len() > MAX_BYTES {
         return Err(format!("{name} is too big to open here (over 64 MB)."));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("Could not open {name}: {e}"))?;
+    // Read at most one byte past the limit, so a file that grows after the
+    // check above still cannot exhaust memory.
+    let mut bytes = Vec::new();
+    {
+        use std::io::Read;
+        let f = std::fs::File::open(path).map_err(|e| format!("Could not open {name}: {e}"))?;
+        f.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("Could not open {name}: {e}"))?;
+    }
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(format!("{name} is too big to open here (over 64 MB)."));
+    }
     if force.is_none() && encoding::looks_binary(&bytes) {
         return Err(format!("{name} does not look like a text file."));
     }
@@ -125,13 +143,38 @@ struct SaveFail {
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<Option<SystemTime>, SaveFail> {
-    match std::fs::write(path, bytes) {
-        Ok(()) => Ok(std::fs::metadata(path).and_then(|m| m.modified()).ok()),
-        Err(e) => Err(SaveFail {
-            msg: format!("Could not save {}: {e}", path.display()),
-            denied: e.kind() == std::io::ErrorKind::PermissionDenied,
-            bytes: if e.kind() == std::io::ErrorKind::PermissionDenied { bytes.to_vec() } else { Vec::new() },
-        }),
+    use std::io::Write;
+    let denied_fail = |e: &std::io::Error| SaveFail {
+        msg: format!("Could not save {}: {e}", path.display()),
+        denied: e.kind() == std::io::ErrorKind::PermissionDenied,
+        bytes: if e.kind() == std::io::ErrorKind::PermissionDenied { bytes.to_vec() } else { Vec::new() },
+    };
+    // Write to a sibling file and rename it over the target, so a crash or a
+    // full disk never leaves a half-written file. A symlink is followed so the
+    // link itself stays, and the original permissions are kept.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let existing = std::fs::metadata(&target).ok();
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = target.with_file_name(format!(".{name}.lapin-notes-{}.tmp", std::process::id()));
+    let staged = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        if let Some(m) = &existing {
+            std::fs::set_permissions(&tmp, m.permissions())?;
+        }
+        std::fs::rename(&tmp, &target)
+    })();
+    match staged {
+        Ok(()) => Ok(std::fs::metadata(&target).and_then(|m| m.modified()).ok()),
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp);
+            // The folder may be read-only while the file itself is writable.
+            match std::fs::write(&target, bytes) {
+                Ok(()) => Ok(std::fs::metadata(&target).and_then(|m| m.modified()).ok()),
+                Err(e) => Err(denied_fail(&e)),
+            }
+        }
     }
 }
 
@@ -385,7 +428,9 @@ enum Message {
     PdfPicked(Option<PathBuf>),
     /// Result of printing or writing a PDF; the string says what happened.
     PrintDone(Result<String, String>),
-    Saved { id: u64, path: PathBuf, close: bool, lossy: bool, result: Result<Option<SystemTime>, SaveFail> },
+    Saved { id: u64, path: PathBuf, close: bool, lossy: bool, rev: u64, enc: Enc, eol: Eol, result: Result<Option<SystemTime>, SaveFail> },
+    PromptLossySave,
+    AskLossy(u64, PathBuf, bool),
     Pasted(Option<String>),
     Tick,
     FindText(String),
@@ -431,7 +476,9 @@ enum Prompt {
     Quit,
     Reload(u64),
     Info(String, String),
-    Admin { id: u64, path: PathBuf, bytes: Vec<u8>, close: bool },
+    Admin { id: u64, path: PathBuf, bytes: Vec<u8>, close: bool, lossy: bool, rev: u64, enc: Enc, eol: Eol },
+    /// The chosen encoding cannot store every character: ask before writing.
+    Lossy { id: u64, path: PathBuf, close: bool },
 }
 
 struct App {
@@ -456,6 +503,8 @@ struct App {
     hits: Vec<search::FileHit>,
     status: String,
     prompt: Option<Prompt>,
+    /// Paths with a save in flight, so two saves of one file never overlap.
+    saving: std::cell::RefCell<std::collections::HashSet<PathBuf>>,
     overwrite: bool,
     vp: (usize, usize, f32),
     lock: Option<std::fs::File>,
@@ -980,14 +1029,29 @@ impl App {
     }
 
     fn write_task(&self, id: u64, path: PathBuf, close: bool) -> Task<Message> {
+        self.write_task_ex(id, path, close, false)
+    }
+
+    /// Writes the tab to `path`. A save that would replace characters the
+    /// encoding cannot hold asks first, unless `allow_lossy` is set.
+    fn write_task_ex(&self, id: u64, path: PathBuf, close: bool, allow_lossy: bool) -> Task<Message> {
         let Some(i) = self.tab_index(id) else { return Task::none() };
         let (bytes, lossy) = self.tabs[i].bytes();
+        let (rev, enc, eol) = (self.tabs[i].buf.revision, self.tabs[i].enc, self.tabs[i].eol);
+        if lossy && !allow_lossy {
+            return Task::done(cosmic::Action::App(Message::AskLossy(id, path, close)));
+        }
+        // Two saves of one file at once could finish in either order.
+        if !self.saving.borrow_mut().insert(path.clone()) {
+            let result = Err(SaveFail { msg: format!("{} is still being saved. Try again in a moment.", path.display()), denied: false, bytes: Vec::new() });
+            return Task::done(cosmic::Action::App(Message::Saved { id, path, close, lossy: false, rev, enc, eol, result }));
+        }
         Task::future(async move {
             let p = path.clone();
             let result = tokio::task::spawn_blocking(move || write_file(&p, &bytes))
                 .await
                 .unwrap_or_else(|e| Err(SaveFail { msg: e.to_string(), denied: false, bytes: Vec::new() }));
-            cosmic::Action::App(Message::Saved { id, path, close, lossy, result })
+            cosmic::Action::App(Message::Saved { id, path, close, lossy, rev, enc, eol, result })
         })
     }
 
@@ -1006,7 +1070,7 @@ impl App {
 
     fn request_close(&mut self, i: usize) {
         let t = &self.tabs[i];
-        if t.buf.is_modified() && t.path.is_some() {
+        if t.buf.is_modified() {
             self.prompt = Some(Prompt::CloseTab(t.id));
         } else {
             let id = t.id;
@@ -1365,7 +1429,9 @@ impl App {
             Cmd::SetEnc(e) => self.tabs[self.active].enc = e,
             Cmd::ReopenEnc(enc) => {
                 let t = &self.tabs[self.active];
-                if let Some(p) = t.path.clone() {
+                if t.buf.is_modified() {
+                    self.prompt = Some(Prompt::Info("Unsaved changes".into(), "Reopening with another encoding would discard your changes. Save or undo them first.".into()));
+                } else if let Some(p) = t.path.clone() {
                     let id = t.id;
                     tasks.push(Task::future(async move {
                         let r = tokio::task::spawn_blocking(move || read_file(&p, Some(enc)))
@@ -1610,6 +1676,7 @@ impl cosmic::Application for App {
             hits: Vec::new(),
             status: String::new(),
             prompt: None,
+            saving: Default::default(),
             overwrite: false,
             vp: (80, 30, 8.0),
             lock,
@@ -1901,12 +1968,26 @@ impl cosmic::Application for App {
                     tasks.push(self.write_task(id, p, close));
                 }
             }
-            Message::Saved { id, path, close, lossy, result } => match result {
+            Message::AskLossy(id, path, close) => self.prompt = Some(Prompt::Lossy { id, path, close }),
+            Message::PromptLossySave => {
+                if let Some(Prompt::Lossy { id, path, close }) = self.prompt.take() {
+                    tasks.push(self.write_task_ex(id, path, close, true));
+                }
+            }
+            Message::Saved { id, path, close, lossy, rev, enc, eol, result } => {
+                self.saving.borrow_mut().remove(&path);
+                match result {
                 Ok(mtime) => {
+                    // The file on disk holds the text as it was when the save
+                    // began. Only a tab still at that revision is clean, and
+                    // only then may it close.
+                    let unchanged = self.tab_index(id).is_some_and(|i| self.tabs[i].buf.revision == rev && self.tabs[i].enc == enc && self.tabs[i].eol == eol);
                     if let Some(i) = self.tab_index(id) {
                         let t = &mut self.tabs[i];
                         let first_path = t.path.is_none();
-                        t.buf.mark_saved();
+                        if unchanged {
+                            t.buf.mark_saved();
+                        }
                         t.mtime = mtime;
                         t.readonly = false;
                         t.path = Some(path.clone());
@@ -1924,18 +2005,19 @@ impl cosmic::Application for App {
                             "The chosen encoding cannot store every character in this file, so those were replaced. Choose UTF-8 in the Encoding menu and save again to keep them.".into(),
                         ));
                     }
-                    if close {
+                    if close && unchanged {
                         self.close_tab_id(id);
                     }
                 }
                 Err(f) => {
                     if f.denied {
-                        self.prompt = Some(Prompt::Admin { id, path, bytes: f.bytes, close });
+                        self.prompt = Some(Prompt::Admin { id, path, bytes: f.bytes, close, lossy, rev, enc, eol });
                     } else {
                         self.prompt = Some(Prompt::Info("Could not save".into(), f.msg));
                     }
                 }
-            },
+                }
+            }
             Message::Pasted(t) => {
                 if let Some(t) = t {
                     let t = t.replace("\r\n", "\n").replace('\r', "\n");
@@ -2085,13 +2167,16 @@ impl cosmic::Application for App {
             },
             Message::PromptCancel => self.prompt = None,
             Message::PromptAdmin => {
-                if let Some(Prompt::Admin { id, path, bytes, close }) = self.prompt.take() {
+                if let Some(Prompt::Admin { id, path, bytes, close, lossy, rev, enc, eol }) = self.prompt.take() {
+                    if !self.saving.borrow_mut().insert(path.clone()) {
+                        return Task::none();
+                    }
                     tasks.push(Task::future(async move {
                         let p = path.clone();
                         let result = tokio::task::spawn_blocking(move || write_file_admin(&p, &bytes))
                             .await
                             .unwrap_or_else(|e| Err(SaveFail { msg: e.to_string(), denied: false, bytes: Vec::new() }));
-                        cosmic::Action::App(Message::Saved { id, path, close, lossy: false, result })
+                        cosmic::Action::App(Message::Saved { id, path, close, lossy, rev, enc, eol, result })
                     }));
                 }
             }
@@ -2152,6 +2237,12 @@ impl cosmic::Application for App {
                 .title(t.clone())
                 .body(b.clone())
                 .primary_action(button::suggested("OK").on_press(Message::PromptCancel))
+                .into(),
+            Prompt::Lossy { id, .. } => d
+                .title(format!("Some characters in {} cannot be saved", name_of(*id)))
+                .body("The chosen encoding cannot store every character in this file, so those would be replaced. Choose UTF-8 in the Encoding menu to keep them, or save anyway.")
+                .primary_action(button::standard("Cancel").on_press(Message::PromptCancel))
+                .secondary_action(button::destructive("Save anyway").on_press(Message::PromptLossySave))
                 .into(),
             Prompt::Admin { path, .. } => d
                 .title("Save as administrator?")

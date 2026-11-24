@@ -327,10 +327,17 @@ pub fn indent_lines(b: &mut Buffer, ind: Indent, out: bool) {
         })
         .collect();
     let (a, z) = b.selection();
-    let end_col = z.col;
+    let collapsed = a == z;
+    let before = b.line(f).chars().count();
     rewrite(b, f, l, v, a);
-    let _ = end_col;
-    b.select_range(Pos::new(f, 0), Pos::new(l, b.line_len(l)));
+    if collapsed {
+        // No selection: keep a caret at the matching column.
+        let after = b.line_len(f);
+        let col = if after >= before { a.col + (after - before) } else { a.col.saturating_sub(before - after) };
+        b.select_range(Pos::new(f, col.min(after)), Pos::new(f, col.min(after)));
+    } else {
+        b.select_range(Pos::new(f, 0), Pos::new(l, b.line_len(l)));
+    }
 }
 
 // --- comments ---
@@ -367,8 +374,12 @@ pub fn toggle_comment(b: &mut Buffer, lang: &str) -> bool {
                 } else if all {
                     let ind = leading(s).to_string();
                     let t = s.trim();
-                    let t = t.strip_prefix(o).unwrap().strip_suffix(c).unwrap();
-                    format!("{ind}{}", t.strip_prefix(' ').unwrap_or(t).strip_suffix(' ').unwrap_or(t.strip_prefix(' ').unwrap_or(t)))
+                    // Strip sequentially so `/*/` (open and close overlap)
+                    // cannot panic; text that is too short stays as it is.
+                    let inner = t.strip_prefix(o).and_then(|r| r.strip_suffix(c)).unwrap_or(t);
+                    let inner = inner.strip_prefix(' ').unwrap_or(inner);
+                    let inner = inner.strip_suffix(' ').unwrap_or(inner);
+                    format!("{ind}{inner}")
                 } else {
                     format!("{}{open}{}{close}", leading(s), s.trim_start())
                 }
@@ -379,7 +390,7 @@ pub fn toggle_comment(b: &mut Buffer, lang: &str) -> bool {
         return true;
     };
     let lines: Vec<String> = (f..=l).map(|i| b.line(i).to_string()).collect();
-    let all = lines.iter().filter(|s| !s.trim().is_empty()).all(|s| s.trim_start().starts_with(tok));
+    let all = lines.iter().filter(|s| !s.trim().is_empty()).all(|s| s[leading(s).len()..].starts_with(tok));
     let min_ind = lines.iter().filter(|s| !s.trim().is_empty()).map(|s| leading(s).len()).min().unwrap_or(0);
     let v: Vec<String> = lines
         .iter()
@@ -388,10 +399,13 @@ pub fn toggle_comment(b: &mut Buffer, lang: &str) -> bool {
                 s.clone()
             } else if all {
                 let ind = leading(s);
-                let rest = &s[ind.len() + tok.len()..];
+                let rest = s[ind.len()..].strip_prefix(tok).unwrap_or(&s[ind.len()..]);
                 format!("{ind}{}", rest.strip_prefix(' ').unwrap_or(rest))
             } else {
-                format!("{}{tok} {}", &s[..min_ind], &s[min_ind..])
+                // `min_ind` is a byte count of the shortest indent; cut at a
+                // char boundary so mixed whitespace (U+2003) cannot panic.
+                let cut = (0..=min_ind.min(s.len())).rev().find(|i| s.is_char_boundary(*i)).unwrap_or(0);
+                format!("{}{tok} {}", &s[..cut], &s[cut..])
             }
         })
         .collect();

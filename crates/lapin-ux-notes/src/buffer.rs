@@ -293,6 +293,15 @@ impl Buffer {
     fn apply(&mut self, a: Pos, b: Pos, text: &str, caret_before: Pos, group: bool) {
         let a = self.clamp(a);
         let b = self.clamp(b);
+        // Inserted text is always LF inside the buffer: CRLF and lone CR
+        // from paste or drops would otherwise leave a literal `\r`.
+        let normalized;
+        let text: &str = if text.contains('\r') {
+            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            &normalized
+        } else {
+            text
+        };
         let removed = self.slice(a, b);
         if removed.is_empty() && text.is_empty() {
             return;
