@@ -23,7 +23,8 @@
 **Snipping** (Super+Shift+S or Print Screen)
 - The screen freezes and dims; pick Rectangle (drag), Window or Full screen
   from the toolbar. The snip is copied to the clipboard, saved in
-  Pictures/Screenshots, and a notification shows it.
+  Pictures/Screenshots, and a notification shows it. The notification has an
+  **Edit** button that opens the [snip editor](snip-editor.md) on the file.
 - The picture is of the screen with the focused window (else the main
   display), and the overlay opens on that screen. COSMIC's own *Screenshot*
   system action also points at `lapin-ux-shell snip` (`system_actions`, swapped

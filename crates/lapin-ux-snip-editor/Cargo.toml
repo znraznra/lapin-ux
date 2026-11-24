@@ -1,0 +1,19 @@
+[package]
+name = "lapin-ux-snip-editor"
+description = "Lapin UX Snip editor: pen, highlighter and crop for screenshots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libcosmic.workspace = true
+lapin-ux-core.workspace = true
+lapin-ux-ui.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Already in the tree through libcosmic; opens the picture and writes the PNG.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }

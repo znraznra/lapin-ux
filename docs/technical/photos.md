@@ -26,4 +26,4 @@ Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `
 
 ## Not yet
 
-Lazy tile loading on scroll, delete, rotate, slideshow and edit.
+Lazy tile loading on scroll, delete, rotate, slideshow. Edit opens the picture in the [snip editor](snip-editor.md).

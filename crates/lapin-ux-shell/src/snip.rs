@@ -260,7 +260,10 @@ async fn notify_saved(path: &std::path::Path) {
     notify("Screenshot copied to clipboard", format!("Saved to {folder}"), Some(path)).await;
 }
 
+/// A notification from the snipping tool. With a picture it also offers "Edit",
+/// which opens the snip editor (#78) on that file.
 async fn notify(summary: &str, body: String, image: Option<&std::path::Path>) {
+    use futures::StreamExt;
     let Ok(conn) = zbus::Connection::session().await else { return };
     let mut hints: std::collections::HashMap<&str, zbus::zvariant::Value> = std::collections::HashMap::new();
     let p = image.map(|p| p.display().to_string()).unwrap_or_default();
@@ -268,24 +271,66 @@ async fn notify(summary: &str, body: String, image: Option<&std::path::Path>) {
         hints.insert("image-path", p.as_str().into());
     }
     hints.insert("suppress-sound", true.into());
-    let _ = conn
+    let actions: Vec<&str> = if image.is_some() { vec!["edit", "Edit"] } else { Vec::new() };
+    // Listen before sending so a quick click can't be missed.
+    let mut signals = None;
+    if image.is_some()
+        && let Ok(proxy) = zbus::Proxy::new(&conn, "org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications").await
+    {
+        signals = proxy.receive_all_signals().await.ok();
+    }
+    let reply = conn
         .call_method(
             Some("org.freedesktop.Notifications"),
             "/org/freedesktop/Notifications",
             Some("org.freedesktop.Notifications"),
             "Notify",
-            &(
-                "Snipping Tool",
-                0u32,
-                "applets-screenshooter-symbolic",
-                summary,
-                body,
-                Vec::<&str>::new(),
-                hints,
-                -1i32,
-            ),
+            &("Snipping Tool", 0u32, "applets-screenshooter-symbolic", summary, body, actions, hints, -1i32),
         )
         .await;
+    let (Some(path), Some(mut signals), Ok(id)) = (image.map(|p| p.to_path_buf()), signals, reply.and_then(|r| r.body().deserialize::<u32>())) else { return };
+    // Wait for the click in the background; the shell must not be held up.
+    tokio::spawn(async move {
+        // Long enough for a snip kept in the notification centre; ends earlier when the
+        // notification is dismissed or its action is used.
+        let deadline = tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => return,
+                s = signals.next() => {
+                    let Some(msg) = s else { return };
+                    let header = msg.header();
+                    let member = header.member().map(|m| m.to_string()).unwrap_or_default();
+                    if member == "ActionInvoked"
+                        && let Ok((nid, key)) = msg.body().deserialize::<(u32, String)>()
+                        && nid == id
+                    {
+                        if key == "edit" {
+                            let mut c = std::process::Command::new("lapin-ux-snip-editor");
+                            c.arg(&path);
+                            crate::catalog::child_env_std(&mut c);
+                            if cosmic::process::spawn(c).await.is_none() {
+                                tracing::warn!("lapin-ux-snip-editor did not start");
+                            }
+                        }
+                        return;
+                    }
+                    if member == "NotificationClosed"
+                        && let Ok((nid, reason)) = msg.body().deserialize::<(u32, u32)>()
+                        && nid == id
+                    {
+                        // Dismissed by the user (2): nothing can press "Edit" any more.
+                        if reason == 2 {
+                            return;
+                        }
+                        // Otherwise it is kept in the notification centre, where "Edit" can still be pressed.
+                        continue;
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn dim() -> theme::Container<'static> {

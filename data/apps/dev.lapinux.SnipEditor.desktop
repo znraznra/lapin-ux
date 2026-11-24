@@ -1,0 +1,10 @@
+[Desktop Entry]
+SingleMainWindow=true
+Type=Application
+Name=Snip editor
+Comment=Mark up a screenshot with a pen and a highlighter, crop it, then copy or save it
+Exec=lapin-ux-snip-editor %f
+Icon=applets-screenshooter-symbolic
+Categories=Graphics;
+StartupNotify=true
+StartupWMClass=dev.lapinux.SnipEditor

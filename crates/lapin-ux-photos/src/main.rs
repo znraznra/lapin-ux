@@ -106,6 +106,8 @@ enum Message {
     Prev,
     Next,
     ToggleFavorite(PathBuf),
+    /// Open the picture in the snip editor (#78).
+    Edit(PathBuf),
     /// Opens or closes the "More actions" menu.
     ToggleMenu,
     StartRename,
@@ -885,6 +887,12 @@ impl cosmic::Application for App {
             }
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
+            Message::Edit(path) => {
+                // The editor is its own app, so Photos never holds the picture open for it.
+                if std::process::Command::new("lapin-ux-snip-editor").arg(&path).spawn().is_err() {
+                    self.notice = Some("The editor could not be opened.".into());
+                }
+            }
             Message::ToggleFavorite(path) => {
                 let on = !self.favorites.contains(&path);
                 // A full disk or a read-only home must not end the program (#174).
@@ -1042,7 +1050,7 @@ impl App {
         let index = list.iter().position(|p| p.path == path);
         let favorite = self.favorites.contains(path);
 
-        let mut bar = row::with_capacity(7)
+        let mut bar = row::with_capacity(8)
             .spacing(4)
             .align_y(Alignment::Center)
             .push(
@@ -1055,6 +1063,9 @@ impl App {
             .push(widget::Space::new().width(Length::Fill));
         if self.favorites_unsaved {
             bar = bar.push(text::caption(FAVORITES_UNSAVED));
+        }
+        if let Some(n) = &self.notice {
+            bar = bar.push(text::caption(n.clone()));
         }
         let bar = bar
             .push(
@@ -1071,6 +1082,11 @@ impl App {
                 button::icon(icon::from_name("go-next-symbolic"))
                     .name("Next photo")
                     .on_press_maybe(index.filter(|i| i + 1 < list.len()).map(|_| Message::Next)),
+            )
+            .push(
+                button::icon(icon::from_name("document-edit-symbolic"))
+                    .name("Edit")
+                    .on_press(Message::Edit(path.to_path_buf())),
             )
             .push(
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))
