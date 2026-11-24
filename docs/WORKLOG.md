@@ -47,6 +47,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
 | Mon 23 Nov | Code scanning (#190): the first Semgrep findings are triaged. Every workflow action is pinned to a commit, and the cursor-pack download can only use https, is checked against a known hash and has size limits, so it can never read a local file or install a changed pack. The uninstall tests now give the same result when run from inside a Lapin session. | Docs |
 
+| Mon 23 Nov | Explorer details view (#212): column headings and the Date modified, Type and Size cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
 ## Phase dates
 
 | Phase | Started | Finished |
