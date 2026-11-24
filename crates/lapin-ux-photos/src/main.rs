@@ -1679,6 +1679,23 @@ impl App {
                 self.hidden_unreadable = true;
             }
         }
+        // Another window may have hidden a picture that is picked here. Outside
+        // Hidden it must not stay in a selection or a half-asked delete.
+        if self.section != Section::Hidden && !self.selected.is_empty() {
+            let hidden = &self.hidden;
+            let keys = &self.keys;
+            let before = self.selected.len();
+            self.selected.retain(|p| {
+                let k = keys.get(p).cloned().unwrap_or_else(|| photo_key(p));
+                !(hidden.contains(&k) || hidden.contains(p))
+            });
+            if self.selected.len() != before {
+                self.confirm_delete = false;
+            }
+            if self.selected.is_empty() {
+                self.clear_selection();
+            }
+        }
     }
 
     /// The canonical name of the photo found at `path`.
@@ -2245,11 +2262,20 @@ impl cosmic::Application for App {
                         return Task::none();
                     }
                     let to = name.clone();
+                    // Checked again inside the locked update: another window may
+                    // have made an album with this name since this one loaded.
+                    let mut clash = false;
                     match edit_albums(|a| {
-                        if let Some(list) = a.remove(&old) {
+                        if a.contains_key(&to) {
+                            clash = true;
+                        } else if let Some(list) = a.remove(&old) {
                             a.insert(to, list);
                         }
                     }) {
+                        Ok(saved) if clash => {
+                            self.albums = saved;
+                            self.notice = Some("An album with this name already exists.".to_string());
+                        }
                         Ok(saved) => {
                             self.albums = saved;
                             self.albums_unsaved = false;
@@ -2323,6 +2349,11 @@ impl cosmic::Application for App {
                         self.source = None;
                         self.source_extra = Some(dir);
                         self.notice = None;
+                        // Same reset as picking a source: nothing chosen in the old
+                        // view may be batch-deleted from the new one.
+                        self.clear_selection();
+                        self.tile_limit = MAX_TILES;
+                        self.grid_bucket = usize::MAX;
                         self.scanning = true;
                         return self.scan_task();
                     }
