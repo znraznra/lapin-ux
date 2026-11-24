@@ -1,0 +1,186 @@
+From 1316f1338cd0c8851a3247a8316d0748ceef6b12 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 14:11:55 +0800
+Subject: [PATCH] Explorer Networks finds shares by itself in the Lapin session
+ (#153)
+
+Adds mapped drives, connected shares and SMB servers found on the local
+subnet (port 445) to the Networks page. Gated on config::lapin_session().
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/tab.rs | 150 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 148 insertions(+), 2 deletions(-)
+
+diff --git a/src/tab.rs b/src/tab.rs
+index c5d58d2..011f45b 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -1321,16 +1321,162 @@ pub fn scan_recents(sizes: IconSizes) -> Vec<Item> {
+ }
+ 
+ pub fn scan_network(uri: &str, sizes: IconSizes) -> Vec<Item> {
++    let mut items = Vec::new();
+     for mounter in MOUNTERS.values() {
+         match mounter.network_scan(uri, sizes) {
+-            Some(Ok(items)) => return items,
++            Some(Ok(found)) => {
++                items = found;
++                break;
++            }
+             Some(Err(err)) => {
+                 log::warn!("failed to scan {uri:?}: {err}");
+             }
+             None => {}
+         }
+     }
+-    Vec::new()
++    // Lapin UX (#153): the Networks page finds shares by itself.
++    if crate::config::lapin_session() && uri == "network:///" {
++        lapin_network_extend(&mut items, sizes);
++    }
++    items
++}
++
++fn lapin_network_item(name: String, uri: String, path_opt: Option<PathBuf>, sizes: IconSizes) -> Item {
++    let icon = |size| widget::icon::from_name("network-server").size(size).handle();
++    Item {
++        name: name.clone(),
++        is_mount_point: false,
++        display_name: name.clone(),
++        metadata: ItemMetadata::SimpleDir { entries: 0 },
++        hidden: false,
++        location_opt: Some(Location::Network(uri, name, path_opt)),
++        image_dimensions: None,
++        mime: "inode/directory".parse().unwrap(),
++        icon_handle_grid: icon(sizes.grid()),
++        icon_handle_list: icon(sizes.list()),
++        icon_handle_list_condensed: icon(sizes.list_condensed()),
++        thumbnail_opt: Some(ItemThumbnail::NotImage),
++        button_id: widget::Id::unique(),
++        pos_opt: Cell::new(None),
++        rect_opt: Cell::new(None),
++        selected: false,
++        highlighted: false,
++        overlaps_drag_rect: false,
++        dir_size: DirSize::NotDirectory,
++        cut: false,
++        checksums: ChecksumState::default(),
++    }
++}
++
++/// Lapin UX (#153): the host part of a share address, lower case.
++fn lapin_uri_host(uri: &str) -> String {
++    let rest = uri.split_once("://").map_or(uri, |(_, r)| r);
++    let rest = rest.split('/').next().unwrap_or(rest);
++    rest.rsplit('@').next().unwrap_or(rest).to_lowercase()
++}
++
++/// Lapin UX (#153): adds to the Networks page what gvfs does not list by
++/// itself: mapped drives, shares that are already connected, and file
++/// servers on the local network found by asking the addresses of the local
++/// subnet whether they accept SMB connections (port 445). Needs neither
++/// NetBIOS (SMB1) nor WS-Discovery nor Avahi.
++fn lapin_network_extend(items: &mut Vec<Item>, sizes: IconSizes) {
++    let mut seen: std::collections::HashSet<String> = items
++        .iter()
++        .filter_map(|i| match &i.location_opt {
++            Some(Location::Network(uri, ..)) => Some(lapin_uri_host(uri)),
++            _ => None,
++        })
++        .collect();
++    let mut add = |items: &mut Vec<Item>, name: String, uri: String, path: Option<PathBuf>| {
++        if seen.insert(lapin_uri_host(&uri) + if uri.matches('/').count() > 3 { &uri } else { "" }) {
++            items.push(lapin_network_item(name, uri, path, sizes));
++        }
++    };
++
++    for mapped in lapin_mapped_load() {
++        add(items, mapped.name.clone(), mapped.uri.clone(), None);
++    }
++
++    #[cfg(feature = "gvfs")]
++    {
++        use gio::prelude::*;
++        for mount in gio::VolumeMonitor::get().mounts() {
++            let root = mount.root();
++            if root.is_native() {
++                continue;
++            }
++            add(
++                items,
++                mount.name().to_string(),
++                root.uri().to_string(),
++                root.path(),
++            );
++        }
++    }
++
++    for ip in lapin_scan_smb_hosts() {
++        let host = ip.to_string();
++        // A server that is already listed (by name or by address) stays as is
++        if seen.contains(&host) {
++            continue;
++        }
++        seen.insert(host.clone());
++        items.push(lapin_network_item(host.clone(), format!("smb://{host}/"), None, sizes));
++    }
++    items.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.display_name, &b.display_name));
++}
++
++/// Lapin UX (#153): this machine's IPv4 address and prefix length, from `ip`.
++fn lapin_local_subnet() -> Option<(std::net::Ipv4Addr, u32)> {
++    let out = std::process::Command::new("ip")
++        .args(["-4", "-o", "addr", "show", "scope", "global"])
++        .output()
++        .ok()?;
++    String::from_utf8_lossy(&out.stdout).lines().find_map(|line| {
++        let cidr = line.split_whitespace().skip_while(|w| *w != "inet").nth(1)?;
++        let (ip, len) = cidr.split_once('/')?;
++        Some((ip.parse().ok()?, len.parse().ok()?))
++    })
++}
++
++/// Lapin UX (#153): hosts on the local subnet that accept connections on the
++/// SMB port. At most 1022 addresses (a /22) are asked, a few dozen at a time,
++/// each with a short time-out, so the page opens in about a second.
++fn lapin_scan_smb_hosts() -> Vec<std::net::Ipv4Addr> {
++    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
++    let Some((me, len)) = lapin_local_subnet() else {
++        return Vec::new();
++    };
++    let len = len.clamp(22, 30);
++    let mask = u32::MAX << (32 - len);
++    let base = u32::from(me) & mask;
++    let last = base | !mask;
++    let targets: Vec<Ipv4Addr> = ((base + 1)..last)
++        .map(Ipv4Addr::from)
++        .filter(|ip| *ip != me)
++        .collect();
++    let found = std::sync::Mutex::new(Vec::new());
++    let next = atomic::AtomicUsize::new(0);
++    std::thread::scope(|scope| {
++        for _ in 0..64 {
++            scope.spawn(|| {
++                loop {
++                    let i = next.fetch_add(1, atomic::Ordering::Relaxed);
++                    let Some(ip) = targets.get(i) else { break };
++                    let addr = SocketAddr::from((*ip, 445));
++                    if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
++                        if let Ok(mut found) = found.lock() {
++                            found.push(*ip);
++                        }
++                    }
++                }
++            });
++        }
++    });
++    let mut found = found.into_inner().unwrap_or_default();
++    found.sort();
++    found
+ }
+ 
+ //TODO: organize desktop items based on display
+-- 
+2.56.1
+

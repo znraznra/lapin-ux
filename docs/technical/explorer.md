@@ -147,6 +147,14 @@ is always listed under This PC, on the page and in the left pane, connected or
 not; opening one that isn't connected connects it first (`LapinOpenMapped`),
 and a whole server (`smb://server`) is browsed instead. "…" > Disconnect
 network drive forgets the drive shown and disconnects it.
+Networks finds shares by itself (#153): besides what gvfs lists, the page adds
+mapped drives, shares that are already connected, and file servers on the local
+network. Servers are found by asking each address of the local subnet (at most
+a /22, 64 at a time, 300 ms each) whether it accepts SMB connections on port
+445 (`tab::lapin_scan_smb_hosts`), so it needs no NetBIOS (SMB1), WS-Discovery
+or Avahi. A found server opens as `smb://address/` and asks for the sign-in
+when its shares are listed. Only in the Lapin session; COSMIC's own session
+shows the stock page.
 The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 
 **File dialogs** (`lapin-ux-portal`, COSMIC's portal built with a COSMIC Files patch)
