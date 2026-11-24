@@ -255,6 +255,7 @@ async fn serve(mut out: futures::channel::mpsc::Sender<Cmd>) {
     let mut watch_rx = state;
     let mut last = State::default();
     let mut lock: Option<zbus::zvariant::OwnedFd> = None;
+    let mut inhibit_failed = false;
     loop {
         tokio::select! {
             cmd = rx.recv() => {
@@ -278,13 +279,18 @@ async fn serve(mut out: futures::channel::mpsc::Sender<Cmd>) {
                         let _ = g.volume_changed(ctx).await;
                     }
                 }
-                if now.playing && lock.is_none() {
+                if now.playing && lock.is_none() && !inhibit_failed {
                     match inhibit().await {
                         Ok(fd) => lock = Some(fd),
-                        Err(e) => tracing::warn!("could not keep the screen awake while playing: {e:#}"),
+                        Err(e) => {
+                            // Tried once per play; not again on every state change.
+                            inhibit_failed = true;
+                            tracing::warn!("could not keep the screen awake while playing: {e:#}");
+                        }
                     }
                 } else if !now.playing {
                     lock = None;
+                    inhibit_failed = false;
                 }
                 last = now;
             }

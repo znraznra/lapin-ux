@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
+/// How long "this folder has no picture" is trusted before ffmpeg is asked again.
+const NONE_KEPT: Duration = Duration::from_secs(24 * 3600);
+
 use serde::{Deserialize, Serialize};
 
 use crate::library::{Kind, Track};
@@ -139,7 +142,7 @@ fn run_limited(mut cmd: Command, seconds: u64) -> Option<(Ran, Vec<u8>)> {
 /// as empty.
 fn probe(path: &Path) -> Option<Tags> {
     let mut cmd = Command::new("ffprobe");
-    cmd.args(["-v", "quiet", "-protocol_whitelist", "file", "-print_format", "json", "-show_entries", "format_tags:stream_tags", "-i"]).arg(path);
+    cmd.args(["-v", "quiet", "-protocol_whitelist", "file", "-print_format", "json", "-select_streams", "a", "-show_entries", "format_tags:stream_tags", "-i"]).arg(path);
     let (ran, out) = run_limited(cmd, PROBE_SECONDS)?;
     match ran {
         Ran::TimedOut => None,
@@ -288,7 +291,8 @@ pub fn cover_for(dir: &Path, first_song: &Path) -> Option<PathBuf> {
     if png.is_file() {
         return Some(png);
     }
-    if none.is_file() {
+    // "no picture" is remembered for a day, so a failed conversion is tried again
+    if none.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < NONE_KEPT) {
         return None;
     }
     std::fs::create_dir_all(covers_dir()).ok()?;

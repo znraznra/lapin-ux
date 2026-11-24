@@ -29,7 +29,7 @@ The menu bar has File, Edit, Media, View, Controls, Playlist, Window and Help. T
 - A file that fails to open is skipped; when every queue item fails in a row playback stops with a notice instead of cycling. Repeat One does not replay a failed file. mpv's end-of-file event for the file being replaced is ignored, so changing tracks never skips one. A refused seek (for example in a live stream) puts the position back and shows a notice. Streams are not counted in play counts.
 - If the stations file cannot be read, the player shows a notice and does not overwrite it; a missing file just means no stations yet.
 - Without `XDG_RUNTIME_DIR` the mpv socket lives in a private (0700) folder under the temp directory, removed on exit. mpv is stopped if it does not start in time.
-- Radio has no built-in stations. You add a name and a stream address, import `.m3u` or `.json`, and export both. No network call happens until you play a station.
+- Radio has no built-in stations. You add a name and a stream address, import `.m3u` or `.json`, and export both. No network call happens until you play a station or open a web address.
 - Play counts are kept in `~/.config/dev.lapinux.MediaPlayer/plays.json` and drive Listen Now and Made for You. Stations are saved in the same folder, written atomically.
 - Icon-only buttons have accessible names and the surfaces are grouped with `lapin_ux_ui::a11y::group`.
 

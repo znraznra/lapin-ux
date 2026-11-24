@@ -27,9 +27,11 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | The sign-in screen says plainly when the disk is full (#174), so a failed sign-in is no longer a silent mystery. | Retest |
 | Sun 22 Nov | Warning before the disk is full (#174): a notice when a drive is almost full, shown once and not repeated while it stays low, with a switch in the notification settings. | Retest |
 | Sun 22 Nov | Explorer: Home and This PC are per tab, right-click menus on Home and This PC, a tidier Recent list, and a details pane that follows the page (#168, #169, #170, #175). | Retest |
+| Mon 23 Nov | Explorer: Up and the address bar now work on network shares and mapped drives (#210, #211). | Retest |
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Media Player plays video inside its own window through libmpv, with an auto-hiding control bar, full screen and a graphics card switch (#222). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
+| Mon 23 Nov | Choose a Start layout (#198): Current, Classic, Classic with two columns, or a Programs list, in Settings and in the welcome app. | Retest |
 | Sun 22 Nov | The taskbar can sit on the left or right edge as well as the bottom and top (#41): a narrow icon-only bar, Start, panels, pop-ups, auto-hide and the work area all follow the edge. Chosen in Settings or from the taskbar menu. | Retest |
 | Sun 22 Nov | Photos (#74), stage 1: an offline picture app with a dark gallery (by date, Favorites, your folders) and a light viewer with a filmstrip. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
@@ -42,11 +44,15 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Code scanning (#190, part 2): CodeQL and Semgrep results now show in the Security tab. | Docs |
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
+| Mon 23 Nov | Explorer (#216): your own folder is named after your account (your full name, or your user name if none is set) in the sidebar, address bar, tab titles, Open and Save dialogs and This PC. "Home" always means the start page. | Retest |
+| Mon 23 Nov | Desktop on every display (#165): right-click the empty desktop on any display opens the desktop menu there, and files can be dropped on it. Icons stay on the main display, and displays plugged in or out are picked up on the fly. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
 | Mon 23 Nov | Lapin Media Player (#222), first stage: music library (Listen Now, Artists, Albums, Songs, Made for You), radio with your own stations, a video list, a transport bar and queue, on an mpv engine run as its own program. Follows the light or dark system theme. | Retest |
 | Mon 23 Nov | Media Player (#222), second stage: media keys and the desktop's media controls (MPRIS), no sleep or lock while playing, favourite songs, a choice of sound output, a mini player, and Media Player as the default for music and video in a Lapin session only. | Retest |
 | Mon 23 Nov | Media Player (#222), third stage: system file dialogs, titles and album pictures read from the files, a Settings page (library folders, tags, pictures, sound output, play history), and the video playlist beside the Videos list. The picture still plays in mpv's own window. | Retest |
+| Mon 23 Nov | Code scanning (#190): the first Semgrep findings are triaged. Every workflow action is pinned to a commit, and the cursor-pack download can only use https, is checked against a known hash and has size limits, so it can never read a local file or install a changed pack. The uninstall tests now give the same result when run from inside a Lapin session. | Docs |
 
+| Mon 23 Nov | Explorer details view (#212): column headings and the Date modified, Type and Size cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
 ## Phase dates
 
 | Phase | Started | Finished |
