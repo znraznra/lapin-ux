@@ -189,8 +189,13 @@ lapin-ux-desktop-settings enter || true
 # anything else that asks for x-scheme-handler/terminal use it.
 # It is written only when the installed settings swap knows mimeapps.list (#223), so the entry
 # is always handed back at session end; an older build leaves the default alone.
+# It also needs proof that the swap really saved the other desktops' copy (the state folder
+# can be unwritable while the config folder is not), otherwise there'd be nothing to hand back.
+LAPIN_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
 if [ -f /usr/share/applications/dev.lapinux.Terminal.desktop ] && command -v xdg-mime >/dev/null 2>&1 \
    && grep -q mimeapps "$(command -v lapin-ux-desktop-settings 2>/dev/null)" 2>/dev/null \
+   && [ -f "$LAPIN_STATE/lapin-active" ] \
+   && { [ -f "$LAPIN_STATE/other-desktops/mimeapps.list" ] || [ -f "$LAPIN_STATE/other-desktops/mimeapps.list.absent" ]; } \
    && [ -z "$(xdg-mime query default x-scheme-handler/terminal 2>/dev/null)" ]; then
     xdg-mime default dev.lapinux.Terminal.desktop x-scheme-handler/terminal || true
 fi
