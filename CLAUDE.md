@@ -1,8 +1,10 @@
 # Lapin UX: rules for anyone (or any Claude session) working in this repo
 
-Project context lives in the claude.ai Project docs (`claude/lapin-overview.md`
-first). This file holds the rules that keep already-shipped fixes from being
-undone. They apply to every change.
+The claude.ai Project docs were retired on 2026-11-19. The maintainer keeps
+working context (architecture notes, roadmap, pending work) in local-only
+notes that are not part of the repo, so this file and `docs/` are what every
+other contributor or session has. This file holds the rules that keep
+already-shipped fixes from being undone. They apply to every change.
 
 ## How Lapin UX is described (set 2026-11-01)
 
@@ -156,8 +158,8 @@ reviewed files. Every excluded file needs a separate review.
   file for their area under `docs/technical/` (shell, settings, system-parts,
   look-and-sound, explorer, session), not at the end of `docs/TECHNICAL.md`:
   separate files keep parallel PRs from conflicting. Add a new file there (and
-  a line in the list in `docs/TECHNICAL.md`) for a new area. The claude.ai Project docs
-  live outside the repo and are updated after the merge.
+  a line in the list in `docs/TECHNICAL.md`) for a new area. The maintainer's
+  local context notes live outside the repo and are updated after the merge.
 - A PR that touches `packaging/**/*.patch` says in its description that the
   patches were rebuilt from the pinned commit and that `git diff packaging/`
   shows only the intended change, since CodeRabbit doesn't review those files.
