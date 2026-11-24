@@ -153,6 +153,13 @@
 - Right-click the desktop: View (Large/Medium/Small icons, Show desktop
   icons), Sort by (Name, Date modified, Item type), Refresh, New (Folder,
   Text Document), Display settings, Personalize, Open in Terminal.
+- **Other displays** (#165): the icons live on the main display only, but every
+  other display gets an empty desktop surface (`ExtraDesktop`, namespace
+  `lapin-ux-desktop`, bottom layer) that takes clicks. Right-click opens the same
+  desktop menu at the pointer on that display, a click closes it, and files
+  dropped there are copied or moved into ~/Desktop. The surfaces are created and
+  destroyed by `sync_extra_desktops`, called from `desktop_follow_main` whenever a
+  display is added, removed or the main one changes (one shell, see #83).
 
 **Auto-hide** (right-click the taskbar → Automatically hide the taskbar):
 the taskbar disappears and windows use the whole screen; touching the bottom
