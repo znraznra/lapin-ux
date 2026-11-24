@@ -636,6 +636,16 @@ fn load_albums() -> Albums {
     })
 }
 
+/// Adds `paths` to `list` in order, skipping any already in it, in one pass.
+fn add_unique(list: &mut Vec<PathBuf>, paths: Vec<PathBuf>) {
+    let mut have: HashSet<PathBuf> = list.iter().cloned().collect();
+    for p in paths {
+        if have.insert(p.clone()) {
+            list.push(p);
+        }
+    }
+}
+
 /// Changes the albums and returns them as saved. The file is read again under a
 /// lock first and replaced atomically, like the favorites.
 fn edit_albums(change: impl FnOnce(&mut Albums)) -> std::io::Result<Albums> {
@@ -693,6 +703,11 @@ impl App {
             return Vec::new();
         }
         let now = SystemTime::now();
+        // Looked up once, so a large album costs one hash lookup per photo.
+        let in_album: HashSet<&PathBuf> = match (self.section, self.album.as_ref()) {
+            (Section::Album, Some(a)) => self.albums.get(a).map(|l| l.iter().collect()).unwrap_or_default(),
+            _ => HashSet::new(),
+        };
         self.photos
             .iter()
             .filter(|p| {
@@ -705,11 +720,7 @@ impl App {
                     Section::Screenshots => is_screenshot(&p.path),
                     Section::Gifs => is_gif(&p.path),
                     Section::Favorites => self.favorites.contains(&p.path),
-                    Section::Album => self
-                        .album
-                        .as_ref()
-                        .and_then(|a| self.albums.get(a))
-                        .is_some_and(|list| list.contains(&p.path)),
+                    Section::Album => in_album.contains(&p.path),
                     // A date in the future (a wrong camera clock) still counts as recent.
                     Section::Recents => now.duration_since(p.modified).map_or(true, |d| d.as_secs() <= RECENT_SECS),
                 };
@@ -741,7 +752,9 @@ impl App {
     }
 
     fn scan_task(&self) -> Task<Message> {
-        let extra: HashSet<PathBuf> = self.favorites.union(&self.hidden).cloned().collect();
+        let mut extra: HashSet<PathBuf> = self.favorites.union(&self.hidden).cloned().collect();
+        // Album members outside the scanned folders must come back after a restart too.
+        extra.extend(self.albums.values().flatten().cloned());
         let epoch = self.trash_epoch;
         Task::future(async move {
             let mut found = tokio::task::spawn_blocking(move || scan(extra)).await.unwrap_or_default();
@@ -1164,18 +1177,23 @@ impl cosmic::Application for App {
                 if paths.is_empty() {
                     return Task::none();
                 }
+                // Only an album that still exists in the saved file gets the photos: another
+                // window may have deleted it, and this must not bring it back.
+                let mut found = false;
                 match edit_albums(|a| {
-                    let list = a.entry(name).or_default();
-                    for p in paths {
-                        if !list.contains(&p) {
-                            list.push(p);
-                        }
+                    if let Some(list) = a.get_mut(&name) {
+                        found = true;
+                        add_unique(list, paths);
                     }
                 }) {
                     Ok(saved) => {
                         self.albums = saved;
                         self.albums_unsaved = false;
-                        self.clear_selection();
+                        if found {
+                            self.clear_selection();
+                        } else {
+                            self.notice = Some(format!("The album \"{name}\" no longer exists. Your selection is kept."));
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("could not save albums: {e}");
@@ -1239,12 +1257,7 @@ impl cosmic::Application for App {
                 let had = !paths.is_empty();
                 let open = name.clone();
                 match edit_albums(|a| {
-                    let list = a.entry(name).or_default();
-                    for p in paths {
-                        if !list.contains(&p) {
-                            list.push(p);
-                        }
-                    }
+                    add_unique(a.entry(name).or_default(), paths);
                 }) {
                     Ok(saved) => {
                         self.albums = saved;
