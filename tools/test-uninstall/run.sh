@@ -604,16 +604,24 @@ printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
 bash "$DS" enter; bash "$DS" leave
 cp "$IN" "$M"                                  # the swap happened...
 rm -f "$STATEDIR/lapin-active"
-echo "mimeapps default" > "$STATEDIR/lapin-entering"   # ...but the entry never finished
+echo "A mimeapps default" > "$STATEDIR/lapin-entering"   # ...but the entry never finished
 bash "$DS" leave
 check "a half-finished entry: the other desktop's own file is back" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
 check "a half-finished entry: nothing left marked" "[ ! -e \"$STATEDIR/lapin-entering\" ] && [ ! -e \"$STATEDIR/lapin-active\" ]"
 # 3. An entry that stopped before the swap: Lapin UX's copy must stay.
-echo "mimeapps default" > "$STATEDIR/lapin-entering"
+echo "A mimeapps default" > "$STATEDIR/lapin-entering"
 bash "$DS" leave
 check "an entry that never swapped: Lapin UX's copy is kept" "grep -q cosmic-files.desktop \"$IN\""
 check "an entry that never swapped: the live file is untouched" "grep -q nautilus.desktop \"$M\""
 rm -f "$STATEDIR/lapin-entering"
+# 3b. A journal for an item another desktop has changed since: left as it is,
+# and the other desktop's saved copy is kept in a second place.
+printf '[Default Applications]\ninode/directory=edited-later.desktop\n' > "$M"
+echo "A mimeapps default" > "$STATEDIR/lapin-entering"
+bash "$DS" leave > "$HOME/out3b.txt" 2>&1
+check "a changed-since entry: the live file is untouched" "grep -q edited-later.desktop \"$M\""
+check "a changed-since entry: the other desktop's copy is kept" "grep -rqs nautilus.desktop \"$STATEDIR/kept-copies\" && grep -q nautilus.desktop \"$OUT\""
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
 # 4. The journal can't be written: nothing changes at all.
 mkdir "$STATEDIR/lapin-entering"
 bash "$DS" enter > "$HOME/out4.txt" 2>&1

@@ -208,7 +208,7 @@ item_save() {   # kind name dest
         if dconf_ok && ! dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null; then rm -f "$3"; return 1; fi
         return 0
     fi
-    f=$(item_path "$1" "$2")
+    f=$(live_file "$1" "$2") || return 1
     # Stage the new copy next to the old one and swap it in only when it is
     # complete, so a full disk never leaves a partial copy (or none) behind
     # for leave_session to restore. On failure the old copy stays and the
@@ -247,10 +247,15 @@ lapin_sets() {   # kind name
 }
 # Where the live file is. mimeapps.list may be a symlink (dotfiles): work on
 # its target so the link itself stays (#223).
+# A link that can't be resolved (a missing parent folder) is a failure, never
+# the link's own path: nothing may be saved or applied through it.
 live_file() {   # kind name
-    local f
+    local f r
     f=$(item_path "$1" "$2")
-    [ "$1" = mimeapps ] && f=$(readlink -f "$f" 2>/dev/null || echo "$f")
+    if [ "$1" = mimeapps ] && [ -L "$f" ]; then
+        r=$(readlink -f -- "$f" 2>/dev/null) && [ -n "$r" ] || return 1
+        f=$r
+    fi
     echo "$f"
 }
 # Make the live value what src holds. Fails (and leaves the live value as it
@@ -262,7 +267,7 @@ item_apply() {   # kind name src
         elif [ -e "$3" ] || [ -e "$3.absent" ]; then dconf_do reset "$(gkey_path "$2")" || return 1; fi
         return 0
     fi
-    f=$(live_file "$1" "$2")
+    f=$(live_file "$1" "$2") || return 1
     if [ -e "$3.absent" ]; then
         run rm -rf "$f"
     elif [ -d "$3" ]; then
@@ -292,7 +297,12 @@ item_apply() {   # kind name src
 }
 # Back to the desktop's own default.
 item_default() {   # kind name
-    if [ "$1" = dconf ]; then dconf_do reset "$(gkey_path "$2")"; else run rm -rf "$(live_file "$1" "$2")"; fi
+    if [ "$1" = dconf ]; then dconf_do reset "$(gkey_path "$2")"
+    else
+        local f
+        f=$(live_file "$1" "$2") || return 1
+        run rm -rf "$f"
+    fi
 }
 # Does the live value equal the one saved in src (an empty or ".absent" copy
 # means unset)?
@@ -304,7 +314,7 @@ same_as() {   # kind name src
         [ "$cur" = "$(cat "$3" 2>/dev/null)" ]
         return
     fi
-    f=$(live_file "$1" "$2")
+    f=$(live_file "$1" "$2") || return 1
     if [ -e "$3.absent" ]; then [ ! -e "$f" ]
     elif [ -d "$3" ]; then [ -d "$f" ] && diff -rq "$3" "$f" >/dev/null 2>&1
     elif [ -e "$3" ]; then [ -f "$f" ] && cmp -s "$3" "$f"
@@ -482,6 +492,32 @@ other_desktops_value() {   # kind name dest
 # stores Lapin's and puts theirs back. A change you make in COSMIC stays in
 # COSMIC; a change you make in Lapin UX stays in Lapin UX.
 
+# Keep a copy of the other desktops' saved value where nothing overwrites or
+# deletes it, for the rare case the live value ended up neither theirs nor
+# Lapin's. Says where it went.
+keep_copy() {   # kind name
+    local out dest
+    [ "$DRY" = 1 ] && return 0
+    out=$(store_path "$OUTSIDE" "$1" "$2")
+    saved "$out" || return 0
+    dest="$STATE/kept-copies/$(date +%Y%m%dT%H%M%S)"
+    if mkdir -p "$dest" 2>/dev/null && cp -a "$out" "$out.absent" "$dest/" 2>/dev/null || [ -e "$dest/$(basename "$out")" ] || [ -e "$dest/$(basename "$out").absent" ]; then
+        say "  $(describe "$1" "$2"): your previous value is kept in $dest"
+    else
+        say "  $(describe "$1" "$2"): could not keep a copy of your previous value, it stays in $out"
+    fi
+}
+# Is the live value the desktop's own default (unset)?
+is_default() {   # kind name
+    local f
+    if [ "$1" = dconf ]; then
+        dconf_ok || return 0
+        [ -z "$(dconf read "$(gkey_path "$2")" 2>/dev/null)" ]
+        return
+    fi
+    f=$(live_file "$1" "$2") || return 1
+    [ ! -e "$f" ]
+}
 # Leave an item alone for this session: its save or swap failed, so
 # leave_session must not touch it (the live value is still the other desktops'
 # own). Drop the other desktops' copy as well: leave_session never restores an
@@ -515,20 +551,32 @@ swap_back() {   # kind name
     fi
 }
 # An entry that stopped half way (a crash, a power cut, no room for the marker)
-# left $PENDING behind: hand back every item it had swapped. An item whose live
-# value still equals the other desktops' copy was never swapped (or its swap
-# failed): nothing to hand back, and Lapin's copy stays. Returns 1 when there
+# left $PENDING behind. Each line says what enter meant to do with an item (A:
+# put Lapin's copy in, D: clear it). Only an item whose live value is now what
+# that swap would have left is handed back. One whose live value still equals
+# the other desktops' copy was never swapped (or its swap failed), and one that
+# matches neither (another desktop changed it since, or a swap stopped in the
+# middle) is left exactly as it is, with both copies kept. Returns 1 when there
 # was nothing to recover.
 recover_entry() {
     [ -f "$PENDING" ] || return 1
-    local kind name out
-    while read -r kind name; do
+    local act kind name out in swapped
+    while read -r act kind name; do
         [ -n "$kind" ] || continue
         [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
         out=$(store_path "$OUTSIDE" "$kind" "$name")
+        in=$(store_path "$INSIDE" "$kind" "$name")
         saved "$out" || continue
         same_as "$kind" "$name" "$out" && continue
-        swap_back "$kind" "$name"
+        swapped=0
+        if [ "$act" = D ]; then is_default "$kind" "$name" && swapped=1
+        else saved "$in" && same_as "$kind" "$name" "$in" && swapped=1; fi
+        if [ "$swapped" = 1 ]; then
+            swap_back "$kind" "$name"
+        else
+            say "  $(describe "$kind" "$name"): changed since, left as it is"
+            keep_copy "$kind" "$name"
+        fi
     done < "$PENDING"
     run rm -f "$PENDING" "$SKIPPED"
 }
@@ -583,7 +631,7 @@ enter_session() {
     # can be undone (recover_entry).
     local act ok
     if [ "$DRY" != 1 ] && [ "${#todo[@]}" -gt 0 ]; then
-        if ! { mkdir -p "$STATE" && printf '%s\n' "${todo[@]#? }" > "$PENDING"; } 2>/dev/null; then
+        if ! { mkdir -p "$STATE" && printf '%s\n' "${todo[@]}" > "$PENDING"; } 2>/dev/null; then
             rm -f "$PENDING" 2>/dev/null
             say "  could not keep track of the swap; the settings are left as they are"
             return 1
@@ -595,14 +643,26 @@ enter_session() {
         if [ "$act" = D ]; then item_default "$kind" "$name" || ok=0
         else item_apply "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")" || ok=0; fi
         if [ "$ok" = 0 ]; then
-            # The live value is still the other desktops' own: leave_session
-            # must not save it over Lapin's copy.
             say "  $(describe "$kind" "$name"): could not switch it, left as it is"
-            if ! skip_item "$kind" "$name"; then
-                # The entry stays open (no marker): leave_session undoes it
-                # from $PENDING, which keeps Lapin's copy for this item.
-                say "  could not keep track of it; the settings are handed back when you leave"
-                return 1
+            out=$(store_path "$OUTSIDE" "$kind" "$name")
+            # A failed apply may have changed part of it (a folder half removed):
+            # put the other desktops' value back first, and only drop their copy
+            # once the live value is verifiably theirs again.
+            if ! same_as "$kind" "$name" "$out"; then
+                item_apply "$kind" "$name" "$out" || true
+            fi
+            if same_as "$kind" "$name" "$out"; then
+                if ! skip_item "$kind" "$name"; then
+                    # The entry stays open (no marker): leave_session undoes it
+                    # from $PENDING, which keeps Lapin's copy for this item.
+                    say "  could not keep track of it; the settings are handed back when you leave"
+                    return 1
+                fi
+            else
+                # Could not put it back: keep their copy safe, and keep the
+                # damaged live value out of Lapin's copy.
+                keep_copy "$kind" "$name"
+                { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null || true
             fi
         fi
     done
