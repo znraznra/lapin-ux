@@ -450,18 +450,22 @@ fn load_prefs() -> Prefs {
     prefs
 }
 
-fn save_prefs(prefs: &Prefs) {
+/// Saves one toolbar preference. The file is read again under a lock and only
+/// `key` is changed, so a second window never writes back an older value of
+/// something the first one just changed.
+fn save_pref(key: &str, value: serde_json::Value) {
     let Some(file) = prefs_file() else { return };
-    let v = serde_json::json!({
-        "size": prefs.size,
-        "square": prefs.square,
-        "group": prefs.group.key(),
-        "sidebar": prefs.sidebar,
-        "source": prefs.source.map(|f| f.key()),
-    });
     let result = (|| {
         let dir = file.parent().ok_or_else(|| std::io::Error::other("settings file has no folder"))?;
         std::fs::create_dir_all(dir)?;
+        let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("settings.lock"))?;
+        lock.lock()?;
+        let mut v = std::fs::read(&file)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        v[key] = value;
         let tmp = dir.join(format!("settings.json.{}.tmp", std::process::id()));
         let written = std::fs::write(&tmp, serde_json::to_vec_pretty(&v).map_err(std::io::Error::other)?)
             .and_then(|()| std::fs::rename(&tmp, &file));
@@ -694,14 +698,6 @@ fn is_gif(path: &Path) -> bool {
 }
 
 impl App {
-    fn prefs(&self) -> Prefs {
-        Prefs { size: self.size, square: self.square, group: self.group, sidebar: self.sidebar, source: self.source }
-    }
-
-    fn save(&self) {
-        save_prefs(&self.prefs());
-    }
-
     /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
         let root = self.source.and_then(Folder::dir);
@@ -1086,26 +1082,26 @@ impl cosmic::Application for App {
                 self.source = folder;
                 self.menu = None;
                 self.clear_selection();
-                self.save();
+                save_pref("source", serde_json::json!(folder.map(|f| f.key())));
                 return self.refresh_view();
             }
             Message::ToggleSidebar => {
                 self.sidebar = !self.sidebar;
-                self.save();
+                save_pref("sidebar", serde_json::json!(self.sidebar));
             }
             Message::ToggleSquare => {
                 self.square = !self.square;
-                self.save();
+                save_pref("square", serde_json::json!(self.square));
             }
             Message::SetGroup(g) => {
                 self.group = g;
                 self.menu = None;
-                self.save();
+                save_pref("group", serde_json::json!(g.key()));
             }
             Message::Menu(menu) => self.menu = menu,
             Message::Size(n) => {
                 self.size = n.min(REEL);
-                self.save();
+                save_pref("size", serde_json::json!(self.size));
                 return self.sync_reel();
             }
             Message::Wheel(y) => {
@@ -1411,11 +1407,11 @@ impl cosmic::Application for App {
                     self.slideshow = false;
                 } else {
                     let list = self.viewer_list();
+                    // A photo open from outside the section plays as a list of one.
                     let start = self
                         .viewing
                         .clone()
-                        .filter(|v| list.iter().any(|p| &p.path == v))
-                        .or_else(|| self.selected.iter().find_map(|s| list.iter().find(|p| &p.path == s).map(|p| p.path.clone())))
+                        .or_else(|| list.iter().find(|p| self.selected.contains(&p.path)).map(|p| p.path.clone()))
                         .or_else(|| list.first().map(|p| p.path.clone()));
                     let Some(start) = start else { return Task::none() };
                     self.slideshow = true;
@@ -1428,10 +1424,8 @@ impl cosmic::Application for App {
                 }
                 let list = self.viewer_list();
                 let Some(current) = self.viewing.as_ref() else { return Task::none() };
-                let Some(i) = list.iter().position(|p| &p.path == current) else {
-                    self.slideshow = false;
-                    return Task::none();
-                };
+                // Outside the section the open photo is the whole list: nothing to move on to.
+                let Some(i) = list.iter().position(|p| &p.path == current) else { return Task::none() };
                 let next = list[(i + 1) % list.len()].path.clone();
                 // A single photo has nothing to move on to.
                 if &next != current {
@@ -1747,6 +1741,9 @@ impl App {
             if self.favorites_unsaved {
                 col = col.push(text::caption(FAVORITES_UNSAVED));
             }
+            if self.albums_unsaved && self.new_album.is_none() {
+                col = col.push(text::caption(ALBUMS_UNSAVED));
+            }
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));
             }
@@ -1756,6 +1753,9 @@ impl App {
             if self.favorites_unsaved {
                 col = col.push(container(text::caption(FAVORITES_UNSAVED)).padding([8, 16, 0, 8]));
             }
+            if self.albums_unsaved && self.new_album.is_none() {
+                col = col.push(container(text::caption(ALBUMS_UNSAVED)).padding([8, 16, 0, 8]));
+            }
             if let Some(notice) = &self.notice {
                 col = col.push(container(text::caption(notice.as_str())).padding([8, 16, 0, 8]));
             }
@@ -1764,6 +1764,9 @@ impl App {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
                 col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            if self.albums_unsaved && self.new_album.is_none() {
+                col = col.push(text::caption(ALBUMS_UNSAVED));
             }
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));
