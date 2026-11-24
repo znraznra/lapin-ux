@@ -450,7 +450,7 @@ other_desktops_value() {   # kind name dest
 
 enter_session() {
     [ -f "$ACTIVE" ] && return 0    # Lapin's copy is already in place
-    local kind name out in first=0
+    local kind name out in first=0 todo=()
     [ -d "$OUTSIDE" ] || first=1
     [ "$DRY" = 1 ] || rm -f "$SKIPPED"
     while read -r kind name; do
@@ -478,8 +478,15 @@ enter_session() {
                 # an item without a copy, so it stays safe even when this
                 # record cannot be written (a full state disk).
                 if [ "$DRY" != 1 ]; then
-                    rm -rf "$out" "$out.absent"
-                    { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null || true
+                    rm -rf "$out" "$out.absent" 2>/dev/null
+                    if ! { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null \
+                        && saved "$out"; then
+                        # Neither the old copy could go nor the skip recorded:
+                        # leave could not tell this item wasn't swapped. Change
+                        # nothing at all this session (no marker, no apply).
+                        say "  could not keep track of it; the settings are left as they are"
+                        return 1
+                    fi
                 fi
                 continue
             fi
@@ -488,12 +495,19 @@ enter_session() {
                 # clear the setting, so Lapin UX's shell puts its own value
                 # back instead of the session inheriting another desktop's.
                 rm -rf "$in" "$in.absent"
-                item_default "$kind" "$name"
+                todo+=("D $kind $name")
             elif saved "$in"; then
-                item_apply "$kind" "$name" "$in"
+                todo+=("A $kind $name")
             fi
         fi
     done < <(items)
+    # Every save is done and none was left unaccounted for: now swap.
+    local act
+    for act in "${todo[@]}"; do
+        read -r act kind name <<< "$act"
+        if [ "$act" = D ]; then item_default "$kind" "$name"
+        else item_apply "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"; fi
+    done
     mkdir -p "$STATE" && date -Iseconds > "$ACTIVE"
 }
 
