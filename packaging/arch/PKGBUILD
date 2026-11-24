@@ -283,6 +283,7 @@ package_lapin-ux-desktop-git() {
         'upower'                   # battery
         'wireplumber'              # volume (wpctl)
         'pipewire-audio'           # system sounds (pw-play)
+        'mpv'                      # engine of Lapin Media Player (run as its own process)
         'pacman-contrib'           # checkupdates and paccache, for Update and Storage
         'wl-clipboard'             # snips go on the clipboard (wl-copy)
         'iio-sensor-proxy'         # auto-rotate on tablets and convertibles
@@ -306,7 +307,7 @@ package_lapin-ux-desktop-git() {
 
     cd "$_src"
     local bin
-    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-xembed lapin-ux-taskmgr lapin-ux-control lapin-ux-update lapin-ux-welcome lapin-ux-photos; do
+    for bin in lapin-ux-session lapin-ux-shell lapin-ux-notifyd lapin-ux-xembed lapin-ux-taskmgr lapin-ux-control lapin-ux-update lapin-ux-welcome lapin-ux-photos lapin-ux-media-player; do
         install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
     done
     install -Dm755 data/session/start-lapin-ux        "$pkgdir/usr/bin/start-lapin-ux"
@@ -345,6 +346,8 @@ package_lapin-ux-desktop-git() {
     install -Dm755 tools/lapin-ux-howdy             "$pkgdir/usr/bin/lapin-ux-howdy"
     install -Dm644 data/polkit/dev.lapinux.howdy.policy "$pkgdir/usr/share/polkit-1/actions/dev.lapinux.howdy.policy"
     install -Dm644 -t "$pkgdir/usr/share/applications" data/apps/*.desktop
+    # Media Player is the default for music and video in a Lapin session only.
+    install -Dm644 data/apps/lapinux-mimeapps.list "$pkgdir/usr/share/applications/lapinux-mimeapps.list"
 
     # System sounds: Borealis by Ivica Ico Bukvic (Artistic; see its COPYING).
     mkdir -p "$pkgdir/usr/share/sounds"

@@ -2972,6 +2972,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapin-ux-media-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures",
+ "lapin-ux-core",
+ "lapin-ux-ui",
+ "libcosmic",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
 name = "lapin-ux-notifyd"
 version = "0.1.0"
 dependencies = [
