@@ -71,6 +71,9 @@ pub struct StartMenu {
     pub id: window::Id,
     pub query: String,
     pub page: StartPage,
+    /// The layout this menu opened with; a change in Settings applies to the
+    /// next opening, so the open menu, its size and its keyboard list agree.
+    pub layout: config::StartLayout,
     /// Keyboard selection. Home and All apps only highlight once the user
     /// starts using the arrow keys; search results highlight the best match.
     pub selected: Option<usize>,
@@ -278,6 +281,10 @@ pub enum Message {
     PointerPressed(window::Id),
     FilesIndexed(std::sync::Arc<lapin_ux_core::files::FileIndex>),
     Desktop(crate::desktop::DesktopMsg),
+    /// The empty desktops on the other displays (#165).
+    ExtraDesktopPress,
+    ExtraDesktopContext(window::Id),
+    ExtraDesktopDropped(Option<crate::dnd::Uris>, cosmic::iced::clipboard::dnd::DndAction),
     Clip(crate::clipboard::ClipMsg),
     Preview(crate::previews::PreviewMsg),
     CloseSubmenu,
@@ -331,7 +338,7 @@ pub struct Shell {
     /// A menu a press outside just closed, and when (#36): the press that
     /// closes it can also be the click on the button that opened it, which
     /// must not open it again.
-    pub popup_dismissed: Option<(PopupKind, Instant)>,
+    pub popup_dismissed: Option<(PopupKind, window::Id, Instant)>,
     /// The last window the taskbar asked to minimize and when (#85): if the
     /// window reports it is shown again a moment later, the app undid it.
     pub(crate) minimize_asked: Option<(Handle, Instant)>,
@@ -367,6 +374,8 @@ pub struct Shell {
     pub files: std::sync::Arc<lapin_ux_core::files::FileIndex>,
     pub indexing: bool,
     pub desktop: Option<crate::desktop::DesktopView>,
+    /// Empty desktop surfaces on the other displays (#165).
+    pub extra_desktops: Vec<crate::desktop::ExtraDesktop>,
     pub clip: crate::clipboard::ClipState,
     pub thumbs: std::collections::HashMap<Handle, crate::previews::Thumb>,
     /// A cascading submenu of `popup`.
@@ -494,6 +503,11 @@ impl Shell {
     /// Keep the desktop icons on the main display when it changes (chosen
     /// in Settings, plugged in or unplugged).
     pub(crate) fn desktop_follow_main(&mut self) -> Task<Message> {
+        let main = self.main_desktop_follow();
+        Task::batch([main, self.sync_extra_desktops()])
+    }
+
+    fn main_desktop_follow(&mut self) -> Task<Message> {
         let Some((output, h)) = self.main_bar().map(|b| (b.output.clone(), b.output_height.unwrap_or(720))) else {
             return Task::none();
         };
@@ -582,7 +596,8 @@ impl Shell {
         self.start = Some(StartMenu {
             id,
             query: String::new(),
-            page: StartPage::Home,
+            page: self.config.start_layout.first_page(),
+            layout: self.config.start_layout,
             selected: None,
             recent_files: if self.config.no_recent_items { Vec::new() } else { lapin_ux_core::recent::load(6) },
             folder: None,
@@ -594,6 +609,7 @@ impl Shell {
         let start_edge = self.start_edge();
         let start_margin = self.start_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
+        let start_w = self.config.start_layout.width();
         self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
@@ -613,11 +629,11 @@ impl Shell {
                     namespace: "lapin-ux-start".into(),
                     // Opens a little close to the bar and slides into place (anim.rs).
                     margin: start_margin,
-                    size: Some((Some(style::START_WIDTH), Some(height))),
+                    size: Some((Some(start_w), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
-                        .min_width(style::START_WIDTH as f32)
-                        .max_width(style::START_WIDTH as f32)
+                        .min_width(start_w as f32)
+                        .max_width(start_w as f32)
                         .min_height(height as f32)
                         .max_height(height as f32),
                     ..Default::default()
@@ -648,6 +664,9 @@ impl Shell {
         }
         if self.desktop.as_ref().is_some_and(|d| d.id == id) {
             return "desktop".into();
+        }
+        if self.extra_desktops.iter().any(|e| e.id == id) {
+            return "desktop (other display)".into();
         }
         if self.start.as_ref().is_some_and(|s| s.id == id) {
             return "Start".into();
@@ -745,11 +764,12 @@ impl Shell {
 
     /// Open a popup anchored above the tracked rectangle `key` on surface `parent`.
     pub(crate) fn open_popup(&mut self, parent: window::Id, key: &str, kind: PopupKind) -> Task<Message> {
-        // The press that closed this very menu was the click on its button.
-        if self.popup_dismissed.take().is_some_and(|(k, at)| k == kind && at.elapsed() < Duration::from_millis(400)) {
+        // The press that closed this very menu was the click on its button. A
+        // request from another surface (another display) is its own click.
+        if self.popup_dismissed.take().is_some_and(|(k, from, at)| k == kind && from == parent && at.elapsed() < Duration::from_millis(400)) {
             return Task::none();
         }
-        let same = self.popup.as_ref().is_some_and(|p| p.kind == kind);
+        let same = self.popup.as_ref().is_some_and(|p| p.kind == kind && p.parent == parent);
         let close = self.close_popup();
         if same {
             return close; // second click on the same thing closes it
@@ -923,6 +943,9 @@ impl Shell {
             return self.search(&s.query).flat();
         }
         let ids: Vec<String> = match s.page {
+            StartPage::Home if s.layout != config::StartLayout::Current => {
+                return crate::start_layouts::home_items(self, s.layout);
+            }
             StartPage::Home => {
                 if let Some((_, _, apps)) = self.open_folder() {
                     return apps.into_iter().map(StartItem::App).collect();
@@ -1173,6 +1196,7 @@ impl Application for Shell {
             start: None,
             start_closed_at: Instant::now() - Duration::from_secs(10),
             catcher: None,
+            extra_desktops: Vec::new(),
             popup: None,
             popup_dismissed: None,
             minimize_asked: None,
@@ -1612,7 +1636,7 @@ impl Shell {
                     && self.sub.as_ref().is_none_or(|s| s.id != id);
                 if outside {
                     tracing::debug!("press outside the menu: closing it");
-                    self.popup_dismissed = self.popup.as_ref().map(|p| (p.kind.clone(), Instant::now()));
+                    self.popup_dismissed = self.popup.as_ref().map(|p| (p.kind.clone(), id, Instant::now()));
                     self.hover = None;
                     return self.close_popup();
                 }
@@ -1790,6 +1814,11 @@ impl Shell {
                         Pointer::Down => Task::none(),
                     };
                 }
+                if let Pointer::Move(p) = ev
+                    && self.extra_desktop_pointer(id, p)
+                {
+                    return Task::none();
+                }
                 return self.bar_pointer(id, ev);
             }
             Message::TrayOverflow(bar) => return self.tray_overflow(bar),
@@ -1868,8 +1897,8 @@ impl Shell {
             Message::StartNav(nav) => {
                 let len = self.start_items().len();
                 let searching = self.start.as_ref().is_some_and(|s| !s.query.trim().is_empty());
-                let cols = match self.start.as_ref().map(|s| s.page) {
-                    Some(StartPage::Home) if !searching => crate::start_view::PINNED_COLUMNS,
+                let cols = match self.start.as_ref().map(|s| (s.page, s.layout)) {
+                    Some((StartPage::Home, config::StartLayout::Current)) if !searching => crate::start_view::PINNED_COLUMNS,
                     _ => 1,
                 };
                 if let Some(s) = &mut self.start
@@ -2168,6 +2197,9 @@ impl Shell {
             }
             Message::ReloadApps => self.catalog = Catalog::load(self.config.show_other_desktop_apps),
             Message::Desktop(m) => return self.update_desktop(m),
+            Message::ExtraDesktopPress => return self.extra_desktop_press(),
+            Message::ExtraDesktopContext(id) => return self.extra_desktop_context(id),
+            Message::ExtraDesktopDropped(uris, action) => return self.extra_desktop_dropped(uris, action),
             Message::Clip(m) => return self.update_clip(m),
             Message::Preview(m) => return self.update_preview(m),
             Message::CloseSubmenu => return self.close_submenu(),
@@ -2371,7 +2403,7 @@ fn output_model(info: &cosmic::cctk::sctk::output::OutputInfo) -> String {
 fn surface_kind(shell: &Shell, id: window::Id) -> &'static str {
     if shell.bars.iter().any(|b| b.id == id) {
         "taskbar"
-    } else if shell.desktop.as_ref().is_some_and(|d| d.id == id) {
+    } else if shell.desktop.as_ref().is_some_and(|d| d.id == id) || shell.extra_desktops.iter().any(|e| e.id == id) {
         "desktop"
     } else if shell.start.as_ref().is_some_and(|s| s.id == id) {
         "start"
@@ -2396,6 +2428,9 @@ fn view_surface(shell: &Shell, id: window::Id) -> Element<'_, Message> {
     }
     if shell.desktop.as_ref().is_some_and(|d| d.id == id) {
         return group("Desktop", crate::desktop::view(shell));
+    }
+    if shell.extra_desktops.iter().any(|e| e.id == id) {
+        return group("Desktop", crate::desktop::extra_view(id));
     }
     if shell.desktop.as_ref().is_some_and(|d| d.rename_surface == Some(id)) {
         return crate::desktop::rename_view(shell);

@@ -266,7 +266,7 @@ fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Mes
     crate::taskbar_view::track_if(shell, shell.page_slide().is_none(), key, content)
 }
 
-fn pin_icon(shell: &Shell, pin: &Pin, size: u16) -> Element<'static, Message> {
+pub(crate) fn pin_icon(shell: &Shell, pin: &Pin, size: u16) -> Element<'static, Message> {
     match pin {
         Pin::App(a) => icon(app_icon(shell, a)).size(size).into(),
         Pin::Path(p) => {
@@ -290,7 +290,7 @@ fn pin_icon(shell: &Shell, pin: &Pin, size: u16) -> Element<'static, Message> {
     }
 }
 
-fn pin_label(shell: &Shell, pin: &Pin) -> String {
+pub(crate) fn pin_label(shell: &Shell, pin: &Pin) -> String {
     match pin {
         Pin::App(a) => app_name(shell, a),
         p => p.label(),
@@ -325,6 +325,24 @@ fn pin_tile<'a>(shell: &'a Shell, start: &'a StartMenu, i: usize, pin: &Pin, sel
         _ => area.into(),
     };
     tracked(shell, rect_key(start.id, &format!("pin:{i}")), inner)
+}
+
+/// A pin as a flat row (the list layouts of Start). Apps use the normal app
+/// row, so they keep their menu; files, folders and sites open as in the grid.
+pub(crate) fn pin_row<'a>(shell: &'a Shell, start: &'a StartMenu, i: usize, pin: &Pin, selected: bool) -> Element<'a, Message> {
+    let b = button::custom(
+        row::with_children(vec![
+            pin_icon(shell, pin, 24),
+            text::body(pin_label(shell, pin)).into(),
+        ])
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([6, 12])
+    .class(style::flat_button(selected))
+    .on_press(Message::Pins(PinMsg::Open(i)));
+    tracked(shell, rect_key(start.id, &format!("pin:{i}")), mouse_area(b).on_right_press(Message::Pins(PinMsg::Context(i))))
 }
 
 /// The pinned grid, or the open folder.
