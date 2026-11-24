@@ -519,8 +519,9 @@ leave_session() {
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
             [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
-            # No copy of the other desktops' value: it was never swapped.
-            [ "$kind" != dconf ] && ! saved "$out" && continue
+            # No copy of the other desktops' value (not even an empty one for an
+            # unset key): it was never swapped, so Lapin's own copy stays.
+            ! saved "$out" && continue
             # A setting Lapin always sets but that's unset right now (a crash,
             # a half-written file): keep Lapin's previous copy instead (#46).
             if lapin_sets "$kind" "$name" && ! has_value "$(item_path "$kind" "$name")"; then

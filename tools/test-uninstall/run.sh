@@ -454,6 +454,12 @@ PATH="$FD:$PATH" bash "$DS" enter
 check "a stale copy that can't go: the live value stays" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ]"
 check "a stale copy that can't go: nothing is marked as swapped" "[ ! -f \"$SD/lapin-active\" ]"
 chmod 700 "$O/dconf"; rm -rf "$SD/lapin-skipped" "$O/dconf"
+# a copy missing (never saved) and no skip record: leave must not overwrite Lapin's own copy
+I="$SD/lapin-desktop/dconf"; mkdir -p "$I" "$O/dconf"; echo "'LapinCursor'" > "$I/cursor-theme"; rm -f "$O/dconf/cursor-theme"
+date -Iseconds > "$SD/lapin-active"
+bash "$DS" leave
+check "leave with no copy of the other desktop's value keeps Lapin's copy" "[ \"\$(cat \"$I/cursor-theme\")\" = \"'LapinCursor'\" ]"
+rm -rf "$SD/lapin-skipped" "$SD/lapin-active"
 # Back to the system's pointer inside Lapin UX resets the added one too
 pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1
@@ -559,11 +565,11 @@ STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"; OUT="$STATEDIR/other-
 mkdir "$STATEDIR/lapin-skipped"      # a directory: appending to it fails
 chmod 500 "$OUT/mimeapps"   # an old copy stays, and no new one can be written
 bash "$DS" enter
+check "a failed save: nothing is marked as swapped" "[ ! -f \"$STATEDIR/lapin-active\" ]"
 printf '[Default Applications]\ninode/directory=changed-outside.desktop\n' > "$M"
 bash "$DS" leave
 chmod 700 "$OUT/mimeapps"; rmdir "$STATEDIR/lapin-skipped" 2>/dev/null
 check "a failed save: the live defaults are kept as they were" "grep -q changed-outside.desktop \"$M\""
-check "a failed save: nothing is marked as swapped" "[ ! -f \"$STATEDIR/lapin-active\" ]"
 # Uninstall while the Lapin session is still active must leave the user's own file.
 rm -rf "$OUT/mimeapps"; rm -f "$M"; printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
 bash "$DS" enter
