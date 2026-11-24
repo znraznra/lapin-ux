@@ -558,11 +558,14 @@ impl App {
             }
             Err(e) => {
                 tracing::warn!("could not move the favorite: {e}");
+                // Report it even when the cached set lacks the old name: another
+                // window may have starred the photo, and the saved star then
+                // still sits on the old path.
                 if self.favorites.remove(&old) {
                     self.favorites.insert(new.clone());
-                    self.favorites_unsaved = true;
-                    self.notice = Some("The photo was renamed, but its star could not be moved to the new name.".into());
                 }
+                self.favorites_unsaved = true;
+                self.notice = Some("The photo was renamed, but its star could not be moved to the new name.".into());
             }
         }
         if self.viewing.as_deref() == Some(old.as_path()) {
@@ -1139,12 +1142,17 @@ impl App {
 
         // Bars take their own space, so the picture is fitted between them and
         // never drawn under them.
-        let mut page = column::with_capacity(5).push(toolbar);
+        let mut page = column::with_capacity(6).push(toolbar);
         if let Some(panel) = panel {
             page = page.push(container(panel).padding([8, 12, 0, 12]));
         }
         if let Some(e) = &self.action_error {
             page = page.push(container(text::caption(e.clone())).padding([4, 12, 0, 12]));
+        }
+        // Rename warnings (a leftover second name, a star that did not move)
+        // stay visible in the viewer too, also after another photo is opened.
+        if let Some(n) = &self.notice {
+            page = page.push(container(text::caption(n.clone())).padding([4, 12, 0, 12]));
         }
         let page = page
             .push(container(picture).padding(8).width(Length::Fill).height(Length::Fill))
