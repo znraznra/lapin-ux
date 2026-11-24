@@ -122,6 +122,32 @@ fn still_viewing(path: &Path) -> bool {
 
 const FAVORITES_UNSAVED: &str = "Your favorites could not be saved, so the change was not kept.";
 
+/// Action name sent to a running Photos when a picture is opened (#248).
+const OPEN_ACTION: &str = "open";
+
+/// What Photos was started with. Photos runs as a single instance, like Task
+/// Manager: starting it again raises the running window, and a picture given on
+/// the command line is shown there (#248).
+#[derive(Debug, Clone, Default)]
+struct Launch {
+    path: Option<PathBuf>,
+}
+
+impl cosmic::app::CosmicFlags for Launch {
+    type SubCommand = String;
+    type Args = Vec<String>;
+
+    fn action(&self) -> Option<&String> {
+        // Only a picture needs an action; plain launches just raise the window.
+        static OPEN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| OPEN_ACTION.to_string());
+        self.path.as_ref().map(|_| &*OPEN)
+    }
+
+    fn args(&self) -> Vec<&str> {
+        self.path.iter().filter_map(|p| p.to_str()).collect()
+    }
+}
+
 struct App {
     core: Core,
     photos: Vec<Photo>,
@@ -438,9 +464,25 @@ impl App {
     }
 }
 
+impl App {
+    /// Shows a picture handed over by Files or by a second launch, also when it
+    /// lies outside the scanned folders. Anything that is not a picture is ignored.
+    fn open_handed_over(&mut self, p: PathBuf) -> Task<Message> {
+        if !is_photo(&p) {
+            return Task::none();
+        }
+        let p = p.canonicalize().unwrap_or(p);
+        if !self.photos.iter().any(|x| x.path == p) {
+            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+            self.photos.insert(0, Photo { path: p.clone(), modified });
+        }
+        self.open(p)
+    }
+}
+
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = Option<PathBuf>;
+    type Flags = Launch;
     type Message = Message;
     const APP_ID: &'static str = APP_ID;
 
@@ -452,7 +494,8 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, start: Option<PathBuf>) -> (Self, Task<Message>) {
+    fn init(core: Core, launch: Launch) -> (Self, Task<Message>) {
+        let start = launch.path;
         let mut app = App {
             core,
             photos: Vec::new(),
@@ -479,6 +522,33 @@ impl cosmic::Application for App {
             cosmic::Action::App(Message::Scanned(found))
         });
         (app, Task::batch([title, scan]))
+    }
+
+    /// #248: a second launch (Start, the taskbar, or a picture opened from Files)
+    /// reaches the running window here instead of starting another one.
+    fn dbus_activation(&mut self, msg: cosmic::dbus_activation::Message) -> Task<Message> {
+        use cosmic::dbus_activation::Details;
+        let path = match msg.msg {
+            Details::Activate => None,
+            Details::Open { url } => url.into_iter().find_map(|u| u.to_file_path().ok()),
+            Details::ActivateAction { action, args } if action == OPEN_ACTION => args.into_iter().next().map(PathBuf::from),
+            Details::ActivateAction { .. } => None,
+        };
+        // The window is raised by libcosmic's own activation handling.
+        let raise = match self.core.main_window_id() {
+            Some(id) => cosmic::iced::window::gain_focus(id),
+            None => Task::none(),
+        };
+        let open = match path {
+            // The first scan has not finished: hand it over the same way a command-line path is.
+            Some(p) if self.scanning => {
+                self.start = Some(p);
+                Task::none()
+            }
+            Some(p) => self.open_handed_over(p),
+            None => Task::none(),
+        };
+        Task::batch([raise, open])
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
@@ -519,15 +589,8 @@ impl cosmic::Application for App {
                 let tiles = self.want_section_thumbs();
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
-                    Some(p) if is_photo(&p) => {
-                        let p = p.canonicalize().unwrap_or(p);
-                        if !self.photos.iter().any(|x| x.path == p) {
-                            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                            self.photos.insert(0, Photo { path: p.clone(), modified });
-                        }
-                        self.open(p)
-                    }
-                    _ => Task::none(),
+                    Some(p) => self.open_handed_over(p),
+                    None => Task::none(),
                 };
                 return Task::batch([tiles, open]);
             }
@@ -784,11 +847,12 @@ fn main() -> cosmic::iced::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .log_internal_errors(false) // #174: a full disk must not end the program
         .init();
-    let start = std::env::args_os().nth(1).map(PathBuf::from);
-    cosmic::app::run::<App>(
+    // The running window has another working directory, so hand it an absolute path.
+    let path = std::env::args_os().nth(1).map(PathBuf::from).map(|p| p.canonicalize().unwrap_or(p));
+    cosmic::app::run_single_instance::<App>(
         Settings::default()
             .size(Size::new(1100.0, 720.0))
             .size_limits(cosmic::iced::Limits::NONE.min_width(640.0).min_height(420.0)),
-        start,
+        Launch { path },
     )
 }

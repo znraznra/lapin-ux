@@ -18,6 +18,8 @@ Each view sets its own theme on its content (`iced::widget::themer`). The title 
 - The full picture is decoded when opened and scaled down once if it is larger than 3840 px on either side.
 - Favorites are saved in `~/.config/dev.lapinux.Photos/favorites.json`. A failed save is logged and never ends the program (#174).
 
+- Photos runs as a single instance (#248), like Task Manager. A second start (Start, the taskbar, or a picture opened from Files) finds the running window over the session bus, raises it and exits. A picture passed on the command line is sent along as an absolute path and shown in the running viewer (the `open` action, or the standard `Open` activation). If the first scan is still running, the picture waits for it, as it does at start. `COSMIC_SINGLE_INSTANCE=false` turns this off.
+
 ## Coexistence
 
 Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package.
