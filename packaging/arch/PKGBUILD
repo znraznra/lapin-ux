@@ -10,7 +10,7 @@
 # and Lapin UX's compositor build (lapin-ux-comp) is built alongside.
 
 pkgbase=lapin-ux-desktop-git
-pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-settings' 'lapin-ux-portal' 'lapin-explorer')
+pkgname=('lapin-ux-desktop-git' 'lapin-ux-comp' 'lapin-ux-greeter' 'lapin-ux-osk' 'lapin-ux-osd' 'lapin-ux-settings' 'lapin-ux-portal' 'lapin-explorer' 'lapin-store')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Lapin UX: a familiar Linux desktop (taskbar, Start menu, notifications) built on COSMIC components"
@@ -28,6 +28,9 @@ makedepends=(
     'just' 'pam' 'dav1d'
     # lapin-ux-portal build
     'pipewire'
+    # lapin-store build: cosmic-store links libflatpak, and makepkg -s only
+    # installs the global makedepends of a split package
+    'flatpak'
 )
 # Everything below is pinned to COSMIC's stable release epoch-1.11.0.
 # The COSMIC version Lapin's replacements stand in for: versioned provides,
@@ -48,14 +51,17 @@ _settings_commit=f1d00fc06e18203e880771617657067c10c43321
 # File dialogs: COSMIC's portal built against COSMIC Files plus our patch.
 _portal_commit=f448ddfb296bf7bb23517b24b2f532559a334a1c
 _files_commit=3cc4b8003e8d08349c7ced8a9cdd10cdfa45d38c
+# Store (#77): COSMIC Store epoch-1.11.0 plus packaging/lapin-ux-store.
+_store_commit=16b1667e43c634318a99995c8eb77c23603ae560
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#commit=${_comp_commit}"
         "cosmic-greeter::git+https://github.com/pop-os/cosmic-greeter.git#commit=${_greeter_commit}"
         "cosmic-osk::git+https://github.com/pop-os/cosmic-osk.git#commit=${_osk_commit}"
         "cosmic-osd::git+https://github.com/pop-os/cosmic-osd.git#commit=${_osd_commit}"
         "cosmic-settings::git+https://github.com/pop-os/cosmic-settings.git#commit=${_settings_commit}"
         "xdg-desktop-portal-cosmic::git+https://github.com/pop-os/xdg-desktop-portal-cosmic.git#commit=${_portal_commit}"
-        "cosmic-files::git+https://github.com/pop-os/cosmic-files.git#commit=${_files_commit}")
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+        "cosmic-files::git+https://github.com/pop-os/cosmic-files.git#commit=${_files_commit}"
+        "cosmic-store::git+https://github.com/pop-os/cosmic-store.git#commit=${_store_commit}")
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 # !strip keeps the line tables Lapin's release profile adds, so crash
 # reports in ~/.local/state/lapin-ux name the code (#29).
 options=('!lto' '!strip')
@@ -135,6 +141,17 @@ prepare() {
     rm -f rust-toolchain rust-toolchain.toml
     # Use the patched COSMIC Files for the file dialogs.
     cargo fetch --config "$_files_patch" --target "$host"
+
+    # Store (#77): its own cargo home, so Lapin's libcosmic patch (title bar)
+    # applies to its private libcosmic copy; the lockfile stays as is.
+    cd "$srcdir/cosmic-store"
+    git reset -q --hard && git clean -fdq
+    for p in "$_src"/packaging/lapin-ux-store/*.patch; do
+        [ -e "$p" ] && git apply "$p"
+    done
+    rm -f rust-toolchain rust-toolchain.toml
+    CARGO_HOME="$srcdir/cargo-store" cargo fetch --locked --target "$host"
+    _patch_libcosmic "$srcdir/cargo-store"
 }
 
 # Patches for cargo's git checkouts (#61). Each checkout records which patch
@@ -246,6 +263,10 @@ build() {
 
     cd "$srcdir/cosmic-files"
     just build-release --frozen
+
+    cd "$srcdir/cosmic-store"
+    _clean_repatched "$srcdir/cargo-store" "$srcdir/cosmic-store/target"
+    CARGO_HOME="$srcdir/cargo-store" just build-release --frozen
 }
 
 check() {
@@ -479,6 +500,18 @@ package_lapin-explorer() {
     provides=("cosmic-files=$_cosmic_ver")
     conflicts=('cosmic-files' 'lapin-ux-cosmic-files')
     cd "$srcdir/cosmic-files"
+    just rootdir="$pkgdir" install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_lapin-store() {
+    pkgdesc="Store: COSMIC Store with Lapin UX's Home and Library (stock COSMIC Store outside a Lapin session)"
+    url="https://github.com/pop-os/cosmic-store"
+    license=('GPL-3.0-only')
+    depends=('cosmic-icon-theme' 'flatpak' 'appstream' 'libgcc' 'glibc' 'libxkbcommon' 'openssl' 'xdg-utils')
+    provides=("cosmic-store=$_cosmic_ver")
+    conflicts=('cosmic-store' 'lapin-ux-cosmic-store')
+    cd "$srcdir/cosmic-store"
     just rootdir="$pkgdir" install
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

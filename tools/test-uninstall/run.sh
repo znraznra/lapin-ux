@@ -511,9 +511,15 @@ chmod u+w "$D/sounds"
 check "a '.x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/.ocean/stereo/bell.oga\" ]"
 check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" ]"
 }
+scenU() {
+echo "U: the Lapin Store is part of the uninstall lists (#77)"
+# active lines only (comments stripped), whole words between spaces, quotes or brackets
+check "lapin-store is in LAPIN_PKGS" "sed -n '/^LAPIN_PKGS=/,/)/p' \"$U\" | sed 's/#.*//' | grep -Eq '(^|[ (])lapin-store([ )]|\$)'"
+check "lapin-store maps to cosmic-store in STOCK" "sed 's/#.*//' \"$U\" | grep -Eq '\[lapin-store\]=cosmic-store([ )]|\$)'"
+}
 # fakebin/pgrep only sees processes this run started, never the surrounding session
 if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T; do
+for x in A B C D E F G H I J K L M N O P Q R S T U; do
   h=$(mktemp -d); mkdir -p "$h/run"
   env -i HOME="$h" USER="$USER" XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN="$x" dbus-run-session -- bash "$0" "$U" > "$h.log" 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' "$h.log"

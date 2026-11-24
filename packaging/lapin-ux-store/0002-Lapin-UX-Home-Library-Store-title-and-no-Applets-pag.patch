@@ -1,0 +1,59 @@
+From 78a9004387225311197a49a4af39b92288025632 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 11:07:59 +0800
+Subject: [PATCH 2/2] Lapin UX: Home, Library, Store title and no Applets page
+ via lapin module (#77)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/main.rs | 5 +++--
+ src/nav.rs  | 3 +++
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/main.rs b/src/main.rs
+index 2d01d13..67c9661 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -60,6 +60,7 @@ mod gstreamer;
+ 
+ use icon_cache::icon_cache_handle;
+ mod icon_cache;
++mod lapin;
+ 
+ use key_bind::{KeyBind, key_binds};
+ mod key_bind;
+@@ -1741,7 +1742,7 @@ impl App {
+ 
+     fn update_title(&mut self) -> Task<Message> {
+         if let Some(window_id) = &self.core.main_window_id() {
+-            self.set_window_title(fl!("app-name"), *window_id)
++            self.set_window_title(lapin::app_title(), *window_id)
+         } else {
+             Task::none()
+         }
+@@ -2127,7 +2128,7 @@ impl Application for App {
+         let app_themes = vec![fl!("match-desktop"), fl!("dark"), fl!("light")];
+ 
+         let mut nav_model = widget::nav_bar::Model::default();
+-        for &nav_page in NavPage::all() {
++        for nav_page in lapin::nav_pages() {
+             let id = nav_model
+                 .insert()
+                 .icon(nav_page.icon())
+diff --git a/src/nav.rs b/src/nav.rs
+index f168f25..4572aca 100644
+--- a/src/nav.rs
++++ b/src/nav.rs
+@@ -83,6 +83,9 @@ impl NavPage {
+     }
+ 
+     pub fn title(&self) -> String {
++        if let Some(title) = crate::lapin::page_title(*self) {
++            return title;
++        }
+         match self {
+             Self::Explore => fl!("explore"),
+             Self::Create => fl!("create"),
+-- 
+2.56.1
+
