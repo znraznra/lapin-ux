@@ -11,7 +11,13 @@
   apps stacked, tray and clock at the bottom; the running marker sits on the
   inner edge and alignment Center/Left becomes Center/Top. Start, panels,
   pop-ups, toasts, auto-hide and the work area follow the edge. Start and
-  panels on a side bar anchor to its bottom corner.
+  panels on a side bar anchor to its bottom corner, except Start, which docks
+  in the top corner beside the Start button and slides in sideways (#197).
+  On a side bar the clock shows time and date on one line each (seconds are
+  dropped with AM/PM, the date is split into two short lines), the tray is
+  centred, the notification badge stays round and shows its count below the
+  clock (#194, #204), and the right-click menu opens beside the bar and only
+  slides, so it neither clips nor flickers (#195, #196).
 - The Search box is a real text field: click it to type on the taskbar (the
   taskbar takes the keyboard only meanwhile); Enter shows the results in
   Start; Esc or clicking away clears it.
@@ -99,6 +105,17 @@
   first; pacman packages through an admin prompt, Flatpaks directly; core
   desktop packages are refused). Newly installed or removed apps appear the
   next time Start opens.
+- **Start layout** (#198): Settings > Personalization > Start > Layout, or the
+  welcome app's "Start layout" step (after Pointers). Setting `start_layout`
+  in `dev.lapinux.Shell`: `Current` (default), `Classic` (narrow single
+  column, accent strip on the left), `ClassicTwoColumns` and `ProgramsList`
+  (600 px wide, user picture and places on the right). Code in
+  `start_layouts.rs`; search, pins, all apps, other-desktop filtering and the
+  power menu are shared with the Current layout. There are no flyout
+  submenus: Programs switches the panel to the apps list (with a Back row),
+  Shut Down's arrow opens the usual power menu. Applies the next time Start
+  opens, only inside the Lapin session. Lapin's own setting, so nothing in
+  `items()` of `lapin-ux-uninstall`.
 - Account button: Change account settings, **Change account picture**, Lock,
   Sign out, **Switch user** (LightDM, SDDM, GDM). Power menu: Lock, Sign out,
   Sleep, Restart, Shut down.
@@ -147,6 +164,13 @@
 - Right-click the desktop: View (Large/Medium/Small icons, Show desktop
   icons), Sort by (Name, Date modified, Item type), Refresh, New (Folder,
   Text Document), Display settings, Personalize, Open in Terminal.
+- **Other displays** (#165): the icons live on the main display only, but every
+  other display gets an empty desktop surface (`ExtraDesktop`, namespace
+  `lapin-ux-desktop`, bottom layer) that takes clicks. Right-click opens the same
+  desktop menu at the pointer on that display, a click closes it, and files
+  dropped there are copied or moved into ~/Desktop. The surfaces are created and
+  destroyed by `sync_extra_desktops`, called from `desktop_follow_main` whenever a
+  display is added, removed or the main one changes (one shell, see #83).
 
 **Auto-hide** (right-click the taskbar → Automatically hide the taskbar):
 the taskbar disappears and windows use the whole screen; touching the bottom

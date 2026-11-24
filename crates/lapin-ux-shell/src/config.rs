@@ -34,9 +34,22 @@ impl TaskbarPosition {
     }
 }
 
+/// Settings > Personalization > Start > "Layout" (#198). Read on every open
+/// of Start, so a change applies the next time it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum StartLayout {
+    #[default]
+    Current,
+    Classic,
+    ClassicTwoColumns,
+    ProgramsList,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, CosmicConfigEntry)]
 #[version = 1]
 pub struct ShellConfig {
+    /// Which Start menu layout is used (#198).
+    pub start_layout: StartLayout,
     /// Defaults below are filled from installed apps on first start.
     pub initialized: bool,
     pub alignment: TaskbarAlignment,
