@@ -75,8 +75,9 @@ check("an extra file is refused", err is not None)
 err, _, _ = unpack(b"this is not a zip", want)
 check("a file that isn't a zip is refused", err is not None and "not a zip" in err)
 
-# The archives carry the expected files plus one bad member, so the digest
-# matches and only the path check can refuse them.
+# The archives carry the expected files plus one bad member. The extra member
+# would also change the digest, so the tests check the error text to prove
+# the path check is what refused them, not a digest mismatch.
 for label, name, why in (("a '..' path", "pack-abc/../../evil", "unsafe path"),
                          ("an absolute path", "/etc/evil", "unsafe path"),
                          ("a backslash path", "pack-abc\\evil", "unsafe path"),
