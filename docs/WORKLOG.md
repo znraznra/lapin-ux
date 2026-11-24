@@ -42,6 +42,12 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
+| Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | Retest |
+| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | Retest |
+| Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | Retest |
+| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | Retest |
+| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | Retest |
+| Mon 23 Nov | Photos rename album (#203): More > Rename this album. | 1 |
 
 ## Phase dates
 
@@ -54,9 +60,3 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Hardware retest | 22 Oct | In progress: 54 of 58 issues closed on 10 Nov |
 
 Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real-hardware test on 22 October, the work is mostly fixes and retests.
-| Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | 4 |
-| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
-| Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | 1 |
-| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | 1 |
-| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | 1 |
-| Mon 23 Nov | Photos rename album (#203): More > Rename this album. | 1 |
