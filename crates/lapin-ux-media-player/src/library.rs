@@ -152,7 +152,7 @@ pub fn parse_playlist(text: &str, base: &Path) -> Vec<String> {
         let item = if pls {
             let Some((key, value)) = line.split_once('=') else { continue };
             let key = key.trim();
-            let is_file = key.len() > 4 && key[..4].eq_ignore_ascii_case("file") && key[4..].chars().all(|c| c.is_ascii_digit());
+            let is_file = key.get(..4).is_some_and(|k| k.eq_ignore_ascii_case("file")) && key.len() > 4 && key[4..].chars().all(|c| c.is_ascii_digit());
             if !is_file {
                 continue;
             }
@@ -307,6 +307,12 @@ mod tests {
         std::fs::write(stations_path(), "{ not json").unwrap();
         assert!(load_stations().is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pls_keys_with_unicode_do_not_panic() {
+        let t = "[playlist]\nFile1=/a.mp3\nファイル1=/b.mp3\nfé=/c.mp3\n";
+        assert_eq!(parse_playlist(t, Path::new("/m")), vec!["/a.mp3".to_string()]);
     }
 
     #[test]

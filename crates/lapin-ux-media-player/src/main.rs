@@ -361,6 +361,8 @@ struct App {
     devices: Vec<(String, String)>,
     device: String,
     show_devices: bool,
+    /// The remembered output, waiting for mpv to list it.
+    pending_device: Option<String>,
     mini: bool,
     shuffle: bool,
     repeat: Repeat,
@@ -442,6 +444,9 @@ impl App {
             return;
         };
         self.index = Some(i);
+        // A station keeps its star and stream title whichever way it was reached
+        // (queue, next, previous); anything else is not a station.
+        self.station = if item.stream { self.stations.iter().position(|s| s.url == item.target) } else { None };
         self.notice = None;
         self.now = Now { title: item.title.clone(), artist: item.artist.clone(), ..Default::default() };
         self.confirmed_pos = 0.0;
@@ -459,11 +464,6 @@ impl App {
     }
 
     fn play_list(&mut self, items: Vec<Item>, at: usize) {
-        // Playing a station again from the queue keeps its star and stream title.
-        self.station = match items.get(at) {
-            Some(it) if it.stream => self.stations.iter().position(|s| s.url == it.target),
-            _ => None,
-        };
         self.queue = items;
         self.fail_streak = 0;
         self.play_index(at);
@@ -525,12 +525,9 @@ impl App {
         match e {
             E::Ready(eng) => {
                 eng.set("volume", json!(self.volume));
-                if let Ok(d) = std::fs::read_to_string(device_path()) {
-                    let d = d.trim();
-                    if !d.is_empty() && d != "auto" {
-                        eng.set("audio-device", json!(d));
-                    }
-                }
+                // The saved output is applied only once mpv lists it (E::Devices);
+                // if it is gone, mpv keeps its automatic choice.
+                self.pending_device = std::fs::read_to_string(device_path()).ok().map(|d| d.trim().to_string()).filter(|d| !d.is_empty() && d != "auto");
                 self.engine = Some(eng);
                 self.problem = None;
                 for target in std::mem::take(&mut self.start) {
@@ -558,7 +555,16 @@ impl App {
             E::Volume(v) => self.volume = v,
             E::Mute(m) => self.muted = m,
             E::Speed(_) => {}
-            E::Devices(d) => self.devices = d,
+            E::Devices(d) => {
+                if let Some(want) = self.pending_device.take() {
+                    if d.iter().any(|(n, _)| *n == want) {
+                        if let Some(eng) = &self.engine {
+                            eng.set("audio-device", json!(want));
+                        }
+                    }
+                }
+                self.devices = d;
+            }
             E::Device(d) => self.device = d,
             E::Title(t) => {
                 if !t.is_empty() && (self.now.title.is_empty() || self.station.is_some()) {
@@ -815,6 +821,8 @@ impl App {
                     } else {
                         self.play_list(found.iter().map(Item::from).collect(), 0);
                     }
+                } else if path.is_file() && path.to_str().is_none() {
+                    self.notice = Some("That file name is not plain text, so the player cannot open it from here.".into());
                 } else if path.is_file() {
                     let kind = library::kind_of(&path).unwrap_or(Kind::Audio);
                     let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1496,6 +1504,7 @@ impl cosmic::Application for App {
             devices: Vec::new(),
             device: String::from("auto"),
             show_devices: false,
+            pending_device: None,
             mini: false,
             shuffle: false,
             repeat: Repeat::Off,
