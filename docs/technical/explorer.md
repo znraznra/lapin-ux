@@ -182,7 +182,15 @@ column; the full path is the tooltip. Clicking the chevron or title of Quick
 access, Favorites or Recent folds or unfolds its content, the chevron turns, and
 the thin line stays. On Networks and Recycle Bin the pane follows the selected
 item too, and the same empty message shows only while nothing is selected, instead
-of a stale or blank pane (the same goes for any tab with nothing selected). This is Lapin-only
+of a stale or blank pane (the same goes for any tab with nothing selected).
+What the pane shows (#170, patch 0040): a drive adds File system and Address
+(the mount source, read from `/proc/self/mountinfo` by longest mount point) below
+its capacity; a deleted item in Recycle Bin shows Original location, Date deleted
+and Size (or the item count for a folder); a server or share under Networks, and
+a share picked on This PC that has no local path, shows its Address. Several
+picked items say "N items selected" with the total size, deleted files included.
+Navigating clears the old details, and nothing picked no longer falls back to the
+parent folder's details. This is Lapin-only
 (`config::lapin_session()`); COSMIC's own session is stock.
 
 **Narrow windows** (#151): the file list keeps at least 420 px. Below that
