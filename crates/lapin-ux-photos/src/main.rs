@@ -818,13 +818,12 @@ impl cosmic::Application for App {
             }
             Message::Renamed(old, Err(e)) => {
                 self.file_op = false;
-                if self.viewing.as_deref() == Some(old.as_path()) {
-                    self.action_error = Some(e);
-                } else {
-                    // The photo was left while the rename ran. A failure here
-                    // can mean a leftover second name, so it must still show.
-                    self.notice = Some(e);
-                }
+                // Always a notice, never the viewer's action error: that one
+                // is cleared by opening another photo, the menu or going back,
+                // and a failed rename can mean a leftover second name. The
+                // viewer shows notices too.
+                let _ = old;
+                self.notice = Some(e);
             }
             Message::Renamed(old, Ok(new)) => {
                 self.file_op = false;
