@@ -441,8 +441,19 @@ check "a pointer named like Lapin's bundled one plus a suffix goes back" "[ \"\$
 O="$HOME/.local/state/lapin-ux/other-desktops"
 FD=$(mktemp -d); printf '#!/bin/sh\n[ "$1" = read ] && exit 1\nexec /usr/bin/dconf "$@"\n' > "$FD/dconf"; chmod +x "$FD/dconf"
 dconf write /org/gnome/desktop/interface/cursor-theme "'Adwaita'"; rm -rf "$O"
+SD="$HOME/.local/state/lapin-ux"
 PATH="$FD:$PATH" bash "$DS" enter
 check "a failed dconf read leaves no saved copy" "[ ! -e \"$O/dconf/cursor-theme\" ]"
+check "a failed dconf read: the other desktop's value is kept" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ]"
+bash "$DS" leave; rm -rf "$SD/lapin-skipped" "$SD/lapin-active"
+# a stale copy that can't be removed and a skip record that can't be written:
+# enter stops with no marker and the live value stays
+SD="$HOME/.local/state/lapin-ux"
+mkdir -p "$O/dconf"; echo "'Stale'" > "$O/dconf/cursor-theme"; chmod 500 "$O/dconf"; mkdir -p "$SD/lapin-skipped"
+PATH="$FD:$PATH" bash "$DS" enter
+check "a stale copy that can't go: the live value stays" "[ \"\$(rd cursor-theme)\" = \"'Adwaita'\" ]"
+check "a stale copy that can't go: nothing is marked as swapped" "[ ! -f \"$SD/lapin-active\" ]"
+chmod 700 "$O/dconf"; rm -rf "$SD/lapin-skipped" "$O/dconf"
 # Back to the system's pointer inside Lapin UX resets the added one too
 pick "My Cursor"
 XDG_CURRENT_DESKTOP=LapinUX python3 "$CUR" --system > /dev/null 2>&1

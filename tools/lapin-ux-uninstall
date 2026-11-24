@@ -199,10 +199,12 @@ item_save() {   # kind name dest
     [ "$DRY" = 1 ] && return 0
     mkdir -p "$(dirname "$3")" || return 1
     if [ "$1" = dconf ]; then
-        rm -rf "$3" "$3.absent"
+        rm -rf "$3" "$3.absent" 2>/dev/null
+        [ -e "$3" ] && return 1
         # A successful read of an unset key leaves an empty copy (the existing
-        # "unset" convention); a failed read must leave no copy at all.
-        if dconf_ok && ! dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null; then rm -f "$3"; fi
+        # "unset" convention); a failed read leaves no copy and reports it, so
+        # the caller keeps the live value (enter_session skips the item).
+        if dconf_ok && ! dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null; then rm -f "$3"; return 1; fi
         return 0
     fi
     f=$(item_path "$1" "$2")
