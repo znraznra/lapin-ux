@@ -50,6 +50,9 @@ The side bar, source, group, grid style and size are remembered in `~/.config/de
 
 Photos writes only its own `dev.lapinux.Photos` folder, so nothing is added to `items()` in `tools/lapin-ux-uninstall`. It replaces no COSMIC package. The Hidden vault lives in `~/.local/share/dev.lapinux.Photos/vault/`; `lapin-ux-uninstall` never touches that folder, because it holds the person's own pictures, and uninstalling Lapin UX must not delete them. (If the Photos app is removed the pictures stay encrypted there.)
 
+- Progress for vault jobs: while Hide or Unhide with a password, setting, changing or removing the password, or checking the password runs, a bar under the toolbar (in the gallery and in the viewer) says what is happening and counts "12 of 340" pictures. A step is counted after each picture is finished (two atomic counters read every 200 ms). Checking the password has no count, so its bar just moves. A second Hide or Unhide pressed while one runs shows a note instead of starting.
+- Hide from the viewer: an eye button in the viewer toolbar hides the open picture (in Hidden it unhides it) and then shows the next picture, or the previous one if it was last, or goes back to the gallery if it was the only one. With a password the move runs as a vault job and the viewer moves on when it finishes; the button is off while a job runs. Hiding into the vault still needs the password typed once (Hidden), as in the grid.
+
 ## Not yet
 
 Free-hand crop (dragging a box), undo for edits, and a brightness slider.

@@ -88,5 +88,6 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos grid memory (#203): thumbnails far from the visible stretch are dropped, the grid restarts when the source folder changes, and a failed turn shows its note until the next try. | 1 |
 | Mon 23 Nov | Photos edit (#203): brighter, darker, contrast, black and white and crops in the viewer, saved as a copy. | 1 |
 | Mon 23 Nov | Photos Hidden vault (#203): a password for Hidden now encrypts the hidden pictures (Argon2id, ChaCha20-Poly1305) instead of only locking the view. | 1 |
+| Mon 23 Nov | Photos progress and viewer Hide (#203): a progress bar with a count for Hide, Unhide and vault jobs, and a Hide or Unhide button in the viewer. | 1 |
 | Tue 24 Nov | Photos turn left and right now writes through an exclusively created, owner-only temporary file and syncs the folder after the rename (#203). | 1 |
 | Tue 24 Nov | Photos edit copies are written through an exclusively created temporary file, never replace an existing file, and inherit Hidden from the original, which is saved durably before the copy appears. Moving pictures are told apart by the image decoder, and only a copy made this session is edited in place (#203). | 1 |
