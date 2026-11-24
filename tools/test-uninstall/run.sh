@@ -516,10 +516,11 @@ echo "U: the Lapin Store is part of the uninstall lists (#77)"
 check "lapin-store is in LAPIN_PKGS" "sed -n '/^LAPIN_PKGS=/,/)/p' \"$U\" | grep -qw lapin-store"
 check "lapin-store maps to cosmic-store in STOCK" "grep -q '\[lapin-store\]=cosmic-store' \"$U\""
 }
-if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
+# fakebin/pgrep only sees processes this run started, never the surrounding session
+if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T U; do
-  h=$(mktemp -d)
-  env -i HOME=$h USER=$USER PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN=$x dbus-run-session -- bash "$0" "$U" > $h.log 2>&1 || fail=1
-  grep -v -e dbus-daemon -e '^$' $h.log
+  h=$(mktemp -d); mkdir -p "$h/run"
+  env -i HOME="$h" USER="$USER" XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN="$x" dbus-run-session -- bash "$0" "$U" > "$h.log" 2>&1 || fail=1
+  grep -v -e dbus-daemon -e '^$' "$h.log"
 done
 exit $fail

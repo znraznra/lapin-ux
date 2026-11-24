@@ -1,0 +1,15 @@
+#!/bin/bash
+# pgrep stand-in: only counts processes started by this test run, so a real
+# lapin-ux-shell (the suite run from inside a Lapin session) can't make the
+# uninstaller say "Lapin UX is running" and fail every scenario.
+root=${LAPIN_TEST_ROOT:-}
+[ -n "$root" ] || exit 1
+found=1
+for pid in $(/usr/bin/pgrep "$@" 2>/dev/null); do
+    p=$pid
+    while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+        if [ "$p" = "$root" ]; then echo "$pid"; found=0; break; fi
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    done
+done
+exit $found
