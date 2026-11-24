@@ -195,7 +195,7 @@ LAPIN_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
 if [ -f /usr/share/applications/dev.lapinux.Terminal.desktop ] && command -v xdg-mime >/dev/null 2>&1 \
    && grep -q mimeapps "$(command -v lapin-ux-desktop-settings 2>/dev/null)" 2>/dev/null \
    && [ -f "$LAPIN_STATE/lapin-active" ] \
-   && { [ -f "$LAPIN_STATE/other-desktops/mimeapps.list" ] || [ -f "$LAPIN_STATE/other-desktops/mimeapps.list.absent" ]; } \
+   && { [ -f "$LAPIN_STATE/other-desktops/mimeapps/default" ] || [ -f "$LAPIN_STATE/other-desktops/mimeapps/default.absent" ]; } \
    && [ -z "$(xdg-mime query default x-scheme-handler/terminal 2>/dev/null)" ]; then
     xdg-mime default dev.lapinux.Terminal.desktop x-scheme-handler/terminal || true
 fi
