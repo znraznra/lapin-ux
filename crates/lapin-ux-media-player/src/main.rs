@@ -528,7 +528,9 @@ impl App {
             self.clear_media();
         }
         self.index = Some(i);
-        self.notice = None;
+        if !self.video_failed {
+            self.notice = None;
+        }
         self.now = Now { title: item.title.clone(), artist: item.artist.clone(), ..Default::default() };
         self.confirmed_pos = 0.0;
         self.awaiting_start = true;
@@ -724,6 +726,10 @@ impl App {
         match out {
             video::Out::Event(E::Ready(eng)) => {
                 eng.set("volume", json!(self.volume));
+                eng.set("mute", json!(self.muted));
+                if !self.device.is_empty() {
+                    eng.set("audio-device", json!(self.device));
+                }
                 self.video = Some(eng);
                 self.video_failed = false;
                 self.start_queue();
@@ -1891,7 +1897,7 @@ impl App {
                 }
             }
             Message::SetDevice(name) => {
-                if let Some(e) = &self.engine {
+                for e in [&self.engine, &self.video].into_iter().flatten() {
                     e.set("audio-device", json!(name));
                 }
                 if let Some(dir) = device_path().parent() {
