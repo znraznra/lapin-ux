@@ -100,9 +100,21 @@ fn socket_path() -> PathBuf {
         return dir.join(format!("lapin-ux-media-player-{}.sock", std::process::id()));
     }
     use std::os::unix::fs::DirBuilderExt;
-    let dir = std::env::temp_dir().join(format!("lapin-ux-media-player-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+    // `create` fails if the name already exists (even as a link someone else
+    // planted), so a folder we get back is new, ours and private. Never
+    // delete a predictable path in the shared temp folder.
+    let base = std::env::temp_dir();
+    let mut dir = base.clone();
+    for attempt in 0..16u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(attempt);
+        dir = base.join(format!("lapin-ux-media-player-{}-{:08x}", std::process::id(), nanos ^ attempt.wrapping_mul(0x9e37_79b9)));
+        if std::fs::DirBuilder::new().mode(0o700).create(&dir).is_ok() {
+            break;
+        }
+    }
     dir.join("mpv.sock")
 }
 

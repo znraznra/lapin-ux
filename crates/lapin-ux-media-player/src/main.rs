@@ -1517,7 +1517,13 @@ impl cosmic::Application for App {
             about: false,
             start,
             favourites: std::fs::read_to_string(favourites_path()).ok().and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().collect(),
-            plays: std::fs::read_to_string(plays_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            // Only local files are counted: an address kept by an older build is dropped here
+            // and so is not written back on the next save.
+            plays: std::fs::read_to_string(plays_path())
+                .ok()
+                .and_then(|s| serde_json::from_str::<std::collections::HashMap<String, u32>>(&s).ok())
+                .map(|m| m.into_iter().filter(|(k, _)| !k.contains("://")).collect())
+                .unwrap_or_default(),
             awaiting_start: false,
             fail_streak: 0,
             confirmed_pos: 0.0,
