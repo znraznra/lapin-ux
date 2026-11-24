@@ -251,6 +251,9 @@ struct Tab {
     scroll_y: f32,
     want: Option<usize>,
     col_anchor: Option<Pos>,
+    /// Where the last column selection left the caret: the anchor above only
+    /// counts while the caret is still there.
+    col_end: Option<Pos>,
     readonly: bool,
     mtime: Option<SystemTime>,
     indent: Indent,
@@ -286,6 +289,7 @@ impl Tab {
             scroll_y: 0.0,
             want: None,
             col_anchor: None,
+            col_end: None,
             readonly: false,
             mtime: None,
             indent,
@@ -409,6 +413,8 @@ enum Message {
     Menu(Option<usize>),
     Cmd(Cmd),
     SelectTab(usize),
+    /// The press (not the release) on a tab, which arms the drag to reorder.
+    ArmDrag(usize),
     CloseTab(usize),
     Picked(Vec<PathBuf>),
     /// Files dropped on the window (a `text/uri-list` body).
@@ -425,7 +431,7 @@ enum Message {
     PickPrinter(String),
     Copies(i32),
     PrintRun,
-    PdfPicked(Option<PathBuf>),
+    PdfPicked(Option<PathBuf>, (String, String, usize)),
     /// Result of printing or writing a PDF; the string says what happened.
     PrintDone(Result<String, String>),
     Saved { id: u64, path: PathBuf, close: bool, lossy: bool, rev: u64, enc: Enc, eol: Eol, result: Result<Option<SystemTime>, SaveFail> },
@@ -644,11 +650,11 @@ impl App {
             self.status = "This file is read-only. Use File, Read-only to unlock it.".into();
             return;
         }
-        let line = t.buf.selection().0.line;
-        t.hl.borrow_mut().invalidate(line);
+        let first = t.extra.iter().flat_map(|e| [e.0.line, e.1.line]).chain([t.buf.selection().0.line]).min().unwrap_or(0);
+        t.hl.borrow_mut().invalidate(first);
         t.want = None;
         t.buf.break_undo();
-        let (lines0, start) = (t.buf.line_count(), t.buf.selection().0.line);
+        let (lines0, start) = (t.buf.line_count(), first);
         f(t, &self.settings);
         t.buf.break_undo();
         let lines1 = t.buf.line_count();
@@ -723,8 +729,15 @@ impl App {
 
     fn tab_key(&mut self, back: bool) {
         let multi = self.selection_line_span() || !self.tabs[self.active].extra.is_empty() && back;
+        // Lines already (out)dented by another caret in this pass.
+        let mut done: Vec<(usize, usize)> = Vec::new();
         self.edit_multi(|t, _| {
             if multi || back {
+                let r = lineops::selected_lines(&t.buf);
+                if done.iter().any(|d| r.0 <= d.1 && d.0 <= r.1) {
+                    return;
+                }
+                done.push(r);
                 lineops::indent_lines(&mut t.buf, t.indent, back);
             } else if t.indent.use_spaces {
                 let c = t.buf.caret;
@@ -744,7 +757,13 @@ impl App {
         }
         v.push((t.buf.selection().0, t.buf.selected_text()));
         v.sort_by_key(|x| x.0);
-        v.into_iter().map(|x| x.1).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
+        let rows: Vec<String> = v.into_iter().map(|x| x.1).collect();
+        // Empty carets keep their (empty) row, so rows stay in step with carets.
+        if rows.iter().all(|r| r.is_empty()) {
+            String::new()
+        } else {
+            rows.join("\n")
+        }
     }
 
     fn nav(&mut self, key: Named, ctrl: bool, shift: bool) -> bool {
@@ -773,24 +792,47 @@ impl App {
         true
     }
 
-    /// Makes `sels` the selections of the tab: the last one is the primary
-    /// caret, overlapping or identical ones are merged.
-    fn set_selections(t: &mut Tab, mut sels: Vec<(Pos, Pos)>) {
-        let prim = sels.pop().unwrap_or((t.buf.anchor, t.buf.caret));
-        let mut extra: Vec<(Pos, Pos)> = Vec::new();
-        let key = |s: &(Pos, Pos)| (s.0.min(s.1), s.0.max(s.1));
-        let pk = key(&prim);
-        sels.sort_by_key(key);
-        for s in sels {
-            let k = key(&s);
-            let clash_prev = extra.last().map(|l| { let lk = key(l); k.0 < lk.1 || (k.0 == lk.0) }).unwrap_or(false);
-            let clash_prim = k.0 < pk.1 && pk.0 < k.1 || k == pk || (k.0 == k.1 && k.0 == pk.0);
-            if !clash_prev && !clash_prim {
-                extra.push(s);
+    /// Merges overlapping or identical selections into their union. The last
+    /// of `sels` is the primary caret; the result keeps the one that holds it last.
+    fn merge_selections(sels: Vec<(Pos, Pos)>) -> Vec<(Pos, Pos)> {
+        let n = sels.len();
+        let mut items: Vec<(Pos, Pos, (Pos, Pos), bool)> =
+            sels.into_iter().enumerate().map(|(i, s)| (s.0.min(s.1), s.0.max(s.1), s, i + 1 == n)).collect();
+        items.sort_by_key(|x| (x.0, x.1));
+        // lo, hi, original, holds the primary, was merged
+        let mut out: Vec<(Pos, Pos, (Pos, Pos), bool, bool)> = Vec::new();
+        for it in items {
+            if let Some(l) = out.last_mut() {
+                if it.0 < l.1 || it.0 == l.0 {
+                    l.1 = l.1.max(it.1);
+                    l.3 |= it.3;
+                    l.4 = true;
+                    continue;
+                }
+            }
+            out.push((it.0, it.1, it.2, it.3, false));
+        }
+        let mut res = Vec::new();
+        let mut prim = None;
+        for o in out {
+            let s = if o.4 { (o.0, o.1) } else { o.2 };
+            if o.3 {
+                prim = Some(s);
+            } else {
+                res.push(s);
             }
         }
+        res.extend(prim);
+        res
+    }
+
+    /// Makes `sels` the selections of the tab: the last one is the primary
+    /// caret, overlapping or identical ones are merged into their union.
+    fn set_selections(t: &mut Tab, sels: Vec<(Pos, Pos)>) {
+        let mut m = Self::merge_selections(sels);
+        let prim = m.pop().unwrap_or((t.buf.anchor, t.buf.caret));
         t.buf.select_range(prim.0, prim.1);
-        t.extra = extra;
+        t.extra = m;
     }
 
     /// Chars from `p` to the end of the document.
@@ -838,6 +880,7 @@ impl App {
         t.want = None;
         t.buf.select_range(prim.1, prim.2);
         t.extra = sels.into_iter().map(|s| (s.1, s.2)).collect();
+        t.col_end = Some(t.buf.caret);
     }
 
     fn add_caret_vertical(&mut self, d: isize) {
@@ -885,15 +928,19 @@ impl App {
         let mut hit = None;
         for k in 0..=total {
             let l = (from.line + k) % total;
-            let start = if k == 0 { from.col } else { 0 };
-            if let Some(c) = line_find(t, l, start) {
+            let mut start = if k == 0 { from.col } else { 0 };
+            while let Some(c) = line_find(t, l, start) {
                 let at = Pos::new(l, c);
-                // skip matches that are already carets
+                // skip matches that are already carets, and go on along the line
                 let taken = t.extra.iter().chain([&(t.buf.anchor, t.buf.caret)]).any(|e| e.0.min(e.1) == at);
                 if !taken {
                     hit = Some(at);
                     break;
                 }
+                start = c + 1;
+            }
+            if hit.is_some() {
+                break;
             }
         }
         if let Some(at) = hit {
@@ -911,8 +958,9 @@ impl App {
         }
         self.edit_keep(|t, s| {
             let mut sels = t.extra.clone();
-            let prim_i = sels.len();
             sels.push((t.buf.anchor, t.buf.caret));
+            // Overlapping or identical targets would be edited twice: merge them first.
+            let sels = Self::merge_selections(sels);
             let mut order: Vec<usize> = (0..sels.len()).collect();
             order.sort_by_key(|&i| std::cmp::Reverse(sels[i].0.min(sels[i].1)));
             t.buf.begin_join();
@@ -924,9 +972,7 @@ impl App {
                 out[i] = (Self::dist_to_end(&t.buf, t.buf.anchor), Self::dist_to_end(&t.buf, t.buf.caret));
             }
             t.buf.end_join();
-            let mut res: Vec<(Pos, Pos)> = out.iter().map(|&(a, c)| (Self::pos_from_end(&t.buf, a), Self::pos_from_end(&t.buf, c))).collect();
-            let prim = res.remove(prim_i);
-            res.push(prim);
+            let res: Vec<(Pos, Pos)> = out.iter().map(|&(a, c)| (Self::pos_from_end(&t.buf, a), Self::pos_from_end(&t.buf, c))).collect();
             Self::set_selections(t, res);
         });
     }
@@ -1006,11 +1052,14 @@ impl App {
     }
 
     fn pdf_dialog(&self) -> Task<Message> {
+        // The text is taken now, so the file holds what was on screen when the
+        // user chose Save as PDF, whatever happens to the tab while the dialog is open.
+        let job = self.pdf_job();
         let stem = Path::new(&self.tabs[self.active].name()).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into());
         Task::future(async move {
             let r = cosmic::dialog::file_chooser::save::Dialog::new().title("Save as PDF".to_string()).file_name(format!("{stem}.pdf")).save_file().await;
             let p = r.ok().and_then(|r| r.url().and_then(|u| u.to_file_path().ok()));
-            cosmic::Action::App(Message::PdfPicked(p))
+            cosmic::Action::App(Message::PdfPicked(p, job))
         })
     }
 
@@ -1098,15 +1147,21 @@ impl App {
         }
     }
 
-    fn save_session_if_changed(&mut self, force: bool) {
+    fn save_session_if_changed(&mut self, force: bool) -> bool {
         if self.lock.is_none() {
-            return;
+            return true;
         }
         let key: Vec<(u64, u64)> = self.tabs.iter().map(|t| (t.id, t.buf.revision as u64)).chain([(0, self.active as u64)]).collect();
         if force || key != self.last_session {
-            settings::save_session(&self.session());
-            self.last_session = key;
+            match settings::save_session(&self.session()) {
+                Ok(()) => self.last_session = key,
+                Err(e) => {
+                    self.status = format!("Could not save the session: {e}");
+                    return false;
+                }
+            }
         }
+        true
     }
 
     fn restore(&mut self, sess: Session) {
@@ -1359,7 +1414,10 @@ impl App {
                     });
                 }
             }
-            Cmd::Minimap => self.settings.minimap = !self.settings.minimap,
+            Cmd::Minimap => {
+                self.settings.minimap = !self.settings.minimap;
+                self.ensure_visible();
+            }
             Cmd::Paste => tasks.push(cosmic::iced::clipboard::read().map(|t| cosmic::Action::App(Message::Pasted(t)))),
             Cmd::SelectAll => self.tabs[self.active].buf.select_all(),
             Cmd::Indent => self.tab_key(false),
@@ -1566,7 +1624,7 @@ impl App {
                 Named::ArrowUp | Named::ArrowDown | Named::ArrowLeft | Named::ArrowRight if alt && shift && !ctrl => {
                     let t = &mut self.tabs[self.active];
                     let c = t.buf.caret;
-                    let a = t.col_anchor.unwrap_or(c);
+                    let a = if t.col_end == Some(c) { t.col_anchor.unwrap_or(c) } else { c };
                     let tab = t.indent.width;
                     let x = cell_of(t.buf.line(c.line), c.col, tab);
                     let p = match n {
@@ -1776,6 +1834,7 @@ impl cosmic::Application for App {
                         } else {
                             t.extra.clear();
                             t.col_anchor = Some(pos);
+                            t.col_end = None;
                             match clicks {
                                 1 => t.buf.set_caret(pos, extend),
                                 2 => t.buf.select_word_at(pos),
@@ -1818,6 +1877,7 @@ impl cosmic::Application for App {
                     Ev::Viewport { cols, rows, cell_w } => {
                         if self.vp != (cols, rows, cell_w) {
                             self.vp = (cols, rows, cell_w);
+                            follow = true;
                         }
                     }
                     Ev::Fold(line) => {
@@ -1833,6 +1893,10 @@ impl cosmic::Application for App {
             Message::SelectTab(i) => {
                 if i < self.tabs.len() {
                     self.active = i;
+                }
+            }
+            Message::ArmDrag(i) => {
+                if i < self.tabs.len() {
                     self.drag_tab = Some(i);
                 }
             }
@@ -1940,9 +2004,8 @@ impl cosmic::Application for App {
                     }));
                 }
             }
-            Message::PdfPicked(p) => {
+            Message::PdfPicked(p, (text, title, tab)) => {
                 if let Some(path) = p {
-                    let (text, title, tab) = self.pdf_job();
                     self.panel = Panel::None;
                     tasks.push(Task::future(async move {
                         let r = tokio::task::spawn_blocking(move || {
@@ -2125,9 +2188,14 @@ impl cosmic::Application for App {
             }
             Message::CompletePick(w) => {
                 let t = &mut self.tabs[self.active];
-                let (a, _) = complete_prefix(t);
-                let c = t.buf.caret;
-                t.buf.replace_range(a, c, &w);
+                if t.readonly {
+                    self.status = "This file is read-only".into();
+                } else {
+                    let (a, _) = complete_prefix(t);
+                    let c = t.buf.caret;
+                    t.hl.borrow_mut().invalidate(a.line);
+                    t.buf.replace_range(a, c, &w);
+                }
                 self.panel = Panel::None;
                 follow = true;
             }
@@ -2182,8 +2250,11 @@ impl cosmic::Application for App {
             }
             Message::CloseWindow => {
                 if self.lock.is_some() {
-                    self.save_session_if_changed(true);
-                    std::process::exit(0);
+                    if self.save_session_if_changed(true) {
+                        std::process::exit(0);
+                    }
+                    self.prompt = Some(Prompt::Info("Could not save your session".into(), self.status.clone()));
+                    return Task::batch(tasks);
                 }
                 if self.tabs.iter().any(|t| t.buf.is_modified()) {
                     self.prompt = Some(Prompt::Quit);
@@ -2483,10 +2554,13 @@ impl App {
         let mut r = row::with_capacity(self.tabs.len()).spacing(2).align_y(Alignment::Center).padding([2, 8]);
         for (i, t) in self.tabs.iter().enumerate() {
             let dot = if t.buf.is_modified() { "\u{25CF} " } else { "" };
+            // The button fires on release, so the press is read from an area
+            // inside it (the button hands its content the event first).
+            let title = widget::mouse_area(text::body(format!("{dot}{}", t.name()))).on_press(Message::ArmDrag(i));
             let label = row::with_capacity(2)
                 .spacing(6)
                 .align_y(Alignment::Center)
-                .push(text::body(format!("{dot}{}", t.name())))
+                .push(title)
                 .push(
                     button::icon(widget::icon::from_name("window-close-symbolic").size(12))
                         .name("Close tab")

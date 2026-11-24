@@ -159,16 +159,13 @@ pub fn load_session() -> Session {
         .unwrap_or_default()
 }
 
-pub fn save_session(s: &Session) {
-    let Some(d) = dir() else { return };
-    match serde_json::to_vec(s) {
-        Ok(b) => {
-            if let Err(e) = write_atomic(&d.join("session.json"), &b) {
-                tracing::warn!("could not save the session: {e}");
-            }
-        }
-        Err(e) => tracing::warn!("could not encode the session: {e}"),
-    }
+pub fn save_session(s: &Session) -> Result<(), String> {
+    let d = dir().ok_or_else(|| "no settings folder".to_string())?;
+    let b = serde_json::to_vec(s).map_err(|e| format!("could not encode the session: {e}"))?;
+    write_atomic(&d.join("session.json"), &b).map_err(|e| {
+        tracing::warn!("could not save the session: {e}");
+        e.to_string()
+    })
 }
 
 /// Only one window owns the session (restores it and keeps it up to date), so

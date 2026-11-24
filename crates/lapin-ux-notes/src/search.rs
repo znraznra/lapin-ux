@@ -37,19 +37,25 @@ pub struct Match {
     pub end: usize,
 }
 
-fn cols(line: &str, byte_start: usize, byte_end: usize) -> (usize, usize) {
-    let s = line[..byte_start].chars().count();
-    (s, s + line[byte_start..byte_end].chars().count())
+/// Character column of every byte offset asked for, in one forward pass.
+/// `offs` must be sorted ascending and sit on char boundaries.
+fn cols_for(line: &str, offs: &[usize]) -> Vec<usize> {
+    let mut out = Vec::with_capacity(offs.len());
+    let (mut byte, mut col) = (0usize, 0usize);
+    for &o in offs {
+        col += line[byte..o].chars().count();
+        byte = o;
+        out.push(col);
+    }
+    out
 }
 
 pub fn matches_in_line(re: &Regex, line: &str, idx: usize) -> Vec<Match> {
-    re.find_iter(line)
-        .filter(|m| !m.as_str().is_empty())
-        .map(|m| {
-            let (start, end) = cols(line, m.start(), m.end());
-            Match { line: idx, start, end }
-        })
-        .collect()
+    let found: Vec<(usize, usize)> =
+        re.find_iter(line).filter(|m| !m.as_str().is_empty()).map(|m| (m.start(), m.end())).collect();
+    let offs: Vec<usize> = found.iter().flat_map(|&(s, e)| [s, e]).collect();
+    let cols = cols_for(line, &offs);
+    found.iter().enumerate().map(|(i, _)| Match { line: idx, start: cols[2 * i], end: cols[2 * i + 1] }).collect()
 }
 
 pub fn count_all(b: &Buffer, re: &Regex) -> usize {
@@ -99,39 +105,54 @@ pub fn find(b: &Buffer, re: &Regex, from: Pos, forward: bool) -> Option<Match> {
 }
 
 /// Replacement text for one match: `$1` style groups when `regex` is on.
+/// Groups are read against the whole line (so anchors and look-around see the
+/// same text the search saw), and only when the match found there really is `m`.
 pub fn replacement_for(re: &Regex, line: &str, m: Match, with: &str, regex: bool) -> String {
-    let bs = line.char_indices().nth(m.start).map(|(i, _)| i).unwrap_or(line.len());
-    let be = line.char_indices().nth(m.end).map(|(i, _)| i).unwrap_or(line.len());
     if !regex {
         return with.to_string();
     }
-    match re.captures(&line[bs..be]) {
-        Some(c) => {
+    let bs = line.char_indices().nth(m.start).map(|(i, _)| i).unwrap_or(line.len());
+    let be = line.char_indices().nth(m.end).map(|(i, _)| i).unwrap_or(line.len());
+    match re.captures_at(line, bs) {
+        Some(c) if c.get(0).map(|g| (g.start(), g.end())) == Some((bs, be)) => {
             let mut out = String::new();
             c.expand(with, &mut out);
             out
         }
-        None => with.to_string(),
+        _ => with.to_string(),
     }
 }
 
-/// Replaces every match; returns how many.
+/// Replaces every match; returns how many. The count and the edit come from
+/// the same list of non-empty matches, so they always agree.
 pub fn replace_all(b: &mut Buffer, re: &Regex, with: &str, regex: bool) -> usize {
     let mut count = 0;
     let mut out = Vec::with_capacity(b.line_count());
     for l in b.lines() {
-        let n = if regex {
-            re.find_iter(l).filter(|m| !m.as_str().is_empty()).count()
-        } else {
-            re.find_iter(l).filter(|m| !m.as_str().is_empty()).count()
-        };
+        let mut res = String::new();
+        let mut last = 0;
+        let mut n = 0;
+        for c in re.captures_iter(l) {
+            let Some(m) = c.get(0) else { continue };
+            if m.as_str().is_empty() {
+                continue;
+            }
+            res.push_str(&l[last..m.start()]);
+            if regex {
+                c.expand(with, &mut res);
+            } else {
+                res.push_str(with);
+            }
+            last = m.end();
+            n += 1;
+        }
         if n == 0 {
             out.push(l.clone());
             continue;
         }
+        res.push_str(&l[last..]);
         count += n;
-        let r = if regex { re.replace_all(l, with).into_owned() } else { re.replace_all(l, regex::NoExpand(with)).into_owned() };
-        out.push(r);
+        out.push(res);
     }
     if count > 0 {
         b.replace_all(&out.join("\n"));
@@ -273,5 +294,19 @@ mod tests {
         let mut b = Buffer::new("a$ a$");
         assert_eq!(replace_all(&mut b, &re, "$1", false), 2);
         assert_eq!(b.text(), "$1 $1");
+    }
+
+    #[test]
+    fn replace_all_skips_empty_matches_and_reads_the_whole_line() {
+        let re = Query { regex: true, text: "^|z".into(), ..Default::default() }.compile().unwrap().unwrap();
+        let mut b = Buffer::new("az");
+        assert_eq!(replace_all(&mut b, &re, "_", true), 1);
+        assert_eq!(b.text(), "a_");
+        // Groups see the whole line, so a look-behind free anchor still works.
+        let re = Query { regex: true, text: r"\bx(\d)".into(), ..Default::default() }.compile().unwrap().unwrap();
+        let b = Buffer::new("x1 x2");
+        let ms = matches_in_line(&re, b.line(0), 0);
+        assert_eq!(ms.len(), 2);
+        assert_eq!(replacement_for(&re, b.line(0), ms[1], "<$1>", true), "<2>");
     }
 }

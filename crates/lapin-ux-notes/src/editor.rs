@@ -80,6 +80,8 @@ struct State {
     reported: (usize, usize, u32),
     dragging: bool,
     mm_drag: bool,
+    /// Top row of the minimap when the drag began: the frame stays fixed while the editor scrolls under it.
+    mm_top0: usize,
     last_click: Option<mouse::Click>,
     mods: cosmic::iced::core::keyboard::Modifiers,
 }
@@ -104,8 +106,8 @@ impl<'a, M> Editor<'a, M> {
     }
 
     /// The document row under a y position in the minimap.
-    fn mm_row(&self, b: Rectangle, lh: f32, y: f32) -> usize {
-        (self.mm_top(b, lh) + ((y - b.y).max(0.0) / 2.0) as usize).min(self.rows.len().saturating_sub(1))
+    fn mm_row(&self, top: usize, b: Rectangle, y: f32) -> usize {
+        (top + ((y - b.y).max(0.0) / 2.0) as usize).min(self.rows.len().saturating_sub(1))
     }
 
     fn gutter_cells(&self) -> usize {
@@ -195,7 +197,8 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                 let Some(p) = cursor.position_in(b).map(|q| Point::new(q.x + b.x, q.y + b.y)) else { return };
                 if self.minimap && p.x > b.x + b.width - MM_W {
                     st.mm_drag = true;
-                    let r = self.mm_row(b, lh, p.y);
+                    st.mm_top0 = self.mm_top(b, lh);
+                    let r = self.mm_row(st.mm_top0, b, p.y);
                     shell.publish((self.on)(Ev::Minimap(r)));
                     shell.capture_event();
                     return;
@@ -232,7 +235,7 @@ impl<'a, M> Widget<M, Theme, Renderer> for Editor<'a, M> {
                 shell.capture_event();
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) if st.mm_drag => {
-                let r = self.mm_row(b, lh, position.y);
+                let r = self.mm_row(st.mm_top0, b, position.y);
                 shell.publish((self.on)(Ev::Minimap(r)));
                 shell.capture_event();
             }
