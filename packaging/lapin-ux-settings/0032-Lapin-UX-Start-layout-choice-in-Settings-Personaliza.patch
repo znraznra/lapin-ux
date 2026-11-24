@@ -1,0 +1,93 @@
+From 3e06be7ee99e063c0178855f3f6ff363296b85ff Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 10:14:02 +0800
+Subject: [PATCH] Lapin UX: Start layout choice in Settings > Personalization >
+ Start
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cosmic-settings/src/lapin/settings.rs | 28 +++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/cosmic-settings/src/lapin/settings.rs b/cosmic-settings/src/lapin/settings.rs
+index 7a5851a..f929b1b 100644
+--- a/cosmic-settings/src/lapin/settings.rs
++++ b/cosmic-settings/src/lapin/settings.rs
+@@ -36,6 +36,16 @@ pub enum Position {
+     Left,
+     Right,
+ }
++/// Start menu layouts. Same names as the shell's `StartLayout` (#198).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub enum StartLayout {
++    #[default]
++    Current,
++    Classic,
++    ClassicTwoColumns,
++    ProgramsList,
++}
++
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+ pub enum Combine {
+     #[default]
+@@ -107,6 +117,7 @@ pub struct Prefs {
+     pub touch_keyboard_button: bool,
+     pub alignment: Alignment,
+     pub position: Position,
++    pub start_layout: StartLayout,
+     pub auto_hide: bool,
+     pub combine: Combine,
+     pub small: SmallButtons,
+@@ -183,6 +194,7 @@ impl Prefs {
+             touch_keyboard_button: get(&shell, "touch_keyboard_button").unwrap_or(false),
+             alignment: get(&shell, "alignment").unwrap_or_default(),
+             position: get(&shell, "position").unwrap_or_default(),
++            start_layout: get(&shell, "start_layout").unwrap_or_default(),
+             auto_hide: get(&shell, "auto_hide").unwrap_or(false),
+             combine: get(&shell, "combine_buttons").unwrap_or_default(),
+             small: get(&shell, "small_buttons").unwrap_or_default(),
+@@ -237,6 +249,7 @@ pub enum Msg {
+     TouchKeyboard(bool),
+     Alignment(usize),
+     Position(usize),
++    StartLayout(usize),
+     AutoHide(bool),
+     Combine(usize),
+     Small(usize),
+@@ -733,6 +746,10 @@ pub fn update(pages: &mut Binder<PMsg>, msg: Msg) -> cosmic::app::Task<crate::Me
+             p.position = [Position::Bottom, Position::Top, Position::Left, Position::Right][i.min(3)];
+             save(SHELL, "position", &p.position);
+         }
++        Msg::StartLayout(i) => {
++            p.start_layout = START_LAYOUTS[i.min(3)].0;
++            save(SHELL, "start_layout", &p.start_layout);
++        }
+         Msg::AutoHide(v) => (p.auto_hide = v, save(SHELL, "auto_hide", &v)).1,
+         Msg::Combine(i) => {
+             p.combine = [Combine::Always, Combine::WhenFull, Combine::Never][i.min(2)];
+@@ -1427,11 +1444,22 @@ lapin_page!(Taskbar, "lapin-taskbar", "user-desktop-symbolic", "Taskbar", "Taskb
+ 
+ // --- Personalization > Start ----------------------------------------------
+ 
++const START_LAYOUTS: [(StartLayout, &str); 4] = [
++    (StartLayout::Current, "Current"),
++    (StartLayout::Classic, "Classic"),
++    (StartLayout::ClassicTwoColumns, "Classic, two columns"),
++    (StartLayout::ProgramsList, "Programs list"),
++];
++
+ fn start_rows<'a>(_: &'a Binder<PMsg>, p: &'a Prefs) -> Vec<Item<'a>> {
+     let engine = ENGINES.iter().position(|(_, url)| *url == p.web_search).unwrap_or(0);
+     static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+     let names: &'static [&'static str] = NAMES.get_or_init(|| ENGINES.iter().map(|(n, _)| *n).collect());
++    static LAYOUTS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
++    let layouts: &'static [&'static str] = LAYOUTS.get_or_init(|| START_LAYOUTS.iter().map(|(_, n)| *n).collect());
++    let layout = START_LAYOUTS.iter().position(|(l, _)| *l == p.start_layout).unwrap_or(0);
+     vec![
++        choice("Layout", Some("How the Start menu is arranged"), layouts, layout, Msg::StartLayout),
+         toggle("Show web results in search", Some("Offer \"Search the web\" when you search from Start"), p.web_results, Msg::WebResults),
+         choice("Search engine", Some("Used for web results"), names, engine, Msg::Engine),
+         toggle(
+-- 
+2.56.1
+

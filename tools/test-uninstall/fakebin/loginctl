@@ -1,0 +1,3 @@
+#!/bin/sh
+# loginctl stand-in: no sessions, so the real Lapin session around the test run is never seen
+exit 1
