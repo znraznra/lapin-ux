@@ -4,12 +4,14 @@ An offline picture app (#74). Nothing leaves the computer: no cloud, no accounts
 
 ## Two views
 
-- **Gallery** (dark): a sidebar with Gallery, Favorites and your folders (Pictures, Downloads, Desktop, Documents, shown only when they exist), and a grid of tiles grouped by date (Today, Yesterday, then the full date), newest first.
-- **Viewer** (light): one photo at a time with a floating toolbar (back, previous, next, favorite, file name) and a filmstrip of the nearby photos. Left and Right step through the list, Esc goes back to the gallery.
+- **Gallery**: a sidebar with Gallery, Favorites and your folders (Pictures, Downloads, Desktop, Documents, shown only when they exist), and a grid of tiles grouped by date (Today, Yesterday, then the full date), newest first.
+- **Viewer**: one photo at a time. The toolbar (Back with its label, file name, More actions, previous, next, favorite) sits above the picture and the filmstrip of nearby photos below it, so the picture is fitted into the space between them and never drawn under either bar (#201). Left and Right step through the list, Esc closes an open menu first and then goes back to the gallery.
+
+**More actions** (#202): Rename (keeps the picture's place, thumbnail and star, and never replaces another file), Delete (asks first, then moves the picture to the Recycle Bin with `gio trash`, never a permanent delete; the viewer moves to the next photo, or the one before it, or back to the gallery when it was the last) and Open file location.
 
 Opening a picture from Files (`lapin-ux-photos %f`) goes straight to the viewer, also when the picture is outside the scanned folders.
 
-Each view sets its own theme on its content (`iced::widget::themer`). The title bar stays in the system theme.
+Both views follow the system theme, light by default (#200). There are no theme overrides in the app.
 
 ## How it works
 
