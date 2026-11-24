@@ -10,6 +10,7 @@ mod mpris;
 mod pick;
 mod settings;
 mod tags;
+mod video;
 
 use std::path::{Path, PathBuf};
 
@@ -128,6 +129,24 @@ impl MenuId {
     }
 }
 
+/// Right-aligns a panel above the video control bar.
+fn float_right(panel: Element<'_, Message>) -> widget::Container<'_, Message, cosmic::Theme> {
+    container(panel).width(Length::Fill).align_x(Alignment::End).padding([0, 8])
+}
+
+const TUNES: [video::Tune; 4] = [video::Tune::SubDelay, video::Tune::AudioDelay, video::Tune::SubScale, video::Tune::SubPos];
+
+/// The panels that open above the video control bar, one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarMenu {
+    Audio,
+    Subtitles,
+    Video,
+    Chapters,
+    Speed,
+    Adjust,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ask {
     Open,
@@ -136,6 +155,7 @@ enum Ask {
     ImportStations,
     ExportStations,
     LibraryFolder,
+    Subtitles,
 }
 
 impl Ask {
@@ -147,6 +167,7 @@ impl Ask {
             Ask::ImportStations => "Stations file (.m3u or .json)",
             Ask::ExportStations => "Save stations as (.json or .m3u)",
             Ask::LibraryFolder => "Folder to add to the library",
+            Ask::Subtitles => "Subtitle file (.srt, .ass, .vtt, .sub)",
         }
     }
 }
@@ -286,6 +307,28 @@ struct Now {
 #[derive(Debug, Clone)]
 enum Message {
     Engine(engine::Event),
+    Video(video::Out),
+    /// Mouse moved or a key was pressed over a playing video.
+    Activity,
+    ToggleFullscreen,
+    LeaveFullscreen,
+    /// Opens or closes one of the menus above the control bar.
+    Bar(BarMenu),
+    Tune(video::Tune, i8),
+    /// Chooses a track; `None` turns audio-less choices off (subtitles).
+    PickTrack(engine::TrackKind, Option<i64>),
+    PickChapter(i64),
+    SetSpeed(f64),
+    /// Sets the start of the A-B loop, then its end, then clears it.
+    AbLoop,
+    SubColor(usize),
+    CycleAspect,
+    CycleEncoding,
+    Rotate,
+    /// One frame forward (true) or back; pauses the video.
+    FrameStep(bool),
+    /// Redraws the picture page so the control bar can hide by itself.
+    Tick,
     Mpris(mpris::Cmd),
     SetDevice(String),
     Menu(MenuId),
@@ -335,6 +378,7 @@ enum Message {
 enum Switch {
     UseTags,
     ShowCovers,
+    GpuVideo,
 }
 
 struct App {
@@ -393,6 +437,38 @@ struct App {
     covers: std::collections::HashMap<PathBuf, widget::image::Handle>,
     /// Which scan the answers belong to, so a slow older scan cannot replace a newer one.
     scan_id: u64,
+    /// The video engine inside this window (libmpv). `None` until it starts, or
+    /// when it could not, in which case videos open in mpv's own window.
+    video: Option<engine::Engine>,
+    /// The video engine could not start, so the old own-window path is used.
+    video_failed: bool,
+    /// The item being played is shown by the video engine, not the music one.
+    video_on: bool,
+    /// The queue from the command line starts once both engines have answered.
+    begun: bool,
+    /// Newest picture from the video engine.
+    frame: Option<widget::image::Handle>,
+    /// Size of the picture area in pixels, read by the video engine's thread.
+    video_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Last mouse move or key press while a video plays, for the control bar.
+    last_activity: std::time::Instant,
+    fullscreen: bool,
+    /// Audio, subtitle and video tracks of the playing video, and which menu is open.
+    media_tracks: Vec<engine::Track>,
+    bar_menu: Option<BarMenu>,
+    /// Chapters (title, start) and the one playing; the ends of the A-B loop that are set.
+    chapters: Vec<(String, f64)>,
+    chapter: i64,
+    loop_a: bool,
+    loop_b: bool,
+    /// Playback speed, the chosen subtitle colour (index into `video::SUB_COLORS`), and the Adjust panel values.
+    speed: f64,
+    sub_color: usize,
+    /// Picture shape, subtitle text encoding (indexes into `video::ASPECTS` and `video::ENCODINGS`) and rotation in degrees.
+    aspect: usize,
+    encoding: usize,
+    rotation: u16,
+    tune: [f64; 4],
 }
 
 fn fmt_time(s: f64) -> String {
@@ -439,15 +515,27 @@ fn run_scan(roots: Vec<PathBuf>) -> (Vec<Track>, usize) {
 impl App {
     fn play_index(&mut self, i: usize) {
         let Some(item) = self.queue.get(i).cloned() else { return };
-        let Some(engine) = &self.engine else {
+        let use_video = item.kind == Kind::Video && self.video.is_some();
+        let Some(engine) = (if use_video { self.video.clone() } else { self.engine.clone() }) else {
             self.notice = Some(self.problem.clone().unwrap_or_else(|| "The player engine is still starting.".into()));
             return;
         };
+        if use_video != self.video_on {
+            // the other engine stops, and its last events are ignored from here on
+            if let Some(other) = if use_video { &self.engine } else { &self.video } {
+                other.stop();
+            }
+            self.video_on = use_video;
+            self.frame = None;
+            self.clear_media();
+        }
         self.index = Some(i);
         // A station keeps its star and stream title whichever way it was reached
         // (queue, next, previous); anything else is not a station.
         self.station = if item.stream { self.stations.iter().position(|s| s.url == item.target) } else { None };
-        self.notice = None;
+        if !self.video_failed {
+            self.notice = None;
+        }
         self.now = Now { title: item.title.clone(), artist: item.artist.clone(), ..Default::default() };
         self.confirmed_pos = 0.0;
         self.awaiting_start = true;
@@ -530,21 +618,28 @@ impl App {
                 self.pending_device = std::fs::read_to_string(device_path()).ok().map(|d| d.trim().to_string()).filter(|d| !d.is_empty() && d != "auto");
                 self.engine = Some(eng);
                 self.problem = None;
-                for target in std::mem::take(&mut self.start) {
-                    let p = Path::new(&target);
-                    let item = Item::new(p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), String::new(), target.clone(), library::kind_of(p).unwrap_or(Kind::Audio));
-                    self.queue.push(item);
-                }
-                if !self.queue.is_empty() && self.index.is_none() {
-                    self.play_index(0);
-                }
+                self.start_queue();
             }
             E::Pause(p) => self.now.paused = p,
             E::Time(t) => {
                 self.now.pos = t;
                 self.confirmed_pos = t;
             }
-            E::Started => self.awaiting_start = false,
+            E::Started => {
+                self.awaiting_start = false;
+                self.reset_tune();
+                self.clear_media();
+            }
+            E::Tracks(t) => self.media_tracks = t,
+            E::Chapters(c) => self.chapters = c,
+            E::Chapter(c) => self.chapter = c,
+            E::LoopPoint(b, set) => {
+                if b {
+                    self.loop_b = set;
+                } else {
+                    self.loop_a = set;
+                }
+            }
             E::Rejected { id, why } => {
                 if id == engine::SEEK_ID {
                     self.now.pos = self.confirmed_pos;
@@ -554,7 +649,7 @@ impl App {
             E::Duration(d) => self.now.dur = d,
             E::Volume(v) => self.volume = v,
             E::Mute(m) => self.muted = m,
-            E::Speed(_) => {}
+            E::Speed(v) => self.speed = v,
             E::Devices(d) => {
                 if let Some(want) = self.pending_device.take() {
                     if d.iter().any(|(n, _)| *n == want) {
@@ -608,8 +703,88 @@ impl App {
         }
     }
 
+    /// The engine that plays what is on now: the video one while a video is shown.
+    fn active(&self) -> Option<engine::Engine> {
+        if self.video_on { self.video.clone() } else { self.engine.clone() }
+    }
+
+    /// Plays what was given on the command line, once the music engine is up and
+    /// the video engine has either started or given up, so a video file named
+    /// at launch lands in the right one.
+    fn start_queue(&mut self) {
+        if self.begun || self.engine.is_none() || (self.video.is_none() && !self.video_failed) {
+            return;
+        }
+        self.begun = true;
+        for target in std::mem::take(&mut self.start) {
+            let p = Path::new(&target);
+            let item = Item::new(p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(target.clone()), String::new(), target.clone(), library::kind_of(p).unwrap_or(Kind::Audio));
+            self.queue.push(item);
+        }
+        if !self.queue.is_empty() && self.index.is_none() {
+            self.play_index(0);
+        }
+    }
+
+    /// Something from the video engine.
+    fn video_out(&mut self, out: video::Out) {
+        use engine::Event as E;
+        match out {
+            video::Out::Event(E::Ready(eng)) => {
+                eng.set("volume", json!(self.volume));
+                eng.set("mute", json!(self.muted));
+                if !self.device.is_empty() {
+                    eng.set("audio-device", json!(self.device));
+                }
+                self.video = Some(eng);
+                self.video_failed = false;
+                self.start_queue();
+            }
+            video::Out::Event(E::Failed(why)) => self.video_gone(&why),
+            video::Out::Unavailable(why) => self.video_gone(&why),
+            video::Out::Event(e) => {
+                if self.video_on {
+                    self.engine_event(e);
+                }
+            }
+            video::Out::Frame(h) => {
+                if self.video_on {
+                    self.frame = Some(h);
+                }
+            }
+        }
+    }
+
+    /// The video engine could not start or stopped: videos open in mpv's own window.
+    fn video_gone(&mut self, why: &str) {
+        self.video = None;
+        self.video_failed = true;
+        if self.video_on {
+            self.video_on = false;
+            self.frame = None;
+            self.clear_media();
+            self.index = None;
+            self.now = Now::default();
+        }
+        self.notice = Some(format!("Video cannot be shown inside this window ({why}). Videos open in their own window instead."));
+        self.start_queue();
+    }
+
+    fn set_fullscreen(&mut self, on: bool) -> Task<Message> {
+        let on = on && self.video_on;
+        if self.fullscreen == on {
+            return Task::none();
+        }
+        self.fullscreen = on;
+        self.last_activity = std::time::Instant::now();
+        match self.core.main_window_id() {
+            Some(id) => cosmic::iced::window::set_mode(id, if on { cosmic::iced::window::Mode::Fullscreen } else { cosmic::iced::window::Mode::Windowed }),
+            None => Task::none(),
+        }
+    }
+
     fn do_action(&mut self, a: Action) -> Task<Message> {
-        let eng = self.engine.clone();
+        let eng = self.active();
         let send = |f: &dyn Fn(&engine::Engine)| {
             if let Some(e) = &eng {
                 f(e)
@@ -643,6 +818,9 @@ impl App {
                 self.index = None;
                 self.station = None;
                 self.now = Now::default();
+                self.frame = None;
+                self.clear_media();
+                return self.set_fullscreen(false);
             }
             Action::Next => {
                 self.fail_streak = 0;
@@ -689,7 +867,12 @@ impl App {
                 self.queue.clear();
                 self.index = None;
             }
-            Action::Fullscreen => send(&|e| e.toggle("fullscreen")),
+            Action::Fullscreen => {
+                if self.video_on {
+                    return self.set_fullscreen(!self.fullscreen);
+                }
+                send(&|e| e.toggle("fullscreen"))
+            }
             Action::About => self.about = !self.about,
         }
         Task::none()
@@ -702,7 +885,7 @@ impl App {
 
     fn set_volume(&mut self, v: f64) {
         self.volume = v;
-        if let Some(e) = &self.engine {
+        for e in [&self.engine, &self.video].into_iter().flatten() {
             e.set("volume", json!(v));
         }
     }
@@ -791,6 +974,7 @@ impl App {
             Job::Stations => Ask::ImportStations,
             Job::SavePlaylist => Ask::ExportPlaylist,
             Job::SaveStations => Ask::ExportStations,
+            Job::Subtitles => Ask::Subtitles,
         };
         match r {
             Ok(Some(path)) => self.apply_ask(kind, path),
@@ -803,6 +987,47 @@ impl App {
         }
     }
 
+    /// mpv keeps delays and subtitle size from one file to the next; each new file starts from the defaults.
+    fn clear_media(&mut self) {
+        self.media_tracks.clear();
+        self.chapters.clear();
+        self.chapter = -1;
+        self.loop_a = false;
+        self.loop_b = false;
+        self.bar_menu = None;
+    }
+
+    fn reset_tune(&mut self) {
+        if let Some(e) = self.video.clone() {
+            if self.aspect != 0 {
+                e.set("video-aspect-override", json!(video::ASPECTS[0].1));
+            }
+            if self.encoding != 0 {
+                e.set("sub-codepage", json!(video::ENCODINGS[0].1));
+            }
+            if self.rotation != 0 {
+                e.set("video-rotate", json!(0));
+            }
+        }
+        self.aspect = 0;
+        self.encoding = 0;
+        self.rotation = 0;
+        if self.sub_color != 0 {
+            self.sub_color = 0;
+            if let Some(e) = &self.video {
+                e.set("sub-color", json!(video::SUB_COLORS[0].1));
+            }
+        }
+        for (i, t) in TUNES.iter().enumerate() {
+            if self.tune[i] != t.default_value() {
+                self.tune[i] = t.default_value();
+                if let Some(e) = &self.video {
+                    e.set(t.property(), json!(t.default_value()));
+                }
+            }
+        }
+    }
+
     fn apply_ask(&mut self, kind: Ask, value: String) {
         if value.is_empty() {
             return;
@@ -810,6 +1035,11 @@ impl App {
         let path = expand_tilde(&open_target(&value));
         match kind {
             Ask::LibraryFolder => self.add_library_folder(&path.to_string_lossy()),
+            Ask::Subtitles => match (&self.video, path.is_file()) {
+                (Some(e), true) => e.command(vec![json!("sub-add"), json!(path.to_string_lossy()), json!("select")]),
+                (_, false) => self.notice = Some("That subtitle file was not found.".into()),
+                _ => {}
+            },
             Ask::Open => {
                 if library::valid_stream_url(&value) {
                     self.station = None;
@@ -1201,6 +1431,7 @@ impl App {
         col = col.push(text::heading("Titles and pictures"));
         col = col.push(widget::toggler(self.settings.use_tags).label("Read titles, artists and albums from the files".to_string()).on_toggle(|_| Message::Toggle(Switch::UseTags)));
         col = col.push(widget::toggler(self.settings.show_covers).label("Show album pictures".to_string()).on_toggle(|_| Message::Toggle(Switch::ShowCovers)));
+        col = col.push(widget::toggler(self.settings.gpu_video).label("Use the graphics card to play video".to_string()).on_toggle(|_| Message::Toggle(Switch::GpuVideo)));
         col = col.push(text::heading("Sound output"));
         if self.devices.is_empty() {
             col = col.push(text::caption("No sound outputs found"));
@@ -1226,6 +1457,136 @@ impl App {
         container(lapin_ux_ui::a11y::group("Output device", scrollable(col))).width(Length::Fixed(260.0)).height(Length::Fill).padding(8).into()
     }
 
+    /// The picture, with the control bar laid over it. The bar is drawn over the
+    /// picture (not beside it), so hiding it never changes the picture's size.
+    fn video_page(&self) -> Element<'_, Message> {
+        let size = self.video_size.clone();
+        let frame = self.frame.clone();
+        let show_bar = video::bar_visible(self.now.paused, self.last_activity.elapsed());
+        let paused = self.now.paused;
+        let bar = self.transport();
+        let fullscreen = self.fullscreen;
+        let of_kind = |k: engine::TrackKind| self.media_tracks.iter().filter(move |t| t.kind == k).collect::<Vec<_>>();
+        let audio = of_kind(engine::TrackKind::Audio);
+        let subs = of_kind(engine::TrackKind::Subtitle);
+        let videos = of_kind(engine::TrackKind::Video);
+        let picture = cosmic::widget::responsive(move |sz| {
+            size.store(video::pack_size(sz.width as u32, sz.height as u32), std::sync::atomic::Ordering::Relaxed);
+            let inner: Element<'_, Message> = match &frame {
+                Some(h) => widget::image(h.clone()).width(Length::Fill).height(Length::Fill).content_fit(cosmic::iced::ContentFit::Contain).into(),
+                None => container(text::body("Opening video")).center(Length::Fill).into(),
+            };
+            container(inner).width(Length::Fill).height(Length::Fill).class(theme::Container::custom(|_| cosmic::iced::widget::container::Style { background: Some(cosmic::iced::Color::BLACK.into()), ..Default::default() })).into()
+        });
+        let area = cosmic::widget::mouse_area(picture).on_move(|_| Message::Activity).on_double_click(Message::ToggleFullscreen);
+        let mut layers = cosmic::iced::widget::stack![area];
+        if show_bar || paused {
+            let exit = button::icon(icon::from_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" })).name(if fullscreen { "Leave full screen" } else { "Full screen" }).on_press(Message::ToggleFullscreen);
+            let mut buttons = row::with_capacity(8).align_y(Alignment::Center);
+            let loop_icon = if self.loop_a || self.loop_b { "media-playlist-repeat-symbolic" } else { "media-playlist-repeat-song-symbolic" };
+            if self.chapters.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("view-list-symbolic")).name("Chapters").on_press(Message::Bar(BarMenu::Chapters)));
+            }
+            if videos.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("video-x-generic-symbolic")).name("Video tracks").on_press(Message::Bar(BarMenu::Video)));
+            }
+            if audio.len() > 1 {
+                buttons = buttons.push(button::icon(icon::from_name("audio-x-generic-symbolic")).name("Audio tracks").on_press(Message::Bar(BarMenu::Audio)));
+            }
+            if !subs.is_empty() {
+                buttons = buttons.push(button::icon(icon::from_name("media-view-subtitles-symbolic")).name("Subtitles").on_press(Message::Bar(BarMenu::Subtitles)));
+            }
+            buttons = buttons
+                .push(button::icon(icon::from_name(loop_icon)).name(video::loop_label(self.loop_a, self.loop_b)).on_press(Message::AbLoop))
+                .push(button::text(video::speed_label(self.speed)).on_press(Message::Bar(BarMenu::Speed)))
+                .push(button::icon(icon::from_name("preferences-system-symbolic")).name("Adjust subtitles and sound delay").on_press(Message::Bar(BarMenu::Adjust)));
+            let mut overlay = column::with_capacity(3).push(widget::space::vertical());
+            let item = |label: String, selected: bool, msg: Message| button::custom(text::body(label)).width(Length::Fill).padding([6, 12]).class(lapin_ux_ui::nav_item(selected)).on_press(msg);
+            match self.bar_menu {
+                Some(BarMenu::Adjust) => {
+                    let mut menu = column::with_capacity(12).spacing(4).push(text::heading("Adjust"));
+                    menu = menu.push(button::standard("Add subtitle file...").width(Length::Fill).on_press(Message::Do(Action::Pick(pick::Job::Subtitles))));
+                    for (i, t) in TUNES.iter().enumerate() {
+                        let (name, minus, plus) = match t {
+                            video::Tune::SubDelay => ("Subtitle delay", "earlier", "later"),
+                            video::Tune::AudioDelay => ("Sound delay", "earlier", "later"),
+                            video::Tune::SubScale => ("Subtitle size", "smaller", "larger"),
+                            video::Tune::SubPos => ("Subtitle position", "higher", "lower"),
+                        };
+                        // position 100 is the bottom, so "lower" is the plus button
+                        let (minus_dir, plus_dir) = (-1, 1);
+                        menu = menu.push(
+                            row::with_capacity(5)
+                                .spacing(4)
+                                .align_y(Alignment::Center)
+                                .push(text::body(name).width(Length::Fill))
+                                .push(button::icon(icon::from_name("list-remove-symbolic")).name(format!("{name} {minus}")).on_press(Message::Tune(*t, minus_dir)))
+                                .push(button::text(t.label(self.tune[i])).on_press(Message::Tune(*t, 0)))
+                                .push(button::icon(icon::from_name("list-add-symbolic")).name(format!("{name} {plus}")).on_press(Message::Tune(*t, plus_dir))),
+                        );
+                    }
+                    let mut colors = row::with_capacity(5).spacing(4).align_y(Alignment::Center).push(text::body("Subtitle colour").width(Length::Fill));
+                    for (n, (name, _)) in video::SUB_COLORS.iter().enumerate() {
+                        colors = colors.push(button::custom(text::body(*name)).padding([4, 8]).class(lapin_ux_ui::nav_item(self.sub_color == n)).on_press(Message::SubColor(n)));
+                    }
+                    menu = menu.push(colors);
+                    let cycle = |label: &str, value: String, msg: Message| {
+                        row::with_capacity(2).spacing(4).align_y(Alignment::Center).push(text::body(label.to_string()).width(Length::Fill)).push(button::text(value).on_press(msg))
+                    };
+                    menu = menu
+                        .push(cycle("Picture shape", video::ASPECTS[self.aspect].0.to_string(), Message::CycleAspect))
+                        .push(cycle("Rotate", format!("{} degrees", self.rotation), Message::Rotate))
+                        .push(cycle("Subtitle text", video::ENCODINGS[self.encoding].0.to_string(), Message::CycleEncoding))
+                        .push(
+                            row::with_capacity(3)
+                                .spacing(4)
+                                .align_y(Alignment::Center)
+                                .push(text::body("Frame by frame").width(Length::Fill))
+                                .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back one frame").on_press(Message::FrameStep(false)))
+                                .push(button::icon(icon::from_name("go-next-symbolic")).name("Forward one frame").on_press(Message::FrameStep(true))),
+                        );
+                    menu = menu.push(text::caption("Press a value to reset it."));
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(460.0)).class(theme::Container::Background).into()));
+                }
+                Some(BarMenu::Speed) => {
+                    let mut menu = column::with_capacity(video::SPEEDS.len() + 1).spacing(2).push(text::heading("Speed"));
+                    for s in video::SPEEDS {
+                        menu = menu.push(item(video::speed_label(s), (self.speed - s).abs() < 0.001, Message::SetSpeed(s)));
+                    }
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(200.0)).class(theme::Container::Background).into()));
+                }
+                Some(BarMenu::Chapters) => {
+                    let mut menu = column::with_capacity(self.chapters.len() + 1).spacing(2).push(text::heading("Chapters"));
+                    let mut list = column::with_capacity(self.chapters.len()).spacing(2);
+                    for (n, (title, at)) in self.chapters.iter().enumerate() {
+                        list = list.push(item(video::chapter_label(title, *at, n + 1), self.chapter == n as i64, Message::PickChapter(n as i64)));
+                    }
+                    menu = menu.push(scrollable(list).height(Length::Fixed(240.0)));
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(320.0)).class(theme::Container::Background).into()));
+                }
+                Some(kind @ (BarMenu::Audio | BarMenu::Subtitles | BarMenu::Video)) => {
+                    let (tk, title, list) = match kind {
+                        BarMenu::Audio => (engine::TrackKind::Audio, "Audio tracks", &audio),
+                        BarMenu::Video => (engine::TrackKind::Video, "Video tracks", &videos),
+                        _ => (engine::TrackKind::Subtitle, "Subtitles", &subs),
+                    };
+                    let mut menu = column::with_capacity(list.len() + 2).spacing(2).push(text::heading(title));
+                    if tk == engine::TrackKind::Subtitle {
+                        menu = menu.push(item("Off".to_string(), !subs.iter().any(|t| t.selected), Message::PickTrack(tk, None)));
+                    }
+                    for (n, t) in list.iter().enumerate() {
+                        menu = menu.push(item(video::track_label(t, n + 1), t.selected, Message::PickTrack(tk, Some(t.id))));
+                    }
+                    overlay = overlay.push(float_right(container(menu).padding(8).width(Length::Fixed(280.0)).class(theme::Container::Background).into()));
+                }
+                None => {}
+            }
+            overlay = overlay.push(container(row::with_capacity(3).push(container(bar).width(Length::Fill)).push(buttons).push(exit).align_y(Alignment::Center)).class(theme::Container::Background));
+            layers = layers.push(lapin_ux_ui::a11y::group("Video controls", overlay));
+        }
+        layers.width(Length::Fill).height(Length::Fill).into()
+    }
+
     fn queue_panel(&self) -> Element<'_, Message> {
         let mut col = column::with_capacity(self.queue.len() + 1).spacing(2).push(text::heading("Queue"));
         if self.queue.is_empty() {
@@ -1243,7 +1604,7 @@ impl App {
 impl App {
     /// What the desktop's media controls should show.
     fn mpris_state(&self) -> mpris::State {
-        let has_media = self.engine.is_some() && self.index.is_some();
+        let has_media = self.active().is_some() && self.index.is_some();
         mpris::State {
             has_media,
             playing: has_media && !self.now.paused,
@@ -1274,12 +1635,12 @@ impl App {
             Cmd::Prev => return self.do_action(Action::Prev),
             Cmd::Stop => return self.do_action(Action::Stop),
             Cmd::SeekBy(d) => {
-                if let Some(e) = &self.engine {
+                if let Some(e) = self.active() {
                     e.seek_by(d);
                 }
             }
             Cmd::SeekTo(t) => {
-                if let Some(e) = &self.engine {
+                if let Some(e) = self.active() {
                     e.seek_to(t);
                     self.now.pos = t;
                 }
@@ -1297,7 +1658,94 @@ impl App {
 impl App {
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Engine(e) => self.engine_event(e),
+            Message::Engine(e) => {
+                // while a video plays the music engine only reports itself and the outputs
+                use engine::Event as E;
+                if !self.video_on || matches!(e, E::Ready(_) | E::Failed(_) | E::Devices(_) | E::Device(_)) {
+                    self.engine_event(e);
+                }
+            }
+            Message::Video(out) => self.video_out(out),
+            Message::Activity => self.last_activity = std::time::Instant::now(),
+            Message::Tick => {}
+            Message::ToggleFullscreen => return self.set_fullscreen(!self.fullscreen),
+            Message::LeaveFullscreen => return self.set_fullscreen(false),
+            Message::Bar(m) => {
+                self.bar_menu = if self.bar_menu == Some(m) { None } else { Some(m) };
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::Tune(t, dir) => {
+                if let (Some(i), Some(e)) = (TUNES.iter().position(|x| *x == t), &self.video) {
+                    self.tune[i] = t.step(self.tune[i], dir);
+                    e.set(t.property(), json!(self.tune[i]));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::PickTrack(kind, id) => {
+                self.bar_menu = None;
+                if let Some(e) = &self.video {
+                    let prop = match kind {
+                        engine::TrackKind::Audio => "aid",
+                        engine::TrackKind::Subtitle => "sid",
+                        engine::TrackKind::Video => "vid",
+                    };
+                    e.set(prop, match id { Some(i) => json!(i), None => json!("no") });
+                }
+            }
+            Message::PickChapter(c) => {
+                self.bar_menu = None;
+                if let Some(e) = &self.video {
+                    e.set("chapter", json!(c));
+                }
+            }
+            Message::SetSpeed(v) => {
+                self.bar_menu = None;
+                if let Some(e) = &self.video {
+                    e.set("speed", json!(v));
+                }
+            }
+            Message::AbLoop => {
+                if let Some(e) = &self.video {
+                    e.command(vec![json!("ab-loop")]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::CycleAspect => {
+                self.aspect = video::next_index(self.aspect, video::ASPECTS.len());
+                if let Some(e) = &self.video {
+                    e.set("video-aspect-override", json!(video::ASPECTS[self.aspect].1));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::CycleEncoding => {
+                self.encoding = video::next_index(self.encoding, video::ENCODINGS.len());
+                if let Some(e) = &self.video {
+                    e.set("sub-codepage", json!(video::ENCODINGS[self.encoding].1));
+                    // the new encoding only applies to files read afterwards
+                    e.command(vec![json!("sub-reload")]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::Rotate => {
+                self.rotation = video::rotate_next(self.rotation);
+                if let Some(e) = &self.video {
+                    e.set("video-rotate", json!(self.rotation));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::FrameStep(forward) => {
+                if let Some(e) = &self.video {
+                    e.command(vec![json!(if forward { "frame-step" } else { "frame-back-step" })]);
+                }
+                self.last_activity = std::time::Instant::now();
+            }
+            Message::SubColor(n) => {
+                if let (Some((_, value)), Some(e)) = (video::SUB_COLORS.get(n), &self.video) {
+                    self.sub_color = n;
+                    e.set("sub-color", json!(value));
+                }
+                self.last_activity = std::time::Instant::now();
+            }
             Message::Mpris(c) => return self.mpris_cmd(c),
             Message::Menu(m) => self.menu = if self.menu == Some(m) { None } else { Some(m) },
             Message::Do(a) => {
@@ -1333,7 +1781,7 @@ impl App {
             }
             Message::SeekDrag(v) => self.drag = Some(v),
             Message::SeekRelease => {
-                if let (Some(v), Some(e)) = (self.drag.take(), &self.engine) {
+                if let (Some(v), Some(e)) = (self.drag.take(), self.active()) {
                     e.seek_to(f64::from(v) * self.now.dur);
                     self.now.pos = f64::from(v) * self.now.dur;
                 }
@@ -1362,8 +1810,25 @@ impl App {
                     self.covers = found.into_iter().map(|(dir, png)| (dir, widget::image::Handle::from_path(png))).collect();
                 }
             }
+            Message::Toggle(Switch::GpuVideo) => {
+                self.settings.gpu_video = !self.settings.gpu_video;
+                self.save_settings();
+                // the video engine restarts with the new choice, so stop what it was playing
+                self.video = None;
+                self.video_failed = false;
+                if self.video_on {
+                    self.video_on = false;
+                    self.frame = None;
+                    self.clear_media();
+                    self.index = None;
+                    self.now = Now::default();
+                    self.notice = Some("Video stopped to apply the graphics card setting.".to_string());
+                    return self.set_fullscreen(false);
+                }
+            }
             Message::Toggle(sw) => {
                 match sw {
+                    Switch::GpuVideo => {}
                     Switch::UseTags => self.settings.use_tags = !self.settings.use_tags,
                     Switch::ShowCovers => self.settings.show_covers = !self.settings.show_covers,
                 }
@@ -1440,7 +1905,7 @@ impl App {
                 }
             }
             Message::SetDevice(name) => {
-                if let Some(e) = &self.engine {
+                for e in [&self.engine, &self.video].into_iter().flatten() {
                     e.set("audio-device", json!(name));
                 }
                 if let Some(dir) = device_path().parent() {
@@ -1459,8 +1924,12 @@ impl App {
                 }
             }
             Message::Shutdown => {
-                if let Some(e) = &self.engine {
+                let mut any = false;
+                for e in [&self.engine, &self.video].into_iter().flatten() {
                     e.command(vec![json!("quit")]);
+                    any = true;
+                }
+                if any {
                     std::thread::sleep(std::time::Duration::from_millis(150));
                 }
             }
@@ -1531,6 +2000,26 @@ impl cosmic::Application for App {
             settings: settings::Settings::load(),
             covers: std::collections::HashMap::new(),
             scan_id: 0,
+            video: None,
+            video_failed: false,
+            video_on: false,
+            begun: false,
+            frame: None,
+            video_size: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(video::pack_size(0, 0))),
+            last_activity: std::time::Instant::now(),
+            fullscreen: false,
+            media_tracks: Vec::new(),
+            bar_menu: None,
+            chapters: Vec::new(),
+            chapter: -1,
+            loop_a: false,
+            loop_b: false,
+            speed: 1.0,
+            sub_color: 0,
+            aspect: 0,
+            encoding: 0,
+            rotation: 0,
+            tune: TUNES.map(video::Tune::default_value),
         };
         match library::load_stations() {
             Ok(list) => app.stations = list,
@@ -1552,7 +2041,16 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([engine::subscription().map(Message::Engine), mpris::subscription().map(Message::Mpris)])
+        let mut subs = vec![
+            engine::subscription().map(Message::Engine),
+            mpris::subscription().map(Message::Mpris),
+            video::subscription(self.settings.gpu_video, self.video_size.clone()).map(Message::Video),
+        ];
+        if self.video_on {
+            subs.push(cosmic::iced::event::listen_with(key_message));
+            subs.push(cosmic::iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Tick));
+        }
+        Subscription::batch(subs)
     }
 
     fn on_app_exit(&mut self) -> Option<Message> {
@@ -1566,6 +2064,9 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        if self.fullscreen && self.video_on {
+            return container(lapin_ux_ui::a11y::group("Video", self.video_page())).width(Length::Fill).height(Length::Fill).into();
+        }
         if self.mini {
             let back = button::standard("Full player").on_press(Message::Do(Action::ToggleMini));
             let mut page = column::with_capacity(3).push(self.transport());
@@ -1581,12 +2082,21 @@ impl cosmic::Application for App {
             Section::Songs => self.track_rows(self.visible_tracks(Kind::Audio)),
             Section::Favourites => self.track_rows(self.tracks.iter().filter(|t| self.favourites.contains(&t.path.to_string_lossy().into_owned()) && library::matches(t, &self.search)).collect()),
             Section::Videos => {
-                let list = self.track_rows(self.visible_tracks(Kind::Video));
-                // while a video plays, its playlist sits beside the list (the picture is in mpv's own window)
-                if self.inline_queue() {
-                    row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
+                if self.video_on {
+                    // the picture, with the playlist beside it
+                    let mut r = row::with_capacity(2).push(container(self.video_page()).width(Length::Fill).height(Length::Fill));
+                    if self.inline_queue() {
+                        r = r.push(self.queue_panel());
+                    }
+                    r.into()
                 } else {
-                    list
+                    let list = self.track_rows(self.visible_tracks(Kind::Video));
+                    // without the in-window player the picture is in mpv's own window
+                    if self.inline_queue() {
+                        row::with_capacity(2).push(container(list).width(Length::Fill)).push(self.queue_panel()).into()
+                    } else {
+                        list
+                    }
                 }
             }
             Section::Radio => self.radio(),
@@ -1618,6 +2128,40 @@ impl cosmic::Application for App {
         }
         page = page.push(widget::divider::horizontal::default()).push(main);
         container(lapin_ux_ui::a11y::group("Media Player", page)).class(theme::Container::Background).width(Length::Fill).height(Length::Fill).into()
+    }
+}
+
+/// What a key or the mouse means while a video is shown. Other keys count as
+/// activity, so the control bar comes back.
+fn key_message(event: cosmic::iced::Event, status: cosmic::iced::event::Status, _id: cosmic::iced::window::Id) -> Option<Message> {
+    use cosmic::iced::{Event, keyboard, mouse};
+    match event {
+        Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::Activity),
+        Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) if status == cosmic::iced::event::Status::Ignored => Some(key_to_message(&key, modifiers.is_empty())),
+        _ => None,
+    }
+}
+
+fn key_to_message(key: &cosmic::iced::keyboard::Key, plain: bool) -> Message {
+    use cosmic::iced::keyboard::{Key, key::Named};
+    match key {
+        Key::Named(Named::Escape) => Message::LeaveFullscreen,
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Message::ToggleFullscreen,
+        _ => Message::Activity,
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use cosmic::iced::keyboard::{Key, key::Named};
+
+    #[test]
+    fn keys_map_to_fullscreen_and_activity() {
+        assert!(matches!(key_to_message(&Key::Named(Named::Escape), true), Message::LeaveFullscreen));
+        assert!(matches!(key_to_message(&Key::Character("F".into()), true), Message::ToggleFullscreen));
+        assert!(matches!(key_to_message(&Key::Character("f".into()), false), Message::Activity));
+        assert!(matches!(key_to_message(&Key::Named(Named::Enter), true), Message::Activity));
     }
 }
 

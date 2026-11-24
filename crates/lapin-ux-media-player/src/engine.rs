@@ -14,6 +14,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
+/// What a track of the playing file carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackKind {
+    Audio,
+    Subtitle,
+    Video,
+}
+
+/// One audio, subtitle or video track of the file that is playing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Track {
+    pub id: i64,
+    pub kind: TrackKind,
+    pub title: String,
+    pub lang: String,
+    pub selected: bool,
+}
+
 /// What the player tells the window.
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -24,8 +42,13 @@ pub enum Event {
     Duration(f64),
     Volume(f64),
     Mute(bool),
-    #[allow(dead_code)]
     Speed(f64),
+    /// The chapters of the file: title and start time in seconds (video only).
+    Chapters(Vec<(String, f64)>),
+    /// The chapter that is playing, counted from 0; -1 before the first one (video only).
+    Chapter(i64),
+    /// One end of the A-B loop was set or cleared (`false` is A, `true` is B; video only).
+    LoopPoint(bool, bool),
     /// `media-title`, or the stream's own title when it sends one.
     Title(String),
     Artist(String),
@@ -34,6 +57,8 @@ pub enum Event {
     StreamTitle(String),
     /// A picture or video track is playing (mpv opens its own video window).
     HasVideo(bool),
+    /// The audio and subtitle tracks of the file (video engine only).
+    Tracks(Vec<Track>),
     /// The sound outputs mpv can use: (name, description).
     Devices(Vec<(String, String)>),
     /// The output in use (mpv's `audio-device` name).
@@ -59,6 +84,11 @@ pub struct Engine {
 pub const SEEK_ID: u64 = 9001;
 
 impl Engine {
+    /// A handle plus the receiving end, for an engine that is not the mpv process (the embedded video one).
+    pub fn channel() -> (Engine, mpsc::UnboundedReceiver<(Vec<Value>, Option<u64>)>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Engine { tx }, rx)
+    }
     pub fn command(&self, args: Vec<Value>) {
         let _ = self.tx.send((args, None));
     }
@@ -155,7 +185,7 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     }
 }
 
-fn property(name: &str, data: &Value) -> Vec<Event> {
+pub(crate) fn property(name: &str, data: &Value) -> Vec<Event> {
     let num = data.as_f64();
     match name {
         "pause" => data.as_bool().map(Event::Pause).into_iter().collect(),

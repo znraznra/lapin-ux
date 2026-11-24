@@ -15,11 +15,13 @@ pub struct Settings {
     pub use_tags: bool,
     /// Show album pictures.
     pub show_covers: bool,
+    /// Decode video on the graphics card (software decoding when off).
+    pub gpu_video: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { folders: Vec::new(), use_tags: true, show_covers: true }
+        Self { folders: Vec::new(), use_tags: true, show_covers: true, gpu_video: true }
     }
 }
 
@@ -78,13 +80,13 @@ mod tests {
     #[test]
     fn defaults_scan_and_read_tags() {
         let s = Settings::default();
-        assert!(s.use_tags && s.show_covers && s.folders.is_empty());
+        assert!(s.use_tags && s.show_covers && s.gpu_video && s.folders.is_empty());
     }
 
     #[test]
     fn a_partial_file_keeps_the_other_defaults() {
         let s: Settings = serde_json::from_str(r#"{"use_tags":false}"#).unwrap();
-        assert!(!s.use_tags && s.show_covers);
+        assert!(!s.use_tags && s.show_covers && s.gpu_video);
     }
 
     #[test]

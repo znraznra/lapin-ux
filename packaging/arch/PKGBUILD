@@ -283,7 +283,7 @@ package_lapin-ux-desktop-git() {
         'upower'                   # battery
         'wireplumber'              # volume (wpctl)
         'pipewire-audio'           # system sounds (pw-play)
-        'mpv'                      # engine of Lapin Media Player (run as its own process)
+        'mpv'                      # Lapin Media Player: music engine (own process) and libmpv for video in the window
         'pacman-contrib'           # checkupdates and paccache, for Update and Storage
         'wl-clipboard'             # snips go on the clipboard (wl-copy)
         'iio-sensor-proxy'         # auto-rotate on tablets and convertibles
