@@ -639,6 +639,36 @@ bash "$DS" leave
 check "a later leave hands it back and clears the note" "grep -q nautilus.desktop \"$M\" && [ ! -e \"$STATEDIR/lapin-unresolved\" ]"
 # 3d. Kept copies sit in their own folder per item, so two never collide.
 check "kept copies are filed per item" "ls -d \"$STATEDIR\"/kept-copies/*/mimeapps-default >/dev/null 2>&1"
+if [ "$(id -u)" != 0 ]; then
+# 3e. Lapin UX's choice can't be kept at leave: nothing is handed back, and
+# the item is retried (not lost) next time.
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$DS" enter
+printf '[Default Applications]\ninode/directory=lapin-pick.desktop\n' > "$M"
+chmod 500 "$(dirname "$IN")"
+bash "$DS" leave > "$HOME/out3e.txt" 2>&1
+chmod 700 "$(dirname "$IN")"
+check "a failed save at leave: the live file is untouched" "grep -q lapin-pick.desktop \"$M\""
+check "a failed save at leave: the other desktop's copy is kept" "grep -q nautilus.desktop \"$OUT\""
+check "a failed save at leave: it is remembered for next time" "[ -f \"$STATEDIR/lapin-unresolved\" ] || [ -f \"$STATEDIR/lapin-active\" ]"
+bash "$DS" leave > "$HOME/out3e2.txt" 2>&1
+check "a later leave hands it back" "grep -q nautilus.desktop \"$M\" && [ ! -e \"$STATEDIR/lapin-unresolved\" ] && [ ! -e \"$STATEDIR/lapin-active\" ]"
+# 3f. A failed hand-back that can't be written down keeps the journal.
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$DS" enter; bash "$DS" leave
+cp "$IN" "$M"; rm -f "$STATEDIR/lapin-active"
+echo "A mimeapps default" > "$STATEDIR/lapin-entering"
+mkdir "$STATEDIR/lapin-unresolved.new"
+chmod 500 "$HOME/.config"
+bash "$DS" leave > "$HOME/out3f.txt" 2>&1
+chmod 700 "$HOME/.config"
+rmdir "$STATEDIR/lapin-unresolved.new"
+check "an unrecorded failure: the journal stays for the retry" "[ -f \"$STATEDIR/lapin-entering\" ]"
+check "an unrecorded failure: the other desktop's copy is kept" "grep -q nautilus.desktop \"$OUT\""
+bash "$DS" leave > /dev/null 2>&1
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+rm -f "$STATEDIR/lapin-entering" "$STATEDIR/lapin-unresolved"
+fi
 # 4. The journal can't be written: nothing changes at all.
 mkdir "$STATEDIR/lapin-entering"
 bash "$DS" enter > "$HOME/out4.txt" 2>&1

@@ -544,12 +544,26 @@ swap_back() {   # kind name
     if lapin_sets "$1" "$2" && ! has_value "$(item_path "$1" "$2")"; then
         :
     else
-        item_save "$1" "$2" "$(store_path "$INSIDE" "$1" "$2")"
+        # Lapin's choice has to be kept before it is replaced: if it can't be,
+        # nothing is handed back and the caller keeps the item to retry.
+        if ! item_save "$1" "$2" "$(store_path "$INSIDE" "$1" "$2")"; then
+            say "  $(describe "$1" "$2"): could not keep Lapin UX's choice, left as it is"
+            return 1
+        fi
     fi
     if saved "$out"; then
         say "  $(describe "$1" "$2"): back to the other desktops' own"
-        item_apply "$1" "$2" "$out"
+        item_apply "$1" "$2" "$out" || return 1
     fi
+    return 0
+}
+# Remember the items whose hand-back failed ("A kind name" lines). Returns 1
+# when that can't be written down, so the caller keeps its own markers.
+note_unresolved() {   # lines...
+    [ "$DRY" = 1 ] && return 0
+    mkdir -p "$STATE" 2>/dev/null \
+        && printf '%s\n' "$@" > "$UNRESOLVED.new" 2>/dev/null \
+        && mv -f "$UNRESOLVED.new" "$UNRESOLVED" 2>/dev/null
 }
 # An entry that stopped half way (a crash, a power cut, no room for the marker)
 # left $PENDING behind. Each line says what enter meant to do with an item (A:
@@ -558,17 +572,25 @@ swap_back() {   # kind name
 # the other desktops' copy was never swapped (or its swap failed), and one that
 # matches neither (another desktop changed it since, or a swap stopped in the
 # middle) is left exactly as it is, with both copies kept. Returns 1 when there
-# was nothing to recover.
+# was nothing to recover, and 2 when a failed hand-back could not be written
+# down (the caller must not save anything over the other desktops' copies).
+# Items in $UNRESOLVED already failed once: they are retried whatever $SKIPPED
+# says (an entry that stopped early skips them too), and stay recorded until the
+# hand-back works.
 recover_entry() {
     [ -f "$PENDING" ] || [ -f "$UNRESOLVED" ] || return 1
-    local act kind name out in swapped failed=()
-    while read -r act kind name; do
+    local src act kind name out in swapped failed=()
+    while read -r src act kind name; do
         [ -n "$kind" ] || continue
-        [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
+        [ "$src" = P ] && [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
         out=$(store_path "$OUTSIDE" "$kind" "$name")
         in=$(store_path "$INSIDE" "$kind" "$name")
         saved "$out" || continue
         same_as "$kind" "$name" "$out" && continue
+        if [ "$src" = U ]; then
+            swap_back "$kind" "$name" || failed+=("$act $kind $name")
+            continue
+        fi
         swapped=0
         if [ "$act" = D ]; then is_default "$kind" "$name" && swapped=1
         else saved "$in" && same_as "$kind" "$name" "$in" && swapped=1; fi
@@ -580,13 +602,16 @@ recover_entry() {
             say "  $(describe "$kind" "$name"): changed since, left as it is"
             keep_copy "$kind" "$name"
         fi
-    done < <(cat "$PENDING" "$UNRESOLVED" 2>/dev/null)
+    done < <({ sed 's/^/P /' "$PENDING"; sed 's/^/U /' "$UNRESOLVED"; } 2>/dev/null)
     [ "$DRY" = 1 ] && return 0
     if [ "${#failed[@]}" -gt 0 ]; then
         say "  could not hand some settings back; they are tried again next time"
-        if printf '%s\n' "${failed[@]}" > "$UNRESOLVED.new" 2>/dev/null && mv -f "$UNRESOLVED.new" "$UNRESOLVED"; then
+        if note_unresolved "${failed[@]}"; then
             rm -f "$PENDING" "$SKIPPED"
-        fi   # else the journal stays, and so does the retry
+        else   # the journal stays, and so does the retry
+            say "  could not keep track of it; the settings are left as they are"
+            return 2
+        fi
     else
         rm -f "$PENDING" "$SKIPPED" "$UNRESOLVED"
     fi
@@ -596,6 +621,7 @@ enter_session() {
     [ -f "$ACTIVE" ] && return 0    # Lapin's copy is already in place
     local kind name out in first=0 todo=()
     recover_entry
+    [ $? = 2 ] && return 1   # a failed hand-back is not on record: save nothing
     [ -d "$OUTSIDE" ] || first=1
     [ "$DRY" = 1 ] || rm -f "$SKIPPED"
     while read -r kind name; do
@@ -688,7 +714,7 @@ enter_session() {
 }
 
 leave_session() {
-    local kind name out kind_name changed=0
+    local kind name out kind_name changed=0 failed=()
     if [ -f "$ACTIVE" ]; then
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
@@ -696,8 +722,13 @@ leave_session() {
             # No copy of the other desktops' value (not even an empty one for an
             # unset key): it was never swapped, so Lapin's own copy stays.
             ! saved "$out" && continue
-            swap_back "$kind" "$name"
+            swap_back "$kind" "$name" || failed+=("A $kind $name")
         done < <(items)
+        if [ "${#failed[@]}" -gt 0 ] && ! note_unresolved "${failed[@]}"; then
+            # Not on record: keep the session markers so the next leave tries again.
+            say "  could not hand some settings back or keep track of them; they are tried again next time"
+            return 0
+        fi
         run rm -f "$ACTIVE" "$SKIPPED" "$PENDING"
         changed=1
     else
