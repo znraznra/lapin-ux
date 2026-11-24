@@ -27,6 +27,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | The sign-in screen says plainly when the disk is full (#174), so a failed sign-in is no longer a silent mystery. | Retest |
 | Sun 22 Nov | Warning before the disk is full (#174): a notice when a drive is almost full, shown once and not repeated while it stays low, with a switch in the notification settings. | Retest |
 | Sun 22 Nov | Explorer: Home and This PC are per tab, right-click menus on Home and This PC, a tidier Recent list, and a details pane that follows the page (#168, #169, #170, #175). | Retest |
+| Mon 23 Nov | Explorer: Up and the address bar now work on network shares and mapped drives (#210, #211). | Retest |
 | Sun 22 Nov | Safely Remove Hardware tray icon with eject and a busy-drive message (#102). | Retest |
 | Sun 22 Nov | Signing in on a nearly full disk (#174): a log line that could not be written ended the session script, and the crash reporter aborted the program. The session log is now optional, and a full disk no longer stops the session, the shell or the other programs. | Retest |
 | Mon 23 Nov | Choose a Start layout (#198): Current, Classic, Classic with two columns, or a Programs list, in Settings and in the welcome app. | Retest |
