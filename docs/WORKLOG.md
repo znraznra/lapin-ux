@@ -46,7 +46,17 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Mon 23 Nov | Explorer (#216): your own folder is named after your account (your full name, or your user name if none is set) in the sidebar, address bar, tab titles, Open and Save dialogs and This PC. "Home" always means the start page. | Retest |
 | Mon 23 Nov | Desktop on every display (#165): right-click the empty desktop on any display opens the desktop menu there, and files can be dropped on it. Icons stay on the main display, and displays plugged in or out are picked up on the fly. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
+| Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | Retest |
+| Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | Retest |
+| Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | Retest |
+| Mon 23 Nov | Photos slideshow (#203): play and pause in the viewer, More > Slideshow in the gallery. | Retest |
+| Mon 23 Nov | Photos Add folder (#203): Add folder... in the folder drop-down, saved in `folders.json`, Stop looking in this folder. | Retest |
+| Mon 23 Nov | Photos rename album (#203): More > Rename this album. | 1 |
+| Mon 23 Nov | Photos Hidden password (#203): lock screen for Hidden, set, change and remove from More. | 1 |
+| Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. | 1 |
 | Mon 23 Nov | Code scanning (#190): the first Semgrep findings are triaged. Every workflow action is pinned to a commit, and the cursor-pack download can only use https, is checked against a known hash and has size limits, so it can never read a local file or install a changed pack. The uninstall tests now give the same result when run from inside a Lapin session. | Docs |
+| Tue 24 Nov | Photos review fixes (#241): a starred pipe or device is skipped before it is read, the selection follows Favorites and Hidden changes, New album ends a rename, the rename name is checked under the lock, adding a folder clears the selection, and a failed album save shows outside the naming bar. | 1 |
+| Mon 23 Nov | Photos slideshow speed and full screen (#203): speed in More, Full screen button in the viewer. | 1 |
 
 | Mon 23 Nov | Explorer details view (#212): column headings and the Date modified, Type and Size cells stay on one line, end in "…" when the column is narrow, and never overlap the rows. | Retest |
 ## Phase dates
