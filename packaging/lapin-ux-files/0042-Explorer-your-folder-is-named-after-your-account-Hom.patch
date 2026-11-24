@@ -1,0 +1,152 @@
+From c973a841600131476b05270479e1e740a52f2884 Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Tue, 24 Nov 2026 09:27:14 +0800
+Subject: [PATCH] Explorer: your folder is named after your account, Home is
+ the start page (#216)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs    |  6 ++++-
+ src/config.rs | 65 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+ src/dialog.rs |  2 +-
+ src/tab.rs    |  4 +++-
+ 4 files changed, 73 insertions(+), 4 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 0d22ada..fa039d2 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -1064,7 +1064,11 @@ impl App {
+             }
+         }
+         for dir in recent_dirs {
+-            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
++            let name = if dirs::home_dir().as_deref() == Some(dir.as_path()) {
++                crate::config::home_folder_label()
++            } else {
++                dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string())
++            };
+             quick.push(tile(&dir, name, Location::Path(dir.clone()), None));
+         }
+         let quick = widget::flex_row(quick).row_spacing(space_xs).column_spacing(space_xs);
+diff --git a/src/config.rs b/src/config.rs
+index 88c0342..d77eb78 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -110,7 +110,7 @@ impl Favorite {
+     /// Name shown in the sidebar, or `None` if the path has no usable file name
+     pub fn display_name(&self) -> Option<String> {
+         match self {
+-            Self::Home => Some(crate::fl!("home")),
++            Self::Home => Some(home_folder_label()),
+             Self::Named { name, .. } | Self::Network { name, .. } => Some(name.clone()),
+             _ => self
+                 .path_opt()?
+@@ -471,6 +471,14 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn gecos_first_field_is_the_full_name() {
++        assert_eq!(gecos_full_name("Tako Lee,,,"), Some("Tako Lee".to_string()));
++        assert_eq!(gecos_full_name("  Tako  "), Some("Tako".to_string()));
++        assert_eq!(gecos_full_name(",,,"), None);
++        assert_eq!(gecos_full_name(""), None);
++    }
++
+     #[test]
+     fn favorite_display_name() {
+         assert_eq!(
+@@ -499,6 +507,61 @@ pub fn lapin_session() -> bool {
+     })
+ }
+ 
++/// Lapin UX (#216): the first field of a passwd GECOS entry (the account's
++/// full name), or `None` when it is empty.
++fn gecos_full_name(gecos: &str) -> Option<String> {
++    let name = gecos.split(',').next().unwrap_or("").trim();
++    (!name.is_empty()).then(|| name.to_string())
++}
++
++/// Lapin UX (#216): what the signed-in user's own folder is called: the
++/// account's full name, else the user name. Only used in a Lapin session.
++pub fn lapin_user_label() -> Option<String> {
++    static LABEL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
++    LABEL
++        .get_or_init(|| {
++            let mut buf = vec![0u8; 4096];
++            let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
++            let mut result: *mut libc::passwd = std::ptr::null_mut();
++            // SAFETY: `pwd`, `buf` and `result` outlive the call and `buf`'s
++            // length is passed along; the strings are copied out before return.
++            let rc = unsafe {
++                libc::getpwuid_r(
++                    libc::getuid(),
++                    &mut pwd,
++                    buf.as_mut_ptr().cast(),
++                    buf.len(),
++                    &mut result,
++                )
++            };
++            if rc == 0 && !result.is_null() {
++                let cstr = |p: *const libc::c_char| {
++                    (!p.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
++                };
++                if let Some(full) = cstr(pwd.pw_gecos).and_then(|g| gecos_full_name(&g)) {
++                    return Some(full);
++                }
++                if let Some(user) = cstr(pwd.pw_name).filter(|u| !u.is_empty()) {
++                    return Some(user);
++                }
++            }
++            std::env::var("USER").ok().filter(|u| !u.is_empty())
++        })
++        .clone()
++}
++
++/// Lapin UX (#216): the label of the user's own folder. In a Lapin session
++/// "Home" only means the start page, so the folder carries the user's name;
++/// COSMIC's own session keeps "Home".
++pub fn home_folder_label() -> String {
++    if lapin_session() {
++        if let Some(name) = lapin_user_label() {
++            return name;
++        }
++    }
++    crate::fl!("home")
++}
++
+ /// Lapin UX (#173): the app's own name. Lapin's session calls it Explorer;
+ /// COSMIC's own session keeps COSMIC Files.
+ pub fn app_name() -> String {
+diff --git a/src/dialog.rs b/src/dialog.rs
+index 644d20f..c9f3994 100644
+--- a/src/dialog.rs
++++ b/src/dialog.rs
+@@ -1050,7 +1050,7 @@ impl App {
+         if lapin {
+             if let Some(home) = dirs::home_dir() {
+                 nav_model = nav_model.insert(move |b| {
+-                    b.text(fl!("home"))
++                    b.text(crate::config::home_folder_label())
+                         .icon(widget::icon::from_name("user-home-symbolic").size(16))
+                         .data(Location::Path(home.clone()))
+                 });
+diff --git a/src/tab.rs b/src/tab.rs
+index 8c709f8..7e231ed 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -3227,7 +3227,9 @@ fn folder_name<P: AsRef<Path>>(path: P) -> (String, bool) {
+         Some(name) => {
+             if path == crate::home_dir() {
+                 found_home = true;
+-                fl!("home")
++                // Lapin UX (#216): the user's folder is named after the
++                // user; "Home" is the start page. Stock COSMIC keeps "Home".
++                crate::config::home_folder_label()
+             } else {
+                 match (get_filename_from_path(path), fs::metadata(path)) {
+                     (Ok(name), Ok(metadata)) => {
+-- 
+2.56.1
+
