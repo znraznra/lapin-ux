@@ -1066,7 +1066,7 @@ impl App {
     /// The current tab as PDF bytes plus its title, made off the UI thread.
     fn pdf_job(&self) -> (String, String, usize) {
         let t = &self.tabs[self.active];
-        (t.buf.text(), t.name().to_string(), self.settings.tab_width)
+        (t.buf.text(), t.name().to_string(), t.indent.width)
     }
 
     fn save_tab(&self, id: u64, close: bool) -> Task<Message> {
@@ -1751,6 +1751,13 @@ impl cosmic::Application for App {
             app.restore(s);
         }
         for p in flags {
+            // A file the session already restored (with any recovered edits)
+            // is selected, not opened a second time from disk.
+            let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+            if let Some(i) = app.tabs.iter().position(|t| t.path.as_ref().is_some_and(|tp| *tp == p || *tp == canon)) {
+                app.active = i;
+                continue;
+            }
             match read_file(&p, None) {
                 Ok(l) => {
                     let i = app.new_tab(&l.text, Some(l.path.clone()), l.enc, l.eol);
