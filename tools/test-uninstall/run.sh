@@ -527,8 +527,10 @@ check "other desktop: its own default terminal back" "grep -q org.gnome.Terminal
 bash "$DS" enter
 check "Lapin UX: Lapin Terminal is the default there" "grep -q dev.lapinux.Terminal.desktop \"$M\""
 # uninstall runs while the Lapin default is still active, so it has to clean it up itself
-bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
+rc=0; bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1 || rc=$?
+check "uninstall finishes without an error" "[ $rc -eq 0 ]"
 check "after uninstall: no Lapin Terminal default left" "! grep -q dev.lapinux.Terminal \"$M\""
+check "after uninstall: the user's own default terminal is back" "grep -q org.gnome.Terminal.desktop \"$M\""
 }
 if [ -n "${SCEN:-}" ]; then "scen$SCEN"; exit $fail; fi
 for x in A B C D E F G H I J K L M N O P Q R S T V; do
