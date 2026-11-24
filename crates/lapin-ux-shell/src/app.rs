@@ -71,6 +71,9 @@ pub struct StartMenu {
     pub id: window::Id,
     pub query: String,
     pub page: StartPage,
+    /// The layout this menu opened with; a change in Settings applies to the
+    /// next opening, so the open menu, its size and its keyboard list agree.
+    pub layout: config::StartLayout,
     /// Keyboard selection. Home and All apps only highlight once the user
     /// starts using the arrow keys; search results highlight the best match.
     pub selected: Option<usize>,
@@ -593,7 +596,8 @@ impl Shell {
         self.start = Some(StartMenu {
             id,
             query: String::new(),
-            page: StartPage::Home,
+            page: self.config.start_layout.first_page(),
+            layout: self.config.start_layout,
             selected: None,
             recent_files: if self.config.no_recent_items { Vec::new() } else { lapin_ux_core::recent::load(6) },
             folder: None,
@@ -605,6 +609,7 @@ impl Shell {
         let start_edge = self.start_edge();
         let start_margin = self.start_margin(above - 8, if left && !vertical { 12 } else { 0 }, 0);
         let r = style::PANEL_RADIUS as u32;
+        let start_w = self.config.start_layout.width();
         self.anim_start_opened(id);
         Task::batch([
             cosmic::surface::surface_task(app_layer_shell(
@@ -624,11 +629,11 @@ impl Shell {
                     namespace: "lapin-ux-start".into(),
                     // Opens a little close to the bar and slides into place (anim.rs).
                     margin: start_margin,
-                    size: Some((Some(style::START_WIDTH), Some(height))),
+                    size: Some((Some(start_w), Some(height))),
                     exclusive_zone: 0,
                     size_limits: Limits::NONE
-                        .min_width(style::START_WIDTH as f32)
-                        .max_width(style::START_WIDTH as f32)
+                        .min_width(start_w as f32)
+                        .max_width(start_w as f32)
                         .min_height(height as f32)
                         .max_height(height as f32),
                     ..Default::default()
@@ -938,6 +943,9 @@ impl Shell {
             return self.search(&s.query).flat();
         }
         let ids: Vec<String> = match s.page {
+            StartPage::Home if s.layout != config::StartLayout::Current => {
+                return crate::start_layouts::home_items(self, s.layout);
+            }
             StartPage::Home => {
                 if let Some((_, _, apps)) = self.open_folder() {
                     return apps.into_iter().map(StartItem::App).collect();
@@ -1889,8 +1897,8 @@ impl Shell {
             Message::StartNav(nav) => {
                 let len = self.start_items().len();
                 let searching = self.start.as_ref().is_some_and(|s| !s.query.trim().is_empty());
-                let cols = match self.start.as_ref().map(|s| s.page) {
-                    Some(StartPage::Home) if !searching => crate::start_view::PINNED_COLUMNS,
+                let cols = match self.start.as_ref().map(|s| (s.page, s.layout)) {
+                    Some((StartPage::Home, config::StartLayout::Current)) if !searching => crate::start_view::PINNED_COLUMNS,
                     _ => 1,
                 };
                 if let Some(s) = &mut self.start
