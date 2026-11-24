@@ -10,3 +10,4 @@ libcosmic.workspace = true
 lapin-ux-core.workspace = true
 lapin-ux-ui.workspace = true
 tokio.workspace = true
+serde.workspace = true
