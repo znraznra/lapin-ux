@@ -17,6 +17,8 @@ Opening a picture from Files (`lapin-ux-photos %f`) goes straight to the viewer,
 
 The side bar, source, group, grid style and size are remembered in `~/.config/dev.lapinux.Photos/settings.json`. Each one is saved on its own under a lock, so two open windows never write back an older value of a setting the other just changed.
 
+**More actions** (#202): Rename (keeps the picture's place, thumbnail and star, and never replaces another file), Delete (asks first, then moves the picture to the Recycle Bin with `gio trash`, never a permanent delete; the viewer moves to the next photo, or the one before it, or back to the gallery when it was the last) and Open file location.
+
 ## How it works
 
 - The scan walks the four folders in the background, up to 5 levels deep, skipping hidden folders, and stops at 20,000 pictures. Starred pictures outside those folders are added on top of that limit, since they are the person's own choice. An empty section still shows the read-error, stopped-early and could-not-save notes, and says "could not be read" only when a folder really failed. Formats: JPEG, PNG, WebP, BMP, GIF.

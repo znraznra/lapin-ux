@@ -22,7 +22,7 @@ jobs:
       contents: read
       security-events: write
     container:
-      image: semgrep/semgrep:1.97.0
+      image: semgrep/semgrep:1.97.0@sha256:a265d09a9ca712e6624aca09056304ce4314a695b7028d65c041dd53fd44c700
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Scan
