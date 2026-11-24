@@ -42,18 +42,6 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
-
-## Phase dates
-
-| Phase | Started | Finished |
-|---|---|---|
-| 1: Core desktop | 15 Oct | 20 Oct (reviewed) |
-| 2: Settings and multitasking | 18 Oct | 21 Oct (Settings stage 5 approved) |
-| 3: System apps | 19 Oct | In progress: File Explorer and the navigation pane remain |
-| 4: Zero learning curve | 19 Oct | In progress: Store, snip markup editor and accessibility remain |
-| Hardware retest | 22 Oct | In progress: 54 of 58 issues closed on 10 Nov |
-
-Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real-hardware test on 22 October, the work is mostly fixes and retests.
 | Mon 23 Nov | Photos gallery layout (#203): toolbar with Source and Group menus, size slider with a reel step, square or proportional grid, multi-select with favorite and Recycle Bin, Recents. Follows the light or dark theme. | 4 |
 | Mon 23 Nov | Photos Media types and Hidden (#203): Screenshots and Animated GIFs sections, Hide and Unhide for selected photos. | 1 |
 | Mon 23 Nov | Photos Albums (#203): album list in the side bar, Add to album, New album, remove from album, delete album. | 1 |
@@ -67,4 +55,16 @@ Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real
 | Mon 23 Nov | Photos grid memory (#203): thumbnails far from the visible stretch are dropped, the grid restarts when the source folder changes, and a failed turn shows its note until the next try. | 1 |
 | Tue 24 Nov | Photos turn left and right now writes through an exclusively created, owner-only temporary file and syncs the folder after the rename (#203). | 1 |
 | Tue 24 Nov | Photos Hidden lock hardening (#203): unreadable password or hidden list keeps Hidden closed, the password is re-read across windows, hidden photos, favorites and albums are matched by canonical path, and a lock change clears the selection and blocks Hide, Unhide and delete. The password check and write share one lock file, and a hidden picture handed over by Files no longer opens while Hidden is locked. | 1 |
+| Tue 24 Nov | Photos turn left and right, review round (#203): a second turn waits for the first, thumbnails decoded before a turn are dropped, the format is read from the file (not its name), animated PNG is refused, and the Reel shows notices and loads more as you scroll sideways. | 1 |
 
+## Phase dates
+
+| Phase | Started | Finished |
+|---|---|---|
+| 1: Core desktop | 15 Oct | 20 Oct (reviewed) |
+| 2: Settings and multitasking | 18 Oct | 21 Oct (Settings stage 5 approved) |
+| 3: System apps | 19 Oct | In progress: File Explorer and the navigation pane remain |
+| 4: Zero learning curve | 19 Oct | In progress: Store, snip markup editor and accessibility remain |
+| Hardware retest | 22 Oct | In progress: 54 of 58 issues closed on 10 Nov |
+
+Busiest stretch: 18 to 21 October, 92 commits in four days. After the first real-hardware test on 22 October, the work is mostly fixes and retests.

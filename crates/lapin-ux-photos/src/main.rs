@@ -253,7 +253,7 @@ enum Message {
     Reel(PathBuf),
     Refresh,
     /// A thumbnail with its size, so tiles can keep the picture's proportions.
-    Thumb(PathBuf, Option<(Handle, (u32, u32))>),
+    Thumb(PathBuf, u64, Option<(Handle, (u32, u32))>),
     Open(PathBuf),
     Full(PathBuf, Option<Handle>),
     /// A full-size decode that was skipped because the picture is no longer open.
@@ -288,6 +288,8 @@ struct App {
     core: Core,
     photos: Vec<Photo>,
     scanning: bool,
+    /// Which scan is the current one; an older result is dropped.
+    scan_gen: u64,
     /// What the last scan could not do, shown above the grid.
     notice: Option<String>,
     /// Some folders could not be read (apart from a scan that only stopped early).
@@ -310,6 +312,11 @@ struct App {
     dims: HashMap<PathBuf, (u32, u32)>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
+    /// How many times each picture was turned. A thumbnail decoded before a
+    /// turn carries an older number and is dropped.
+    thumb_rev: HashMap<PathBuf, u64>,
+    /// Pictures with a turn still being written. A second turn waits for it.
+    turning: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
     /// Where each photo was found, to its canonical name (`Photo.key`), so the
     /// saved lists can be matched without touching the disk for every tile.
@@ -336,8 +343,6 @@ struct App {
     hidden_unreadable: bool,
     /// Hidden was unlocked since the person last opened it.
     hidden_open: bool,
-    /// Number of the newest scan asked for; older results are dropped.
-    scan_gen: u64,
     /// Set while the box for a new password is open.
     setting_lock: bool,
     lock_text: String,
@@ -650,6 +655,11 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
         // Saved favorites are canonical names, so a starred symlink such as
         // `a.jpg -> raw-file` arrives as its target. The extension is then no
         // evidence either way: the content decides.
+        // A FIFO or device is never opened for sniffing: that could block the
+        // whole scan.
+        if !std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
         if !is_photo(&path) && !sniffs_as_photo(&path) {
             continue;
         }
@@ -792,15 +802,29 @@ fn rotate_file(path: &Path, clockwise: bool) -> Result<Saved, String> {
     use std::os::unix::fs::OpenOptionsExt;
     let real = path.canonicalize().map_err(|_| "The picture could not be read.".to_string())?;
     let path = real.as_path();
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp") {
-        return Err("This kind of picture cannot be turned.".into());
-    }
+    // The format comes from the file's content, not its name, so a link
+    // without an extension or a ".jpe" file is turned the way it is stored.
+    let head = {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| f.take(64 * 1024).read_to_end(&mut buf))
+            .map_err(|_| "The picture could not be read.".to_string())?;
+        buf
+    };
+    let ext = match image::guess_format(&head) {
+        Ok(image::ImageFormat::Jpeg) => "jpg",
+        Ok(image::ImageFormat::WebP) => "webp",
+        Ok(image::ImageFormat::Bmp) => "bmp",
+        // An animated PNG would lose every frame but the first.
+        Ok(image::ImageFormat::Png) if !head.windows(4).any(|w| w == b"acTL") => "png",
+        _ => return Err("This kind of picture cannot be turned.".into()),
+    };
     let (img, exif) = decode_keeping_exif(path).ok_or("The picture could not be read.")?;
     let turned = if clockwise { img.rotate90() } else { img.rotate270() };
     let (tmp, file) =
         create_temp_beside(path).ok_or("The picture could not be saved. Is the folder read-only?")?;
-    let result = save_with_exif(&turned, &file, &ext, exif).map_err(|e| e.to_string()).and_then(|()| {
+    let result = save_with_exif(&turned, &file, ext, exif).map_err(|e| e.to_string()).and_then(|()| {
         if let Ok(meta) = std::fs::metadata(path) {
             file.set_permissions(meta.permissions()).map_err(|e| e.to_string())?;
         }
@@ -1217,12 +1241,13 @@ impl App {
         if todo.is_empty() {
             return Task::none();
         }
+        let todo: Vec<(PathBuf, u64)> = todo.into_iter().map(|p| { let r = self.thumb_rev.get(&p).copied().unwrap_or(0); (p, r) }).collect();
         Task::stream(
             futures::stream::iter(todo)
-                .map(|p| async move {
+                .map(|(p, rev)| async move {
                     let key = p.clone();
                     let h = tokio::task::spawn_blocking(move || load_thumb(p)).await.ok().flatten();
-                    cosmic::Action::App(Message::Thumb(key, h))
+                    cosmic::Action::App(Message::Thumb(key, rev, h))
                 })
                 .buffer_unordered(4),
         )
@@ -1370,6 +1395,7 @@ impl App {
                 self.hidden_unreadable = true;
             }
         }
+        self.reconcile_selection();
     }
 
     /// The canonical name of the photo found at `path`.
@@ -1379,6 +1405,19 @@ impl App {
 
     fn is_favorite(&self, path: &Path) -> bool {
         self.favorites.contains(&self.key_of(path))
+    }
+
+    /// Drops selected photos the list no longer shows (hidden, removed or
+    /// locked since they were picked), so nothing off-screen is acted on.
+    fn reconcile_selection(&mut self) {
+        let before = self.selected.len();
+        let shown: HashSet<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+        self.selected.retain(|p| shown.contains(p));
+        if self.selected.is_empty() {
+            self.clear_selection();
+        } else if self.selected.len() != before {
+            self.confirm_delete = false;
+        }
     }
 
     fn clear_selection(&mut self) {
@@ -1473,6 +1512,7 @@ impl cosmic::Application for App {
             core,
             photos: Vec::new(),
             scanning: true,
+            scan_gen: 0,
             notice: None,
             read_errors: false,
             favorites_unsaved: false,
@@ -1489,6 +1529,8 @@ impl cosmic::Application for App {
             thumbs: HashMap::new(),
             dims: HashMap::new(),
             asked: HashSet::new(),
+            thumb_rev: HashMap::new(),
+            turning: HashSet::new(),
             favorites: load_favorites(),
             keys: HashMap::new(),
             hidden: hidden_set.unwrap_or_default(),
@@ -1499,7 +1541,6 @@ impl cosmic::Application for App {
             renaming: None,
             lock: saved_lock.as_ref().ok().cloned().flatten(),
             lock_unreadable: saved_lock.is_err(),
-            scan_gen: 0,
             hidden_open: false,
             setting_lock: false,
             lock_text: String::new(),
@@ -1928,16 +1969,21 @@ impl cosmic::Application for App {
                         self.renaming = None;
                         return Task::none();
                     }
-                    if self.albums.contains_key(&name) {
-                        self.notice = Some("An album with this name already exists.".to_string());
-                        return Task::none();
-                    }
                     let to = name.clone();
+                    let mut taken = false;
                     match edit_albums(|a| {
-                        if let Some(list) = a.remove(&old) {
-                            a.insert(to, list);
+                        // Checked against the list read under the lock, so an
+                        // album another window just made is never overwritten.
+                        if a.contains_key(&to) {
+                            taken = true;
+                        } else if let Some(list) = a.remove(&old) {
+                            a.insert(to.clone(), list);
                         }
                     }) {
+                        Ok(saved) if taken => {
+                            self.albums = saved;
+                            self.notice = Some("An album with this name already exists.".to_string());
+                        }
                         Ok(saved) => {
                             self.albums = saved;
                             self.albums_unsaved = false;
@@ -2010,13 +2056,16 @@ impl cosmic::Application for App {
                         self.extra = saved;
                         self.source = None;
                         self.source_extra = Some(dir);
+                        self.clear_selection();
+                        self.tile_limit = MAX_TILES;
+                        self.grid_bucket = usize::MAX;
                         self.notice = None;
                         self.scanning = true;
                         return self.scan_task();
                     }
                     Err(e) => {
                         tracing::warn!("could not save folders: {e}");
-                        self.notice = Some("The folder could not be saved, so Photos will forget it when it closes.".to_string());
+                        self.notice = Some("The folder could not be added. Check that Photos may save its settings.".to_string());
                     }
                 }
             }
@@ -2128,8 +2177,10 @@ impl cosmic::Application for App {
                 self.scanning = true;
                 return self.scan_task();
             }
-            Message::Thumb(path, loaded) => {
-                if let Some((h, dims)) = loaded {
+            Message::Thumb(path, rev, loaded) => {
+                if rev != self.thumb_rev.get(&path).copied().unwrap_or(0) {
+                    // Decoded before the picture was turned: not what is on disk now.
+                } else if let Some((h, dims)) = loaded {
                     self.dims.insert(path.clone(), dims);
                     self.thumbs.insert(path, h);
                 }
@@ -2186,6 +2237,11 @@ impl cosmic::Application for App {
                     self.slideshow = false;
                 } else {
                     let list = self.viewer_list();
+                    // A picture opened from outside the folders is not in the list:
+                    // there is nothing to step through, so play does nothing.
+                    if self.viewing.as_ref().is_some_and(|v| !list.iter().any(|p| &p.path == v)) {
+                        return Task::none();
+                    }
                     let start = self
                         .viewing
                         .clone()
@@ -2240,6 +2296,11 @@ impl cosmic::Application for App {
                 let Some(path) = self.viewing.clone() else { return Task::none() };
                 self.slideshow = false;
                 self.notice = None;
+                // One turn per picture at a time: a second press while the first
+                // is being written would decode the old file and undo half of it.
+                if !self.turning.insert(path.clone()) {
+                    return Task::none();
+                }
                 return Task::future(async move {
                     let p = path.clone();
                     let done = tokio::task::spawn_blocking(move || rotate_file(&p, clockwise))
@@ -2248,10 +2309,13 @@ impl cosmic::Application for App {
                     cosmic::Action::App(Message::Rotated(path, done))
                 });
             }
-            Message::Rotated(path, done) => match done {
+            Message::Rotated(path, done) => {
+                self.turning.remove(&path);
+                match done {
                 Ok(saved) => {
                     self.notice = if saved.durable { None } else { Some(NOT_DURABLE.into()) };
                     tracing::debug!("turned {}", saved.path.display());
+                    *self.thumb_rev.entry(path.clone()).or_insert(0) += 1;
                     self.asked.remove(&path);
                     self.thumbs.remove(&path);
                     self.dims.remove(&path);
@@ -2261,7 +2325,8 @@ impl cosmic::Application for App {
                     return self.want_section_thumbs();
                 }
                 Err(e) => self.notice = Some(e),
-            },
+                }
+            }
             Message::SlideshowTick => {
                 if !self.slideshow || self.viewing.is_none() {
                     return Task::none();
@@ -2764,11 +2829,17 @@ impl App {
         for photo in shown.iter().take(self.tile_limit) {
             strip = strip.push(self.tile(&photo.path, true));
         }
-        column::with_capacity(2)
-            .spacing(8)
-            .padding([8, 16, 16, 8])
-            .push(big)
-            .push(scrollable::horizontal(strip).width(Length::Fill))
+        let mut col = column::with_capacity(4).spacing(8).padding([8, 16, 16, 8]);
+        if self.favorites_unsaved {
+            col = col.push(text::caption(FAVORITES_UNSAVED));
+        }
+        col = col.push_maybe(self.notice.as_deref().map(text::caption));
+        col.push(big)
+            .push(
+                scrollable::horizontal(strip)
+                    .width(Length::Fill)
+                    .on_scroll(|v| Message::GridScrolled(v.relative_offset().x)),
+            )
             .into()
     }
 
@@ -2866,12 +2937,12 @@ impl App {
             .push(
                 button::icon(icon::from_name("object-rotate-left-symbolic"))
                     .name("Turn left")
-                    .on_press(Message::Rotate(false)),
+                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(false))),
             )
             .push(
                 button::icon(icon::from_name("object-rotate-right-symbolic"))
                     .name("Turn right")
-                    .on_press(Message::Rotate(true)),
+                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(true))),
             )
             .push(
                 button::icon(icon::from_name(if self.fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" }))
