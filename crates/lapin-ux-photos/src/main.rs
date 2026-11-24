@@ -186,7 +186,7 @@ struct Photo {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Scanned(Scan),
+    Scanned(u64, Scan),
     Section(Section),
     Source(Option<Folder>),
     ToggleSidebar,
@@ -275,6 +275,10 @@ struct App {
     core: Core,
     photos: Vec<Photo>,
     scanning: bool,
+    /// Counts the scans started; a result from an older one is ignored.
+    scan_gen: u64,
+    /// Photos moved to the Recycle Bin here, dropped from a scan that was already running.
+    trashed: HashSet<PathBuf>,
     /// What the last scan could not do, shown above the grid.
     notice: Option<String>,
     /// Some folders could not be read (apart from a scan that only stopped early).
@@ -1005,12 +1009,14 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scan_gen += 1;
+        let generation = self.scan_gen;
         let starred = self.favorites.clone();
         let extra = self.extra.clone();
         Task::future(async move {
             let found = tokio::task::spawn_blocking(move || scan(starred, extra)).await.unwrap_or_default();
-            cosmic::Action::App(Message::Scanned(found))
+            cosmic::Action::App(Message::Scanned(generation, found))
         })
     }
 
@@ -1220,6 +1226,8 @@ impl cosmic::Application for App {
             core,
             photos: Vec::new(),
             scanning: true,
+            scan_gen: 0,
+            trashed: HashSet::new(),
             notice: None,
             read_errors: false,
             favorites_unsaved: false,
@@ -1308,7 +1316,10 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Scanned(found) => {
+            Message::Scanned(generation, _) if generation != self.scan_gen => {}
+            Message::Scanned(_, mut found) => {
+                let gone = std::mem::take(&mut self.trashed);
+                found.photos.retain(|p| !gone.contains(&p.path));
                 self.read_errors = found.unreadable > 0;
                 self.notice = match (found.unreadable, found.truncated) {
                     (0, false) => None,
@@ -1522,6 +1533,7 @@ impl cosmic::Application for App {
             }
             Message::NewAlbum => {
                 self.menu = None;
+                self.renaming = None;
                 self.new_album = Some(String::new());
                 return widget::text_input::focus(NEW_ALBUM_ID.clone());
             }
@@ -1629,16 +1641,21 @@ impl cosmic::Application for App {
                         self.renaming = None;
                         return Task::none();
                     }
-                    if self.albums.contains_key(&name) {
-                        self.notice = Some("An album with this name already exists.".to_string());
-                        return Task::none();
-                    }
                     let to = name.clone();
+                    let mut conflict: Option<&str> = None;
                     match edit_albums(|a| {
-                        if let Some(list) = a.remove(&old) {
+                        if a.contains_key(&to) {
+                            conflict = Some("An album with this name already exists.");
+                        } else if let Some(list) = a.remove(&old) {
                             a.insert(to, list);
+                        } else {
+                            conflict = Some("This album no longer exists, so it was not renamed.");
                         }
                     }) {
+                        Ok(saved) if conflict.is_some() => {
+                            self.albums = saved;
+                            self.notice = conflict.map(str::to_string);
+                        }
                         Ok(saved) => {
                             self.albums = saved;
                             self.albums_unsaved = false;
@@ -1711,13 +1728,14 @@ impl cosmic::Application for App {
                         self.extra = saved;
                         self.source = None;
                         self.source_extra = Some(dir);
+                        self.clear_selection();
                         self.notice = None;
                         self.scanning = true;
                         return self.scan_task();
                     }
                     Err(e) => {
                         tracing::warn!("could not save folders: {e}");
-                        self.notice = Some("The folder could not be saved, so Photos will forget it when it closes.".to_string());
+                        self.notice = Some("The folder could not be added, so Photos kept showing what it was showing.".to_string());
                     }
                 }
             }
@@ -1797,6 +1815,7 @@ impl cosmic::Application for App {
             }
             Message::Trashed(done, failed) => {
                 let gone: HashSet<PathBuf> = done.into_iter().collect();
+                self.trashed.extend(gone.iter().cloned());
                 self.photos.retain(|p| !gone.contains(&p.path));
                 self.selected.retain(|p| !gone.contains(p));
                 for p in &gone {
@@ -1886,6 +1905,10 @@ impl cosmic::Application for App {
                         .or_else(|| self.selected.iter().find_map(|s| list.iter().find(|p| &p.path == s).map(|p| p.path.clone())))
                         .or_else(|| list.first().map(|p| p.path.clone()));
                     let Some(start) = start else { return Task::none() };
+                    if self.viewing.as_ref().is_some_and(|v| v != &start) {
+                        self.notice = Some("This picture is not in the gallery, so there is no slideshow to play from it.".to_string());
+                        return Task::none();
+                    }
                     self.slideshow = true;
                     return self.open(start);
                 }
@@ -2390,10 +2413,11 @@ impl App {
         for photo in shown.iter().take(MAX_TILES) {
             strip = strip.push(self.tile(&photo.path, true));
         }
-        column::with_capacity(2)
-            .spacing(8)
-            .padding([8, 16, 16, 8])
-            .push(big)
+        let mut col = column::with_capacity(3).spacing(8).padding([8, 16, 16, 8]);
+        if let Some(notice) = &self.notice {
+            col = col.push(text::caption(notice.as_str()));
+        }
+        col.push(big)
             .push(scrollable::horizontal(strip).width(Length::Fill))
             .into()
     }
