@@ -3019,6 +3019,7 @@ dependencies = [
  "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",
+ "rustix 1.1.5",
  "serde_json",
  "tokio",
  "tracing",
@@ -3108,6 +3109,7 @@ dependencies = [
  "lapin-ux-core",
  "lapin-ux-ui",
  "libcosmic",
+ "serde",
  "tokio",
 ]
 
