@@ -424,7 +424,7 @@ enum Message {
     /// The mouse button went up: the tab drag is over.
     DragEnd,
     Opened(Vec<Result<Loaded, String>>, Option<usize>),
-    Reloaded(u64, Result<Loaded, String>),
+    Reloaded(u64, u64, Result<Loaded, String>),
     SavePicked(u64, Option<PathBuf>, bool),
     /// Printers from `lpstat`, and the default one.
     Printers(Vec<String>, Option<String>),
@@ -1491,11 +1491,12 @@ impl App {
                     self.prompt = Some(Prompt::Info("Unsaved changes".into(), "Reopening with another encoding would discard your changes. Save or undo them first.".into()));
                 } else if let Some(p) = t.path.clone() {
                     let id = t.id;
+                    let rev = t.buf.revision as u64;
                     tasks.push(Task::future(async move {
                         let r = tokio::task::spawn_blocking(move || read_file(&p, Some(enc)))
                             .await
                             .unwrap_or_else(|e| Err(e.to_string()));
-                        cosmic::Action::App(Message::Reloaded(id, r))
+                        cosmic::Action::App(Message::Reloaded(id, rev, r))
                     }));
                 }
             }
@@ -1532,11 +1533,12 @@ impl App {
                         self.prompt = Some(Prompt::Reload(t.id));
                     } else {
                         let id = t.id;
+                        let rev = t.buf.revision as u64;
                         tasks.push(Task::future(async move {
                             let r = tokio::task::spawn_blocking(move || read_file(&p, None))
                                 .await
                                 .unwrap_or_else(|e| Err(e.to_string()));
-                            cosmic::Action::App(Message::Reloaded(id, r))
+                            cosmic::Action::App(Message::Reloaded(id, rev, r))
                         }));
                     }
                 }
@@ -1961,8 +1963,10 @@ impl cosmic::Application for App {
                 }
                 settings::save_settings(&self.settings);
             }
-            Message::Reloaded(id, r) => {
-                if let Some(i) = self.tab_index(id) {
+            Message::Reloaded(id, rev, r) => {
+                // A tab edited while the file was being read keeps its edits:
+                // the late result is dropped rather than written over them.
+                if let Some(i) = self.tab_index(id).filter(|&i| self.tabs[i].buf.revision as u64 == rev) {
                     match r {
                         Ok(l) => {
                             let t = &mut self.tabs[i];
@@ -2110,11 +2114,12 @@ impl cosmic::Application for App {
                             self.prompt = Some(Prompt::Reload(t.id));
                         } else {
                             let id = t.id;
+                            let rev = t.buf.revision as u64;
                             tasks.push(Task::future(async move {
                                 let r = tokio::task::spawn_blocking(move || read_file(&p, None))
                                     .await
                                     .unwrap_or_else(|e| Err(e.to_string()));
-                                cosmic::Action::App(Message::Reloaded(id, r))
+                                cosmic::Action::App(Message::Reloaded(id, rev, r))
                             }));
                         }
                     }
@@ -2222,11 +2227,12 @@ impl cosmic::Application for App {
                 Some(Prompt::Reload(id)) => {
                     if let Some(i) = self.tab_index(id) {
                         if let Some(p) = self.tabs[i].path.clone() {
+                            let rev = self.tabs[i].buf.revision as u64;
                             tasks.push(Task::future(async move {
                                 let r = tokio::task::spawn_blocking(move || read_file(&p, None))
                                     .await
                                     .unwrap_or_else(|e| Err(e.to_string()));
-                                cosmic::Action::App(Message::Reloaded(id, r))
+                                cosmic::Action::App(Message::Reloaded(id, rev, r))
                             }));
                         }
                     }
