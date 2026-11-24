@@ -647,14 +647,17 @@ impl Shell {
         if self.config.desktop_auto_arrange {
             return;
         }
-        // Not only when nothing is saved: with positions saved for some icons
-        // only, the unsaved ones still sit in sort order and a newcomer that
-        // sorts before one would take its cell. Pin every icon that has none.
-        let unpinned = self.desktop.as_ref().is_some_and(|d| {
-            let saved: Vec<&str> = self.state.desktop_cells.iter().map(|s| s.name.as_str()).collect();
-            d.items.iter().any(|s| !is_pinned(&saved, &s.item.file_name))
+        // Compare what is saved with where the icons really sit now: some may
+        // have no saved cell, or a saved cell outside a grid that has shrunk.
+        let differs = self.desktop.as_ref().is_some_and(|d| {
+            let names: HashMap<&PathBuf, &str> = d.items.iter().map(|s| (&s.item.path, s.item.file_name.as_str())).collect();
+            let shown: Vec<(&str, Cell)> =
+                self.placed().iter().filter_map(|(p, c)| Some((*names.get(p)?, *c))).collect();
+            let saved: HashMap<&str, Cell> =
+                self.state.desktop_cells.iter().map(|s| (s.name.as_str(), (s.col, s.row))).collect();
+            layout_differs(&shown, &saved)
         });
-        if unpinned {
+        if differs {
             self.pin_cells();
             self.persist_state();
         }
@@ -1880,20 +1883,28 @@ pub fn extra_view<'a>(id: window::Id) -> Element<'a, Message> {
     .into()
 }
 
-/// Whether an icon already has a saved cell.
-fn is_pinned(saved: &[&str], name: &str) -> bool {
-    saved.contains(&name)
+/// Whether any icon is shown somewhere other than its saved cell (or has none).
+fn layout_differs(shown: &[(&str, Cell)], saved: &HashMap<&str, Cell>) -> bool {
+    shown.iter().any(|(n, c)| saved.get(n) != Some(c))
 }
 
 #[cfg(test)]
 mod pin_tests {
-    use super::is_pinned;
+    use super::layout_differs;
+    use std::collections::HashMap;
 
     #[test]
-    fn partly_saved_positions_leave_some_icons_unpinned() {
-        let saved = ["a.txt"];
-        assert!(is_pinned(&saved, "a.txt"));
-        assert!(!is_pinned(&saved, "b.txt"));
-        assert!(!is_pinned(&[], "a.txt"));
+    fn partly_saved_positions_differ() {
+        let saved = HashMap::from([("a.txt", (0, 0))]);
+        assert!(!layout_differs(&[("a.txt", (0, 0))], &saved));
+        assert!(layout_differs(&[("a.txt", (0, 0)), ("b.txt", (0, 1))], &saved));
+    }
+
+    #[test]
+    fn saved_cell_off_a_shrunken_grid_differs() {
+        // b.txt was saved at (2,0) but the grid shrank, so it is shown at (0,0).
+        let saved = HashMap::from([("b.txt", (2, 0)), ("c.txt", (1, 0))]);
+        assert!(layout_differs(&[("b.txt", (0, 0)), ("c.txt", (1, 0))], &saved));
+        assert!(!layout_differs(&[("b.txt", (2, 0)), ("c.txt", (1, 0))], &saved));
     }
 }
