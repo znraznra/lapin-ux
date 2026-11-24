@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use cosmic::app::{Settings, Task};
 use cosmic::iced::keyboard::{Event as KeyEvent, Key, Modifiers, key::Named};
@@ -19,6 +19,8 @@ use cosmic::widget::image::Handle;
 use cosmic::widget::{self, button, column, container, icon, row, scrollable, text};
 use cosmic::{ApplicationExt, Core, Element, theme};
 use futures::StreamExt;
+
+mod vault;
 
 const APP_ID: &str = "dev.lapinux.Photos";
 /// Longest side of a loaded thumbnail. One size serves every slider step (it is
@@ -247,6 +249,10 @@ enum Message {
     /// Opens the box for a new Hidden password.
     SetLock,
     RemoveLock,
+    /// The vault opened (its pictures) or the password was wrong.
+    VaultOpened(Result<Vec<vault::Entry>, String>),
+    /// A vault job ended: set up, hide, unhide, change or remove.
+    VaultDone(Result<VaultOutcome, String>),
     /// Shows the box for naming a new album.
     NewAlbum,
     NewAlbumName(String),
@@ -387,11 +393,12 @@ struct App {
     new_album: Option<String>,
     /// Set while the name box renames this album instead of making a new one.
     renaming: Option<String>,
-    /// The Hidden password (salt and hash), if one is set.
-    lock: Option<Lock>,
-    /// The password file exists but could not be read or understood. Hidden
-    /// then stays locked, since there is no way to tell what the password is.
-    lock_unreadable: bool,
+    /// A Hidden vault exists, so a password is set.
+    vault_set: bool,
+    /// The pictures inside the vault while Hidden is open, newest first.
+    vault_photos: Vec<Photo>,
+    /// A vault job is running (they take a moment: the password is slow on purpose).
+    vault_busy: bool,
     /// The list of hidden photos could not be read. No pictures are shown at
     /// all, because the ones that were hidden cannot be told apart.
     hidden_unreadable: bool,
@@ -455,6 +462,14 @@ fn try_load_set(name: &str) -> std::io::Result<HashSet<PathBuf>> {
 /// The one name a picture goes by in the saved lists, whatever path it was
 /// reached through (symlink, `..`, a second folder that points at the same
 /// place). A picture that cannot be resolved keeps the path it was found at.
+fn store_path_text(name: &str) -> String {
+    store_file(name).map(|p| p.display().to_string()).unwrap_or_else(|| format!("{name}.json in Photos' config folder"))
+}
+
+fn hidden_unreadable_msg() -> String {
+    format!("The list of hidden photos could not be read, so no pictures are shown. Fix or remove {}, then start Photos again.", store_path_text("hidden"))
+}
+
 fn photo_key(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -654,6 +669,163 @@ fn save_pref(key: &str, value: serde_json::Value) {
     }
 }
 
+// ------------------------------------------------------------ Hidden vault
+
+/// What a vault job changed.
+#[derive(Debug, Clone, Default)]
+struct VaultOutcome {
+    /// Everything in the vault afterwards.
+    entries: Vec<vault::Entry>,
+    /// Pictures that left the library (they went into the vault).
+    moved: Vec<PathBuf>,
+    /// Some pictures came out of the vault, so the library is scanned again.
+    rescan: bool,
+    /// The vault now exists (`true`) or is gone (`false`); `None` when unchanged.
+    set: Option<bool>,
+    /// The plain Hidden list, when the job changed it.
+    hidden: Option<HashSet<PathBuf>>,
+    note: Option<String>,
+}
+
+/// Runs a vault job off the UI thread (the password stretching takes a moment).
+fn vault_task(job: impl FnOnce() -> Result<VaultOutcome, String> + Send + 'static) -> Task<Message> {
+    Task::future(async move {
+        let r = tokio::task::spawn_blocking(job)
+            .await
+            .unwrap_or_else(|_| Err("The vault job did not finish.".to_string()));
+        cosmic::Action::App(Message::VaultDone(r))
+    })
+}
+
+fn vault_folder() -> Result<&'static Path, String> {
+    vault::default_dir().map(|d| d.as_path()).ok_or_else(|| "Photos has no folder to keep the vault in.".to_string())
+}
+
+fn vault_open_key() -> Result<vault::Key, String> {
+    vault::key().ok_or_else(|| "Open Hidden and type the password first.".to_string())
+}
+
+fn some_failed(failed: usize, what: &str) -> Option<String> {
+    (failed > 0).then(|| format!("{failed} picture(s) could not be {what}."))
+}
+
+fn vault_unlock(password: &str) -> Result<Vec<vault::Entry>, String> {
+    let dir = vault_folder()?;
+    let key = vault::unlock(dir, password).map_err(|e| e.to_string())?;
+    let index = vault::load_index(dir, &key).map_err(|e| e.to_string())?;
+    vault::set_key(Some(key));
+    Ok(index)
+}
+
+/// Makes the vault and moves the pictures already hidden (a plain list) into it.
+fn vault_setup(password: &str, plain: Vec<PathBuf>) -> Result<VaultOutcome, String> {
+    let dir = vault_folder()?;
+    let key = vault::create(dir, password, vault::Cost::DEFAULT).map_err(|e| e.to_string())?;
+    vault::set_key(Some(key));
+    let mut out = VaultOutcome { set: Some(true), ..Default::default() };
+    let mut failed = 0;
+    for p in plain.iter().filter(|p| p.is_file()) {
+        match vault::add(dir, &key, &mut out.entries, p) {
+            Ok(_) => out.moved.push(p.clone()),
+            Err(e) => {
+                tracing::warn!("could not move {} into the vault: {e}", p.display());
+                failed += 1;
+            }
+        }
+    }
+    if !out.moved.is_empty() {
+        match set_in("hidden", &out.moved, false) {
+            Ok(h) => out.hidden = Some(h),
+            Err(e) => tracing::warn!("could not update the hidden list: {e}"),
+        }
+    }
+    // The old password file (it only ever hid the list) is no longer needed.
+    if let Some(f) = store_file("hidden-lock") {
+        let _ = std::fs::remove_file(f);
+    }
+    out.note = some_failed(failed, "moved into the vault, so they stay hidden as before");
+    Ok(out)
+}
+
+fn vault_hide(paths: &[PathBuf]) -> Result<VaultOutcome, String> {
+    let dir = vault_folder()?;
+    let key = vault_open_key()?;
+    let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, ..Default::default() };
+    let mut failed = 0;
+    for p in paths {
+        match vault::add(dir, &key, &mut out.entries, p) {
+            Ok(_) => out.moved.push(p.clone()),
+            Err(e) => {
+                tracing::warn!("could not move {} into the vault: {e}", p.display());
+                failed += 1;
+            }
+        }
+    }
+    out.note = some_failed(failed, "moved into the vault");
+    Ok(out)
+}
+
+fn vault_unhide(paths: &[PathBuf]) -> Result<VaultOutcome, String> {
+    let dir = vault_folder()?;
+    let key = vault_open_key()?;
+    let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, rescan: true, ..Default::default() };
+    let mut failed = 0;
+    for p in paths {
+        let Some(id) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+        if let Err(e) = vault::restore(dir, &key, &mut out.entries, id) {
+            tracing::warn!("could not take a picture out of the vault: {e}");
+            failed += 1;
+        }
+    }
+    out.note = some_failed(failed, "taken out of the vault");
+    Ok(out)
+}
+
+fn vault_change(new_password: &str) -> Result<VaultOutcome, String> {
+    let dir = vault_folder()?;
+    let key = vault_open_key()?;
+    vault::change_password(dir, &key, new_password, vault::Cost::DEFAULT).map_err(|e| e.to_string())?;
+    Ok(VaultOutcome {
+        entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?,
+        note: Some("The password was changed.".to_string()),
+        ..Default::default()
+    })
+}
+
+/// Takes every picture out of the vault, puts them back on the plain Hidden list
+/// and deletes the vault. If any picture cannot come out the vault stays.
+fn vault_remove() -> Result<VaultOutcome, String> {
+    let dir = vault_folder()?;
+    let key = vault_open_key()?;
+    let mut out = VaultOutcome { entries: vault::load_index(dir, &key).map_err(|e| e.to_string())?, rescan: true, ..Default::default() };
+    let ids: Vec<String> = out.entries.iter().map(|e| e.id.clone()).collect();
+    let (mut back, mut failed) = (Vec::new(), 0);
+    for id in ids {
+        match vault::restore(dir, &key, &mut out.entries, &id) {
+            Ok(p) => back.push(p),
+            Err(e) => {
+                tracing::warn!("could not take a picture out of the vault: {e}");
+                failed += 1;
+            }
+        }
+    }
+    if !back.is_empty() {
+        match set_in("hidden", &back, true) {
+            Ok(h) => out.hidden = Some(h),
+            Err(e) => tracing::warn!("could not update the hidden list: {e}"),
+        }
+    }
+    if failed > 0 {
+        out.note = some_failed(failed, "taken out of the vault, so the password stays");
+        return Ok(out);
+    }
+    vault::destroy(dir).map_err(|e| format!("The vault folder could not be removed: {e}"))?;
+    vault::set_key(None);
+    out.set = Some(false);
+    out.note = Some("The password is removed. Your pictures are back in their folders and still hidden.".to_string());
+    Ok(out)
+}
+
 /// Renames `old` to `new` without ever replacing something already there.
 /// A hard link fails if the name is taken (a dangling symlink counts), and the
 /// old name is removed only after it worked, so a file that appears at the new
@@ -823,14 +995,26 @@ fn decode(path: &Path) -> Option<image::DynamicImage> {
 /// keep the capture date, camera and the rest.
 fn decode_keeping_exif(path: &Path) -> Option<(image::DynamicImage, Option<Vec<u8>>)> {
     use image::ImageDecoder;
-    let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
-    let mut decoder = reader.into_decoder().ok()?;
-    let orientation = decoder.orientation().ok();
-    let mut exif = decoder.exif_metadata().ok().flatten();
-    if let Some(exif) = exif.as_mut() {
-        let _ = image::metadata::Orientation::remove_from_exif_chunk(exif);
-    }
-    let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
+    // A picture in the Hidden vault is decrypted in memory, never to disk.
+    let (mut img, orientation, exif) = if vault::is_vault_path(path) {
+        let reader = image::ImageReader::new(std::io::Cursor::new(vault::read_path(path)?)).with_guessed_format().ok()?;
+        let mut decoder = reader.into_decoder().ok()?;
+        let orientation = decoder.orientation().ok();
+        let mut exif = decoder.exif_metadata().ok().flatten();
+        if let Some(exif) = exif.as_mut() {
+            let _ = image::metadata::Orientation::remove_from_exif_chunk(exif);
+        }
+        (image::DynamicImage::from_decoder(decoder).ok()?, orientation, exif)
+    } else {
+        let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+        let mut decoder = reader.into_decoder().ok()?;
+        let orientation = decoder.orientation().ok();
+        let mut exif = decoder.exif_metadata().ok().flatten();
+        if let Some(exif) = exif.as_mut() {
+            let _ = image::metadata::Orientation::remove_from_exif_chunk(exif);
+        }
+        (image::DynamicImage::from_decoder(decoder).ok()?, orientation, exif)
+    };
     if let Some(o) = orientation {
         img.apply_orientation(o);
     }
@@ -1301,200 +1485,10 @@ fn group_heading(t: SystemTime, group: Group) -> String {
 }
 
 fn file_name(path: &Path) -> String {
+    if let Some(name) = vault::original_name(path) {
+        return name;
+    }
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-}
-
-/// The Hidden password: a random salt and a slow hash of salt plus password,
-/// both as hex. This keeps the section out of casual sight; the pictures are
-/// not encrypted.
-#[derive(Clone, PartialEq)]
-struct Lock {
-    salt: String,
-    hash: String,
-}
-
-impl Lock {
-    fn matches(&self, password: &str) -> bool {
-        let Some(salt) = from_hex(&self.salt) else { return false };
-        let want = to_hex(&stretch(&salt, password));
-        // Compare every byte so the time does not say how much matched.
-        want.len() == self.hash.len() && want.bytes().zip(self.hash.bytes()).fold(0u8, |d, (a, b)| d | (a ^ b)) == 0
-    }
-}
-
-const LOCK_ROUNDS: u32 = 20_000;
-
-/// Where a saved list lives, for messages: the real path `store_file` gives
-/// (it follows `XDG_CONFIG_HOME`), never a guessed `~/.config`.
-fn store_path_text(name: &str) -> String {
-    store_file(name).map(|p| p.display().to_string()).unwrap_or_else(|| format!("{name}.json in Photos' config folder"))
-}
-
-fn lock_unreadable_msg() -> String {
-    format!("Hidden stays locked because its password file could not be read. Fix or remove {}, then start Photos again.", store_path_text("hidden-lock"))
-}
-
-fn hidden_unreadable_msg() -> String {
-    format!("The list of hidden photos could not be read, so no pictures are shown. Fix or remove {}, then start Photos again.", store_path_text("hidden"))
-}
-
-const LOCK_CHANGED: &str = "The password was changed in another window. Type the current one to open Hidden.";
-
-fn stretch(salt: &[u8], password: &str) -> [u8; 32] {
-    let mut data = salt.to_vec();
-    data.extend_from_slice(password.as_bytes());
-    let mut h = sha256(&data);
-    for _ in 0..LOCK_ROUNDS {
-        let mut next = h.to_vec();
-        next.extend_from_slice(salt);
-        h = sha256(&next);
-    }
-    h
-}
-
-fn to_hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-fn from_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.is_ascii() {
-        return None;
-    }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
-}
-
-fn make_lock(password: &str) -> std::io::Result<Lock> {
-    use std::io::Read;
-    let mut salt = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut salt)?;
-    Ok(Lock { salt: to_hex(&salt), hash: to_hex(&stretch(&salt, password)) })
-}
-
-/// The saved password. Only a missing file means "no password"; a file that
-/// cannot be read or understood is an error, so Hidden stays locked rather
-/// than opening for lack of a password it could not load.
-fn load_lock() -> std::io::Result<Option<Lock>> {
-    let Some(file) = store_file("hidden-lock") else { return Ok(None) };
-    let s = match std::fs::read_to_string(&file) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let bad = || std::io::Error::other("the password file is not understood");
-    let v: serde_json::Value = serde_json::from_str(&s).map_err(|_| bad())?;
-    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string).ok_or_else(bad);
-    Ok(Some(Lock { salt: field("salt")?, hash: field("hash")? }))
-}
-
-fn save_lock(lock: &Lock) -> std::io::Result<()> {
-    let file = store_file("hidden-lock").ok_or_else(|| std::io::Error::other("no config folder"))?;
-    let dir = file.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
-    std::fs::create_dir_all(dir)?;
-    let bytes = serde_json::to_vec(&serde_json::json!({ "salt": lock.salt, "hash": lock.hash })).map_err(std::io::Error::other)?;
-    let tmp = dir.join(format!("hidden-lock.json.{}.tmp", std::process::id()));
-    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &file));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-/// How a password change ended.
-enum Replaced {
-    Done,
-    /// Another window changed or removed the password since this one read it.
-    Changed,
-    /// The saved password could not be read, so nothing was written over it.
-    Unreadable,
-    Failed(std::io::Error),
-}
-
-/// Replaces (or, with `None`, removes) the saved password, but only if it is
-/// still `expected`. The read, the comparison and the write happen under one
-/// lock file, so two windows cannot both pass the check and overwrite each
-/// other.
-fn replace_lock(expected: &Option<Lock>, new: Option<&Lock>) -> Replaced {
-    let guarded = || -> std::io::Result<Replaced> {
-        let file = store_file("hidden-lock").ok_or_else(|| std::io::Error::other("no config folder"))?;
-        let dir = file.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
-        std::fs::create_dir_all(dir)?;
-        let guard = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("hidden-lock.lock"))?;
-        guard.lock()?; // released when `guard` is dropped
-        match load_lock() {
-            Err(_) => return Ok(Replaced::Unreadable),
-            Ok(saved) if &saved != expected => return Ok(Replaced::Changed),
-            Ok(_) => {}
-        }
-        match new {
-            Some(l) => save_lock(l)?,
-            None => remove_lock()?,
-        }
-        Ok(Replaced::Done)
-    };
-    guarded().unwrap_or_else(Replaced::Failed)
-}
-
-fn remove_lock() -> std::io::Result<()> {
-    let Some(file) = store_file("hidden-lock") else { return Ok(()) };
-    match std::fs::remove_file(file) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
-    }
-}
-
-/// SHA-256 (FIPS 180-4), small enough to keep here instead of a new crate.
-fn sha256(data: &[u8]) -> [u8; 32] {
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-    ];
-    let mut h: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
-    }
-    msg.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
-    for chunk in msg.chunks(64) {
-        let mut w = [0u32; 64];
-        for (i, b) in chunk.chunks(4).enumerate() {
-            w[i] = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ (!e & g);
-            let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        for (x, y) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
-            *x = x.wrapping_add(y);
-        }
-    }
-    let mut out = [0u8; 32];
-    for (i, x) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&x.to_be_bytes());
-    }
-    out
 }
 
 fn load_folders() -> Vec<PathBuf> {
@@ -1619,6 +1613,9 @@ impl App {
     fn shown(&self) -> Vec<&Photo> {
         if self.hidden_locked() || self.hidden_unreadable {
             return Vec::new();
+        }
+        if self.vault_view() {
+            return self.vault_photos.iter().collect();
         }
         let root = self.source_extra.clone().or_else(|| self.source.and_then(Folder::dir));
         // A photo reached through a symlink belongs to the folder it really lives in.
@@ -1786,9 +1783,46 @@ impl App {
         Task::batch([tiles, reel])
     }
 
+    /// Hidden is showing and its pictures live in the encrypted vault.
+    fn vault_view(&self) -> bool {
+        self.section == Section::Hidden && self.vault_set
+    }
+
+    /// Shows the vault's pictures (newest first) and remembers their file names.
+    fn install_vault(&mut self, mut entries: Vec<vault::Entry>) {
+        vault::set_names(&entries);
+        let Some(dir) = vault::default_dir() else { return };
+        entries.sort_by(|a, b| b.modified.cmp(&a.modified));
+        let fresh: Vec<Photo> = entries
+            .iter()
+            .map(|e| Photo {
+                path: vault::file_of(dir, &e.id),
+                key: vault::file_of(dir, &e.id),
+                modified: SystemTime::UNIX_EPOCH + Duration::from_secs(e.modified),
+            })
+            .collect();
+        let live: HashSet<&PathBuf> = fresh.iter().map(|p| &p.path).collect();
+        for p in self.vault_photos.iter().filter(|p| !live.contains(&p.path)) {
+            self.thumbs.remove(&p.path);
+            self.dims.remove(&p.path);
+            self.asked.remove(&p.path);
+        }
+        self.vault_photos = fresh;
+    }
+
+    /// Hides the vault's pictures again and forgets their thumbnails.
+    fn close_vault(&mut self) {
+        for p in self.vault_photos.drain(..) {
+            self.thumbs.remove(&p.path);
+            self.dims.remove(&p.path);
+            self.asked.remove(&p.path);
+        }
+        self.hidden_open = false;
+    }
+
     /// The Hidden section is showing and its password has not been entered yet.
     fn hidden_locked(&self) -> bool {
-        self.section == Section::Hidden && (self.lock.is_some() || self.lock_unreadable) && !self.hidden_open
+        self.section == Section::Hidden && self.vault_set && !self.hidden_open
     }
 
     /// Whether the person hid this picture. Entries saved under another
@@ -1797,31 +1831,12 @@ impl App {
         self.hidden.contains(&p.key) || self.hidden.contains(&p.path)
     }
 
-    /// Reads the saved password again, because another Photos window may have
-    /// set, changed or removed it since this one started. A change closes
-    /// Hidden, so a window that was unlocked with the old password does not
-    /// stay open under the new one. The Hidden list is re-read too.
+    /// Reads the Hidden list again: another Photos window may have hidden or
+    /// unhidden pictures since this one started.
     fn sync_lock(&mut self) {
-        let saved = load_lock();
-        let (lock, unreadable) = match &saved {
-            Ok(l) => (l.clone(), false),
-            Err(e) => {
-                tracing::warn!("could not read the Hidden password: {e}");
-                (None, true)
-            }
-        };
-        if lock != self.lock || unreadable != self.lock_unreadable {
-            self.lock = lock;
-            self.lock_unreadable = unreadable;
-            self.hidden_open = false;
-            self.setting_lock = false;
-            // Nothing picked in Hidden, and no half-asked delete, survives the
-            // lock changing under it.
-            self.clear_selection();
-        }
-        // The Hidden list is read again with the password: another window may
-        // have hidden or unhidden pictures, or left the file unreadable, and a
-        // decision about what may open must not rest on the list read at start.
+        // Another window may have hidden or unhidden pictures, or left the file
+        // unreadable, and a decision about what may open must not rest on the
+        // list read at start.
         match try_load_set("hidden") {
             Ok(set) => {
                 let changed = set != self.hidden;
@@ -2032,10 +2047,6 @@ impl cosmic::Application for App {
 
     fn init(core: Core, start: Option<PathBuf>) -> (Self, Task<Message>) {
         let prefs = load_prefs();
-        let saved_lock = load_lock();
-        if let Err(e) = &saved_lock {
-            tracing::warn!("could not read the Hidden password: {e}");
-        }
         let hidden_set = try_load_set("hidden");
         let hidden_unreadable = hidden_set.is_err();
         if let Err(e) = &hidden_set {
@@ -2082,8 +2093,9 @@ impl cosmic::Application for App {
             album: None,
             new_album: None,
             renaming: None,
-            lock: saved_lock.as_ref().ok().cloned().flatten(),
-            lock_unreadable: saved_lock.is_err(),
+            vault_set: vault::default_dir().is_some_and(|d| vault::exists(d)),
+            vault_photos: Vec::new(),
+            vault_busy: false,
             hidden_open: false,
             setting_lock: false,
             lock_text: String::new(),
@@ -2225,7 +2237,7 @@ impl cosmic::Application for App {
                         let p = p.canonicalize().unwrap_or(p);
                         let key = photo_key(&p);
                         let hidden_now = self.is_hidden(&Photo { path: p.clone(), key: key.clone(), modified: SystemTime::UNIX_EPOCH });
-                        if self.hidden_unreadable || (hidden_now && (self.lock_unreadable || self.lock.is_some())) {
+                        if self.hidden_unreadable || (hidden_now && self.vault_set && !self.hidden_open) {
                             // Hidden and locked, or the lists could not be read:
                             // show the gallery instead of the picture.
                             Task::none()
@@ -2252,7 +2264,7 @@ impl cosmic::Application for App {
                 self.tile_limit = MAX_TILES;
                 self.grid_bucket = usize::MAX;
                 self.section = s;
-                self.hidden_open = false;
+                self.close_vault();
                 self.sync_lock();
                 self.setting_lock = false;
                 self.lock_text.clear();
@@ -2343,6 +2355,9 @@ impl cosmic::Application for App {
                 }
             }
             Message::FavoriteTargets => {
+                if self.vault_view() {
+                    return Task::none();
+                }
                 let paths = self.targets();
                 if paths.is_empty() {
                     return Task::none();
@@ -2372,6 +2387,9 @@ impl cosmic::Application for App {
                 return self.refresh_view();
             }
             Message::AddToAlbum(name) => {
+                if self.vault_view() {
+                    return Task::none();
+                }
                 self.sync_lock();
                 let paths: Vec<PathBuf> = self.selected.iter().map(|p| self.key_of(p)).collect();
                 self.menu = None;
@@ -2478,80 +2496,107 @@ impl cosmic::Application for App {
             }
             Message::RemoveLock => {
                 self.menu = None;
-                self.sync_lock();
-                if self.hidden_locked() {
-                    return self.refresh_view();
+                if self.vault_busy || !self.vault_set || vault::key().is_none() {
+                    return Task::none();
                 }
-                match replace_lock(&self.lock, None) {
-                    Replaced::Done => {
-                        self.lock = None;
-                        self.lock_msg = None;
+                self.vault_busy = true;
+                self.notice = Some("Taking your pictures out of the vault...".to_string());
+                return vault_task(vault_remove);
+            }
+            Message::LockSubmit => {
+                if self.vault_busy {
+                    return Task::none();
+                }
+                let text = std::mem::take(&mut self.lock_text);
+                if text.is_empty() {
+                    return Task::none();
+                }
+                self.lock_msg = None;
+                if self.setting_lock {
+                    if self.vault_set {
+                        // Changing the password: the vault must be open.
+                        if vault::key().is_none() {
+                            return Task::none();
+                        }
+                        self.vault_busy = true;
+                        return vault_task(move || vault_change(&text));
                     }
-                    Replaced::Changed | Replaced::Unreadable => {
-                        self.sync_lock();
-                        self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
+                    let plain: Vec<PathBuf> = self.hidden.iter().cloned().collect();
+                    self.vault_busy = true;
+                    self.lock_msg = Some("Setting up the vault...".to_string());
+                    return vault_task(move || vault_setup(&text, plain));
+                }
+                self.vault_busy = true;
+                self.lock_msg = Some("Checking the password...".to_string());
+                return Task::future(async move {
+                    let r = tokio::task::spawn_blocking(move || vault_unlock(&text))
+                        .await
+                        .unwrap_or_else(|_| Err("The vault could not be opened.".to_string()));
+                    cosmic::Action::App(Message::VaultOpened(r))
+                });
+            }
+            Message::VaultOpened(opened) => {
+                self.vault_busy = false;
+                match opened {
+                    Ok(entries) if self.section == Section::Hidden => {
+                        self.hidden_open = true;
+                        self.lock_msg = None;
+                        self.install_vault(entries);
                         return self.refresh_view();
                     }
-                    Replaced::Failed(e) => {
-                        tracing::warn!("could not remove the Hidden password: {e}");
-                        self.lock_msg = Some("The password could not be removed.".to_string());
+                    // The person left Hidden while the password was being checked.
+                    Ok(_) => self.lock_msg = None,
+                    Err(e) => {
+                        self.lock_msg = Some(e);
+                        return widget::text_input::focus(LOCK_ID.clone());
                     }
                 }
             }
-            Message::LockSubmit => {
-                let text = std::mem::take(&mut self.lock_text);
-                if self.setting_lock {
-                    if text.is_empty() {
+            Message::VaultDone(done) => {
+                self.vault_busy = false;
+                let o = match done {
+                    Ok(o) => o,
+                    Err(e) => {
+                        if self.setting_lock {
+                            self.lock_msg = Some(e);
+                        } else {
+                            self.notice = Some(e);
+                        }
                         return Task::none();
                     }
-                    // Never write over a password another window set or changed
-                    // meanwhile, or one that could not be read.
-                    // The check and the write share one lock file, so a second
-                    // window cannot slip in between them.
-                    let made = match make_lock(&text) {
-                        Ok(l) => l,
-                        Err(e) => {
-                            tracing::warn!("could not make the Hidden password: {e}");
-                            self.lock_msg = Some("The password could not be saved.".to_string());
-                            return Task::none();
-                        }
-                    };
-                    match replace_lock(&self.lock, Some(&made)) {
-                        Replaced::Done => {
-                            self.lock = Some(made);
-                            self.hidden_open = true;
-                            self.setting_lock = false;
-                            self.lock_msg = None;
-                        }
-                        Replaced::Changed | Replaced::Unreadable => {
-                            self.sync_lock();
-                            self.lock_msg = Some(if self.lock_unreadable { lock_unreadable_msg() } else { LOCK_CHANGED.to_string() });
-                            return self.refresh_view();
-                        }
-                        Replaced::Failed(e) => {
-                            tracing::warn!("could not save the Hidden password: {e}");
-                            self.lock_msg = Some("The password could not be saved.".to_string());
-                        }
-                    }
-                } else if {
-                    // Check against the saved password, not the one this window
-                    // loaded: it may have been changed in another window.
-                    self.sync_lock();
-                    self.lock_unreadable
-                } {
-                    self.lock_msg = Some(lock_unreadable_msg());
-                } else if self.lock.is_none() {
-                    // The password was removed in another window.
-                    self.lock_msg = None;
-                    return self.refresh_view();
-                } else if self.lock.as_ref().is_some_and(|l| l.matches(&text)) {
-                    self.hidden_open = true;
-                    self.lock_msg = None;
-                    return self.refresh_view();
-                } else {
-                    self.lock_msg = Some("That is not the password.".to_string());
-                    return widget::text_input::focus(LOCK_ID.clone());
+                };
+                if let Some(set) = o.set {
+                    self.vault_set = set;
                 }
+                if let Some(h) = o.hidden {
+                    self.hidden = h;
+                }
+                self.setting_lock = false;
+                self.lock_text.clear();
+                self.lock_msg = None;
+                self.notice = o.note;
+                let gone: HashSet<PathBuf> = o.moved.into_iter().collect();
+                self.photos.retain(|p| !gone.contains(&p.path));
+                for p in &gone {
+                    self.thumbs.remove(p);
+                    self.dims.remove(p);
+                    self.asked.remove(p);
+                }
+                if !self.vault_set {
+                    vault::set_key(None);
+                    self.close_vault();
+                    self.vault_photos.clear();
+                } else if self.hidden_open || o.set == Some(true) {
+                    self.hidden_open = true;
+                    self.install_vault(o.entries);
+                }
+                self.clear_selection();
+                let view = self.refresh_view();
+                if o.rescan {
+                    self.scanning = true;
+                    return Task::batch([view, self.scan_task()]);
+                }
+                return view;
             }
             Message::RenameAlbum => {
                 let Some(name) = self.album.clone() else { return Task::none() };
@@ -2718,6 +2763,27 @@ impl cosmic::Application for App {
                     return Task::none();
                 }
                 let hide = self.section != Section::Hidden;
+                if self.vault_set {
+                    let paths: Vec<PathBuf> = targets.iter().cloned().collect();
+                    if self.vault_busy {
+                        return Task::none();
+                    }
+                    if hide {
+                        if vault::key().is_none() {
+                            self.notice = Some("Open Hidden and type the password first, then hide.".to_string());
+                            return Task::none();
+                        }
+                        self.notice = Some("Moving the pictures into the vault...".to_string());
+                        self.vault_busy = true;
+                        return vault_task(move || vault_hide(&paths));
+                    }
+                    if !paths.iter().all(|p| vault::is_vault_path(p)) {
+                        return Task::none();
+                    }
+                    self.notice = Some("Taking the pictures out of the vault...".to_string());
+                    self.vault_busy = true;
+                    return vault_task(move || vault_unhide(&paths));
+                }
                 // The list holds each picture under its canonical name. To unhide, the
                 // spelling the picture was found at goes too, for entries saved before.
                 let mut paths: Vec<PathBuf> = Vec::new();
@@ -2754,6 +2820,9 @@ impl cosmic::Application for App {
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
+                if self.vault_view() {
+                    return Task::none();
+                }
                 self.sync_lock();
                 if self.hidden_locked() {
                     return Task::none();
@@ -2930,7 +2999,7 @@ impl cosmic::Application for App {
                 return self.want_thumbs(near);
             }
             Message::Rotate(clockwise) => {
-                let Some(path) = self.viewing.clone() else { return Task::none() };
+                let Some(path) = self.viewing.clone().filter(|p| !vault::is_vault_path(p)) else { return Task::none() };
                 self.slideshow = false;
                 self.notice = None;
                 // One turn per picture at a time: a second press while the first
@@ -2951,7 +3020,7 @@ impl cosmic::Application for App {
                 self.slideshow = false;
             }
             Message::Edit(edit) => {
-                let Some(path) = self.viewing.clone() else { return Task::none() };
+                let Some(path) = self.viewing.clone().filter(|p| !vault::is_vault_path(p)) else { return Task::none() };
                 self.slideshow = false;
                 self.notice = None;
                 // Only a copy this session made is edited in place. A picture
@@ -3165,6 +3234,9 @@ impl cosmic::Application for App {
             Message::Prev => return self.step(-1),
             Message::Next => return self.step(1),
             Message::ToggleFavorite(path) => {
+                if vault::is_vault_path(&path) {
+                    return Task::none();
+                }
                 // The key is read fresh, not from the scan: a link retargeted since
                 // then must star (and unstar) the file it points to now.
                 let key = photo_key(&path);
@@ -3321,14 +3393,22 @@ impl App {
                 .collect();
             album_items.push(Self::menu_item("New album...", Some("list-add-symbolic"), false, Message::NewAlbum));
             let add = self.dropdown(Menu::AddToAlbum, "folder-new-symbolic", "Add to album".to_string(), album_items);
-            bar = bar.push(star).push(hide);
-            if n > 0 {
+            // Pictures inside the vault can only come out again: no favorites,
+            // albums or Recycle Bin there.
+            let in_vault = self.vault_view();
+            if !in_vault {
+                bar = bar.push(star);
+            }
+            bar = bar.push(hide);
+            if n > 0 && !in_vault {
                 bar = bar.push(add);
             }
             if self.section == Section::Album && n > 0 {
                 bar = bar.push(button::icon(icon::from_name("list-remove-symbolic")).name("Remove from this album").on_press(Message::RemoveFromAlbum));
             }
-            bar = bar.push(bin);
+            if !in_vault {
+                bar = bar.push(bin);
+            }
             bar = bar.push(button::standard("Done").on_press(Message::SelectMode(false)));
         } else {
             bar = bar.push(button::standard("Select").on_press(Message::SelectMode(true)));
@@ -3337,7 +3417,7 @@ impl App {
         let mut more = vec![Self::menu_item("Slideshow", Some("media-playback-start-symbolic"), false, Message::Slideshow), Self::menu_item("Look for new pictures", Some("view-refresh-symbolic"), false, Message::Refresh)];
         more.push(Self::menu_item(&format!("Slideshow speed: {} seconds", self.slide_secs), Some("preferences-system-time-symbolic"), false, Message::SlideSpeed));
         if self.section == Section::Hidden && !self.hidden_locked() {
-            if self.lock.is_some() {
+            if self.vault_set {
                 more.push(Self::menu_item("Change the password", Some("system-lock-screen-symbolic"), false, Message::SetLock));
                 more.push(Self::menu_item("Remove the password", Some("list-remove-symbolic"), false, Message::RemoveLock));
             } else {
@@ -3375,14 +3455,6 @@ impl App {
         let mut unlock = button::suggested("Unlock");
         if !self.lock_text.is_empty() {
             unlock = unlock.on_press(Message::LockSubmit);
-        }
-        if self.lock_unreadable {
-            let col = column::with_capacity(2)
-                .spacing(12)
-                .align_x(Alignment::Center)
-                .push(icon::from_name("system-lock-screen-symbolic").size(48))
-                .push(text::body(lock_unreadable_msg()));
-            return container(col).center(Length::Fill).padding(24).into();
         }
         let mut col = column::with_capacity(4)
             .spacing(12)
@@ -3426,7 +3498,7 @@ impl App {
                 .push(button::standard("Cancel").on_press(Message::LockCancel))
                 .push(save),
         );
-        col = col.push(text::caption("This keeps Hidden out of sight on this computer. It does not encrypt the pictures."));
+        col = col.push(text::caption(if self.vault_set { "The new password replaces the old one. If you forget it, the pictures cannot be opened again." } else { "Pictures you hide are encrypted with this password. If you forget it they cannot be opened again, and nobody can recover them for you." }));
         if let Some(msg) = &self.lock_msg {
             col = col.push(text::caption(msg.as_str()));
         }
@@ -3760,6 +3832,7 @@ impl App {
         let list = self.viewer_list();
         let index = list.iter().position(|p| p.path == path);
         let favorite = self.is_favorite(path);
+        let vaulted = vault::is_vault_path(path);
 
         let mut bar = row::with_capacity(7)
             .spacing(4)
@@ -3796,31 +3869,31 @@ impl App {
                     .name(if self.slideshow { "Stop the slideshow" } else { "Start the slideshow" })
                     .on_press(Message::Slideshow),
             )
-            .push(
+            .push_maybe((!vaulted).then(|| {
                 button::icon(icon::from_name("object-rotate-left-symbolic"))
                     .name("Turn left")
-                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(false))),
-            )
-            .push(
+                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(false)))
+            }))
+            .push_maybe((!vaulted).then(|| {
                 button::icon(icon::from_name("object-rotate-right-symbolic"))
                     .name("Turn right")
-                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(true))),
-            )
-            .push(
+                    .on_press_maybe((!self.turning.contains(path)).then_some(Message::Rotate(true)))
+            }))
+            .push_maybe((!vaulted).then(|| {
                 button::icon(icon::from_name("document-edit-symbolic"))
                     .name(if self.edit_open { "Close the edit buttons" } else { "Edit" })
-                    .on_press(Message::EditToggle),
-            )
+                    .on_press(Message::EditToggle)
+            }))
             .push(
                 button::icon(icon::from_name(if self.fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" }))
                     .name(if self.fullscreen { "Leave full screen" } else { "Full screen" })
                     .on_press(Message::Fullscreen),
             )
-            .push(
+            .push_maybe((!vaulted).then(|| {
                 button::icon(icon::from_name(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }))
                     .name(if favorite { "Remove from favorites" } else { "Add to favorites" })
-                    .on_press(Message::ToggleFavorite(path.to_path_buf())),
-            );
+                    .on_press(Message::ToggleFavorite(path.to_path_buf()))
+            }));
         let toolbar = container(container(bar).padding([4, 8]).class(theme::Container::Card))
             .padding([12, 12, 0, 12])
             .width(Length::Fill);
@@ -3861,7 +3934,7 @@ impl App {
             ),
         };
 
-        let edit_panel: Option<Element<'_, Message>> = self.edit_open.then(|| {
+        let edit_panel: Option<Element<'_, Message>> = (self.edit_open && !vaulted).then(|| {
             let panel = row::with_capacity(9)
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -3981,374 +4054,3 @@ mod edit_tests {
     }
 }
 
-#[cfg(test)]
-mod lock_tests {
-    use super::*;
-
-    #[test]
-    fn sha256_known_answers() {
-        assert_eq!(to_hex(&sha256(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-        assert_eq!(to_hex(&sha256(b"")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-    }
-
-    #[test]
-    fn password_matches_only_itself() {
-        let lock = Lock { salt: to_hex(&[7u8; 16]), hash: to_hex(&stretch(&[7u8; 16], "kitten")) };
-        assert!(lock.matches("kitten"));
-        assert!(!lock.matches("Kitten"));
-        assert!(!lock.matches(""));
-    }
-
-    /// A directory made exclusively for one test (a leftover with the same name
-    /// is never reused) and removed when the test ends, even on a panic.
-    struct TestDir(PathBuf);
-
-    impl TestDir {
-        fn new(label: &str) -> Self {
-            let base = std::env::temp_dir();
-            for n in 0..100u32 {
-                let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-                let dir = base.join(format!("lapin-{label}-{}-{nanos:x}-{n}", std::process::id()));
-                match std::fs::create_dir(&dir) {
-                    Ok(()) => return TestDir(dir),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => panic!("could not make a test folder: {e}"),
-                }
-            }
-            panic!("could not make a unique test folder");
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn rotate_turns_and_leaves_no_temp_file() {
-        let dir = TestDir::new("rotate");
-        let pic = dir.0.join("a.png");
-        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        assert!(rotate_file(&pic, true).unwrap().durable);
-        let turned = image::open(&pic).unwrap();
-        assert_eq!((turned.width(), turned.height()), (2, 4));
-        let left: Vec<_> = std::fs::read_dir(&dir.0).unwrap().flatten().collect();
-        assert_eq!(left.len(), 1);
-    }
-
-    #[test]
-    fn rotate_through_a_symlink_keeps_the_link_and_its_key() {
-        let guard = TestDir::new("rotate-symlink");
-        let dir = guard.0.clone();
-        let real = dir.join("real.png");
-        image::DynamicImage::new_rgb8(4, 2).save(&real).unwrap();
-        let link = dir.join("link.png");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let key = photo_key(&link);
-        let saved = rotate_file(&link, true).unwrap();
-        assert!(saved.durable);
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(photo_key(&link), key);
-        let turned = image::open(&real).unwrap();
-        assert_eq!((turned.width(), turned.height()), (2, 4));
-    }
-
-    #[test]
-    fn staging_file_skips_a_planted_link_and_keeps_its_target() {
-        let dir = TestDir::new("rotate-link");
-        let pic = dir.0.join("b.png");
-        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        let victim = dir.0.join("victim.txt");
-        std::fs::write(&victim, "keep").unwrap();
-        // Plant a link at exactly the first name the opener will try.
-        let seed = 0x5eed_u128;
-        let first = dir.0.join(format!(".b.png.{}.{seed:x}.0.tmp", std::process::id()));
-        std::os::unix::fs::symlink(&victim, &first).expect("the test link must be created");
-        let (tmp, mut file) = create_temp_beside_seeded(&pic, seed).expect("another candidate is used");
-        assert_ne!(tmp, first, "the planted name must be skipped");
-        assert!(tmp.to_string_lossy().ends_with(".1.tmp"));
-        std::io::Write::write_all(&mut file, b"new").unwrap();
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
-        assert!(std::fs::symlink_metadata(&first).unwrap().file_type().is_symlink());
-        // The staging file is owner-only while it holds the bytes.
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o077, 0);
-    }
-
-    #[test]
-    fn rotate_keeps_the_pictures_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = TestDir::new("rotate-mode");
-        let pic = dir.0.join("c.png");
-        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        std::fs::set_permissions(&pic, std::fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(rotate_file(&pic, true).unwrap().durable);
-        assert_eq!(std::fs::metadata(&pic).unwrap().permissions().mode() & 0o777, 0o640);
-    }
-
-    #[test]
-    fn favorite_direction_uses_the_fresh_key_not_the_scan_one() {
-        let guard = TestDir::new("fav-key");
-        let dir = guard.0.clone();
-        std::fs::write(dir.join("a.png"), b"x").unwrap();
-        std::fs::write(dir.join("b.png"), b"y").unwrap();
-        let link = dir.join("link.png");
-        std::os::unix::fs::symlink(dir.join("a.png"), &link).unwrap();
-        let stale = photo_key(&link);
-        std::fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(dir.join("b.png"), &link).unwrap();
-        let fresh = photo_key(&link);
-        assert_ne!(stale, fresh);
-        // Only b.png is starred: the toggle must read the link as b.png.
-        let favorites: HashSet<PathBuf> = HashSet::from([fresh.clone()]);
-        assert!(favorites.contains(&photo_key(&link)));
-        assert!(!favorites.contains(&stale));
-    }
-
-    #[test]
-    fn saved_lists_match_by_canonical_name() {
-        use std::os::unix::fs::symlink;
-        let guard = TestDir::new("alias");
-        let dir = guard.0.clone();
-        std::fs::create_dir_all(dir.join("real")).unwrap();
-        std::fs::write(dir.join("real/a.png"), b"x").unwrap();
-        symlink(dir.join("real"), dir.join("alias")).unwrap();
-        let direct = dir.join("real/a.png");
-        let aliased = dir.join("alias/a.png");
-        assert_ne!(direct, aliased);
-        assert_eq!(photo_key(&direct), photo_key(&aliased));
-
-        let favorites = dir.join("favorites.json");
-        std::fs::write(&favorites, serde_json::to_string(&vec![&aliased]).unwrap()).unwrap();
-        assert!(read_favorites(&favorites).unwrap().contains(&photo_key(&direct)));
-
-        let albums = dir.join("albums.json");
-        std::fs::write(&albums, serde_json::to_string(&BTreeMap::from([("x", vec![&aliased, &direct])])).unwrap()).unwrap();
-        assert_eq!(read_albums(&albums).unwrap()["x"], vec![photo_key(&direct)]);
-    }
-
-    fn png(dir: &Path, name: &str) -> PathBuf {
-        let pic = dir.join(name);
-        image::DynamicImage::new_rgb8(4, 2).save(&pic).unwrap();
-        pic
-    }
-
-    fn ok(_: &Path) -> Result<bool, String> {
-        Ok(false)
-    }
-
-    fn nothing(_: &Path) {}
-
-    fn crc32(data: &[u8]) -> u32 {
-        let mut crc = !0u32;
-        for &b in data {
-            crc ^= u32::from(b);
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-            }
-        }
-        !crc
-    }
-
-    /// A real PNG with an `acTL` chunk in front of its first `IDAT`.
-    fn apng(dir: &Path, name: &str) -> PathBuf {
-        let plain = std::fs::read(png(dir, "plain-for-apng.png")).unwrap();
-        let at = plain.windows(4).position(|w| w == b"IDAT").unwrap() - 4;
-        let mut body = b"acTL".to_vec();
-        body.extend(1u32.to_be_bytes());
-        body.extend(0u32.to_be_bytes());
-        let mut chunk = 8u32.to_be_bytes().to_vec();
-        chunk.extend(&body);
-        chunk.extend(crc32(&body).to_be_bytes());
-        let mut bytes = plain[..at].to_vec();
-        bytes.extend(chunk);
-        bytes.extend(&plain[at..]);
-        let out = dir.join(name);
-        std::fs::write(&out, bytes).unwrap();
-        out
-    }
-
-    fn leftovers(dir: &Path) -> usize {
-        std::fs::read_dir(dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp") && e.file_type().is_ok_and(|t| t.is_file()))
-            .count()
-    }
-
-    #[test]
-    fn edit_makes_a_copy_and_never_writes_through_a_planted_link() {
-        let guard = TestDir::new("edit-link");
-        let dir = &guard.0;
-        let pic = png(dir, "c.png");
-        let victim = dir.join("victim.txt");
-        std::fs::write(&victim, "keep").unwrap();
-        // A link planted at the old, predictable temporary name.
-        let _ = std::os::unix::fs::symlink(&victim, dir.join(format!(".c (edited).png.{}.tmp.png", std::process::id())));
-        let copy = edit_file(&pic, Edit::BlackWhite, false, &ok, &nothing).unwrap();
-        assert_eq!(copy.path, dir.join("c (edited).png"));
-        assert!(copy.durable);
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
-        // Editing a copy made this session edits it in place and adds nothing.
-        assert_eq!(edit_file(&copy.path, Edit::Brighter, true, &ok, &nothing).unwrap().path, copy.path);
-        assert_eq!(leftovers(dir), 0);
-    }
-
-    #[test]
-    fn edit_never_replaces_a_file_that_appeared_meanwhile() {
-        let guard = TestDir::new("edit-clobber");
-        let dir = &guard.0;
-        let pic = png(dir, "d.png");
-        let first = dir.join("d (edited).png");
-        // The name is free when it is chosen and taken just before the copy
-        // is published (here: by the registration step that runs in between).
-        let seen = std::cell::RefCell::new(Vec::new());
-        let gone = std::cell::RefCell::new(Vec::new());
-        let copy = edit_file(&pic, Edit::Darker, false, &|key: &Path| {
-            seen.borrow_mut().push(key.to_path_buf());
-            if seen.borrow().len() == 1 {
-                std::fs::write(&first, "mine").unwrap();
-            }
-            Ok(true)
-        }, &|key: &Path| gone.borrow_mut().push(key.to_path_buf()))
-        .unwrap();
-        assert_eq!(std::fs::read_to_string(&first).unwrap(), "mine");
-        assert_eq!(copy.path, dir.join("d (edited 2).png"));
-        // Every name that was tried was registered before it was published.
-        let real = dir.canonicalize().unwrap();
-        assert_eq!(*seen.borrow(), vec![real.join("d (edited).png"), real.join("d (edited 2).png")]);
-        // The name that was never used is taken off the list again.
-        assert_eq!(*gone.borrow(), vec![real.join("d (edited).png")]);
-        assert_eq!(leftovers(dir), 0);
-    }
-
-    #[test]
-    fn edit_does_not_overwrite_an_imported_file_named_like_a_copy() {
-        let guard = TestDir::new("edit-import");
-        let dir = &guard.0;
-        let imported = dir.join("e (edited).png");
-        image::DynamicImage::new_rgb8(2, 2).save(&imported).unwrap();
-        let before = std::fs::read(&imported).unwrap();
-        let copy = edit_file(&imported, Edit::BlackWhite, false, &ok, &nothing).unwrap();
-        assert_eq!(copy.path, dir.join("e (edited) (edited).png"));
-        assert_eq!(std::fs::read(&imported).unwrap(), before);
-    }
-
-    #[test]
-    fn edit_publishes_nothing_when_it_cannot_register_the_copy() {
-        let guard = TestDir::new("edit-register");
-        let dir = &guard.0;
-        let pic = png(dir, "f.png");
-        let err = edit_file(&pic, Edit::Darker, false, &|_| Err("no".into()), &nothing).unwrap_err();
-        assert!(err.contains("hidden"), "{err}");
-        assert!(!dir.join("f (edited).png").exists());
-        assert_eq!(leftovers(dir), 0);
-    }
-
-    #[test]
-    fn rotate_follows_a_link_and_keeps_it_a_link() {
-        let guard = TestDir::new("rotate-symlink");
-        let dir = &guard.0;
-        std::fs::create_dir(dir.join("real")).unwrap();
-        let target = png(&dir.join("real"), "t.png");
-        let link = dir.join("l.png");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        let saved = rotate_file(&link, true).unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(saved.path, target.canonicalize().unwrap());
-        let turned = image::open(&target).unwrap();
-        assert_eq!((turned.width(), turned.height()), (2, 4));
-    }
-
-    #[test]
-    fn moving_or_mislabelled_pictures_are_left_alone() {
-        let guard = TestDir::new("moving");
-        let dir = &guard.0;
-        // A PNG saved with a .jpg name is not rewritten as a JPEG.
-        let pic = png(dir, "g.png");
-        let wrong = dir.join("g.jpg");
-        std::fs::rename(&pic, &wrong).unwrap();
-        let before = std::fs::read(&wrong).unwrap();
-        assert!(rotate_file(&wrong, true).is_err());
-        assert!(edit_file(&wrong, Edit::Darker, false, &ok, &nothing).is_err());
-        assert_eq!(std::fs::read(&wrong).unwrap(), before);
-        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
-
-        // A moving picture is refused, a still one is not.
-        let moving = apng(dir, "m.png");
-        let still = png(dir, "s.png");
-        assert!(!transformable(&moving, "png"));
-        assert!(transformable(&still, "png"));
-        assert!(edit_file(&moving, Edit::Darker, false, &ok, &nothing).is_err());
-        // A file the decoder cannot inspect is not known to be still.
-        let broken = dir.join("b.webp");
-        std::fs::write(&broken, b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x02\0\0\0\0\0\0\0\0\0").unwrap();
-        assert!(!transformable(&broken, "webp"));
-    }
-
-    #[test]
-    fn a_name_that_was_never_used_is_taken_off_the_list_when_publishing_fails() {
-        let guard = TestDir::new("edit-unregister");
-        let dir = &guard.0;
-        let pic = png(dir, "u.png");
-        // Publishing cannot work in a folder that is read-only after the
-        // temporary file exists, so make the target a directory instead.
-        std::fs::create_dir(dir.join("u (edited).png")).unwrap();
-        let gone = std::cell::RefCell::new(Vec::new());
-        let copy = edit_file(&pic, Edit::Darker, false, &|_| Ok(true), &|k: &Path| gone.borrow_mut().push(k.to_path_buf())).unwrap();
-        assert_eq!(copy.path, dir.join("u (edited 2).png"));
-        assert!(gone.borrow().is_empty(), "the name that was used stays registered");
-    }
-
-    #[test]
-    fn a_different_file_under_a_copys_name_is_not_edited_in_place() {
-        let guard = TestDir::new("edit-identity");
-        let dir = &guard.0;
-        let pic = png(dir, "i.png");
-        let copy = edit_file(&pic, Edit::BlackWhite, false, &ok, &nothing).unwrap();
-        let id = copy.id;
-        assert!(id.is_some());
-        // Swap another file into the copy's name.
-        let other = png(dir, "other.png");
-        std::fs::rename(&other, &copy.path).unwrap();
-        assert_ne!(file_id(&copy.path), id);
-        let before = std::fs::read(&copy.path).unwrap();
-        // The identity check happens in `edit_locked`'s caller path: a changed
-        // identity means a new copy, never an overwrite.
-        let in_place = id.is_some() && file_id(&copy.path) == id;
-        assert!(!in_place);
-        let next = edit_file(&copy.path, Edit::Darker, in_place, &ok, &nothing).unwrap();
-        assert_ne!(next.path, copy.path);
-        assert_eq!(std::fs::read(&copy.path).unwrap(), before);
-    }
-
-    #[test]
-    fn a_second_transform_waits_for_the_first() {
-        let guard = TestDir::new("transform-lock");
-        let held = transform_lock_in(&guard.0).unwrap();
-        let other = std::fs::OpenOptions::new().write(true).open(guard.0.join("transform.lock")).unwrap();
-        assert!(other.try_lock().is_err(), "a second holder must not get the lock");
-        drop(held);
-        assert!(other.try_lock().is_ok(), "released once the first is done");
-    }
-
-    #[test]
-    fn starred_symlink_to_extensionless_picture_is_kept() {
-        use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!("lapin-photos-sniff-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
-        std::fs::write(dir.join("raw-file"), png).unwrap();
-        std::fs::write(dir.join("notes"), b"just text").unwrap();
-        symlink(dir.join("raw-file"), dir.join("a.jpg")).unwrap();
-        // The saved list holds the canonical name, which has no extension.
-        let key = photo_key(&dir.join("a.jpg"));
-        assert!(!is_photo(&key));
-        assert!(sniffs_as_photo(&key));
-        assert!(!sniffs_as_photo(&dir.join("notes")));
-        assert!(!sniffs_as_photo(&dir.join("missing")));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}

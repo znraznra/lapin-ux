@@ -20,5 +20,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 # Already in the tree through libcosmic; reads the photo's rotation (EXIF).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+# The Hidden vault: files are encrypted with ChaCha20-Poly1305, and the key is wrapped by a key made from the password with Argon2id.
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
 # Atomic no-replace rename on drives without hard links.
 rustix = { version = "1", features = ["fs"] }
