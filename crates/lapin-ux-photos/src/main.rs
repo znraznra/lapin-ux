@@ -3,7 +3,7 @@
 //! grouped by date, Favorites, Recents) with a toolbar for the source folder,
 //! grid style, grouping, preview size and selection (#203); opening a photo, or
 //! clicking an image in Files, shows it in a single-image viewer with a floating
-//! toolbar and a filmstrip. Both follow the system theme. Nothing leaves the
+//! toolbar and a filmstrip. Both follow the system theme (#200). Nothing leaves the
 //! computer: no cloud, no accounts, no network.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -231,16 +231,40 @@ enum Message {
     Reel(PathBuf),
     Refresh,
     /// A thumbnail with its size, so tiles can keep the picture's proportions.
-    Thumb(PathBuf, Option<(Handle, (u32, u32))>),
+    Thumb(PathBuf, u64, Option<(Handle, (u32, u32))>),
     Open(PathBuf),
-    Full(PathBuf, Option<Handle>),
+    Full(PathBuf, u64, Option<Handle>),
     /// A full-size decode that was skipped because the picture is no longer open.
     Ignore,
     Retry,
     Back,
+    /// The "Back to the gallery" button: always leaves the viewer, even with a menu open.
+    BackToGallery,
     Prev,
     Next,
     ToggleFavorite(PathBuf),
+    /// Opens or closes the "More actions" menu.
+    ToggleMenu,
+    StartRename,
+    RenameInput(String),
+    RenameCommit,
+    AskDeleteOne,
+    CancelOverlay,
+    ConfirmDeleteOne,
+    OpenLocation,
+    /// Opening the folder failed to start.
+    LocationFailed(u64, String),
+    /// A rename or delete finished: the old path and what came of it.
+    Renamed(PathBuf, Result<PathBuf, String>),
+    Deleted(PathBuf, Result<(), String>),
+}
+
+/// What the viewer's menu is showing over the picture.
+#[derive(Debug, Clone, PartialEq)]
+enum Overlay {
+    Menu,
+    Rename(String),
+    ConfirmDelete,
 }
 
 /// Full-size decodes allowed at once, so paging quickly through a folder queues
@@ -289,13 +313,29 @@ struct App {
     dims: HashMap<PathBuf, (u32, u32)>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
-    /// Counts moves to the Recycle Bin, so a scan that began earlier can be told apart.
-    trash_epoch: u32,
+    /// Bumped whenever a picture's cached tile or full decode is thrown away
+    /// (its file changed on disk). Decodes carry the number they started under.
+    epoch: u64,
+    /// The epoch at which each picture's caches were last thrown away: a decode
+    /// that started before it shows the old file and is dropped.
+    stale_since: HashMap<PathBuf, u64>,
+    /// Folder scans that have not reported yet.
+    scans_running: u32,
+    /// Pictures moved to the Recycle Bin while a scan was running; that scan may
+    /// still list them.
+    trashed_meanwhile: HashSet<PathBuf>,
+    /// Which request each tile is waiting for. A result for a name that was
+    /// renamed, deleted or asked again since is stale and dropped.
+    thumb_epoch: HashMap<PathBuf, u64>,
+    next_epoch: u64,
+    /// Counts viewer visits, so a late "could not open the folder" from an
+    /// earlier photo never shows on the current one.
+    visit: u64,
+    /// A rename or delete is running; the other is refused until it has finished.
+    file_op: bool,
     /// Bumped whenever the list of added folders changes: a scan that began
     /// with an older list must not replace the gallery.
     folders_epoch: u32,
-    /// Pictures moved to the Recycle Bin that an older scan may still list.
-    trashed: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
@@ -330,6 +370,9 @@ struct App {
     full: Option<(PathBuf, Handle)>,
     /// The picture to open at start, from the command line or Files.
     start: Option<PathBuf>,
+    overlay: Option<Overlay>,
+    /// What the last rename or delete could not do.
+    action_error: Option<String>,
 }
 
 fn favorites_file() -> Option<PathBuf> {
@@ -399,19 +442,35 @@ fn set_favorites(paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf
 
 /// Adds photos to, or removes them from, the saved list `name`, under a lock.
 fn set_in(name: &str, paths: &[PathBuf], on: bool) -> std::io::Result<HashSet<PathBuf>> {
+    edit_in(name, |set| {
+        for path in paths {
+            if on {
+                set.insert(path.clone());
+            } else {
+                set.remove(path);
+            }
+        }
+    })
+}
+
+/// Moves a star to a new name in one locked read-modify-write, so a failure
+/// never leaves both names starred or neither.
+fn move_favorite(old: &Path, new: &Path) -> std::io::Result<HashSet<PathBuf>> {
+    edit_in("favorites", |set| {
+        if set.remove(old) {
+            set.insert(new.to_path_buf());
+        }
+    })
+}
+
+fn edit_in(name: &str, change: impl FnOnce(&mut HashSet<PathBuf>)) -> std::io::Result<HashSet<PathBuf>> {
     let file = store_file(name).ok_or_else(|| std::io::Error::other("no config folder"))?;
     let dir = file.parent().ok_or_else(|| std::io::Error::other("list file has no folder"))?;
     std::fs::create_dir_all(dir)?;
     let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join(format!("{name}.lock")))?;
     lock.lock()?; // released when `lock` is dropped
     let mut set = read_favorites(&file)?;
-    for path in paths {
-        if on {
-            set.insert(path.clone());
-        } else {
-            set.remove(path);
-        }
-    }
+    change(&mut set);
     write_favorites(&file, &set)?;
     Ok(set)
 }
@@ -496,6 +555,43 @@ fn save_pref(key: &str, value: serde_json::Value) {
     }
 }
 
+/// Renames `old` to `new` without ever replacing something already there.
+/// A hard link fails if the name is taken (a dangling symlink counts), and the
+/// old name is removed only after it worked, so a file that appears at the new
+/// name in between is never overwritten. File systems without hard links
+/// (FAT, exFAT) fall back to the kernel's atomic no-replace rename.
+fn rename_no_replace(old: &Path, new: &Path) -> Result<(), String> {
+    const TAKEN: &str = "A file with that name already exists.";
+    match std::fs::hard_link(old, new) {
+        Ok(()) => std::fs::remove_file(old).map_err(|e| {
+            // Undo, so there aren't two names for one photo. If even the undo
+            // fails, say so, so the user knows to remove one of the two.
+            match std::fs::remove_file(new) {
+                Ok(()) => format!("Could not rename: {e}"),
+                Err(u) => format!(
+                    "Could not finish renaming: {e}. The photo now exists under both names and the copy could not be removed ({u})."
+                ),
+            }
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(TAKEN.to_string()),
+        Err(_) => {
+            // No hard links here (FAT, exFAT). The kernel's own no-replace
+            // rename is atomic: it fails if the name is taken, however late
+            // another process creates it. Where even that is missing, say so
+            // rather than risk overwriting.
+            use rustix::fs::{renameat_with, RenameFlags, CWD};
+            match renameat_with(CWD, old, CWD, new, RenameFlags::NOREPLACE) {
+                Ok(()) => Ok(()),
+                Err(e) if e == rustix::io::Errno::EXIST => Err(TAKEN.to_string()),
+                Err(e) if e == rustix::io::Errno::INVAL || e == rustix::io::Errno::NOSYS || e == rustix::io::Errno::OPNOTSUPP => {
+                    Err("This drive cannot rename a photo safely. Copy it under the new name in your file manager instead.".to_string())
+                }
+                Err(e) => Err(format!("Could not rename: {}", std::io::Error::from(e))),
+            }
+        }
+    }
+}
+
 fn is_photo(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -505,9 +601,6 @@ fn is_photo(path: &Path) -> bool {
 /// What a scan found, and what it could not look at.
 #[derive(Debug, Clone, Default)]
 struct Scan {
-    /// `Photos::trash_epoch` when the scan began: a scan that began before a
-    /// move to the Recycle Bin may still list the moved pictures.
-    epoch: u32,
     /// `Photos::folders_epoch` when the scan began.
     folders_epoch: u32,
     photos: Vec<Photo>,
@@ -603,7 +696,7 @@ fn scan(extra: HashSet<PathBuf>, folders: Vec<PathBuf>, first: Option<PathBuf>) 
         }
     }
     sort_photos(&mut found);
-    Scan { epoch: 0, folders_epoch: 0, photos: found, unreadable, truncated }
+    Scan { folders_epoch: 0, photos: found, unreadable, truncated }
 }
 
 /// Opens a picture upright, as the camera meant it (EXIF rotation).
@@ -812,15 +905,23 @@ impl App {
     /// Loads the tiles of `paths` that were not asked for yet, four at a time.
     fn want_thumbs(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
         let todo: Vec<PathBuf> = paths.into_iter().filter(|p| self.asked.insert(p.clone())).collect();
+        let todo: Vec<(PathBuf, u64)> = todo
+            .into_iter()
+            .map(|p| {
+                self.next_epoch += 1;
+                self.thumb_epoch.insert(p.clone(), self.next_epoch);
+                (p, self.next_epoch)
+            })
+            .collect();
         if todo.is_empty() {
             return Task::none();
         }
         Task::stream(
             futures::stream::iter(todo)
-                .map(|p| async move {
+                .map(|(p, epoch)| async move {
                     let key = p.clone();
                     let h = tokio::task::spawn_blocking(move || load_thumb(p)).await.ok().flatten();
-                    cosmic::Action::App(Message::Thumb(key, h))
+                    cosmic::Action::App(Message::Thumb(key, epoch, h))
                 })
                 .buffer_unordered(4),
         )
@@ -831,17 +932,16 @@ impl App {
         self.want_thumbs(paths)
     }
 
-    fn scan_task(&self) -> Task<Message> {
+    fn scan_task(&mut self) -> Task<Message> {
+        self.scans_running += 1;
         let folders = self.extra.clone();
         let mut extra: HashSet<PathBuf> = self.favorites.union(&self.hidden).cloned().collect();
         // Album members outside the scanned folders must come back after a restart too.
         extra.extend(self.albums.values().flatten().cloned());
-        let epoch = self.trash_epoch;
         let folders_epoch = self.folders_epoch;
         let first = self.source_extra.clone();
         Task::future(async move {
             let mut found = tokio::task::spawn_blocking(move || scan(extra, folders, first)).await.unwrap_or_default();
-            found.epoch = epoch;
             found.folders_epoch = folders_epoch;
             cosmic::Action::App(Message::Scanned(found))
         })
@@ -851,22 +951,27 @@ impl App {
     /// queued decode of another picture.
     fn want_full(&mut self, path: PathBuf) -> Task<Message> {
         set_viewing(Some(path.clone()));
+        let epoch = self.epoch;
         Task::future(async move {
             let key = path.clone();
             let Ok(_permit) = FULL_DECODES.acquire().await else {
-                return cosmic::Action::App(Message::Full(key, None));
+                return cosmic::Action::App(Message::Full(key, epoch, None));
             };
             // Paged past or closed while waiting for a turn: skip the decode.
             if !still_viewing(&key) {
                 return cosmic::Action::App(Message::Ignore);
             }
             let h = tokio::task::spawn_blocking(move || load_full(path)).await.ok().flatten();
-            cosmic::Action::App(Message::Full(key, h))
+            cosmic::Action::App(Message::Full(key, epoch, h))
         })
     }
 
     fn open(&mut self, path: PathBuf) -> Task<Message> {
+        self.visit += 1;
         self.viewing = Some(path.clone());
+        set_viewing(Some(path.clone()));
+        self.overlay = None;
+        self.action_error = None;
         self.full = None;
         self.failed = None;
         let near = self.neighbours(&path, 6);
@@ -896,7 +1001,9 @@ impl App {
         let Some(target) = target else {
             self.reel = None;
             if self.viewing.is_none() {
+                set_viewing(None);
                 self.full = None;
+                self.failed = None;
             }
             return Task::none();
         };
@@ -977,17 +1084,99 @@ impl App {
         if self.viewing.is_some() { self.open(next) } else { self.pick_reel(next) }
     }
 
+    /// A renamed photo keeps its place in the list, its thumbnail and its star.
+    fn after_rename(&mut self, old: PathBuf, new: PathBuf) -> Task<Message> {
+        for p in &mut self.photos {
+            if p.path == old {
+                p.path = new.clone();
+            }
+        }
+        // Carry the "asked" marker over only together with a cached thumbnail.
+        // If the old decode is still pending, its result is filed under the old
+        // name, so the new name must ask for its own.
+        let asked_before = self.asked.remove(&old);
+        self.thumb_epoch.remove(&old);
+        let mut refetch = Task::none();
+        match self.thumbs.remove(&old) {
+            Some(h) => {
+                self.thumbs.insert(new.clone(), h);
+                if asked_before {
+                    self.asked.insert(new.clone());
+                }
+            }
+            None if asked_before => refetch = self.want_thumbs(vec![new.clone()]),
+            None => {}
+        }
+        // Another window may have starred this photo since this one last read
+        // the file, so ask the saved set, not the cached one.
+        match move_favorite(&old, &new) {
+            Ok(saved) => {
+                self.favorites = saved;
+                self.favorites_unsaved = false;
+            }
+            Err(e) => {
+                tracing::warn!("could not move the favorite: {e}");
+                // Report it even when the cached set lacks the old name: another
+                // window may have starred the photo, and the saved star then
+                // still sits on the old path.
+                if self.favorites.remove(&old) {
+                    self.favorites.insert(new.clone());
+                }
+                self.favorites_unsaved = true;
+                self.notice = Some("The photo was renamed, but its star could not be moved to the new name.".into());
+            }
+        }
+        if self.viewing.as_deref() == Some(old.as_path()) {
+            return Task::batch([refetch, self.open(new)]);
+        }
+        refetch
+    }
+
+    /// A deleted photo moves the viewer to the next one, or the one before it,
+    /// or back to the gallery when it was the only one.
+    fn after_delete(&mut self, path: PathBuf) -> Task<Message> {
+        let next = {
+            let list = self.viewer_list();
+            list.iter().position(|p| p.path == path).and_then(|i| {
+                list.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| list.get(j))).map(|p| p.path.clone())
+            })
+        };
+        self.photos.retain(|p| p.path != path);
+        // The list shifted, so a photo that now falls inside the tile limit needs its thumbnail.
+        let more = self.want_section_thumbs();
+        self.thumbs.remove(&path);
+        self.asked.remove(&path);
+        self.thumb_epoch.remove(&path);
+        if self.favorites.remove(&path) {
+            if let Err(e) = set_favorite(&path, false) {
+                tracing::warn!("could not drop the favorite: {e}");
+            }
+        }
+        if self.viewing.as_deref() == Some(path.as_path()) {
+            let moved = match next {
+                Some(n) => self.open(n),
+                None => self.back(),
+            };
+            return Task::batch([moved, more]);
+        }
+        more
+    }
+
     fn back(&mut self) -> Task<Message> {
         self.slideshow = false;
+        self.visit += 1;
+        self.overlay = None;
+        self.action_error = None;
         self.viewing = None;
         self.full = None;
         self.failed = None;
-        let reel = match self.reel.clone() {
-            Some(p) if self.size == REEL => self.want_full(p),
-            _ => {
-                set_viewing(None);
-                Task::none()
-            }
+        // The reel may have changed while the viewer was open (a favorite was
+        // removed, a picture trashed), so check it against the list again.
+        let reel = if self.size == REEL {
+            self.sync_reel()
+        } else {
+            set_viewing(None);
+            Task::none()
         };
         let title = match self.core.main_window_id() {
             Some(id) => self.set_window_title("Photos".into(), id),
@@ -1031,9 +1220,15 @@ impl cosmic::Application for App {
             thumbs: HashMap::new(),
             dims: HashMap::new(),
             asked: HashSet::new(),
-            trash_epoch: 0,
+            epoch: 0,
+            stale_since: HashMap::new(),
+            scans_running: 0,
+            trashed_meanwhile: HashSet::new(),
+            thumb_epoch: HashMap::new(),
+            next_epoch: 0,
+            visit: 0,
+            file_op: false,
             folders_epoch: 0,
-            trashed: HashSet::new(),
             favorites: load_favorites(),
             hidden: load_set("hidden"),
             albums: load_albums(),
@@ -1053,6 +1248,8 @@ impl cosmic::Application for App {
             slideshow: false,
             full: None,
             start,
+            overlay: None,
+            action_error: None,
         };
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Photos".into(), id),
@@ -1104,6 +1301,10 @@ impl cosmic::Application for App {
                 // A scan that began before the list of added folders changed still
                 // lists a removed folder or misses a new one: the newer scan follows.
                 if found.folders_epoch != self.folders_epoch {
+                    self.scans_running = self.scans_running.saturating_sub(1);
+                    if self.scans_running == 0 {
+                        self.trashed_meanwhile.clear();
+                    }
                     return Task::none();
                 }
                 self.read_errors = found.unreadable > 0;
@@ -1115,40 +1316,53 @@ impl cosmic::Application for App {
                         "Showing the first {MAX_PHOTOS} pictures found in your folders, and {n} folder(s) could not be read."
                     )),
                 };
+                self.scans_running = self.scans_running.saturating_sub(1);
                 let mut photos = found.photos;
-                // A scan that began before the last move to the Recycle Bin may
-                // still list the moved pictures; one that began after cannot.
-                photos.retain(|p| !self.trashed.contains(&p.path));
-                if found.epoch == self.trash_epoch {
-                    self.trashed.clear();
+                // Pictures trashed while this scan ran must not come back.
+                if !self.trashed_meanwhile.is_empty() {
+                    photos.retain(|p| !self.trashed_meanwhile.contains(&p.path));
                 }
-                // A file replaced in place keeps its path, so compare the dates:
-                // a changed one needs a new thumbnail and a new full-size decode.
+                if self.scans_running == 0 {
+                    self.trashed_meanwhile.clear();
+                }
+                // A file that changed on disk needs its tile and full decode again.
                 let old: HashMap<&PathBuf, SystemTime> = self.photos.iter().map(|p| (&p.path, p.modified)).collect();
-                let changed: Vec<PathBuf> =
-                    photos.iter().filter(|p| old.get(&p.path).is_some_and(|m| *m != p.modified)).map(|p| p.path.clone()).collect();
-                for p in &changed {
-                    self.thumbs.remove(p);
-                    self.dims.remove(p);
-                    self.asked.remove(p);
-                }
-                let stale_full = self.full.as_ref().is_some_and(|(p, _)| changed.contains(p));
-                if stale_full {
-                    self.full = None;
+                let changed: Vec<PathBuf> = photos
+                    .iter()
+                    .filter(|p| old.get(&p.path).is_some_and(|m| *m != p.modified))
+                    .map(|p| p.path.clone())
+                    .collect();
+                drop(old);
+                let mut redo = Task::none();
+                if !changed.is_empty() {
+                    self.epoch += 1;
+                    for p in &changed {
+                        self.thumbs.remove(p);
+                        self.dims.remove(p);
+                        self.asked.remove(p);
+                        self.thumb_epoch.remove(p);
+                        self.stale_since.insert(p.clone(), self.epoch);
+                    }
+                    if self.full.as_ref().is_some_and(|(p, _)| changed.contains(p)) {
+                        self.full = None;
+                    }
+                    if let Some(p) = self.viewing.clone().filter(|p| changed.contains(p)) {
+                        self.failed = None;
+                        redo = self.want_full(p);
+                    } else if let Some(p) = self.reel.clone().filter(|p| changed.contains(p)) {
+                        if self.viewing.is_none() && self.size == REEL {
+                            self.failed = None;
+                            redo = self.want_full(p);
+                        }
+                    }
                 }
                 self.photos = photos;
                 self.scanning = false;
                 let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
                 self.selected.retain(|p| live.contains(p));
-                let reload = if stale_full {
-                    self.viewing.clone().or_else(|| self.reel.clone()).filter(|p| changed.contains(p))
-                } else {
-                    None
-                };
-                let reload = reload.map_or_else(Task::none, |p| self.want_full(p));
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
-                    Some(p) if is_photo(&p) => {
+                    Some(p) if is_photo(&p) && p.is_file() => {
                         let p = p.canonicalize().unwrap_or(p);
                         if !self.photos.iter().any(|x| x.path == p) {
                             let modified = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
@@ -1159,7 +1373,7 @@ impl cosmic::Application for App {
                     _ => Task::none(),
                 };
                 let view = self.refresh_view();
-                return Task::batch([view, open, reload]);
+                return Task::batch([view, open, redo]);
             }
             Message::Section(s) => {
                 self.section = s;
@@ -1172,9 +1386,7 @@ impl cosmic::Application for App {
                 self.source = folder;
                 self.source_extra = None;
                 self.menu = None;
-                self.clear_selection();
-                save_pref("source", serde_json::json!(folder.map(|f| f.key())));
-                return self.refresh_view();
+                return self.scan_task();
             }
             Message::ToggleSidebar => {
                 self.sidebar = !self.sidebar;
@@ -1556,15 +1768,16 @@ impl cosmic::Application for App {
             }
             Message::Trashed(done, failed) => {
                 let gone: HashSet<PathBuf> = done.into_iter().collect();
-                // A scan already running may still list these; see `Scanned`.
-                self.trash_epoch = self.trash_epoch.wrapping_add(1);
-                self.trashed.extend(gone.iter().cloned());
+                if self.scans_running > 0 {
+                    self.trashed_meanwhile.extend(gone.iter().cloned());
+                }
                 self.photos.retain(|p| !gone.contains(&p.path));
                 self.selected.retain(|p| !gone.contains(p));
                 for p in &gone {
                     self.thumbs.remove(p);
                     self.dims.remove(p);
                     self.asked.remove(p);
+                    self.thumb_epoch.remove(p);
                 }
                 if self.selected.is_empty() {
                     self.select_mode = false;
@@ -1583,18 +1796,25 @@ impl cosmic::Application for App {
                 self.scanning = true;
                 return self.scan_task();
             }
-            Message::Thumb(path, loaded) => {
+            Message::Thumb(path, epoch, loaded) => {
+                // A decode that began before the file changed, or for a name
+                // renamed, deleted or asked again since, is dropped.
+                if self.thumb_epoch.get(&path) != Some(&epoch) {
+                    return Task::none();
+                }
                 if let Some((h, dims)) = loaded {
                     self.dims.insert(path.clone(), dims);
                     self.thumbs.insert(path, h);
                 }
             }
             Message::Open(path) => return self.open(path),
-            Message::Full(path, handle) => {
-                let wanted = match &self.viewing {
-                    Some(v) => *v == path,
-                    None => self.reel.as_ref() == Some(&path),
-                };
+            Message::Full(path, epoch, handle) => {
+                let stale = self.stale_since.get(&path).is_some_and(|s| epoch < *s);
+                let wanted = !stale
+                    && match &self.viewing {
+                        Some(v) => *v == path,
+                        None => self.reel.as_ref() == Some(&path),
+                    };
                 if wanted {
                     match handle {
                         Some(h) => {
@@ -1618,6 +1838,10 @@ impl cosmic::Application for App {
                 }
             }
             Message::Back => {
+                // Escape closes the menu first, then the viewer.
+                if self.overlay.take().is_some() {
+                    return Task::none();
+                }
                 if self.viewing.is_some() {
                     return self.back();
                 }
@@ -1661,6 +1885,129 @@ impl cosmic::Application for App {
                 // A single photo has nothing to move on to.
                 if &next != current {
                     return self.open(next);
+                }
+            }
+            Message::BackToGallery => {
+                if self.viewing.is_some() {
+                    return self.back();
+                }
+            }
+            Message::ToggleMenu => {
+                self.action_error = None;
+                self.overlay = if self.overlay.is_some() { None } else { Some(Overlay::Menu) };
+            }
+            Message::StartRename => {
+                if let Some(p) = &self.viewing {
+                    self.overlay = Some(Overlay::Rename(file_name(p)));
+                }
+            }
+            Message::RenameInput(t) => {
+                if let Some(Overlay::Rename(cur)) = &mut self.overlay {
+                    *cur = t;
+                }
+            }
+            Message::RenameCommit => {
+                let (Some(old), Some(Overlay::Rename(name))) = (self.viewing.clone(), self.overlay.clone()) else {
+                    return Task::none();
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+                    self.action_error = Some("Type a file name without slashes.".into());
+                    return Task::none();
+                }
+                if name.starts_with('.') {
+                    self.action_error = Some("Start the name with a letter or number. Names that begin with a dot are hidden from the gallery.".into());
+                    return Task::none();
+                }
+                if !is_photo(Path::new(&name)) {
+                    self.action_error = Some("Keep a picture extension such as .jpg or .png.".into());
+                    return Task::none();
+                }
+                let new = old.with_file_name(&name);
+                if new == old {
+                    self.overlay = None;
+                    return Task::none();
+                }
+                if self.file_op {
+                    return Task::none();
+                }
+                self.file_op = true;
+                self.action_error = None;
+                return Task::future(async move {
+                    let key = old.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        rename_no_replace(&old, &new).map(|()| new)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    cosmic::Action::App(Message::Renamed(key, result))
+                });
+            }
+            Message::Renamed(old, Err(e)) => {
+                self.file_op = false;
+                // Always a notice, never the viewer's action error: that one
+                // is cleared by opening another photo, the menu or going back,
+                // and a failed rename can mean a leftover second name. The
+                // viewer shows notices too.
+                let _ = old;
+                self.notice = Some(e);
+            }
+            Message::Renamed(old, Ok(new)) => {
+                self.file_op = false;
+                return self.after_rename(old, new);
+            }
+            Message::AskDeleteOne => self.overlay = Some(Overlay::ConfirmDelete),
+            Message::CancelOverlay => self.overlay = None,
+            Message::ConfirmDeleteOne => {
+                let Some(path) = self.viewing.clone() else { return Task::none() };
+                self.overlay = None;
+                // One file operation at a time: a rename in flight would
+                // leave this path stale under the delete.
+                if self.file_op {
+                    return Task::none();
+                }
+                self.file_op = true;
+                self.action_error = None;
+                return Task::future(async move {
+                    let key = path.clone();
+                    // To the Recycle Bin, never a permanent delete.
+                    let out = tokio::process::Command::new("gio").arg("trash").arg("--").arg(&path).output().await;
+                    let result = match out {
+                        Ok(o) if o.status.success() => Ok(()),
+                        Ok(o) => Err(format!("Could not move it to the Recycle Bin: {}", String::from_utf8_lossy(&o.stderr).trim())),
+                        Err(e) => Err(format!("Could not move it to the Recycle Bin: {e}")),
+                    };
+                    cosmic::Action::App(Message::Deleted(key, result))
+                });
+            }
+            Message::Deleted(path, Err(e)) => {
+                self.file_op = false;
+                if self.viewing.as_deref() == Some(path.as_path()) {
+                    self.action_error = Some(e);
+                }
+            }
+            Message::Deleted(path, Ok(())) => {
+                self.file_op = false;
+                return self.after_delete(path);
+            }
+            Message::OpenLocation => {
+                self.overlay = None;
+                if let Some(dir) = self.viewing.as_deref().and_then(Path::parent).map(Path::to_path_buf) {
+                    // Waited for in a task, so the finished helper is reaped and
+                    // never lingers as a zombie while Photos stays open.
+                    let visit = self.visit;
+                    return Task::future(async move {
+                        match tokio::process::Command::new("xdg-open").arg(&dir).status().await {
+                            Ok(status) if status.success() => cosmic::Action::App(Message::LocationFailed(visit, String::new())),
+                            Ok(status) => cosmic::Action::App(Message::LocationFailed(visit, format!("Could not open the folder ({status})."))),
+                            Err(e) => cosmic::Action::App(Message::LocationFailed(visit, format!("Could not open the folder: {e}"))),
+                        }
+                    });
+                }
+            }
+            Message::LocationFailed(visit, e) => {
+                if visit == self.visit && !e.is_empty() {
+                    self.action_error = Some(e);
                 }
             }
             Message::Prev => return self.step(-1),
@@ -1996,17 +2343,18 @@ impl App {
             }
             container(col.push(text::body(msg))).center(Length::Fill).into()
         } else if self.size == REEL {
-            let mut col = column::with_capacity(3).spacing(8);
+            // The reel has no grid to carry the status lines, so they go above it.
+            let mut col = column::with_capacity(3).spacing(8).padding([8, 16, 0, 8]);
             if self.favorites_unsaved {
-                col = col.push(container(text::caption(FAVORITES_UNSAVED)).padding([8, 16, 0, 8]));
+                col = col.push(text::caption(FAVORITES_UNSAVED));
             }
             if self.albums_unsaved && self.new_album.is_none() {
                 col = col.push(container(text::caption(ALBUMS_UNSAVED)).padding([8, 16, 0, 8]));
             }
             if let Some(notice) = &self.notice {
-                col = col.push(container(text::caption(notice.as_str())).padding([8, 16, 0, 8]));
+                col = col.push(text::caption(notice.as_str()));
             }
-            col.push(self.reel_view(&shown)).into()
+            col.push(self.reel_view(&shown)).height(Length::Fill).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
@@ -2104,13 +2452,28 @@ impl App {
         };
         let (w, h) = (Length::Fixed(w), Length::Fixed(h));
         let picture: Element<'_, Message> = match self.thumbs.get(path) {
-            Some(handle) => widget::image(handle.clone()).content_fit(cosmic::iced::ContentFit::Cover).width(w).height(h).into(),
-            None => container(icon::from_name("image-x-generic-symbolic").size(32)).center(w).height(h).into(),
+            Some(handle) => {
+                // Square tiles crop to fill. Otherwise the tile follows the
+                // picture's shape, and where the width is capped (a very wide or
+                // very tall picture) the whole picture stays visible.
+                let fit = if self.square || strip && !self.dims.contains_key(path) {
+                    cosmic::iced::ContentFit::Cover
+                } else {
+                    cosmic::iced::ContentFit::Contain
+                };
+                widget::image(handle.clone()).content_fit(fit).width(w).height(h).into()
+            }
+            // A neutral backdrop, so an unloaded tile reads in light and dark.
+            None => container(icon::from_name("image-x-generic-symbolic").size(32))
+                .center(w)
+                .height(h)
+                .class(theme::Container::Card)
+                .into(),
         };
         let mut tile = stack![picture];
         if self.favorites.contains(path) {
             tile = tile.push(
-                container(icon::from_name("starred-symbolic").size(16))
+                container(container(icon::from_name("starred-symbolic").size(16)).padding(3).class(theme::Container::Card))
                     .padding(6)
                     .align_x(Alignment::End)
                     .align_y(Alignment::End)
@@ -2163,13 +2526,23 @@ impl App {
         let mut bar = row::with_capacity(7)
             .spacing(4)
             .align_y(Alignment::Center)
-            .push(button::icon(icon::from_name("go-previous-symbolic")).name("Back to the gallery").on_press(Message::Back))
+            .push(
+                button::standard("Back")
+                    .leading_icon(icon::from_name("go-previous-symbolic"))
+                    .name("Back to the gallery")
+                    .on_press(Message::BackToGallery),
+            )
             .push(container(text::body(file_name(path))).padding([0, 8]))
             .push(widget::Space::new().width(Length::Fill));
         if self.favorites_unsaved {
             bar = bar.push(text::caption(FAVORITES_UNSAVED));
         }
         let bar = bar
+            .push(
+                button::icon(icon::from_name("view-more-symbolic"))
+                    .name("More actions")
+                    .on_press(Message::ToggleMenu),
+            )
             .push(
                 button::icon(icon::from_name("go-previous-symbolic"))
                     .name("Previous photo")
@@ -2191,9 +2564,44 @@ impl App {
                     .on_press(Message::ToggleFavorite(path.to_path_buf())),
             );
         let toolbar = container(container(bar).padding([4, 8]).class(theme::Container::Card))
-            .padding(12)
-            .width(Length::Fill)
-            .align_y(Alignment::Start);
+            .padding([12, 12, 0, 12])
+            .width(Length::Fill);
+
+        // The menu and its follow-up questions sit in their own row under the bar.
+        let panel: Option<Element<'_, Message>> = match &self.overlay {
+            None => None,
+            Some(Overlay::Menu) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .push(button::standard("Rename").name("Rename").on_press(Message::StartRename))
+                    .push(button::destructive("Delete").name("Delete").on_press(Message::AskDeleteOne))
+                    .push(button::standard("Open file location").name("Open file location").on_press(Message::OpenLocation))
+                    .into(),
+            ),
+            Some(Overlay::Rename(name)) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        widget::text_input("File name", name.clone())
+                            .on_input(Message::RenameInput)
+                            .on_submit(|_| Message::RenameCommit)
+                            .width(Length::Fixed(320.0)),
+                    )
+                    .push(button::suggested("Rename").name("Rename").on_press(Message::RenameCommit))
+                    .push(button::standard("Cancel").name("Cancel").on_press(Message::CancelOverlay))
+                    .into(),
+            ),
+            Some(Overlay::ConfirmDelete) => Some(
+                row::with_capacity(3)
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(text::body(format!("Move {} to the Recycle Bin?", file_name(path))))
+                    .push(button::destructive("Delete").name("Delete").on_press(Message::ConfirmDeleteOne))
+                    .push(button::standard("Cancel").name("Cancel").on_press(Message::CancelOverlay))
+                    .into(),
+            ),
+        };
 
         let mut strip = row::with_capacity(13).spacing(6).align_y(Alignment::Center);
         for p in self.neighbours(path, 6) {
@@ -2215,11 +2623,26 @@ impl App {
         let filmstrip = container(container(strip).padding(6).class(theme::Container::Card))
             .padding(12)
             .width(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::End)
-            .height(Length::Fill);
+            .align_x(Alignment::Center);
 
-        lapin_ux_ui::a11y::group("Photo viewer", stack![picture, toolbar, filmstrip])
+        // Bars take their own space, so the picture is fitted between them and
+        // never drawn under them.
+        let mut page = column::with_capacity(6).push(toolbar);
+        if let Some(panel) = panel {
+            page = page.push(container(panel).padding([8, 12, 0, 12]));
+        }
+        if let Some(e) = &self.action_error {
+            page = page.push(container(text::caption(e.clone())).padding([4, 12, 0, 12]));
+        }
+        // Rename warnings (a leftover second name, a star that did not move)
+        // stay visible in the viewer too, also after another photo is opened.
+        if let Some(n) = &self.notice {
+            page = page.push(container(text::caption(n.clone())).padding([4, 12, 0, 12]));
+        }
+        let page = page
+            .push(container(picture).padding(8).width(Length::Fill).height(Length::Fill))
+            .push(filmstrip);
+        lapin_ux_ui::a11y::group("Photo viewer", page)
     }
 }
 
