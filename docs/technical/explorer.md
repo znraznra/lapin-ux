@@ -157,6 +157,15 @@ The uninstaller lists the `lapin-explorer` package in `LAPIN_PKGS` and `STOCK`.
 - Every app's Open/Save dialog ends with *File name* with the file
   type beside it (*Save as type* when saving), then Open/Save and Cancel.
 
+**Up and the address bar on network locations (#210, #211).** A share (`smb://`,
+`sftp://`...) is a `Location::Network`, which Up used to ignore. Up now goes to the
+parent folder inside the share, from a share root to the server, and from a server
+to Networks (`lapin_network_parent`). The address bar breaks the uri into
+clickable parts: Networks, the server, then each folder (`lapin_network_crumbs`,
+with `%20` and friends shown as text). The last part opens the editable path and
+the others open that folder, so Back and Forward keep working after Up. This is
+plain navigation, so it is not gated on the Lapin session and writes no settings.
+
 **Pages per tab and the details pane (#168, #169, #170, #175).** Home and This PC
 are properties of each tab (the tab's location), not flags on the window, so two
 tabs can show different pages and switching tabs no longer shows one tab's page in
@@ -241,3 +250,23 @@ developer contact is listed because the About widget turns those into mail
 links. The Explorer app icon is not part of this change. Patch
 `packaging/lapin-ux-files/0034-*`; outside a Lapin session both strings and the
 About page are stock.
+
+## Your folder and Home (#216)
+
+"Home" is only the start page. The user's own folder is labelled with the
+account's full name (the first field of the passwd GECOS entry), or the user
+name when no full name is set (`config::lapin_user_label()`). It is used in the
+sidebar tree, the address bar and tab titles (`folder_name`), the Open and Save
+dialog sidebar, the quick-access tiles and the favourite's `display_name`.
+Outside a Lapin session the folder stays "Home" as in stock COSMIC. Patch
+`packaging/lapin-ux-files/0042-*`.
+
+## Details view columns on one line (#212)
+
+In the details view the headings and the Date modified, Type and Size cells are
+single-line, clipped to their column, and end in "…" when the text is wider than
+the column (the heading keeps room for its sort arrow). The header row keeps its
+fixed height, so narrowing a column to its minimum never wraps a heading over
+the rows. Text widths are an estimate (`lapin_ellipsize`, shared with Home), so
+each cell also clips as a safety net. Patch `packaging/lapin-ux-files/0041-*`;
+outside a Lapin session the columns are stock.

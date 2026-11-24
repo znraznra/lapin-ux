@@ -1,0 +1,160 @@
+From 5ff84533fed695a991e582d6bcbb7c0b0d5664bd Mon Sep 17 00:00:00 2001
+From: Znra <arnz.lee16@gmail.com>
+Date: Mon, 23 Nov 2026 10:38:12 +0800
+Subject: [PATCH] Explorer details view: one-line headings and cells with
+ ellipsis (#212)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/app.rs |  2 +-
+ src/tab.rs | 71 +++++++++++++++++++++++++++++++++++++++++++-----------
+ 2 files changed, 58 insertions(+), 15 deletions(-)
+
+diff --git a/src/app.rs b/src/app.rs
+index 60445ed..0d22ada 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -9763,7 +9763,7 @@ fn lapin_sort_files(files: &mut [(Option<usize>, LapinHomeFile)], sort: Option<(
+ /// Lapin UX (#168): text cut to fit `px` of width, ending in an ellipsis. The
+ /// widths are an estimate (the text renderer has no ellipsis of its own), so
+ /// the cells also clip as a safety net.
+-fn lapin_ellipsize(text: &str, px: f32) -> String {
++pub(crate) fn lapin_ellipsize(text: &str, px: f32) -> String {
+     const UNIT: f32 = 7.2;
+     let unit = |c: char| {
+         if c >= '\u{2E80}' {
+diff --git a/src/tab.rs b/src/tab.rs
+index be2d779..166ab85 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -3089,7 +3089,24 @@ fn lapin_widths() -> [f32; 3] {
+ 
+ /// Lapin UX: the width of a column-resize handle in the headings.
+ const LAPIN_HANDLE: f32 = 8.0;
++/// Lapin UX (#212): one line of body text in a fixed-width column, cut with an
++/// ellipsis and clipped so it never wraps or spills into the next column.
++fn lapin_cell<'a>(text: String, width: f32) -> Element<'a, Message> {
++    let text = crate::app::lapin_ellipsize(&text, width);
++    widget::container(widget::text::body(text).wrapping(text::Wrapping::None))
++        .width(Length::Fixed(width))
++        .clip(true)
++        .into()
++}
++
+ fn modified_cell<'a>(modified: String, kind: Option<String>, width: f32) -> Element<'a, Message> {
++    if lapin_columns() {
++        let mut row = widget::row::with_capacity(2).push(lapin_cell(modified, width));
++        if let Some(kind) = kind {
++            row = row.push(lapin_cell(kind, lapin_widths()[1]));
++        }
++        return row.into();
++    }
+     match kind {
+         Some(kind) => widget::row::with_capacity(2)
+             .push(widget::text::body(modified).width(Length::Fixed(width)))
+@@ -3103,6 +3120,35 @@ fn modified_cell<'a>(modified: String, kind: Option<String>, width: f32) -> Elem
+     }
+ }
+ 
++fn lapin_size_cell<'a>(text: String, width: f32) -> Element<'a, Message> {
++    if lapin_columns() {
++        lapin_cell(text, width)
++    } else {
++        widget::text::body(text).width(Length::Fixed(width)).into()
++    }
++}
++
++/// Lapin UX (#212): a column heading on one line, cut with an ellipsis (room is
++/// kept for the sort arrow) and clipped, so it never wraps over the rows.
++fn lapin_heading_label<'a>(name: String, width: Length, sorted: bool) -> Element<'a, Message> {
++    if !lapin_columns() {
++        return widget::text::heading(name).into();
++    }
++    match width {
++        Length::Fixed(w) => {
++            let room = w - if sorted { 22.0 } else { 0.0 };
++            widget::container(
++                widget::text::heading(crate::app::lapin_ellipsize(&name, room.max(0.0)))
++                    .wrapping(text::Wrapping::None),
++            )
++            .width(Length::Fixed(room.max(0.0)))
++            .clip(true)
++            .into()
++        }
++        _ => widget::text::heading(name).wrapping(text::Wrapping::None).into(),
++    }
++}
++
+ /// Which half of the location row to build (Lapin UX splits it).
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum LocationPart {
+@@ -5792,7 +5838,8 @@ impl Tab {
+                 .align_y(Alignment::Center)
+                 .spacing(space_xxxs)
+                 .width(width);
+-            row = row.push(widget::text::heading(name));
++            let sorted = sort_name == msg && self.lapin_sort_type.is_none();
++            row = row.push(lapin_heading_label(name, width, sorted));
+             match (sort_name == msg && self.lapin_sort_type.is_none(), sort_direction) {
+                 (true, true) => {
+                     row = row.push(widget::icon::from_name("pan-down-symbolic").size(16));
+@@ -5846,7 +5893,11 @@ impl Tab {
+                 .align_y(Alignment::Center)
+                 .spacing(space_xxxs)
+                 .width(Length::Fixed(lapin_widths()[1] - cut))
+-                .push(widget::text::heading(fl!("type-column")));
++                .push(lapin_heading_label(
++                    fl!("type-column"),
++                    Length::Fixed(lapin_widths()[1] - cut),
++                    self.lapin_sort_type.is_some(),
++                ));
+             if let Some(ascending) = self.lapin_sort_type {
+                 row = row.push(
+                     widget::icon::from_name(if ascending { "pan-down-symbolic" } else { "pan-up-symbolic" }).size(16),
+@@ -6815,9 +6866,7 @@ impl Tab {
+                             .width(Length::Fill)
+                             .into(),
+                             modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+-                            widget::text::body(size_text.clone())
+-                                .width(Length::Fixed(size_width))
+-                                .into(),
++                            lapin_size_cell(size_text.clone(), size_width),
+                         ])
+                         .height(Length::Fixed(f32::from(row_height)))
+                         .align_y(Alignment::Center)
+@@ -6832,9 +6881,7 @@ impl Tab {
+                                 .width(Length::Fill)
+                                 .into(),
+                             modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+-                            widget::text::body(size_text.clone())
+-                                .width(Length::Fixed(size_width))
+-                                .into(),
++                            lapin_size_cell(size_text.clone(), size_width),
+                         ])
+                         .height(Length::Fixed(f32::from(row_height)))
+                         .align_y(Alignment::Center)
+@@ -6924,9 +6971,7 @@ impl Tab {
+                                 .width(Length::Fill)
+                                 .into(),
+                                 modified_cell(modified_text.clone(), type_text.clone(), modified_width),
+-                                widget::text::body(size_text.clone())
+-                                    .width(Length::Fixed(size_width))
+-                                    .into(),
++                                lapin_size_cell(size_text.clone(), size_width),
+                             ])
+                             .align_y(Alignment::Center)
+                             .spacing(space_xxs)
+@@ -6943,9 +6988,7 @@ impl Tab {
+                                 widget::text(modified_text)
+                                     .width(Length::Fixed(modified_width))
+                                     .into(),
+-                                widget::text::body(size_text)
+-                                    .width(Length::Fixed(size_width))
+-                                    .into(),
++                                lapin_size_cell(size_text, size_width),
+                             ])
+                             .align_y(Alignment::Center)
+                             .spacing(space_xxs)
+-- 
+2.56.1
+
