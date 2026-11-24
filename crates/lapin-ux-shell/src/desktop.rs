@@ -644,7 +644,17 @@ impl Shell {
     /// Before something lands in the next free spot: pin the icons where they
     /// are (and save that), so the newcomer doesn't push the others along.
     fn pin_before_free_placement(&mut self) {
-        if !self.config.desktop_auto_arrange && self.state.desktop_cells.is_empty() {
+        if self.config.desktop_auto_arrange {
+            return;
+        }
+        // Not only when nothing is saved: with positions saved for some icons
+        // only, the unsaved ones still sit in sort order and a newcomer that
+        // sorts before one would take its cell. Pin every icon that has none.
+        let unpinned = self.desktop.as_ref().is_some_and(|d| {
+            let saved: Vec<&str> = self.state.desktop_cells.iter().map(|s| s.name.as_str()).collect();
+            d.items.iter().any(|s| !is_pinned(&saved, &s.item.file_name))
+        });
+        if unpinned {
             self.pin_cells();
             self.persist_state();
         }
@@ -1868,4 +1878,22 @@ pub fn extra_view<'a>(id: window::Id) -> Element<'a, Message> {
         Message::ExtraDesktopDropped(uris, action)
     })
     .into()
+}
+
+/// Whether an icon already has a saved cell.
+fn is_pinned(saved: &[&str], name: &str) -> bool {
+    saved.contains(&name)
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::is_pinned;
+
+    #[test]
+    fn partly_saved_positions_leave_some_icons_unpinned() {
+        let saved = ["a.txt"];
+        assert!(is_pinned(&saved, "a.txt"));
+        assert!(!is_pinned(&saved, "b.txt"));
+        assert!(!is_pinned(&[], "a.txt"));
+    }
 }
