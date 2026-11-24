@@ -33,6 +33,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Mon 23 Nov | Choose a Start layout (#198): Current, Classic, Classic with two columns, or a Programs list, in Settings and in the welcome app. | Retest |
 | Sun 22 Nov | The taskbar can sit on the left or right edge as well as the bottom and top (#41): a narrow icon-only bar, Start, panels, pop-ups, auto-hide and the work area all follow the edge. Chosen in Settings or from the taskbar menu. | Retest |
 | Sun 22 Nov | Photos (#74), stage 1: an offline picture app with a dark gallery (by date, Favorites, your folders) and a light viewer with a filmstrip. | Retest |
+| Mon 23 Nov | Terminal (#225): a fork of the Alacritty terminal under Lapin's own names, the default terminal in a Lapin session only. | Retest |
 | Sun 22 Nov | Explorer in a narrow window (#151): the details pane gives way first, then the navigation pane, and both return when the window has room. | Retest |
 | Sun 22 Nov | Explorer pop-ups (new item, rename, delete, replace, errors) in Lapin's design, stage 1 (#163). | Retest |
 | Sun 22 Nov | Sign-in screen matches the lock screen (#120): the same clock-to-panel fade and corner spacing. | Retest |

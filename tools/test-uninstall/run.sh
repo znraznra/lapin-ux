@@ -511,9 +511,30 @@ chmod u+w "$D/sounds"
 check "a '.x' scheme that can't move is kept" "[ -f \"$D/lapin-ux/sounds/.ocean/stereo/bell.oga\" ]"
 check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" ]"
 }
+scenV() {
+echo "V: Lapin Terminal as default terminal stays in Lapin UX (#225)"
+DS=$(dirname "$U")/lapin-ux-desktop-settings
+M="$HOME/.config/mimeapps.list"
+if ! grep -q mimeapps "$U"; then echo "  skipped: mimeapps.list is not a swapped item yet (needs #223 / PR #226)"; return; fi
+mkdir -p "$HOME/.config"
+printf '[Default Applications]\nx-scheme-handler/terminal=org.gnome.Terminal.desktop\n' > "$M"
+bash "$U" --snapshot; bash "$DS" enter
+# what start-lapin-ux does in the Lapin session, once a default is not set; the user's own is kept
+check "the user's own default terminal is kept" "grep -q org.gnome.Terminal.desktop \"$M\""
+printf '[Default Applications]\nx-scheme-handler/terminal=dev.lapinux.Terminal.desktop\n' > "$M"
+bash "$DS" leave
+check "other desktop: its own default terminal back" "grep -q org.gnome.Terminal.desktop \"$M\" && ! grep -q dev.lapinux.Terminal \"$M\""
+bash "$DS" enter
+check "Lapin UX: Lapin Terminal is the default there" "grep -q dev.lapinux.Terminal.desktop \"$M\""
+# uninstall runs while the Lapin default is still active, so it has to clean it up itself
+rc=0; bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1 || rc=$?
+check "uninstall finishes without an error" "[ $rc -eq 0 ]"
+check "after uninstall: no Lapin Terminal default left" "! grep -q dev.lapinux.Terminal \"$M\""
+check "after uninstall: the user's own default terminal is back" "grep -q org.gnome.Terminal.desktop \"$M\""
+}
 # fakebin/pgrep only sees processes this run started, never the surrounding session
 if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T; do
+for x in A B C D E F G H I J K L M N O P Q R S T V; do
   h=$(mktemp -d); mkdir -p "$h/run"
   env -i HOME="$h" USER="$USER" XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN="$x" dbus-run-session -- bash "$0" "$U" > "$h.log" 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' "$h.log"

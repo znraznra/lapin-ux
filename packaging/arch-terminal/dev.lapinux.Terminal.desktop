@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+GenericName=Terminal
+Comment=Run commands in a window
+Exec=lapin-ux-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;cmd;
+StartupNotify=true
+StartupWMClass=dev.lapinux.Terminal
+Actions=New;
+
+[Desktop Action New]
+Name=New Terminal
+Exec=lapin-ux-terminal msg create-window

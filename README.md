@@ -67,6 +67,8 @@ Log out, pick **Lapin UX** on the sign-in screen, and sign in. The first build t
 
 Full list in the [technical reference](docs/TECHNICAL.md).
 
+**Terminal.** An optional Terminal app (`packaging/arch-terminal`, a fork of [Alacritty](https://github.com/alacritty/alacritty) under its own name and settings) becomes the default terminal in a Lapin UX session only. See [Terminal](docs/technical/terminal.md).
+
 ## Progress
 
 | Phase | What it covers | Progress |

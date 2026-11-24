@@ -14,6 +14,7 @@ those terms.
 | Fluent Emoji, © Microsoft Corporation | All emoji (built into the *Lapin Fluent Emoji* colour font) | MIT | `data/fonts/fluent-emoji/` (the "Color" artwork rendered into a colour-bitmap font by `tools/make-fluent-emoji.py`; licence in `LICENSE-fluentui-emoji`) | [microsoft/fluentui-emoji](https://github.com/microsoft/fluentui-emoji) |
 | Noto fonts (Arch packages) | Only characters Selawik lacks (CJK, other scripts) | SIL Open Font License 1.1 | installed as dependencies | [notofonts](https://github.com/notofonts) |
 | Borealis sound theme 0.9a, © 2004 Ivica Ico Bukvic | System sounds (sign-in, notifications, volume, Recycle Bin…) | Artistic License, with the author's note that commercial use is allowed only with GPL/LGPL software | `data/sounds/borealis/` (unmodified, from Ubuntu's `borealis-sound-theme` package; licence in `COPYING`, origin in `SOURCE`) | [ico.bukvic.net](http://ico.bukvic.net/Linux/Borealis_soundtheme/) |
+| Alacritty 0.17.0, © Joe Wilm and the Alacritty contributors | Terminal (`lapin-ux-terminal`), a fork under its own names | Apache-2.0 or MIT | `packaging/lapin-ux-terminal/` (patches only; upstream is fetched at a pinned commit, licences installed in `/usr/share/licenses/lapin-ux-terminal/`) | [alacritty/alacritty](https://github.com/alacritty/alacritty) |
 
 **Mouse pointers.** The optional pointers are *Cursor Concept W11 Tail
 HDPi*, **designed by JepriCreations**
@@ -32,7 +33,7 @@ Installed packages put every licence in `/usr/share/licenses/lapin-ux-desktop-gi
 trademarks of Microsoft Corporation. "Selawik" is a Reserved Font Name under
 the OFL, so the font is shipped unmodified under its own name; a modified
 version would have to be renamed. Ubuntu and Yaru are trademarks of
-Canonical Ltd. COSMIC is a trademark of System76, Inc. Other product names and
+Canonical Ltd. COSMIC is a trademark of System76, Inc. Alacritty is the name of the upstream project; Lapin Terminal is not affiliated with or endorsed by it. Other product names and
 app icons in the Win11 theme belong to their respective owners. These names
 are used only to identify the assets and what Lapin UX is compatible with or
 inspired by; Lapin UX is an independent open-source project and is not

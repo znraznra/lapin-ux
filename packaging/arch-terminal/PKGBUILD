@@ -1,0 +1,51 @@
+# Maintainer: Lapin UX contributors
+#
+# Lapin Terminal: a fork of Alacritty (https://github.com/alacritty/alacritty), shown as "Terminal".
+#
+# Optional. Alacritty v0.17.0 (pinned commit) plus the patches in packaging/lapin-ux-terminal.
+# It has its own names (app ID dev.lapinux.Terminal, config in ~/.config/dev.lapinux.Terminal),
+# so it never reads or changes a user's own Alacritty setup, and it installs next to COSMIC's
+# Terminal (lapin-ux-cosmic-term), which stays as it is.
+#
+# Build:  cd packaging/arch-terminal && makepkg -si
+# Undo:   sudo pacman -R lapin-ux-terminal   (or ./uninstall.sh)
+
+pkgname=lapin-ux-terminal
+pkgver=0.17.0
+pkgrel=1
+pkgdesc="Terminal for Lapin UX (fork of Alacritty)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/znraznra/lapin-ux"
+license=('GPL-3.0-only' 'Apache-2.0' 'MIT')
+depends=('freetype2' 'fontconfig' 'libxkbcommon' 'libgl')
+makedepends=('cargo' 'git' 'cmake' 'pkgconf' 'python')
+options=('!lto')
+
+_commit=94e7c8874e526b1e67b349d9ba30ddf81669119e   # alacritty v0.17.0
+source=("alacritty::git+https://github.com/alacritty/alacritty.git#commit=${_commit}")
+sha256sums=('SKIP')
+
+_src="$startdir/../.."
+
+prepare() {
+    export RUSTUP_TOOLCHAIN=stable
+    cd "$srcdir/alacritty"
+    git reset --hard -q "$_commit" && git clean -fdq
+    for p in "$_src"/packaging/lapin-ux-terminal/*.patch; do git apply "$p"; done
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    export RUSTUP_TOOLCHAIN=stable
+    cd "$srcdir/alacritty"
+    cargo build --frozen --release -p alacritty
+}
+
+package() {
+    cd "$srcdir/alacritty"
+    install -Dm755 target/release/alacritty "$pkgdir/usr/bin/lapin-ux-terminal"
+    install -Dm644 "$startdir/dev.lapinux.Terminal.desktop" \
+        "$pkgdir/usr/share/applications/dev.lapinux.Terminal.desktop"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+}

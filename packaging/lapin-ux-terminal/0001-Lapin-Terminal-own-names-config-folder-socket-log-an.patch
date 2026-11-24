@@ -1,0 +1,242 @@
+From d2874193b925157f5207cf82806dfa90c9bd1cb7 Mon Sep 17 00:00:00 2001
+From: Znra <noreply@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 14:15:17 +0800
+Subject: [PATCH] Lapin Terminal: own names, config folder, socket, log and
+ TERM
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ alacritty/src/cli.rs              |  6 ++---
+ alacritty/src/config/mod.rs       | 40 +++++++------------------------
+ alacritty/src/config/window.rs    |  4 ++--
+ alacritty/src/lapin.rs            | 26 ++++++++++++++++++++
+ alacritty/src/logging.rs          |  2 +-
+ alacritty/src/main.rs             |  3 ++-
+ alacritty/src/polling/ipc.rs      |  6 ++---
+ alacritty_terminal/src/tty/mod.rs |  4 +++-
+ 8 files changed, 49 insertions(+), 42 deletions(-)
+ create mode 100644 alacritty/src/lapin.rs
+
+diff --git a/alacritty/src/cli.rs b/alacritty/src/cli.rs
+index 60e81a34..028ac901 100644
+--- a/alacritty/src/cli.rs
++++ b/alacritty/src/cli.rs
+@@ -34,17 +34,17 @@ pub struct Options {
+     pub embed: Option<String>,
+ 
+     /// Specify alternative configuration file [default:
+-    /// $XDG_CONFIG_HOME/alacritty/alacritty.toml].
++    /// $XDG_CONFIG_HOME/dev.lapinux.Terminal/terminal.toml].
+     #[cfg(not(any(target_os = "macos", windows)))]
+     #[clap(long, value_hint = ValueHint::FilePath)]
+     pub config_file: Option<PathBuf>,
+ 
+-    /// Specify alternative configuration file [default: %APPDATA%\alacritty\alacritty.toml].
++    /// Specify alternative configuration file [default: %APPDATA%\dev.lapinux.Terminal\terminal.toml].
+     #[cfg(windows)]
+     #[clap(long, value_hint = ValueHint::FilePath)]
+     pub config_file: Option<PathBuf>,
+ 
+-    /// Specify alternative configuration file [default: $HOME/.config/alacritty/alacritty.toml].
++    /// Specify alternative configuration file [default: $HOME/.config/dev.lapinux.Terminal/terminal.toml].
+     #[cfg(target_os = "macos")]
+     #[clap(long, value_hint = ValueHint::FilePath)]
+     pub config_file: Option<PathBuf>,
+diff --git a/alacritty/src/config/mod.rs b/alacritty/src/config/mod.rs
+index 223b51c2..3cfdf56c 100644
+--- a/alacritty/src/config/mod.rs
++++ b/alacritty/src/config/mod.rs
+@@ -364,43 +364,21 @@ fn prune_yaml_nulls(value: &mut serde_yaml::Value, warn_pruned: bool) {
+ /// Get the location of the first found default config file paths
+ /// according to the following order:
+ ///
+-/// 1. $XDG_CONFIG_HOME/alacritty/alacritty.toml
+-/// 2. $XDG_CONFIG_HOME/alacritty.toml
+-/// 3. $HOME/.config/alacritty/alacritty.toml
+-/// 4. $HOME/.alacritty.toml
+-/// 5. /etc/alacritty/alacritty.toml
++/// 1. $XDG_CONFIG_HOME/dev.lapinux.Terminal/terminal.toml
+ #[cfg(not(windows))]
+ pub fn installed_config(suffix: &str) -> Option<PathBuf> {
+-    let file_name = format!("alacritty.{suffix}");
+-
+-    // Try using XDG location by default.
+-    xdg::BaseDirectories::with_prefix("alacritty")
+-        .find_config_file(&file_name)
+-        .or_else(|| xdg::BaseDirectories::new().find_config_file(&file_name))
+-        .or_else(|| {
+-            if let Ok(home) = env::var("HOME") {
+-                // Fallback path: $HOME/.config/alacritty/alacritty.toml.
+-                let fallback = PathBuf::from(&home).join(".config/alacritty").join(&file_name);
+-                if fallback.exists() {
+-                    return Some(fallback);
+-                }
+-                // Fallback path: $HOME/.alacritty.toml.
+-                let hidden_name = format!(".{file_name}");
+-                let fallback = PathBuf::from(&home).join(hidden_name);
+-                if fallback.exists() {
+-                    return Some(fallback);
+-                }
+-            }
+-
+-            let fallback = PathBuf::from("/etc/alacritty").join(&file_name);
+-            fallback.exists().then_some(fallback)
+-        })
++    // Lapin Terminal only reads its own config, $XDG_CONFIG_HOME/dev.lapinux.Terminal/terminal.toml,
++    // so a user's existing Alacritty config is never picked up or changed.
++    let file_name = format!("{}.{suffix}", crate::lapin::CONFIG_FILE);
++    xdg::BaseDirectories::with_prefix(crate::lapin::APP_ID).find_config_file(&file_name)
+ }
+ 
+ #[cfg(windows)]
+ pub fn installed_config(suffix: &str) -> Option<PathBuf> {
+-    let file_name = format!("alacritty.{suffix}");
+-    dirs::config_dir().map(|path| path.join("alacritty").join(file_name)).filter(|new| new.exists())
++    let file_name = format!("{}.{suffix}", crate::lapin::CONFIG_FILE);
++    dirs::config_dir()
++        .map(|path| path.join(crate::lapin::APP_ID).join(file_name))
++        .filter(|new| new.exists())
+ }
+ 
+ #[cfg(test)]
+diff --git a/alacritty/src/config/window.rs b/alacritty/src/config/window.rs
+index 6eacb251..64ba99de 100644
+--- a/alacritty/src/config/window.rs
++++ b/alacritty/src/config/window.rs
+@@ -14,7 +14,7 @@ use crate::config::LOG_TARGET_CONFIG;
+ use crate::config::ui_config::{Delta, Percentage};
+ 
+ /// Default Alacritty name, used for window title and class.
+-pub const DEFAULT_NAME: &str = "Alacritty";
++pub const DEFAULT_NAME: &str = crate::lapin::DISPLAY_NAME;
+ 
+ #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
+ pub struct WindowConfig {
+@@ -215,7 +215,7 @@ impl Class {
+ 
+ impl Default for Class {
+     fn default() -> Self {
+-        Self::new(DEFAULT_NAME, DEFAULT_NAME)
++        Self::new(crate::lapin::APP_ID, crate::lapin::APP_ID)
+     }
+ }
+ 
+diff --git a/alacritty/src/lapin.rs b/alacritty/src/lapin.rs
+new file mode 100644
+index 00000000..e0053fe3
+--- /dev/null
++++ b/alacritty/src/lapin.rs
+@@ -0,0 +1,26 @@
++//! Lapin UX additions. Everything Lapin adds lives here, with a few call sites in upstream files,
++//! so rebasing onto a new Alacritty release stays small.
++
++use std::env;
++
++/// App ID, window class and config folder name of Lapin Terminal. Own names, so nothing collides
++/// with a user's `alacritty` package, config or running windows.
++pub const APP_ID: &str = "dev.lapinux.Terminal";
++
++/// Name shown in the title bar, Start search and Apps.
++pub const DISPLAY_NAME: &str = "Terminal";
++
++/// Config file name inside `$XDG_CONFIG_HOME/dev.lapinux.Terminal/`.
++pub const CONFIG_FILE: &str = "terminal";
++
++/// Whether Lapin's own look and behaviour is on: inside the Lapin UX session
++/// (`XDG_CURRENT_DESKTOP` contains `LapinUX`), or when `LAPIN_UX_TERMINAL=1` forces it.
++/// Outside it the app behaves like stock Alacritty (under its own names).
++#[allow(dead_code)]
++pub fn enabled() -> bool {
++    if env::var("LAPIN_UX_TERMINAL").is_ok_and(|v| v == "1") {
++        return true;
++    }
++    env::var("XDG_CURRENT_DESKTOP")
++        .is_ok_and(|desktops| desktops.split([':', ';']).any(|d| d == "LapinUX"))
++}
+diff --git a/alacritty/src/logging.rs b/alacritty/src/logging.rs
+index 386fe5b2..921da415 100644
+--- a/alacritty/src/logging.rs
++++ b/alacritty/src/logging.rs
+@@ -198,7 +198,7 @@ struct OnDemandLogFile {
+ impl OnDemandLogFile {
+     fn new() -> Self {
+         let mut path = env::temp_dir();
+-        path.push(format!("Alacritty-{}.log", process::id()));
++        path.push(format!("{}-{}.log", crate::lapin::APP_ID, process::id()));
+ 
+         // Set log path as an environment variable.
+         unsafe { env::set_var(ALACRITTY_LOG_ENV, path.as_os_str()) };
+diff --git a/alacritty/src/main.rs b/alacritty/src/main.rs
+index a21ee862..be5fc047 100644
+--- a/alacritty/src/main.rs
++++ b/alacritty/src/main.rs
+@@ -34,6 +34,7 @@ mod daemon;
+ mod display;
+ mod event;
+ mod input;
++mod lapin;
+ mod logging;
+ #[cfg(target_os = "macos")]
+ mod macos;
+@@ -141,7 +142,7 @@ fn alacritty(mut options: Options) -> Result<(), Box<dyn Error>> {
+     let log_file = logging::initialize(&options, window_event_loop.create_proxy())
+         .expect("Unable to initialize logger");
+ 
+-    info!("Welcome to Alacritty");
++    info!("Welcome to Lapin Terminal (built on Alacritty)");
+     info!("Version {}", env!("VERSION"));
+ 
+     #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+diff --git a/alacritty/src/polling/ipc.rs b/alacritty/src/polling/ipc.rs
+index b60c7d22..234bb38d 100644
+--- a/alacritty/src/polling/ipc.rs
++++ b/alacritty/src/polling/ipc.rs
+@@ -152,7 +152,7 @@ fn send_reply_fallible(stream: &mut UnixStream, message: SocketReply) -> IoResul
+ /// Directory for the IPC socket file.
+ #[cfg(not(target_os = "macos"))]
+ pub fn socket_dir() -> PathBuf {
+-    xdg::BaseDirectories::with_prefix("alacritty")
++    xdg::BaseDirectories::with_prefix(crate::lapin::APP_ID)
+         .get_runtime_directory()
+         .map(ToOwned::to_owned)
+         .ok()
+@@ -222,13 +222,13 @@ fn find_socket(socket_path: Option<PathBuf>) -> IoResult<UnixStream> {
+ #[cfg(not(target_os = "macos"))]
+ pub fn socket_prefix() -> String {
+     let display = env::var("WAYLAND_DISPLAY").or_else(|_| env::var("DISPLAY")).unwrap_or_default();
+-    format!("Alacritty-{}", display.replace('/', "-"))
++    format!("{}-{}", crate::lapin::APP_ID, display.replace('/', "-"))
+ }
+ 
+ /// File prefix matching all available sockets.
+ #[cfg(target_os = "macos")]
+ pub fn socket_prefix() -> String {
+-    String::from("Alacritty")
++    String::from(crate::lapin::APP_ID)
+ }
+ 
+ /// IPC socket replies.
+diff --git a/alacritty_terminal/src/tty/mod.rs b/alacritty_terminal/src/tty/mod.rs
+index 91eb2a0c..a500634c 100644
+--- a/alacritty_terminal/src/tty/mod.rs
++++ b/alacritty_terminal/src/tty/mod.rs
+@@ -101,13 +101,15 @@ pub fn setup_env() {
+     // Default to 'alacritty' terminfo if it is available, otherwise
+     // default to 'xterm-256color'. May be overridden by user's config
+     // below.
+-    let terminfo = if terminfo_exists("alacritty") { "alacritty" } else { "xterm-256color" };
++    // Lapin Terminal does not ship Alacritty's terminfo, so always use the one every system has.
++    let terminfo = "xterm-256color";
+     unsafe { env::set_var("TERM", terminfo) };
+ 
+     // Advertise 24-bit color support.
+     unsafe { env::set_var("COLORTERM", "truecolor") };
+ }
+ 
++#[allow(dead_code)]
+ /// Check if a terminfo entry exists on the system.
+ fn terminfo_exists(terminfo: &str) -> bool {
+     // Get first terminfo character for the parent directory.
+-- 
+2.56.1
+
