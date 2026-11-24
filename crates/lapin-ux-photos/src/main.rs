@@ -276,6 +276,10 @@ struct App {
     dims: HashMap<PathBuf, (u32, u32)>,
     /// Tiles asked for already (loaded, loading or failed), so none is decoded twice.
     asked: HashSet<PathBuf>,
+    /// Counts moves to the Recycle Bin, so a scan that began earlier can be told apart.
+    trash_epoch: u32,
+    /// Pictures moved to the Recycle Bin that an older scan may still list.
+    trashed: HashSet<PathBuf>,
     favorites: HashSet<PathBuf>,
     /// The last favorites change could not be saved, so the stars show what is on disk.
     favorites_unsaved: bool,
@@ -473,6 +477,9 @@ fn is_photo(path: &Path) -> bool {
 /// What a scan found, and what it could not look at.
 #[derive(Debug, Clone, Default)]
 struct Scan {
+    /// `Photos::trash_epoch` when the scan began: a scan that began before a
+    /// move to the Recycle Bin may still list the moved pictures.
+    epoch: u32,
     photos: Vec<Photo>,
     /// Folders or entries that could not be read (permissions, a vanished drive).
     unreadable: usize,
@@ -488,7 +495,8 @@ fn sort_photos(photos: &mut [Photo]) {
 /// Every picture under the usual folders, newest first, plus the starred pictures
 /// that live elsewhere. Hidden folders are skipped, and the walk is bounded so a
 /// huge Documents tree cannot stall the app.
-fn scan(favorites: HashSet<PathBuf>) -> Scan {
+/// `extra` are pictures to include even outside the folders (starred or hidden ones).
+fn scan(extra: HashSet<PathBuf>) -> Scan {
     let mut found: Vec<Photo> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut unreadable = 0usize;
@@ -533,8 +541,8 @@ fn scan(favorites: HashSet<PathBuf>) -> Scan {
             }
         }
     }
-    // Starred pictures outside the folders above still belong in Favorites.
-    for path in favorites {
+    // Starred and hidden pictures outside the folders above must not vanish.
+    for path in extra {
         if seen.contains(&path) || !is_photo(&path) {
             continue;
         }
@@ -545,7 +553,7 @@ fn scan(favorites: HashSet<PathBuf>) -> Scan {
         }
     }
     sort_photos(&mut found);
-    Scan { photos: found, unreadable, truncated }
+    Scan { epoch: 0, photos: found, unreadable, truncated }
 }
 
 /// Opens a picture upright, as the camera meant it (EXIF rotation).
@@ -680,6 +688,10 @@ impl App {
     /// The photos the current section and source show, newest first.
     fn shown(&self) -> Vec<&Photo> {
         let root = self.source.and_then(Folder::dir);
+        // A named folder this account does not have shows nothing, not everything.
+        if self.source.is_some() && root.is_none() {
+            return Vec::new();
+        }
         let now = SystemTime::now();
         self.photos
             .iter()
@@ -729,9 +741,11 @@ impl App {
     }
 
     fn scan_task(&self) -> Task<Message> {
-        let starred = self.favorites.clone();
+        let extra: HashSet<PathBuf> = self.favorites.union(&self.hidden).cloned().collect();
+        let epoch = self.trash_epoch;
         Task::future(async move {
-            let found = tokio::task::spawn_blocking(move || scan(starred)).await.unwrap_or_default();
+            let mut found = tokio::task::spawn_blocking(move || scan(extra)).await.unwrap_or_default();
+            found.epoch = epoch;
             cosmic::Action::App(Message::Scanned(found))
         })
     }
@@ -811,6 +825,24 @@ impl App {
         let tiles = self.want_section_thumbs();
         let reel = self.sync_reel();
         Task::batch([tiles, reel])
+    }
+
+    /// The selected pictures that are in the current list, so a bulk action never
+    /// touches one that is no longer shown (unstarred in Favorites, say).
+    fn targets(&self) -> Vec<PathBuf> {
+        let visible: HashSet<&PathBuf> = self.shown().into_iter().map(|p| &p.path).collect();
+        self.selected.iter().filter(|p| visible.contains(p)).cloned().collect()
+    }
+
+    /// Drops from the selection what the current list no longer shows.
+    fn trim_selection(&mut self) {
+        let keep: HashSet<PathBuf> = self.targets().into_iter().collect();
+        self.selected.retain(|p| keep.contains(p));
+        if self.selected.is_empty() {
+            self.select_mode = false;
+            self.anchor = None;
+            self.confirm_delete = false;
+        }
     }
 
     fn clear_selection(&mut self) {
@@ -901,6 +933,8 @@ impl cosmic::Application for App {
             thumbs: HashMap::new(),
             dims: HashMap::new(),
             asked: HashSet::new(),
+            trash_epoch: 0,
+            trashed: HashSet::new(),
             favorites: load_favorites(),
             hidden: load_set("hidden"),
             albums: load_albums(),
@@ -968,10 +1002,37 @@ impl cosmic::Application for App {
                         "Showing the first {MAX_PHOTOS} pictures found in your folders, and {n} folder(s) could not be read."
                     )),
                 };
-                self.photos = found.photos;
+                let mut photos = found.photos;
+                // A scan that began before the last move to the Recycle Bin may
+                // still list the moved pictures; one that began after cannot.
+                photos.retain(|p| !self.trashed.contains(&p.path));
+                if found.epoch == self.trash_epoch {
+                    self.trashed.clear();
+                }
+                // A file replaced in place keeps its path, so compare the dates:
+                // a changed one needs a new thumbnail and a new full-size decode.
+                let old: HashMap<&PathBuf, SystemTime> = self.photos.iter().map(|p| (&p.path, p.modified)).collect();
+                let changed: Vec<PathBuf> =
+                    photos.iter().filter(|p| old.get(&p.path).is_some_and(|m| *m != p.modified)).map(|p| p.path.clone()).collect();
+                for p in &changed {
+                    self.thumbs.remove(p);
+                    self.dims.remove(p);
+                    self.asked.remove(p);
+                }
+                let stale_full = self.full.as_ref().is_some_and(|(p, _)| changed.contains(p));
+                if stale_full {
+                    self.full = None;
+                }
+                self.photos = photos;
                 self.scanning = false;
                 let live: HashSet<&PathBuf> = self.photos.iter().map(|p| &p.path).collect();
                 self.selected.retain(|p| live.contains(p));
+                let reload = if stale_full {
+                    self.viewing.clone().or_else(|| self.reel.clone()).filter(|p| changed.contains(p))
+                } else {
+                    None
+                };
+                let reload = reload.map_or_else(Task::none, |p| self.want_full(p));
                 // A picture handed over by Files opens straight in the viewer.
                 let open = match self.start.take() {
                     Some(p) if is_photo(&p) => {
@@ -985,7 +1046,7 @@ impl cosmic::Application for App {
                     _ => Task::none(),
                 };
                 let view = self.refresh_view();
-                return Task::batch([view, open]);
+                return Task::batch([view, open, reload]);
             }
             Message::Section(s) => {
                 self.section = s;
@@ -1065,13 +1126,14 @@ impl cosmic::Application for App {
             }
             Message::SelectAll => {
                 if self.viewing.is_none() {
-                    self.selected = self.shown().into_iter().map(|p| p.path.clone()).collect();
+                    // Only what the grid draws: a hidden tile must not be hidden or deleted by accident.
+                    self.selected = self.shown().into_iter().take(MAX_TILES).map(|p| p.path.clone()).collect();
                     self.select_mode = true;
                     self.confirm_delete = false;
                 }
             }
             Message::FavoriteTargets => {
-                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let paths = self.targets();
                 if paths.is_empty() {
                     return Task::none();
                 }
@@ -1086,6 +1148,7 @@ impl cosmic::Application for App {
                         self.favorites_unsaved = true;
                     }
                 }
+                self.trim_selection();
                 return self.refresh_view();
             }
             Message::Album(name) => {
@@ -1201,7 +1264,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::HideTargets => {
-                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let paths = self.targets();
                 if paths.is_empty() {
                     return Task::none();
                 }
@@ -1227,7 +1290,7 @@ impl cosmic::Application for App {
             Message::CancelDelete => self.confirm_delete = false,
             Message::ConfirmDelete => {
                 self.confirm_delete = false;
-                let paths: Vec<PathBuf> = self.selected.iter().cloned().collect();
+                let paths = self.targets();
                 if paths.is_empty() {
                     return Task::none();
                 }
@@ -1240,6 +1303,9 @@ impl cosmic::Application for App {
             }
             Message::Trashed(done, failed) => {
                 let gone: HashSet<PathBuf> = done.into_iter().collect();
+                // A scan already running may still list these; see `Scanned`.
+                self.trash_epoch = self.trash_epoch.wrapping_add(1);
+                self.trashed.extend(gone.iter().cloned());
                 self.photos.retain(|p| !gone.contains(&p.path));
                 self.selected.retain(|p| !gone.contains(p));
                 for p in &gone {
@@ -1626,7 +1692,14 @@ impl App {
             }
             container(col.push(text::body(msg))).center(Length::Fill).into()
         } else if self.size == REEL {
-            self.reel_view(&shown)
+            let mut col = column::with_capacity(3).spacing(8);
+            if self.favorites_unsaved {
+                col = col.push(container(text::caption(FAVORITES_UNSAVED)).padding([8, 16, 0, 8]));
+            }
+            if let Some(notice) = &self.notice {
+                col = col.push(container(text::caption(notice.as_str())).padding([8, 16, 0, 8]));
+            }
+            col.push(self.reel_view(&shown)).into()
         } else {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {

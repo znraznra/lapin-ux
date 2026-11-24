@@ -6,8 +6,8 @@ An offline picture app (#74). Nothing leaves the computer: no cloud, no accounts
 
 - **Gallery**: follows the person's light or dark theme (#200). A toolbar on top, an optional side bar (Gallery, Favorites, Recents, then Media types: Screenshots, Animated GIFs, and Hidden, then your albums) and the grid.
   - Toolbar: side bar toggle, **Source** (all folders, or Pictures, Downloads, Desktop, Documents, shown only when they exist), **Group** (Years, Months, Days, All), a square or own-proportions grid toggle, a size slider, **Select**, and a More menu (Look for new pictures).
-  - The size slider has six steps. The last step is a reel: one large photo with the others in a strip below; clicking the large photo opens the viewer.
-  - **Select** shows a tick on each tile you click. Click selects, Shift+click selects a range, Ctrl+click adds one, Ctrl+A selects all, Esc clears. While photos are selected the toolbar offers Select all, favorite or unfavorite, and move to the Recycle Bin (asks first, uses `gio trash`).
+  - The size slider has seven positions: six grid sizes, then a reel as the last one. The reel shows one large photo with the others in a strip below; clicking the large photo opens the viewer.
+  - **Select** shows a tick on each tile you click. Click selects, Shift+click selects a range, Ctrl+click toggles one (adds it if it is not selected, removes it if it is), Ctrl+A selects every tile the grid shows (at most 400), Esc clears. While photos are selected the toolbar offers Select all, favorite or unfavorite, and move to the Recycle Bin (asks first, uses `gio trash`).
   - **Recents** shows the last three days.
   - **Screenshots** shows pictures in a folder or with a file name starting "Screenshot". **Animated GIFs** shows `.gif` files.
   - **Hide** (in the selection toolbar) moves the selected photos out of every section except **Hidden**. In Hidden the same button reads **Unhide**. Hiding keeps the file where it is; it only changes what Photos shows.
