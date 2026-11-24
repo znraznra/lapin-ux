@@ -71,7 +71,7 @@ fn section_header<'a>(title: &'static str, action: Option<(&'static str, Message
     r.into()
 }
 
-fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+pub(crate) fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     // While Start slides between its pages every item moves each frame;
     // tracking them then floods the shell with position updates (and both
     // pages share keys), which made the slide stutter.
@@ -79,10 +79,10 @@ fn tracked<'a>(shell: &'a Shell, key: String, content: impl Into<Element<'a, Mes
 }
 
 /// Compact list row: icon and name, optional secondary line.
-fn list_row<'a>(
+pub(crate) fn list_row<'a>(
     shell: &'a Shell,
     start: &'a StartMenu,
-    app: &'a str,
+    app: &str,
     sub: Option<String>,
     selected: bool,
 ) -> Element<'a, Message> {
@@ -103,6 +103,9 @@ fn list_row<'a>(
 }
 
 pub fn start_menu<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
+    if start.layout != crate::config::StartLayout::Current {
+        return crate::start_layouts::menu(shell, start);
+    }
     let search = container(
         text_input::search_input("Search for apps and documents", &start.query)
             .on_input(Message::StartQuery)
@@ -508,7 +511,7 @@ fn file_card<'a>(
         .into()
 }
 
-fn search_results<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
+pub(crate) fn search_results<'a>(shell: &'a Shell, start: &'a StartMenu) -> Element<'a, Message> {
     let results = shell.search(&start.query);
     let flat = results.flat();
     if flat.is_empty() {
