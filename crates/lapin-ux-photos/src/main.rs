@@ -620,6 +620,12 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
         // Saved favorites are canonical names, so a starred symlink such as
         // `a.jpg -> raw-file` arrives as its target. The extension is then no
         // evidence either way: the content decides.
+        // Only a regular file is ever opened: a pipe or device that took a
+        // starred file's place would block the sniff and the scan with it.
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if !meta.is_file() {
+            continue;
+        }
         if !is_photo(&path) && !sniffs_as_photo(&path) {
             continue;
         }
@@ -627,12 +633,8 @@ fn scan(favorites: HashSet<PathBuf>, extra: Vec<PathBuf>) -> Scan {
         if seen.contains(&key) {
             continue;
         }
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if meta.is_file() {
-                seen.insert(key.clone());
-                found.push(Photo { path, key, modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH) });
-            }
-        }
+        seen.insert(key.clone());
+        found.push(Photo { path, key, modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH) });
     }
     sort_photos(&mut found);
     Scan { photos: found, unreadable, truncated }
@@ -1179,8 +1181,14 @@ impl App {
         // decision about what may open must not rest on the list read at start.
         match try_load_set("hidden") {
             Ok(set) => {
+                let changed = set != self.hidden;
                 self.hidden = set;
                 self.hidden_unreadable = false;
+                if changed {
+                    // Another window may have hidden a selected photo: it is no
+                    // longer shown, so it must not stay a target.
+                    self.reconcile_selection();
+                }
             }
             Err(e) => {
                 tracing::warn!("could not read the hidden photos: {e}");
@@ -1199,6 +1207,19 @@ impl App {
 
     fn is_favorite(&self, path: &Path) -> bool {
         self.favorites.contains(&self.key_of(path))
+    }
+
+    /// Drops selected photos the current section no longer shows.
+    fn reconcile_selection(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let visible: HashSet<PathBuf> = self.shown().into_iter().map(|p| p.path.clone()).collect();
+        self.selected.retain(|p| visible.contains(p));
+        self.confirm_delete = false;
+        if self.selected.is_empty() {
+            self.anchor = None;
+        }
     }
 
     fn clear_selection(&mut self) {
@@ -1514,8 +1535,9 @@ impl cosmic::Application for App {
             }
             Message::SelectAll => {
                 if self.viewing.is_none() {
-                    // The tiles loaded for this section (at most `MAX_TILES`), never
-                    // a photo the list does not show, so nothing unseen is batch-deleted.
+                    // Every photo in this section's list (at most `MAX_TILES`), not only
+                    // the ones scrolled into view. Hidden photos are never in the list, and
+                    // moving to the Recycle Bin asks first.
                     self.selected = self.shown().into_iter().take(MAX_TILES).map(|p| p.path.clone()).collect();
                     self.select_mode = true;
                     self.confirm_delete = false;
@@ -1531,6 +1553,8 @@ impl cosmic::Application for App {
                     Ok(saved) => {
                         self.favorites = saved;
                         self.favorites_unsaved = false;
+                        // In Favorites an unstarred photo leaves the list.
+                        self.reconcile_selection();
                     }
                     Err(e) => {
                         tracing::warn!("could not save favorites: {e}");
@@ -1613,6 +1637,7 @@ impl cosmic::Application for App {
             }
             Message::NewAlbum => {
                 self.menu = None;
+                self.renaming = None;
                 self.new_album = Some(String::new());
                 return widget::text_input::focus(NEW_ALBUM_ID.clone());
             }
@@ -1734,16 +1759,23 @@ impl cosmic::Application for App {
                         self.renaming = None;
                         return Task::none();
                     }
-                    if self.albums.contains_key(&name) {
-                        self.notice = Some("An album with this name already exists.".to_string());
-                        return Task::none();
-                    }
                     let to = name.clone();
+                    // Checked in the freshly loaded list, under the lock: another
+                    // window may have made the album since this one last read it.
+                    let mut conflict: Option<&str> = None;
                     match edit_albums(|a| {
-                        if let Some(list) = a.remove(&old) {
+                        if a.contains_key(&to) {
+                            conflict = Some("An album with this name already exists.");
+                        } else if let Some(list) = a.remove(&old) {
                             a.insert(to, list);
+                        } else {
+                            conflict = Some("That album no longer exists.");
                         }
                     }) {
+                        Ok(saved) if conflict.is_some() => {
+                            self.albums = saved;
+                            self.notice = conflict.map(str::to_string);
+                        }
                         Ok(saved) => {
                             self.albums = saved;
                             self.albums_unsaved = false;
@@ -1816,13 +1848,14 @@ impl cosmic::Application for App {
                         self.extra = saved;
                         self.source = None;
                         self.source_extra = Some(dir);
+                        self.clear_selection();
                         self.notice = None;
                         self.scanning = true;
                         return self.scan_task();
                     }
                     Err(e) => {
                         tracing::warn!("could not save folders: {e}");
-                        self.notice = Some("The folder could not be saved, so Photos will forget it when it closes.".to_string());
+                        self.notice = Some("The folder could not be added, so Photos kept showing what it was showing.".to_string());
                     }
                 }
             }
@@ -2425,9 +2458,12 @@ impl App {
                 (_, true) => "Some folders could not be read, so no pictures were found here.",
                 _ => "No pictures here yet.",
             };
-            let mut col = column::with_capacity(3).spacing(8).align_x(Alignment::Center);
+            let mut col = column::with_capacity(4).spacing(8).align_x(Alignment::Center);
             if self.favorites_unsaved {
                 col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            if self.albums_unsaved && self.new_album.is_none() {
+                col = col.push(text::caption(ALBUMS_UNSAVED));
             }
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));
@@ -2439,6 +2475,9 @@ impl App {
             let mut col = column::with_capacity(8).spacing(8).padding([8, 16, 16, 8]);
             if self.favorites_unsaved {
                 col = col.push(text::caption(FAVORITES_UNSAVED));
+            }
+            if self.albums_unsaved && self.new_album.is_none() {
+                col = col.push(text::caption(ALBUMS_UNSAVED));
             }
             if let Some(notice) = &self.notice {
                 col = col.push(text::caption(notice.as_str()));

@@ -42,6 +42,7 @@ The days Lapin UX was actually worked on, taken from the commit history of `main
 | Sun 22 Nov | Automated checks on every pull request (#190): the uninstall tests, shellcheck and a dependency and secret scan run in GitHub Actions. | Docs |
 | Mon 23 Nov | Explorer Home (#168): the Recent and Favorites lists are real columns you can drag to resize and click to sort, long text ends in "…" with the full path as a tooltip, and Quick access, Favorites and Recent fold and unfold from their chevron. | Retest |
 | Mon 23 Nov | Explorer right-click (#169): the menu on Home now opens at the pointer, right-click on empty space works (Refresh, Map network drive), drives can be pinned to Home, and This PC's details pane shows a summary when nothing is picked. | Retest |
+| Tue 24 Nov | Photos review fixes (#241): a starred pipe or device is skipped before it is read, the selection follows Favorites and Hidden changes, New album ends a rename, the rename name is checked under the lock, adding a folder clears the selection, and a failed album save shows outside the naming bar. | 1 |
 
 ## Phase dates
 
