@@ -56,7 +56,8 @@ FONTS_CONF=/usr/share/lapin-ux/fonts.conf
 OUTSIDE="$STATE/other-desktops"     # what other desktops use
 INSIDE="$STATE/lapin-desktop"       # what Lapin UX uses
 ACTIVE="$STATE/lapin-active"        # Lapin UX's copy is the one in place
-SKIPPED="$STATE/lapin-skipped"      # items enter left alone (their save failed)
+SKIPPED="$STATE/lapin-skipped"      # items enter left alone (their save or swap failed)
+PENDING="$STATE/lapin-entering"     # items enter is swapping (so a crash can be undone)
 
 # COSMIC theme folders (colours, corners, gaps).
 THEME_DIRS=(com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Dark.Builder
@@ -244,25 +245,40 @@ lapin_sets() {   # kind name
     for k in "${LAPIN_SETS[@]}"; do [ "$k" = "$2" ] && return 0; done
     return 1
 }
-# Make the live value what src holds.
+# Where the live file is. mimeapps.list may be a symlink (dotfiles): work on
+# its target so the link itself stays (#223).
+live_file() {   # kind name
+    local f
+    f=$(item_path "$1" "$2")
+    [ "$1" = mimeapps ] && f=$(readlink -f "$f" 2>/dev/null || echo "$f")
+    echo "$f"
+}
+# Make the live value what src holds. Fails (and leaves the live value as it
+# was) when it can't.
 item_apply() {   # kind name src
     local f
     if [ "$1" = dconf ]; then
-        if [ -s "$3" ]; then dconf_do write "$(gkey_path "$2")" "$(cat "$3")"
-        elif [ -e "$3" ] || [ -e "$3.absent" ]; then dconf_do reset "$(gkey_path "$2")"; fi
+        if [ -s "$3" ]; then dconf_do write "$(gkey_path "$2")" "$(cat "$3")" || return 1
+        elif [ -e "$3" ] || [ -e "$3.absent" ]; then dconf_do reset "$(gkey_path "$2")" || return 1; fi
         return 0
     fi
-    f=$(item_path "$1" "$2")
+    f=$(live_file "$1" "$2")
     if [ -e "$3.absent" ]; then
         run rm -rf "$f"
     elif [ -d "$3" ]; then
-        run rm -rf "$f"; run mkdir -p "$(dirname "$f")"; run cp -a "$3" "$f"
+        # Staged next to it, so a failed copy leaves the live folder alone.
+        run mkdir -p "$(dirname "$f")" || return 1
+        run rm -rf "$f.lapin-new"
+        if run cp -a "$3" "$f.lapin-new"; then
+            run rm -rf "$f" && run mv -f "$f.lapin-new" "$f"
+        else
+            run rm -rf "$f.lapin-new"
+            return 1
+        fi
     elif [ -e "$3" ]; then
         # Copy next to it, then rename over it: the setting is never seen
         # (or left, after a power cut) half-written or empty (#46).
-        # mimeapps.list may be a symlink: write its target and keep the link.
-        [ "$1" = mimeapps ] && f=$(readlink -f "$f" 2>/dev/null || echo "$f")
-        run mkdir -p "$(dirname "$f")"
+        run mkdir -p "$(dirname "$f")" || return 1
         # Only a complete copy replaces the live file: a failed copy (a full
         # disk) leaves the live value as it is.
         if run cp -a "$3" "$f.lapin-new"; then
@@ -276,7 +292,23 @@ item_apply() {   # kind name src
 }
 # Back to the desktop's own default.
 item_default() {   # kind name
-    if [ "$1" = dconf ]; then dconf_do reset "$(gkey_path "$2")"; else run rm -rf "$(item_path "$1" "$2")"; fi
+    if [ "$1" = dconf ]; then dconf_do reset "$(gkey_path "$2")"; else run rm -rf "$(live_file "$1" "$2")"; fi
+}
+# Does the live value equal the one saved in src (an empty or ".absent" copy
+# means unset)?
+same_as() {   # kind name src
+    local f cur
+    if [ "$1" = dconf ]; then
+        dconf_ok || return 0
+        cur=$(dconf read "$(gkey_path "$2")" 2>/dev/null) || return 1
+        [ "$cur" = "$(cat "$3" 2>/dev/null)" ]
+        return
+    fi
+    f=$(live_file "$1" "$2")
+    if [ -e "$3.absent" ]; then [ ! -e "$f" ]
+    elif [ -d "$3" ]; then [ -d "$f" ] && diff -rq "$3" "$f" >/dev/null 2>&1
+    elif [ -e "$3" ]; then [ -f "$f" ] && cmp -s "$3" "$f"
+    else return 0; fi
 }
 
 # Does a value look like one Lapin UX sets? (Selawik, its icons and pointer,
@@ -450,9 +482,61 @@ other_desktops_value() {   # kind name dest
 # stores Lapin's and puts theirs back. A change you make in COSMIC stays in
 # COSMIC; a change you make in Lapin UX stays in Lapin UX.
 
+# Leave an item alone for this session: its save or swap failed, so
+# leave_session must not touch it (the live value is still the other desktops'
+# own). Drop the other desktops' copy as well: leave_session never restores an
+# item without one, so it stays safe even when the record cannot be written (a
+# full state disk). Fails when neither worked: leave could not tell the item
+# wasn't swapped.
+skip_item() {   # kind name
+    local out
+    [ "$DRY" = 1 ] && return 0
+    out=$(store_path "$OUTSIDE" "$1" "$2")
+    rm -rf "$out" "$out.absent" 2>/dev/null
+    if ! { mkdir -p "$STATE" && echo "$1 $2" >> "$SKIPPED"; } 2>/dev/null && saved "$out"; then
+        return 1
+    fi
+    return 0
+}
+# Store the live value as Lapin's and hand the other desktops theirs back.
+swap_back() {   # kind name
+    local out
+    out=$(store_path "$OUTSIDE" "$1" "$2")
+    # A setting Lapin always sets but that's unset right now (a crash,
+    # a half-written file): keep Lapin's previous copy instead (#46).
+    if lapin_sets "$1" "$2" && ! has_value "$(item_path "$1" "$2")"; then
+        :
+    else
+        item_save "$1" "$2" "$(store_path "$INSIDE" "$1" "$2")"
+    fi
+    if saved "$out"; then
+        say "  $(describe "$1" "$2"): back to the other desktops' own"
+        item_apply "$1" "$2" "$out"
+    fi
+}
+# An entry that stopped half way (a crash, a power cut, no room for the marker)
+# left $PENDING behind: hand back every item it had swapped. An item whose live
+# value still equals the other desktops' copy was never swapped (or its swap
+# failed): nothing to hand back, and Lapin's copy stays. Returns 1 when there
+# was nothing to recover.
+recover_entry() {
+    [ -f "$PENDING" ] || return 1
+    local kind name out
+    while read -r kind name; do
+        [ -n "$kind" ] || continue
+        [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
+        out=$(store_path "$OUTSIDE" "$kind" "$name")
+        saved "$out" || continue
+        same_as "$kind" "$name" "$out" && continue
+        swap_back "$kind" "$name"
+    done < "$PENDING"
+    run rm -f "$PENDING" "$SKIPPED"
+}
+
 enter_session() {
     [ -f "$ACTIVE" ] && return 0    # Lapin's copy is already in place
     local kind name out in first=0 todo=()
+    recover_entry
     [ -d "$OUTSIDE" ] || first=1
     [ "$DRY" = 1 ] || rm -f "$SKIPPED"
     while read -r kind name; do
@@ -474,21 +558,12 @@ enter_session() {
                 # Could not keep the other desktops' value safe: leave it
                 # alone rather than overwrite it with Lapin's.
                 say "  $(describe "$kind" "$name"): could not save it, left as it is"
-                # leave_session must not touch it either: the live value is
-                # still the other desktops' own.
-                # Drop the older copy as well: leave_session never restores
-                # an item without a copy, so it stays safe even when this
-                # record cannot be written (a full state disk).
-                if [ "$DRY" != 1 ]; then
-                    rm -rf "$out" "$out.absent" 2>/dev/null
-                    if ! { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null \
-                        && saved "$out"; then
-                        # Neither the old copy could go nor the skip recorded:
-                        # leave could not tell this item wasn't swapped. Change
-                        # nothing at all this session (no marker, no apply).
-                        say "  could not keep track of it; the settings are left as they are"
-                        return 1
-                    fi
+                # leave_session must not touch it either.
+                if ! skip_item "$kind" "$name"; then
+                    # Neither the old copy could go nor the skip recorded:
+                    # change nothing at all this session (no marker, no apply).
+                    say "  could not keep track of it; the settings are left as they are"
+                    return 1
                 fi
                 continue
             fi
@@ -503,14 +578,35 @@ enter_session() {
             fi
         fi
     done < <(items)
-    # Every save is done and none was left unaccounted for: now swap.
-    local act
+    # Every save is done and none was left unaccounted for: now swap. Write
+    # down what is about to be swapped first, so an entry that stops half way
+    # can be undone (recover_entry).
+    local act ok
+    if [ "$DRY" != 1 ] && [ "${#todo[@]}" -gt 0 ]; then
+        if ! { mkdir -p "$STATE" && printf '%s\n' "${todo[@]#? }" > "$PENDING"; } 2>/dev/null; then
+            rm -f "$PENDING" 2>/dev/null
+            say "  could not keep track of the swap; the settings are left as they are"
+            return 1
+        fi
+    fi
     for act in "${todo[@]}"; do
         read -r act kind name <<< "$act"
-        if [ "$act" = D ]; then item_default "$kind" "$name"
-        else item_apply "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"; fi
+        ok=1
+        if [ "$act" = D ]; then item_default "$kind" "$name" || ok=0
+        else item_apply "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")" || ok=0; fi
+        if [ "$ok" = 0 ]; then
+            # The live value is still the other desktops' own: leave_session
+            # must not save it over Lapin's copy.
+            say "  $(describe "$kind" "$name"): could not switch it, left as it is"
+            if ! skip_item "$kind" "$name"; then
+                # The entry stays open (no marker): leave_session undoes it
+                # from $PENDING, which keeps Lapin's copy for this item.
+                say "  could not keep track of it; the settings are handed back when you leave"
+                return 1
+            fi
+        fi
     done
-    mkdir -p "$STATE" && date -Iseconds > "$ACTIVE"
+    mkdir -p "$STATE" && date -Iseconds > "$ACTIVE" && run rm -f "$PENDING"
 }
 
 leave_session() {
@@ -522,18 +618,13 @@ leave_session() {
             # No copy of the other desktops' value (not even an empty one for an
             # unset key): it was never swapped, so Lapin's own copy stays.
             ! saved "$out" && continue
-            # A setting Lapin always sets but that's unset right now (a crash,
-            # a half-written file): keep Lapin's previous copy instead (#46).
-            if lapin_sets "$kind" "$name" && ! has_value "$(item_path "$kind" "$name")"; then
-                :
-            else
-                item_save "$kind" "$name" "$(store_path "$INSIDE" "$kind" "$name")"
-            fi
-            if saved "$out"; then say "  $(describe "$kind" "$name"): back to the other desktops' own"; item_apply "$kind" "$name" "$out"; fi
+            swap_back "$kind" "$name"
         done < <(items)
-        run rm -f "$ACTIVE" "$SKIPPED"
+        run rm -f "$ACTIVE" "$SKIPPED" "$PENDING"
         changed=1
     else
+        # An entry that stopped half way: hand back what it had swapped.
+        recover_entry && changed=1
         # Not in Lapin's copy, yet Lapin's pointer is in place (#134): it was set
         # while the copies were swapped back too early (#115). It's Lapin's:
         # keep it for Lapin UX and give the other desktops theirs back.

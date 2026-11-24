@@ -576,9 +576,60 @@ bash "$DS" enter
 bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
 check "uninstall from a Lapin session: the user's own defaults intact" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
 }
+scenW() {
+echo "W: a swap that fails or stops half way never loses a copy (#223)"
+DS="$(dirname "$U")/lapin-ux-desktop-settings"
+M="$HOME/.config/mimeapps.list"
+STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"
+OUT="$STATEDIR/other-desktops/mimeapps/default"; IN="$STATEDIR/lapin-desktop/mimeapps/default"
+mkdir -p "$HOME/.config"
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$U" --snapshot; bash "$DS" enter
+printf '[Default Applications]\ninode/directory=cosmic-files.desktop\n' > "$M"
+bash "$DS" leave
+# 1. The apply on enter fails (the config folder can't be written).
+chmod 500 "$HOME/.config"
+bash "$DS" enter > "$HOME/out1.txt" 2>&1
+chmod 700 "$HOME/.config"
+check "a failed apply: the live defaults are untouched" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
+printf '[Default Applications]\ninode/directory=changed-outside.desktop\n' > "$M"
+bash "$DS" leave
+check "a failed apply: Lapin UX's copy is kept, not overwritten" "grep -q cosmic-files.desktop \"$IN\" && ! grep -q changed-outside \"$IN\""
+check "a failed apply: the other desktop's file is kept" "grep -q changed-outside.desktop \"$M\""
+bash "$DS" enter
+check "after a failed apply: the next enter gives Lapin UX its copy" "grep -q cosmic-files.desktop \"$M\""
+bash "$DS" leave
+# 2. An entry that stopped half way, after the swap (a crash before the marker).
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$DS" enter; bash "$DS" leave
+cp "$IN" "$M"                                  # the swap happened...
+rm -f "$STATEDIR/lapin-active"
+echo "mimeapps default" > "$STATEDIR/lapin-entering"   # ...but the entry never finished
+bash "$DS" leave
+check "a half-finished entry: the other desktop's own file is back" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
+check "a half-finished entry: nothing left marked" "[ ! -e \"$STATEDIR/lapin-entering\" ] && [ ! -e \"$STATEDIR/lapin-active\" ]"
+# 3. An entry that stopped before the swap: Lapin UX's copy must stay.
+echo "mimeapps default" > "$STATEDIR/lapin-entering"
+bash "$DS" leave
+check "an entry that never swapped: Lapin UX's copy is kept" "grep -q cosmic-files.desktop \"$IN\""
+check "an entry that never swapped: the live file is untouched" "grep -q nautilus.desktop \"$M\""
+rm -f "$STATEDIR/lapin-entering"
+# 4. The journal can't be written: nothing changes at all.
+mkdir "$STATEDIR/lapin-entering"
+bash "$DS" enter > "$HOME/out4.txt" 2>&1
+rmdir "$STATEDIR/lapin-entering"
+check "no journal: nothing is swapped, nothing marked" "grep -q nautilus.desktop \"$M\" && [ ! -e \"$STATEDIR/lapin-active\" ]"
+# 5. A symlinked mimeapps.list with no copy of the other desktop's file.
+rm -rf "$STATEDIR/other-desktops/mimeapps"
+mkdir -p "$HOME/.config/defaults"
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$HOME/.config/defaults/mimeapps.list"
+rm -f "$M"; ln -s defaults/mimeapps.list "$M"
+bash "$DS" enter; bash "$DS" leave
+check "a symlinked mimeapps.list: the link is kept through a round trip" "[ -L \"$M\" ] && grep -q nautilus.desktop \"$HOME/.config/defaults/mimeapps.list\""
+}
 # fakebin/pgrep only sees processes this run started, never the surrounding session
 if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
-for x in A B C D E F G H I J K L M N O P Q R S T V; do
+for x in A B C D E F G H I J K L M N O P Q R S T V W; do
   h=$(mktemp -d); mkdir -p "$h/run"
   env -i HOME="$h" USER="$USER" XDG_RUNTIME_DIR="$h/run" PATH="$FAKEBIN:/usr/bin:/bin" XDG_DATA_DIRS=/usr/share SCEN="$x" dbus-run-session -- bash "$0" "$U" > "$h.log" 2>&1 || fail=1
   grep -v -e dbus-daemon -e '^$' "$h.log"
