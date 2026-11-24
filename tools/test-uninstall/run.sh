@@ -513,8 +513,9 @@ check "a dangling link outside sounds is removed" "[ ! -L \"$D/lapin-ux/stale\" 
 }
 scenU() {
 echo "U: the Lapin Store is part of the uninstall lists (#77)"
-check "lapin-store is in LAPIN_PKGS" "sed -n '/^LAPIN_PKGS=/,/)/p' \"$U\" | grep -qw lapin-store"
-check "lapin-store maps to cosmic-store in STOCK" "grep -q '\[lapin-store\]=cosmic-store' \"$U\""
+# active lines only (comments stripped), whole words between spaces, quotes or brackets
+check "lapin-store is in LAPIN_PKGS" "sed -n '/^LAPIN_PKGS=/,/)/p' \"$U\" | sed 's/#.*//' | grep -Eq '(^|[ (])lapin-store([ )]|\$)'"
+check "lapin-store maps to cosmic-store in STOCK" "sed 's/#.*//' \"$U\" | grep -Eq '\[lapin-store\]=cosmic-store([ )]|\$)'"
 }
 # fakebin/pgrep only sees processes this run started, never the surrounding session
 if [ -n "${SCEN:-}" ]; then export LAPIN_TEST_ROOT=$$; "scen$SCEN"; exit $fail; fi
