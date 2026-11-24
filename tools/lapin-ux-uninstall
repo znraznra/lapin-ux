@@ -258,9 +258,18 @@ item_apply() {   # kind name src
     elif [ -e "$3" ]; then
         # Copy next to it, then rename over it: the setting is never seen
         # (or left, after a power cut) half-written or empty (#46).
+        # mimeapps.list may be a symlink: write its target and keep the link.
+        [ "$1" = mimeapps ] && f=$(readlink -f "$f" 2>/dev/null || echo "$f")
         run mkdir -p "$(dirname "$f")"
-        run cp -a "$3" "$f.lapin-new" && run sync -- "$f.lapin-new" 2>/dev/null
-        run mv -f "$f.lapin-new" "$f"
+        # Only a complete copy replaces the live file: a failed copy (a full
+        # disk) leaves the live value as it is.
+        if run cp -a "$3" "$f.lapin-new"; then
+            run sync -- "$f.lapin-new" 2>/dev/null
+            run mv -f "$f.lapin-new" "$f"
+        else
+            run rm -rf "$f.lapin-new"
+            return 1
+        fi
     fi
 }
 # Back to the desktop's own default.
@@ -465,7 +474,13 @@ enter_session() {
                 say "  $(describe "$kind" "$name"): could not save it, left as it is"
                 # leave_session must not touch it either: the live value is
                 # still the other desktops' own.
-                [ "$DRY" = 1 ] || { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; }
+                # Drop the older copy as well: leave_session never restores
+                # an item without a copy, so it stays safe even when this
+                # record cannot be written (a full state disk).
+                if [ "$DRY" != 1 ]; then
+                    rm -rf "$out" "$out.absent"
+                    { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null || true
+                fi
                 continue
             fi
             if lapin_sets "$kind" "$name" && ! has_value "$in"; then
@@ -488,6 +503,8 @@ leave_session() {
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
             [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
+            # No copy of the other desktops' value: it was never swapped.
+            [ "$kind" != dconf ] && ! saved "$out" && continue
             # A setting Lapin always sets but that's unset right now (a crash,
             # a half-written file): keep Lapin's previous copy instead (#46).
             if lapin_sets "$kind" "$name" && ! has_value "$(item_path "$kind" "$name")"; then

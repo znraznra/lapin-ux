@@ -537,7 +537,23 @@ bash "$DS" enter
 printf '[Default Applications]\ninode/directory=cosmic-files.desktop\n' > "$M"
 bash "$DS" leave
 check "a symlinked mimeapps.list: the user's defaults back" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
+# The symlink itself must survive the swap, and the edit land in its target.
+bash "$DS" leave
+check "the mimeapps.list symlink is kept" "[ -L \"$M\" ]"
+# A save that fails: the live file is left alone and leave never restores a stale copy,
+# even when the skip record can't be written either.
+rm -f "$M"; printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$DS" enter; bash "$DS" leave
+STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/lapin-ux"; OUT="$STATEDIR/other-desktops"
+mkdir "$STATEDIR/lapin-skipped"      # a directory: appending to it fails
+rm -rf "$OUT/mimeapps"; mkdir "$OUT/mimeapps"; chmod 500 "$OUT/mimeapps"   # no copy possible, no old copy either
+bash "$DS" enter
+printf '[Default Applications]\ninode/directory=changed-outside.desktop\n' > "$M"
+bash "$DS" leave
+chmod 700 "$OUT/mimeapps"; rmdir "$STATEDIR/lapin-skipped" 2>/dev/null
+check "a failed save: the live defaults are kept as they were" "grep -q changed-outside.desktop \"$M\""
 # Uninstall while the Lapin session is still active must leave the user's own file.
+rm -rf "$OUT/mimeapps"; rm -f "$M"; printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
 bash "$DS" enter
 bash "$U" --settings-only --yes > "$HOME/out.txt" 2>&1
 check "uninstall from a Lapin session: the user's own defaults intact" "grep -q nautilus.desktop \"$M\" && ! grep -q cosmic-files \"$M\""
