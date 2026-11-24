@@ -622,6 +622,23 @@ bash "$DS" leave > "$HOME/out3b.txt" 2>&1
 check "a changed-since entry: the live file is untouched" "grep -q edited-later.desktop \"$M\""
 check "a changed-since entry: the other desktop's copy is kept" "grep -rqs nautilus.desktop \"$STATEDIR/kept-copies\" && grep -q nautilus.desktop \"$OUT\""
 printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+# 3c. A hand-back that fails during recovery keeps the other desktop's copy,
+# and the next enter doesn't overwrite it with the live Lapin value.
+printf '[Default Applications]\ninode/directory=nautilus.desktop\n' > "$M"
+bash "$DS" enter; bash "$DS" leave
+cp "$IN" "$M"; rm -f "$STATEDIR/lapin-active"
+echo "A mimeapps default" > "$STATEDIR/lapin-entering"
+chmod 500 "$HOME/.config"
+bash "$DS" leave > "$HOME/out3c.txt" 2>&1
+chmod 700 "$HOME/.config"
+check "a failed recovery: the other desktop's copy is kept" "grep -q nautilus.desktop \"$OUT\""
+check "a failed recovery: it is remembered for next time" "[ -f \"$STATEDIR/lapin-unresolved\" ]"
+bash "$DS" enter > "$HOME/out3c2.txt" 2>&1
+check "the next enter does not overwrite the unresolved copy" "grep -q nautilus.desktop \"$OUT\" && ! grep -q cosmic-files \"$OUT\""
+bash "$DS" leave
+check "a later leave hands it back and clears the note" "grep -q nautilus.desktop \"$M\" && [ ! -e \"$STATEDIR/lapin-unresolved\" ]"
+# 3d. Kept copies sit in their own folder per item, so two never collide.
+check "kept copies are filed per item" "ls -d \"$STATEDIR\"/kept-copies/*/mimeapps-default >/dev/null 2>&1"
 # 4. The journal can't be written: nothing changes at all.
 mkdir "$STATEDIR/lapin-entering"
 bash "$DS" enter > "$HOME/out4.txt" 2>&1

@@ -58,6 +58,7 @@ INSIDE="$STATE/lapin-desktop"       # what Lapin UX uses
 ACTIVE="$STATE/lapin-active"        # Lapin UX's copy is the one in place
 SKIPPED="$STATE/lapin-skipped"      # items enter left alone (their save or swap failed)
 PENDING="$STATE/lapin-entering"     # items enter is swapping (so a crash can be undone)
+UNRESOLVED="$STATE/lapin-unresolved"  # items whose hand-back failed: their saved copy stays put
 
 # COSMIC theme folders (colours, corners, gaps).
 THEME_DIRS=(com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Dark.Builder
@@ -500,7 +501,7 @@ keep_copy() {   # kind name
     [ "$DRY" = 1 ] && return 0
     out=$(store_path "$OUTSIDE" "$1" "$2")
     saved "$out" || return 0
-    dest="$STATE/kept-copies/$(date +%Y%m%dT%H%M%S)"
+    dest="$STATE/kept-copies/$(date +%Y%m%dT%H%M%S)/$1-${2//\//__}"
     if mkdir -p "$dest" 2>/dev/null && cp -a "$out" "$out.absent" "$dest/" 2>/dev/null || [ -e "$dest/$(basename "$out")" ] || [ -e "$dest/$(basename "$out").absent" ]; then
         say "  $(describe "$1" "$2"): your previous value is kept in $dest"
     else
@@ -559,8 +560,8 @@ swap_back() {   # kind name
 # middle) is left exactly as it is, with both copies kept. Returns 1 when there
 # was nothing to recover.
 recover_entry() {
-    [ -f "$PENDING" ] || return 1
-    local act kind name out in swapped
+    [ -f "$PENDING" ] || [ -f "$UNRESOLVED" ] || return 1
+    local act kind name out in swapped failed=()
     while read -r act kind name; do
         [ -n "$kind" ] || continue
         [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
@@ -572,13 +573,23 @@ recover_entry() {
         if [ "$act" = D ]; then is_default "$kind" "$name" && swapped=1
         else saved "$in" && same_as "$kind" "$name" "$in" && swapped=1; fi
         if [ "$swapped" = 1 ]; then
-            swap_back "$kind" "$name"
+            # A hand-back that fails stays unresolved, with the other
+            # desktops' copy where it is, until a later try works.
+            swap_back "$kind" "$name" || failed+=("$act $kind $name")
         else
             say "  $(describe "$kind" "$name"): changed since, left as it is"
             keep_copy "$kind" "$name"
         fi
-    done < "$PENDING"
-    run rm -f "$PENDING" "$SKIPPED"
+    done < <(cat "$PENDING" "$UNRESOLVED" 2>/dev/null)
+    [ "$DRY" = 1 ] && return 0
+    if [ "${#failed[@]}" -gt 0 ]; then
+        say "  could not hand some settings back; they are tried again next time"
+        if printf '%s\n' "${failed[@]}" > "$UNRESOLVED.new" 2>/dev/null && mv -f "$UNRESOLVED.new" "$UNRESOLVED"; then
+            rm -f "$PENDING" "$SKIPPED"
+        fi   # else the journal stays, and so does the retry
+    else
+        rm -f "$PENDING" "$SKIPPED" "$UNRESOLVED"
+    fi
 }
 
 enter_session() {
@@ -588,6 +599,13 @@ enter_session() {
     [ -d "$OUTSIDE" ] || first=1
     [ "$DRY" = 1 ] || rm -f "$SKIPPED"
     while read -r kind name; do
+        if [ -f "$UNRESOLVED" ] && { grep -qxF "A $kind $name" "$UNRESOLVED" || grep -qxF "D $kind $name" "$UNRESOLVED"; }; then
+            # Its hand-back failed earlier: the saved copy of the other
+            # desktops' value must not be overwritten by what's live now.
+            say "  $(describe "$kind" "$name"): not handed back yet, left as it is"
+            { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; } 2>/dev/null || return 1
+            continue
+        fi
         out=$(store_path "$OUTSIDE" "$kind" "$name")
         in=$(store_path "$INSIDE" "$kind" "$name")
         if looks_lapins_now "$kind" "$name"; then
