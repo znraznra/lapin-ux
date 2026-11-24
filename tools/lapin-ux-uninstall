@@ -56,6 +56,7 @@ FONTS_CONF=/usr/share/lapin-ux/fonts.conf
 OUTSIDE="$STATE/other-desktops"     # what other desktops use
 INSIDE="$STATE/lapin-desktop"       # what Lapin UX uses
 ACTIVE="$STATE/lapin-active"        # Lapin UX's copy is the one in place
+SKIPPED="$STATE/lapin-skipped"      # items enter left alone (their save failed)
 
 # COSMIC theme folders (colours, corners, gaps).
 THEME_DIRS=(com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Dark.Builder
@@ -442,6 +443,7 @@ enter_session() {
     [ -f "$ACTIVE" ] && return 0    # Lapin's copy is already in place
     local kind name out in first=0
     [ -d "$OUTSIDE" ] || first=1
+    [ "$DRY" = 1 ] || rm -f "$SKIPPED"
     while read -r kind name; do
         out=$(store_path "$OUTSIDE" "$kind" "$name")
         in=$(store_path "$INSIDE" "$kind" "$name")
@@ -461,6 +463,9 @@ enter_session() {
                 # Could not keep the other desktops' value safe: leave it
                 # alone rather than overwrite it with Lapin's.
                 say "  $(describe "$kind" "$name"): could not save it, left as it is"
+                # leave_session must not touch it either: the live value is
+                # still the other desktops' own.
+                [ "$DRY" = 1 ] || { mkdir -p "$STATE" && echo "$kind $name" >> "$SKIPPED"; }
                 continue
             fi
             if lapin_sets "$kind" "$name" && ! has_value "$in"; then
@@ -482,6 +487,7 @@ leave_session() {
     if [ -f "$ACTIVE" ]; then
         while read -r kind name; do
             out=$(store_path "$OUTSIDE" "$kind" "$name")
+            [ -f "$SKIPPED" ] && grep -qxF "$kind $name" "$SKIPPED" && continue
             # A setting Lapin always sets but that's unset right now (a crash,
             # a half-written file): keep Lapin's previous copy instead (#46).
             if lapin_sets "$kind" "$name" && ! has_value "$(item_path "$kind" "$name")"; then
@@ -491,7 +497,7 @@ leave_session() {
             fi
             if saved "$out"; then say "  $(describe "$kind" "$name"): back to the other desktops' own"; item_apply "$kind" "$name" "$out"; fi
         done < <(items)
-        run rm -f "$ACTIVE"
+        run rm -f "$ACTIVE" "$SKIPPED"
         changed=1
     else
         # Not in Lapin's copy, yet Lapin's pointer is in place (#134): it was set
