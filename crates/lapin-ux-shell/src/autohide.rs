@@ -61,6 +61,26 @@ impl Shell {
         }
     }
 
+    /// Where Start sits: like `edge()`, but beside a side bar it docks in the
+    /// top corner next to the Start button instead of the bottom one (#197).
+    pub(crate) fn start_edge(&self) -> Anchor {
+        match self.config.position {
+            TaskbarPosition::Left => Anchor::LEFT | Anchor::TOP,
+            TaskbarPosition::Right => Anchor::RIGHT | Anchor::TOP,
+            _ => self.edge(),
+        }
+    }
+
+    /// `edge_margin()` for Start: a side bar's Start sits 12 px off the top.
+    pub(crate) fn start_margin(&self, edge: i32, left: i32, right: i32) -> IcedMargin {
+        let mut m = self.edge_margin(edge, left, right);
+        if self.vertical() {
+            m.top = 12;
+            m.bottom = 0;
+        }
+        m
+    }
+
     /// `edge()` plus the right-hand side of a horizontal bar (a side bar's
     /// own side already is the corner).
     pub(crate) fn edge_right(&self) -> Anchor {

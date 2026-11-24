@@ -15,6 +15,8 @@ enum Step {
     Network,
     Mode,
     Pointers,
+    /// Which Start menu layout to use (#198).
+    StartLayout,
     /// Lapin UX's sign-in screen and boot animation, or your own (#100).
     Login,
     Done,
@@ -32,8 +34,9 @@ impl Step {
             Step::Hello => Step::Network,
             Step::Network => Step::Mode,
             Step::Mode => Step::Pointers,
-            Step::Pointers if login_step_needed() => Step::Login,
-            Step::Pointers | Step::Login | Step::Done => Step::Done,
+            Step::Pointers => Step::StartLayout,
+            Step::StartLayout if login_step_needed() => Step::Login,
+            Step::StartLayout | Step::Login | Step::Done => Step::Done,
         }
     }
 }
@@ -56,6 +59,7 @@ enum Message {
     Connect,
     Connected(Result<(), String>),
     Dark(bool),
+    Layout(Layout),
     Pointers,
     /// Ok, or the reason it failed (the tool's last line of output).
     PointersDone(Result<(), String>),
@@ -74,6 +78,8 @@ struct App {
     connecting: bool,
     net_error: Option<String>,
     dark: bool,
+    layout: Layout,
+    layout_error: Option<String>,
     pointers: Option<Result<(), String>>,
     installing_pointers: bool,
     login: Option<Result<(), String>>,
@@ -182,6 +188,104 @@ fn is_dark() -> bool {
         .unwrap_or(false)
 }
 
+/// The Start menu layouts. Same names as the shell's `StartLayout`, which
+/// reads the saved value (`dev.lapinux.Shell`, key `start_layout`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum Layout {
+    Current,
+    Classic,
+    ClassicTwoColumns,
+    ProgramsList,
+}
+
+fn set_layout(l: Layout) -> Result<(), String> {
+    let cfg = cosmic_config::Config::new("dev.lapinux.Shell", 1).map_err(|e| e.to_string())?;
+    cfg.set("start_layout", l).map_err(|e| e.to_string())
+}
+
+fn current_layout() -> Layout {
+    cosmic_config::Config::new("dev.lapinux.Shell", 1)
+        .ok()
+        .and_then(|cfg| cfg.get::<Layout>("start_layout").ok())
+        .unwrap_or(Layout::Current)
+}
+
+/// A small sketch of a Start layout: blocks standing for its columns.
+fn layout_choice<'a>(label: &'a str, selected: bool, layout: Layout) -> Element<'a, Message> {
+    fn block<'a>(w: Length, h: Length, alpha: f32, accent: bool) -> Element<'a, Message> {
+        container(widget::Space::new().width(w).height(h))
+            .class(theme::Container::custom(move |t| {
+                let c: Color = if accent { t.cosmic().accent_color().into() } else { t.cosmic().on_bg_color().into() };
+                container::Style {
+                    background: Some(Background::Color(Color { a: alpha, ..c })),
+                    border: Border { radius: 2.0.into(), ..Default::default() },
+                    ..Default::default()
+                }
+            }))
+            .into()
+    }
+    let lines = |n: usize, w: f32| -> Element<'a, Message> {
+        column::with_children((0..n).map(|_| block(Length::Fixed(w), Length::Fixed(6.0), 0.3, false)).collect::<Vec<_>>())
+            .spacing(5)
+            .into()
+    };
+    let inner: Element<'a, Message> = match layout {
+        Layout::Current => column::with_children(vec![
+            block(Length::Fill, Length::Fixed(10.0), 0.2, false),
+            lines(3, 100.0),
+            block(Length::Fill, Length::Fixed(8.0), 0.2, false),
+        ])
+        .spacing(8)
+        .into(),
+        Layout::Classic => row::with_children(vec![
+            block(Length::Fixed(10.0), Length::Fill, 0.9, true),
+            column::with_children(vec![lines(4, 60.0), block(Length::Fixed(60.0), Length::Fixed(8.0), 0.2, false)])
+                .spacing(8)
+                .into(),
+        ])
+        .spacing(8)
+        .into(),
+        Layout::ClassicTwoColumns | Layout::ProgramsList => row::with_children(vec![
+            column::with_children(vec![lines(3, 44.0), block(Length::Fixed(44.0), Length::Fixed(8.0), 0.2, false)])
+                .spacing(8)
+                .into(),
+            column::with_children(vec![block(Length::Fixed(14.0), Length::Fixed(14.0), 0.5, false), lines(3, 44.0)])
+                .spacing(6)
+                .into(),
+        ])
+        .spacing(12)
+        .into(),
+    };
+    button::custom(
+        column::with_children(vec![
+            container(inner)
+                .padding(12)
+                .width(130)
+                .height(110)
+                .class(theme::Container::custom(move |t| {
+                    let a: Color = t.cosmic().accent_color().into();
+                    container::Style {
+                        background: Some(Background::Color(t.cosmic().bg_color().into())),
+                        border: Border {
+                            radius: 8.0.into(),
+                            width: if selected { 3.0 } else { 1.0 },
+                            color: if selected { a } else { Color { a: 0.3, ..a } },
+                        },
+                        ..Default::default()
+                    }
+                }))
+                .into(),
+            text::body(label).into(),
+        ])
+        .spacing(6)
+        .align_x(Alignment::Center),
+    )
+    .padding(4)
+    .class(theme::Button::MenuItem)
+    .on_press(Message::Layout(layout))
+    .into()
+}
+
 /// A big choice card (light / dark).
 fn choice<'a>(
     label: &'a str,
@@ -266,6 +370,8 @@ impl cosmic::Application for App {
             connecting: false,
             net_error: None,
             dark: is_dark(),
+            layout: current_layout(),
+            layout_error: None,
             pointers: None,
             installing_pointers: false,
             login: None,
@@ -338,6 +444,16 @@ impl cosmic::Application for App {
                 self.dark = d;
                 set_dark(d);
             }
+            Message::Layout(l) => match set_layout(l) {
+                Ok(()) => {
+                    self.layout = l;
+                    self.layout_error = None;
+                }
+                Err(e) => {
+                    eprintln!("lapin-ux-welcome: start layout: {e}");
+                    self.layout_error = Some(e);
+                }
+            },
             Message::Pointers => {
                 self.installing_pointers = true;
                 self.pointers = None;
@@ -404,7 +520,9 @@ impl cosmic::Application for App {
                     eprintln!("lapin-ux-welcome: pointers: {e}");
                 }
                 self.pointers = Some(res);
-                if ok {
+                // Only move on if the user is still on the pointers step, so a
+                // late result can't skip a page they already went past.
+                if ok && self.step == Step::Pointers {
                     self.step = self.step.next();
                 }
             }
@@ -510,6 +628,28 @@ impl cosmic::Application for App {
                 },
                 lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
             ),
+            Step::StartLayout => (
+                "Choose your Start layout".into(),
+                "Pick how the Start menu looks. You can change it later in Settings, under Personalization, Start.".into(),
+                column::with_children(vec![
+                    row::with_children(vec![
+                        layout_choice("Current", self.layout == Layout::Current, Layout::Current),
+                        layout_choice("Classic", self.layout == Layout::Classic, Layout::Classic),
+                        layout_choice("Classic, two columns", self.layout == Layout::ClassicTwoColumns, Layout::ClassicTwoColumns),
+                        layout_choice("Programs list", self.layout == Layout::ProgramsList, Layout::ProgramsList),
+                    ])
+                    .spacing(12)
+                    .into(),
+                    match &self.layout_error {
+                        Some(e) => text::caption(format!("That layout couldn't be saved, so nothing was changed: {e}")).into(),
+                        None => widget::Space::new().into(),
+                    },
+                ])
+                .spacing(8)
+                .align_x(cosmic::iced::Alignment::Center)
+                .into(),
+                lapin_ux_ui::button::suggested("Next").on_press(Message::Next).into(),
+            ),
             Step::Login => (
                 "Sign-in screen and boot animation".into(),
                 "Use Lapin UX's sign-in screen and boot animation? Your current ones are kept and come back if you uninstall Lapin UX. The change shows from the next start-up.".into(),
@@ -533,7 +673,7 @@ impl cosmic::Application for App {
             ),
             Step::Done => (
                 "You're all set".into(),
-                "Start is in the middle of the taskbar. Press the Windows key any time.".into(),
+                "Start is in the middle of the taskbar. Press the Super key any time.".into(),
                 icon::from_name("emblem-ok-symbolic").size(96).into(),
                 lapin_ux_ui::button::suggested("Get started").on_press(Message::Finish).into(),
             ),
