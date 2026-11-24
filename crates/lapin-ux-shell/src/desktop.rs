@@ -104,6 +104,14 @@ enum Launch {
     Exec { exec: String, terminal: bool, trusted: bool },
 }
 
+/// An empty desktop surface on a display that isn't the main one (#165).
+pub struct ExtraDesktop {
+    pub id: window::Id,
+    pub output: WlOutput,
+    /// Last pointer position on this surface, where a menu opens.
+    pub pointer: Point,
+}
+
 pub struct DesktopView {
     pub id: window::Id,
     pub output: WlOutput,
@@ -116,6 +124,8 @@ pub struct DesktopView {
     rename: Option<(PathBuf, String)>,
     drag: Option<Drag>,
     pointer: Point,
+    /// The open menu came from an extra display, so `pointer` is not where it was opened.
+    menu_on_extra: bool,
     /// Box selection: where the drag started.
     band: Option<Point>,
     /// Shift-click selects from here.
@@ -291,6 +301,7 @@ impl Shell {
             rename: None,
             drag: None,
             pointer: Point::ORIGIN,
+            menu_on_extra: false,
             band: None,
             anchor: None,
             press_keep: None,
@@ -314,6 +325,100 @@ impl Shell {
             exclusive_zone: 0,
             ..Default::default()
         })
+    }
+
+    /// Every other display gets an empty desktop surface that takes clicks
+    /// (#165): right-click opens the desktop menu there. Icons stay on the
+    /// main display. Called whenever displays come and go, so plugging one in
+    /// or out never needs another shell (#83).
+    pub(crate) fn sync_extra_desktops(&mut self) -> Task<Message> {
+        let main = self.main_bar().map(|b| b.output.clone());
+        let wanted: Vec<WlOutput> = match main {
+            Some(main) => self.bars.iter().filter(|b| b.output != main).map(|b| b.output.clone()).collect(),
+            None => Vec::new(),
+        };
+        let mut tasks = Vec::new();
+        let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.extra_desktops).into_iter().partition(|e| wanted.contains(&e.output));
+        self.extra_desktops = keep;
+        for e in gone {
+            tasks.push(destroy_layer_surface(e.id));
+        }
+        for output in wanted {
+            if self.extra_desktops.iter().any(|e| e.output == output) {
+                continue;
+            }
+            let id = window::Id::unique();
+            self.extra_desktops.push(ExtraDesktop { id, output: output.clone(), pointer: Point::ORIGIN });
+            tasks.push(get_layer_surface(SctkLayerSurfaceSettings {
+                id,
+                layer: Layer::Bottom,
+                keyboard_interactivity: KeyboardInteractivity::OnDemand,
+                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                output: IcedOutput::Output(output),
+                namespace: "lapin-ux-desktop".into(),
+                size: Some((None, None)),
+                exclusive_zone: 0,
+                ..Default::default()
+            }));
+        }
+        Task::batch(tasks)
+    }
+
+    pub(crate) fn extra_desktop_pointer(&mut self, id: window::Id, p: Point) -> bool {
+        match self.extra_desktops.iter_mut().find(|e| e.id == id) {
+            Some(e) => {
+                e.pointer = p;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A click on an extra display's empty desktop: close any open menu.
+    pub(crate) fn extra_desktop_press(&mut self) -> Task<Message> {
+        let commit = if self.desktop.as_ref().is_some_and(|d| d.rename.is_some()) {
+            self.update_desktop(DesktopMsg::RenameCommit)
+        } else {
+            Task::none()
+        };
+        if let Some(d) = &mut self.desktop
+            && !self.mods.control()
+        {
+            d.selected.clear();
+        }
+        Task::batch([commit, self.close_popup()])
+    }
+
+    /// Right-click on an extra display's empty desktop: the desktop menu, on that display.
+    pub(crate) fn extra_desktop_context(&mut self, id: window::Id) -> Task<Message> {
+        let Some(p) = self.extra_desktops.iter().find(|e| e.id == id).map(|e| e.pointer) else { return Task::none() };
+        if let Some(d) = &mut self.desktop {
+            d.selected.clear();
+            d.menu_on_extra = true;
+        }
+        let key = rect_key(id, "pointer");
+        self.rects.insert(key.clone(), Rectangle { x: p.x, y: p.y, width: 1.0, height: 1.0 });
+        self.open_popup(id, &key, PopupKind::DesktopMenu(None, MenuPage::Main))
+    }
+
+    /// Files dropped on an extra display: copied (or moved) into the desktop
+    /// folder, placed in the next free spot. Icons already on the desktop stay.
+    pub(crate) fn extra_desktop_dropped(&mut self, uris: Option<crate::dnd::Uris>, action: DndAction) -> Task<Message> {
+        let Some(dir) = self.desktop.as_ref().map(|d| d.dir.clone()) else { return Task::none() };
+        let uris = uris.map(|u| u.0).unwrap_or_default();
+        let outside: Vec<PathBuf> = uris
+            .iter()
+            .filter_map(|u| lapin_ux_core::recent::file_uri_to_path(u))
+            .filter(|p| p.parent() != Some(dir.as_path()))
+            .collect();
+        if outside.is_empty() {
+            return Task::none();
+        }
+        // With auto arrange off and nothing saved yet, icons sit in sort order:
+        // pin them first so the new file takes the next free cell instead of
+        // pushing the others along.
+        self.pin_before_free_placement();
+        self.paste_into_desktop(outside, action == DndAction::Move, None)
     }
 
     /// The output's size minus what the taskbar reserves (#41).
@@ -536,6 +641,41 @@ impl Shell {
             self.placed().into_iter().filter_map(|(p, (c, r))| Some(DesktopSlot { name: names.get(&p)?.clone(), col: c, row: r })).collect();
     }
 
+    /// Before something lands in the next free spot: pin the icons where they
+    /// are (and save that), so the newcomer doesn't push the others along.
+    fn pin_before_free_placement(&mut self) {
+        if self.config.desktop_auto_arrange {
+            return;
+        }
+        // Compare what is saved with where the icons really sit now: some may
+        // have no saved cell, or a saved cell outside a grid that has shrunk.
+        let differs = self.desktop.as_ref().is_some_and(|d| {
+            let names: HashMap<&PathBuf, &str> = d.items.iter().map(|s| (&s.item.path, s.item.file_name.as_str())).collect();
+            let shown: Vec<(&str, Cell)> =
+                self.placed().iter().filter_map(|(p, c)| Some((*names.get(p)?, *c))).collect();
+            let saved: HashMap<&str, Cell> =
+                self.state.desktop_cells.iter().map(|s| (s.name.as_str(), (s.col, s.row))).collect();
+            layout_differs(&shown, &saved)
+        });
+        if differs {
+            self.pin_cells();
+            self.persist_state();
+        }
+    }
+
+    /// Where a menu action on the desktop puts its result: the clicked cell on
+    /// the main display, the next free spot (None) when the menu came from an
+    /// extra display, whose pointer is not tracked on the main surface.
+    fn menu_cell(&mut self) -> Option<Cell> {
+        let d = self.desktop.as_ref()?;
+        if d.menu_on_extra {
+            self.pin_before_free_placement();
+            None
+        } else {
+            Some(self.cell_at(d.pointer))
+        }
+    }
+
     /// Paste files into the desktop (copy, or move when cut), starting at `cell`.
     fn paste_into_desktop(&mut self, paths: Vec<PathBuf>, cut: bool, cell: Option<Cell>) -> Task<Message> {
         let Some(dir) = self.desktop.as_ref().map(|d| d.dir.clone()) else { return Task::none() };
@@ -639,8 +779,9 @@ impl Shell {
             return close;
         }
         // Put it where the user right-clicked, like the benchmark.
-        let cell = self.cell_at(self.desktop.as_ref().map_or(Point::ORIGIN, |d| d.pointer));
-        self.remember_cell(&name, cell);
+        if let Some(cell) = self.menu_cell() {
+            self.remember_cell(&name, cell);
+        }
         self.reload_desktop();
         Task::batch([close, self.start_rename(path, true)])
     }
@@ -874,7 +1015,13 @@ impl Shell {
                 "a" => d.selected = d.items.iter().map(|s| s.item.path.clone()).collect(),
                 "c" => return self.update_desktop(DesktopMsg::Copy),
                 "x" => return self.update_desktop(DesktopMsg::Cut),
-                "v" => return self.update_desktop(DesktopMsg::Paste),
+                "v" => {
+                    // Ctrl+V is on the main desktop: not an extra display's menu.
+                    if let Some(d) = &mut self.desktop {
+                        d.menu_on_extra = false;
+                    }
+                    return self.update_desktop(DesktopMsg::Paste);
+                }
                 _ => {}
             },
             DesktopMsg::Cut | DesktopMsg::Copy => {
@@ -928,6 +1075,7 @@ impl Shell {
                 if on.is_none() {
                     d.selected.clear();
                 }
+                d.menu_on_extra = false;
                 let key = rect_key(id, "pointer");
                 self.rects.insert(key.clone(), Rectangle { x: d.pointer.x, y: d.pointer.y, width: 1.0, height: 1.0 });
                 return self.open_popup(id, &key, PopupKind::DesktopMenu(on, MenuPage::Main));
@@ -1654,7 +1802,7 @@ impl Shell {
     pub(crate) fn paste_files(&mut self) -> Task<Message> {
         let close = self.close_popup();
         let Some(clip) = self.clip.files.clone() else { return close };
-        let cell = self.desktop.as_ref().map(|d| d.pointer).map(|p| self.cell_at(p));
+        let cell = self.menu_cell();
         // A cut is used up by pasting it.
         if clip.cut {
             self.clip.files = None;
@@ -1721,4 +1869,42 @@ fn open_trash() -> Task<Message> {
         }
         cosmic::Action::App(Message::Noop)
     })
+}
+
+/// The empty desktop on another display: nothing on it, but it takes clicks
+/// and drops, so right-click opens the desktop menu there (#165).
+pub fn extra_view<'a>(id: window::Id) -> Element<'a, Message> {
+    let area = mouse_area(container(widget::Space::new()).width(Length::Fill).height(Length::Fill))
+        .on_press(Message::ExtraDesktopPress)
+        .on_right_press(Message::ExtraDesktopContext(id));
+    cosmic::widget::dnd_destination::dnd_destination_for_data::<crate::dnd::Uris, Message>(area, |uris, action| {
+        Message::ExtraDesktopDropped(uris, action)
+    })
+    .into()
+}
+
+/// Whether any icon is shown somewhere other than its saved cell (or has none).
+fn layout_differs(shown: &[(&str, Cell)], saved: &HashMap<&str, Cell>) -> bool {
+    shown.iter().any(|(n, c)| saved.get(n) != Some(c))
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::layout_differs;
+    use std::collections::HashMap;
+
+    #[test]
+    fn partly_saved_positions_differ() {
+        let saved = HashMap::from([("a.txt", (0, 0))]);
+        assert!(!layout_differs(&[("a.txt", (0, 0))], &saved));
+        assert!(layout_differs(&[("a.txt", (0, 0)), ("b.txt", (0, 1))], &saved));
+    }
+
+    #[test]
+    fn saved_cell_off_a_shrunken_grid_differs() {
+        // b.txt was saved at (2,0) but the grid shrank, so it is shown at (0,0).
+        let saved = HashMap::from([("b.txt", (2, 0)), ("c.txt", (1, 0))]);
+        assert!(layout_differs(&[("b.txt", (0, 0)), ("c.txt", (1, 0))], &saved));
+        assert!(!layout_differs(&[("b.txt", (2, 0)), ("c.txt", (1, 0))], &saved));
+    }
 }
