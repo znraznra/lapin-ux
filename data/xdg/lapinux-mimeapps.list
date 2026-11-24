@@ -1,0 +1,17 @@
+# Read only when XDG_CURRENT_DESKTOP contains LapinUX (desktop-specific
+# mimeapps list). Other desktops never see it, and a choice made in
+# ~/.config/mimeapps.list always wins over it.
+[Default Applications]
+text/plain=dev.lapinux.Notes.desktop
+text/markdown=dev.lapinux.Notes.desktop
+text/x-log=dev.lapinux.Notes.desktop
+text/x-csrc=dev.lapinux.Notes.desktop
+text/x-chdr=dev.lapinux.Notes.desktop
+text/x-c++src=dev.lapinux.Notes.desktop
+text/x-python=dev.lapinux.Notes.desktop
+text/x-shellscript=dev.lapinux.Notes.desktop
+application/x-shellscript=dev.lapinux.Notes.desktop
+application/json=dev.lapinux.Notes.desktop
+application/toml=dev.lapinux.Notes.desktop
+application/yaml=dev.lapinux.Notes.desktop
+text/csv=dev.lapinux.Notes.desktop
