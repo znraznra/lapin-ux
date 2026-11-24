@@ -194,20 +194,33 @@ describe() {
 
 # Copy the live value into dest.
 item_save() {   # kind name dest
-    local f
+    local f tmp
     [ "$DRY" = 1 ] && return 0
-    mkdir -p "$(dirname "$3")"; rm -rf "$3" "$3.absent"
+    mkdir -p "$(dirname "$3")" || return 1
     if [ "$1" = dconf ]; then
+        rm -rf "$3" "$3.absent"
         # A successful read of an unset key leaves an empty copy (the existing
         # "unset" convention); a failed read must leave no copy at all.
         if dconf_ok && ! dconf read "$(gkey_path "$2")" > "$3" 2>/dev/null; then rm -f "$3"; fi
         return 0
     fi
     f=$(item_path "$1" "$2")
+    # Stage the new copy next to the old one and swap it in only when it is
+    # complete, so a full disk never leaves a partial copy (or none) behind
+    # for leave_session to restore. On failure the old copy stays and the
+    # caller must not swap the item.
+    tmp="$3.lapin-new"
+    rm -rf "$tmp"
     # An empty file is an unset setting (COSMIC reads it as its default): save
     # it as absent, never as an empty copy that would later wipe the value (#46).
     # mimeapps.list is often a relative symlink: keep its contents, not the link.
-    if has_value "$f"; then if [ "$1" = mimeapps ]; then cp -aL "$f" "$3"; else cp -a "$f" "$3"; fi; else : > "$3.absent"; fi
+    if has_value "$f"; then
+        if [ "$1" = mimeapps ]; then cp -aL "$f" "$tmp"; else cp -a "$f" "$tmp"; fi || { rm -rf "$tmp"; return 1; }
+        rm -rf "$3" "$3.absent" && mv -f "$tmp" "$3" || { rm -rf "$tmp"; return 1; }
+    else
+        : > "$tmp" || { rm -rf "$tmp"; return 1; }
+        rm -rf "$3" "$3.absent" && mv -f "$tmp" "$3.absent" || { rm -rf "$tmp"; return 1; }
+    fi
 }
 # A saved or live value that holds something: a non-empty file, or a folder
 # with something in it.
@@ -444,7 +457,12 @@ enter_session() {
                 other_desktops_value "$kind" "$name" "$out"
             fi
         else
-            item_save "$kind" "$name" "$out"
+            if ! item_save "$kind" "$name" "$out"; then
+                # Could not keep the other desktops' value safe: leave it
+                # alone rather than overwrite it with Lapin's.
+                say "  $(describe "$kind" "$name"): could not save it, left as it is"
+                continue
+            fi
             if lapin_sets "$kind" "$name" && ! has_value "$in"; then
                 # Lapin's copy is missing, empty or "unset" (#46): drop it and
                 # clear the setting, so Lapin UX's shell puts its own value
