@@ -260,7 +260,7 @@ fn edit_favorites(change: impl FnOnce(&mut HashSet<PathBuf>)) -> std::io::Result
 /// A hard link fails if the name is taken (a dangling symlink counts), and the
 /// old name is removed only after it worked, so a file that appears at the new
 /// name in between is never overwritten. File systems without hard links
-/// (FAT, exFAT) fall back to a plain rename after a best-effort check.
+/// (FAT, exFAT) fall back to the kernel's atomic no-replace rename.
 fn rename_no_replace(old: &Path, new: &Path) -> Result<(), String> {
     const TAKEN: &str = "A file with that name already exists.";
     match std::fs::hard_link(old, new) {
@@ -276,10 +276,19 @@ fn rename_no_replace(old: &Path, new: &Path) -> Result<(), String> {
         }),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(TAKEN.to_string()),
         Err(_) => {
-            if std::fs::symlink_metadata(new).is_ok() {
-                return Err(TAKEN.to_string());
+            // No hard links here (FAT, exFAT). The kernel's own no-replace
+            // rename is atomic: it fails if the name is taken, however late
+            // another process creates it. Where even that is missing, say so
+            // rather than risk overwriting.
+            use rustix::fs::{renameat_with, RenameFlags, CWD};
+            match renameat_with(CWD, old, CWD, new, RenameFlags::NOREPLACE) {
+                Ok(()) => Ok(()),
+                Err(e) if e == rustix::io::Errno::EXIST => Err(TAKEN.to_string()),
+                Err(e) if e == rustix::io::Errno::INVAL || e == rustix::io::Errno::NOSYS || e == rustix::io::Errno::OPNOTSUPP => {
+                    Err("This drive cannot rename a photo safely. Copy it under the new name in your file manager instead.".to_string())
+                }
+                Err(e) => Err(format!("Could not rename: {}", std::io::Error::from(e))),
             }
-            std::fs::rename(old, new).map_err(|e| format!("Could not rename: {e}"))
         }
     }
 }
@@ -540,18 +549,19 @@ impl App {
             None if asked_before => refetch = self.want_thumbs(vec![new.clone()]),
             None => {}
         }
-        if self.favorites.contains(&old) {
-            let moved = move_favorite(&old, &new);
-            match moved {
-                Ok(saved) => {
-                    self.favorites = saved;
-                    self.favorites_unsaved = false;
-                }
-                Err(e) => {
-                    tracing::warn!("could not move the favorite: {e}");
-                    self.favorites_unsaved = true;
-                    self.favorites.remove(&old);
+        // Another window may have starred this photo since this one last read
+        // the file, so ask the saved set, not the cached one.
+        match move_favorite(&old, &new) {
+            Ok(saved) => {
+                self.favorites = saved;
+                self.favorites_unsaved = false;
+            }
+            Err(e) => {
+                tracing::warn!("could not move the favorite: {e}");
+                if self.favorites.remove(&old) {
                     self.favorites.insert(new.clone());
+                    self.favorites_unsaved = true;
+                    self.notice = Some("The photo was renamed, but its star could not be moved to the new name.".into());
                 }
             }
         }
@@ -807,6 +817,10 @@ impl cosmic::Application for App {
                 self.file_op = false;
                 if self.viewing.as_deref() == Some(old.as_path()) {
                     self.action_error = Some(e);
+                } else {
+                    // The photo was left while the rename ran. A failure here
+                    // can mean a leftover second name, so it must still show.
+                    self.notice = Some(e);
                 }
             }
             Message::Renamed(old, Ok(new)) => {
